@@ -118,7 +118,10 @@ void main() {
     ivec2 samplePos;
     samplePos.x=int(gl_FragCoord.x-R0);
     //int k=0;
-
+    SH centerSH;
+    centerSH.shY=texelFetch(colortex5,ivec2(gl_FragCoord.xy),0);
+    centerSH.CoCg=texelFetch(colortex6,ivec2(gl_FragCoord.xy),0).xy;
+    float centerW=min(pow(diffuseIllumiantionBuffer.data[idx].weight,1.5)*0.003,0.2)*pow(R0,0.875);
     for (int i = 0; i <= 2; i++) {
         samplePos.y=int(gl_FragCoord.y-R0);
         for (int j = 0; j <= 2; j++) {
@@ -126,12 +129,16 @@ void main() {
             float w1 =s[i] * t[j]* step(-0.5,denoiseBuffer.data[idx2].distance);
             
             //idx_M[k]=idx2;
-            float w0 = svgfNormalWeight(centerNormal, texelFetch(colortex3,(samplePos),0).xyz)
-                     * svgfPositionWeight(centerPos, texelFetch(colortex4,samplePos,0).xyz, centerNormal)
-                     * w1;
+            
             SH tmp;
             tmp.shY=texelFetch(colortex5,samplePos,0);
             tmp.CoCg=texelFetch(colortex6,samplePos,0).xy;
+            float dL=centerW*sqrt((dot(tmp.shY-centerSH.shY,tmp.shY-centerSH.shY)+dot(tmp.CoCg-centerSH.CoCg,tmp.CoCg-centerSH.CoCg)));
+            float w0 = svgfNormalWeight(centerNormal, texelFetch(colortex3,(samplePos),0).xyz)
+                     * svgfPositionWeight(centerPos, texelFetch(colortex4,samplePos,0).xyz, centerNormal)
+                     * exp(-dL)
+                     * w1;
+
             
             accumulate_SH(A,tmp,w0);
             //isNotBackground[k] = w1;

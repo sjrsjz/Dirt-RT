@@ -57,7 +57,7 @@ void main() {
     payload.geometryNormal = fragInfo.normal;
     payload.material = getMaterial(albedo, normal, specular, tbn);
     //payload.shadowTransmission *= albedo.rgb * (1.0 - albedo.a);
-    //payload.material.block_id = quad.vertices[0].block_id;
-    //payload.material.mid_block = quad.vertices[0].mid_block;
-    payload.material.block_texture = quad.vertices[0].block_texture;
+    payload.material.block_id = quad.vertices[0].block_id;
+    payload.material.mid_block = quad.vertices[0].mid_block;
+    //payload.material.block_texture = quad.vertices[0].block_texture;
 }    

@@ -143,7 +143,7 @@ bool notInRange(vec2 p) {
 void MixDiffuse() {
     diffuseIllumiantionData center = diffuseIllumiantionBuffer.data[idx];
     vec3 c0 = project_SH_irradiance(center.data_swap, center.normal2);
-    const int S = 3;
+    const int S = 1;
     float w = 0;
     
     vec3 sumX=vec3(0);
@@ -156,7 +156,7 @@ void MixDiffuse() {
     //float maxL=-1;
     for (int i = -S; i <= S; i++) {
         for (int j = -S; j <= S; j++) {
-            float a = exp(-0.025 * (i * i + j * j));
+            float a = 1;//exp(-0.25 * (i * i + j * j));
             uint idx2 = getIdx(uvec2(gl_FragCoord.xy + vec2(i, j)));
             diffuseIllumiantionData sample1 = diffuseIllumiantionBuffer.data[idx2];
             vec3 c1 = project_SH_irradiance(sample1.data_swap, sample1.normal2);
@@ -187,8 +187,8 @@ void MixDiffuse() {
             diffuseIllumiantionData sample1 = diffuseIllumiantionBuffer.data[idx2];
             vec3 c1 = project_SH_irradiance(sample1.data_swap, sample1.normal2);
             vec3 dc=c1-sumX;
-            vec3 p=exp(-dot(dc,dc)*sigma);
-            float w0 = w_M[i + S][j + S] * luma(p*vec3(greaterThan(p,vec3(0.25))));
+            vec3 p=exp(-pow(dot(dc,dc),1.25)*sigma);
+            float w0 = w_M[i + S][j + S] * luma(p*vec3(greaterThan(p,vec3(0.))));
             accumulate_SH(sumX_, sample1.data_swap , w0);
             w += w0;
         }

@@ -25,7 +25,7 @@ struct Material {
     float translucent;
     ivec2 block_id;       
     vec3 mid_block;
-    vec2 block_texture;
+    //vec2 block_texture;
 };
 
 Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn) {

@@ -55,7 +55,7 @@ const bool colortex7Clear = false;
 const bool colortex8Clear = false;
 */
 
-const float NORMAL_PARAM = 1.0;
+const float NORMAL_PARAM = 16.0;
 const float POSITION_PARAM = 1.0;
 const float LUMINANCE_PARAM = 4.0;
 
@@ -63,9 +63,9 @@ float svgfNormalWeight(vec3 centerNormal, vec3 normal) {
     return pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM);
 }
 
-float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal) {
+float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float distance) {
     // Modified to check for distance from the center plane
-    return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)));
+    return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)*(0.1+64*exp(-0.25*distance))));
 }
 
 vec3 reproject(vec3 screenPos) {
@@ -121,10 +121,10 @@ void MixDiffuse() {
     
     diffuseIllumiantionData data = sampleDiffuse(prevScreenPos.xy * texSize);
 
-    float s = float(denoiseBuffer.data[getIdx(uvec2(prevScreenPos.xy * texSize))].distance > -0.5) * svgfNormalWeight(data.lnormal, diffuseIllumiantionBuffer.data[idx].normal) * svgfPositionWeight(data.lpos, diffuseIllumiantionBuffer.data[idx].pos, diffuseIllumiantionBuffer.data[idx].normal);
+    float s = float(denoiseBuffer.data[getIdx(uvec2(prevScreenPos.xy * texSize))].distance > -0.5) * svgfNormalWeight(data.lnormal, diffuseIllumiantionBuffer.data[idx].normal) * svgfPositionWeight(data.lpos, diffuseIllumiantionBuffer.data[idx].pos, diffuseIllumiantionBuffer.data[idx].normal,info_.distance);
     s = (min(1, s + 0.875) - 0.875)*8;
     float prevW = data.weight;
-    prevW = max(1, min(prevW * s + 1, ACCUMULATION_LENGTH*10));
+    prevW = max(1, min(prevW * s + 1, ACCUMULATION_LENGTH*2));
 
     //float k = abs(luma(ACESFilm(avgExposure*decodeSH(diffuseIllumiantionBuffer.data[idx].data_swap,diffuseIllumiantionBuffer.data[idx].normal2))));
     //diffuseIllumiantionBuffer.data[idx].sumX=data.lsumX+(k-data.lsumX)/prevW;
@@ -141,7 +141,7 @@ void MixReflect() {
     }
     vec3IllumiantionData data = sampleReflect(prevScreenPos.xy * texSize);
 
-    float s = float(reflectIllumiantionBuffer.data[getIdx(uvec2(prevScreenPos.xy * texSize))].distance > -0.5) * svgfNormalWeight(data.lnormal, reflectIllumiantionBuffer.data[idx].normal) * svgfPositionWeight(data.lpos, reflectIllumiantionBuffer.data[idx].pos, reflectIllumiantionBuffer.data[idx].normal);
+    float s = float(reflectIllumiantionBuffer.data[getIdx(uvec2(prevScreenPos.xy * texSize))].distance > -0.5) * svgfNormalWeight(data.lnormal, reflectIllumiantionBuffer.data[idx].normal) * svgfPositionWeight(data.lpos, reflectIllumiantionBuffer.data[idx].pos, reflectIllumiantionBuffer.data[idx].normal,info_.distance);
     s=float(reflectIllumiantionBuffer.data[idx].distance < -0.5&&reflectIllumiantionBuffer.data[getIdx(uvec2(prevScreenPos.xy * texSize))].distance < -0.5)*(1-s)+s;
     s = (min(1, s + 0.875) - 0.875)*8;
     float prevW = data.weight;
@@ -158,7 +158,7 @@ void MixRefract() {
     }
     vec3IllumiantionData data = sampleRefract(prevScreenPos.xy * texSize);
 
-    float s = float(refractIllumiantionBuffer.data[getIdx(uvec2(prevScreenPos.xy * texSize))].distance > -0.5) * svgfNormalWeight(data.lnormal, refractIllumiantionBuffer.data[idx].normal) * svgfPositionWeight(data.lpos, refractIllumiantionBuffer.data[idx].pos, refractIllumiantionBuffer.data[idx].normal);
+    float s = float(refractIllumiantionBuffer.data[getIdx(uvec2(prevScreenPos.xy * texSize))].distance > -0.5) * svgfNormalWeight(data.lnormal, refractIllumiantionBuffer.data[idx].normal) * svgfPositionWeight(data.lpos, refractIllumiantionBuffer.data[idx].pos, refractIllumiantionBuffer.data[idx].normal,info_.distance);
 
     s = (min(1, s + 0.875) - 0.875)*8;
     float prevW = data.weight;

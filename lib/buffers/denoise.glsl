@@ -163,7 +163,7 @@ diffuseIllumiantionData blendDiffuse(diffuseIllumiantionData A,diffuseIllumianti
     t.lpos=mix(A.lpos,B.lpos,x);
     //t.pos=B.pos;
     //t.normal=B.normal;
-    t.lnormal=normalize(mix(A.lnormal,B.lnormal,x));
+    t.lnormal=(mix(A.lnormal,B.lnormal,x));
     t.weight=(B.weight-A.weight)*x+A.weight;
     
     //t.lsumX=A.lsumX+(B.lsumX-A.lsumX)*x;
@@ -189,7 +189,7 @@ vec3IllumiantionData blendData(vec3IllumiantionData A,vec3IllumiantionData B,flo
     t.lpos=mix(A.lpos,B.lpos,x);
     //t.pos=B.pos;
     //t.normal=B.normal;
-    t.lnormal=normalize(mix(A.lnormal,B.lnormal,x));
+    t.lnormal=(mix(A.lnormal,B.lnormal,x));
     t.weight=A.weight+(B.weight-A.weight)*x;
 
     t.distance=(B.distance-A.distance)*x+A.distance;

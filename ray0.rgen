@@ -158,11 +158,8 @@ material newMaterial(vec3 Cs, vec3 Cd, vec2 S, vec4 R, vec3 light) {
 }
 material Material_(vec3 pos, vec3 nor) {
     vec3 albedo = tmp_Payload.material.albedo * (1 - tmp_Payload.material.metallic); //*(1-tmp_Payload.material.ambientOcclusion);
-
-    float trans = step(0.9,tmp_Payload.material.translucent);
-    const int S = 512;
-    bool water = tmp_Payload.material.block_texture.y <= S * 121 && tmp_Payload.material.block_texture.y >= S * 120 && tmp_Payload.material.block_texture.x <= S * 20 && tmp_Payload.material.block_texture.x >= S * 18;
-    water = water || tmp_Payload.material.block_texture.y <= S * 15 && tmp_Payload.material.block_texture.y >= S * 8 && tmp_Payload.material.block_texture.x <= S * 14 && tmp_Payload.material.block_texture.x >= S * 10;
+    bool water = tmp_Payload.material.block_id.x==1000;
+    float trans = float(!water&&0.9<tmp_Payload.material.translucent&&tmp_Payload.material.block_id.x!=1001);
     float roughness = water ? 0 : tmp_Payload.material.roughness;
     albedo = water ? vec3(1) : albedo;
     return newMaterial(tmp_Payload.material.F0, albedo, vec2(tmp_Payload.material.metallic*trans, 1 - trans), vec4(roughness > 0.01 ? max(roughness, 0.0125) : 0, trans, water, 1.9), tmp_Payload.material.emission*10);
