@@ -98,7 +98,7 @@ float K(vec3 B, vec3 A, vec3 n) {
 
 void main() {
     //color=texelFetch(colortex5,ivec2(gl_FragCoord.xy),0);
-    return;
+    //return;
     idx = getIdx(uvec2(gl_FragCoord.xy));
 
     info_ = denoiseBuffer.data[idx];

@@ -169,7 +169,7 @@ void MixRefract() {
 }
 
 void main() {
-   
+   //严重消耗性能，与110.glsl一同占据用时的1/4~1/3
     idx = getIdx(uvec2(gl_FragCoord.xy));
 
     info_ = denoiseBuffer.data[idx];
