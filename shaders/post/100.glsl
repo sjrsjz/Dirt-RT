@@ -92,7 +92,8 @@ vec3 reproject2(vec3 worldPos) {
 layout(location = 0) out vec4 fragColor;
 
 vec3 prevScreenPos;
-bufferData info_;
+float info_distance;
+uint idx_l;
 vec2 texSize;
 uint idx;
 
@@ -121,7 +122,7 @@ void MixDiffuse() {
     
     diffuseIllumiantionData data = sampleDiffuse(prevScreenPos.xy * texSize);
 
-    float s = float(denoiseBuffer.data[getIdx(uvec2(prevScreenPos.xy * texSize))].distance > -0.5) * svgfNormalWeight(data.lnormal, diffuseIllumiantionBuffer.data[idx].normal) * svgfPositionWeight(data.lpos, diffuseIllumiantionBuffer.data[idx].pos, diffuseIllumiantionBuffer.data[idx].normal,info_.distance);
+    float s = float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.lnormal, diffuseIllumiantionBuffer.data[idx].normal) * svgfPositionWeight(data.lpos, diffuseIllumiantionBuffer.data[idx].pos, diffuseIllumiantionBuffer.data[idx].normal,info_distance);
     s = (min(1, s + 0.875) - 0.875)*8;
     float prevW = data.weight;
     prevW = max(1, min(prevW * s + 1, ACCUMULATION_LENGTH*2));
@@ -141,8 +142,8 @@ void MixReflect() {
     }
     vec3IllumiantionData data = sampleReflect(prevScreenPos.xy * texSize);
 
-    float s = float(reflectIllumiantionBuffer.data[getIdx(uvec2(prevScreenPos.xy * texSize))].distance > -0.5) * svgfNormalWeight(data.lnormal, reflectIllumiantionBuffer.data[idx].normal) * svgfPositionWeight(data.lpos, reflectIllumiantionBuffer.data[idx].pos, reflectIllumiantionBuffer.data[idx].normal,info_.distance);
-    s=float(reflectIllumiantionBuffer.data[idx].distance < -0.5&&reflectIllumiantionBuffer.data[getIdx(uvec2(prevScreenPos.xy * texSize))].distance < -0.5)*(1-s)+s;
+    float s = float(reflectIllumiantionBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.lnormal, reflectIllumiantionBuffer.data[idx].normal) * svgfPositionWeight(data.lpos, reflectIllumiantionBuffer.data[idx].pos, reflectIllumiantionBuffer.data[idx].normal,info_distance);
+    s=float(reflectIllumiantionBuffer.data[idx].distance < -0.5&&reflectIllumiantionBuffer.data[idx_l].distance < -0.5)*(1-s)+s;
     s = (min(1, s + 0.875) - 0.875)*8;
     float prevW = data.weight;
     prevW = max(1, min(prevW * s + 1, ACCUMULATION_LENGTH*10));
@@ -158,7 +159,7 @@ void MixRefract() {
     }
     vec3IllumiantionData data = sampleRefract(prevScreenPos.xy * texSize);
 
-    float s = float(refractIllumiantionBuffer.data[getIdx(uvec2(prevScreenPos.xy * texSize))].distance > -0.5) * svgfNormalWeight(data.lnormal, refractIllumiantionBuffer.data[idx].normal) * svgfPositionWeight(data.lpos, refractIllumiantionBuffer.data[idx].pos, refractIllumiantionBuffer.data[idx].normal,info_.distance);
+    float s = float(refractIllumiantionBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.lnormal, refractIllumiantionBuffer.data[idx].normal) * svgfPositionWeight(data.lpos, refractIllumiantionBuffer.data[idx].pos, refractIllumiantionBuffer.data[idx].normal,info_distance);
 
     s = (min(1, s + 0.875) - 0.875)*8;
     float prevW = data.weight;
@@ -169,12 +170,13 @@ void MixRefract() {
 }
 
 void main() {
-   //严重消耗性能，与110.glsl一同占据用时的1/4~1/3
+   //严重消耗性能，与200.glsl一同占据用时的1/4~1/3
+    
     idx = getIdx(uvec2(gl_FragCoord.xy));
 
-    info_ = denoiseBuffer.data[idx];
+    info_distance = denoiseBuffer.data[idx].distance;
 
-    if (info_.distance < -0.5) {
+    if (info_distance < -0.5) {
         diffuseIllumiantionBuffer.data[idx].weight = 0;
         reflectIllumiantionBuffer.data[idx].weight = 0;
         refractIllumiantionBuffer.data[idx].weight = 0;
@@ -182,6 +184,7 @@ void main() {
     }
     texSize = textureSize(colortex0, 0);
     prevScreenPos = reproject2(diffuseIllumiantionBuffer.data[idx].pos);
+    idx_l=getIdx(uvec2(prevScreenPos.xy * texSize));
     //MixSample();
     MixDiffuse();
     MixReflect();

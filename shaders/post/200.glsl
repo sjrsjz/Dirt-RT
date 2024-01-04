@@ -7,34 +7,8 @@
 #include "/lib/buffers/denoise.glsl"
 #include "/lib/light_color.glsl"
 
-//2,3,4,5,6,7,8,9
+layout(local_size_x = 8,local_size_y = 8) in;
 
-//2:pos
-
-uniform sampler2D colortex0;
-uniform sampler2D colortex1;
-uniform sampler2D colortex2;
-uniform sampler2D colortex3;
-uniform sampler2D colortex6;
-uniform sampler2D colortex7;
-uniform sampler2D colortex8;
-uniform sampler2D colortex9;
-uniform sampler2D depthtex0;
-
-uniform mat4 gbufferProjectionInverse;
-uniform mat4 gbufferModelViewInverse;
-uniform vec3 cameraPosition;
-
-uniform mat4 gbufferProjection;
-uniform mat4 gbufferModelView;
-uniform mat4 gbufferPreviousProjection;
-uniform mat4 gbufferPreviousModelView;
-uniform vec3 previousCameraPosition;
-
-uniform float near;
-uniform float far;
-uniform vec2 resolution;
-uniform int worldTime;
 /*
 const int colortex0Format = RGBA32F;
 const int colortex1Format = RGBA32F;
@@ -70,27 +44,24 @@ const bool colortex8Clear = false;
 
 /* RENDERTARGETS: 0 */
 
-layout(location = 0) out vec4 fragColor;
-
 void main() {
     //return;
     
-    uint idx = getIdx(uvec2(gl_FragCoord.xy));
+    uint idx = getIdx(uvec2(gl_GlobalInvocationID.xy));
 
     if (denoiseBuffer.data[idx].distance < -0.5) {
-        diffuseIllumiantionBuffer.data[idx].weight = 0;
-        reflectIllumiantionBuffer.data[idx].weight = 0;
-        refractIllumiantionBuffer.data[idx].weight = 0;
         return;
     }
-
-    diffuseIllumiantionBuffer.data[idx].data = diffuseIllumiantionBuffer.data[idx].data_swap;
-    if (any(isnan(diffuseIllumiantionBuffer.data[idx].data.shY))) diffuseIllumiantionBuffer.data[idx].data.shY = vec4(0);
-    if (any(isnan(diffuseIllumiantionBuffer.data[idx].data.CoCg))) diffuseIllumiantionBuffer.data[idx].data.CoCg = vec2(0);
+    SH tmp=diffuseIllumiantionBuffer.data[idx].data_swap;
     
-    reflectIllumiantionBuffer.data[idx].data = reflectIllumiantionBuffer.data[idx].data_swap;
-    if (any(isnan(reflectIllumiantionBuffer.data[idx].data))) reflectIllumiantionBuffer.data[idx].data = vec3(0);
+    if (any(isnan(tmp.shY))) tmp.shY = vec4(0);
+    if (any(isnan(tmp.CoCg))) tmp.CoCg = vec2(0);
+    diffuseIllumiantionBuffer.data[idx].data = tmp;
+    vec3 tmp2=reflectIllumiantionBuffer.data[idx].data_swap;
+    if (any(isnan(tmp2))) tmp2 = vec3(0);
+    reflectIllumiantionBuffer.data[idx].data = tmp2;
     
-    refractIllumiantionBuffer.data[idx].data = refractIllumiantionBuffer.data[idx].data_swap;
-    if (any(isnan(refractIllumiantionBuffer.data[idx].data))) refractIllumiantionBuffer.data[idx].data = vec3(0);
+    tmp2 = refractIllumiantionBuffer.data[idx].data_swap;
+    if (any(isnan(tmp2))) tmp2 = vec3(0);
+    refractIllumiantionBuffer.data[idx].data = tmp2;
 }

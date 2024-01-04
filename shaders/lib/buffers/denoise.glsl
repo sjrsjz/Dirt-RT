@@ -132,7 +132,7 @@ struct diffuseIllumiantionData{
     //float lsumX2;
     float weight;
 };
-layout(std430,set=3, binding = 3) buffer DiffuseIllumiantionDataBuffer{
+layout(std140,set=3, binding = 3) buffer DiffuseIllumiantionDataBuffer{
     diffuseIllumiantionData data[];
 }diffuseIllumiantionBuffer;
 
@@ -148,11 +148,11 @@ struct vec3IllumiantionData{
     float weight;
 };
 
-layout(std430,set=3, binding = 4) buffer ReflectIllumiantionDataBuffer{
+layout(std140,set=3, binding = 4) buffer ReflectIllumiantionDataBuffer{
     vec3IllumiantionData data[];
 }reflectIllumiantionBuffer;
 
-layout(std430,set=3, binding = 5) buffer RefractIllumiantionDataBuffer{
+layout(std140,set=3, binding = 5) buffer RefractIllumiantionDataBuffer{
     vec3IllumiantionData data[];
 }refractIllumiantionBuffer;
 
