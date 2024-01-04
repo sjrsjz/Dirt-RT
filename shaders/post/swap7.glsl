@@ -1,5 +1,5 @@
 #version 430 compatibility
-
+#define REFRACT_BUFFER
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
@@ -21,8 +21,9 @@ layout(location = 0) out vec4 fragColor;
 
 void main() {
     uint idx=getIdx(uvec2(gl_FragCoord.xy));
-
-    refractIllumiantionBuffer.data[idx].data_swap=texelFetch(colortex5,ivec2(gl_FragCoord.xy),0).xyz;
-    refractIllumiantionBuffer.data[idx].lnormal =texelFetch(colortex3,ivec2(gl_FragCoord.xy),0).xyz;
-    refractIllumiantionBuffer.data[idx].lpos = texelFetch(colortex4,ivec2(gl_FragCoord.xy),0).xyz;
+    vec3IllumiantionData tmp=fetchRefract(ivec2(gl_FragCoord.xy));
+    tmp.data_swap=texelFetch(colortex5,ivec2(gl_FragCoord.xy),0).xyz;
+    tmp.normal =texelFetch(colortex3,ivec2(gl_FragCoord.xy),0).xyz;
+    tmp.pos = texelFetch(colortex4,ivec2(gl_FragCoord.xy),0).xyz;
+    WriteRefract(tmp,ivec2(gl_FragCoord.xy));
 }

@@ -52,7 +52,7 @@ void main() {
     if (denoiseBuffer.data[idx].distance < -0.5) {
         return;
     }
-    SH tmp=diffuseIllumiantionBuffer.data[idx].data_swap;
+    /*SH tmp=diffuseIllumiantionBuffer.data[idx].data_swap;
     
     if (any(isnan(tmp.shY))) tmp.shY = vec4(0);
     if (any(isnan(tmp.CoCg))) tmp.CoCg = vec2(0);
@@ -63,5 +63,5 @@ void main() {
     
     tmp2 = refractIllumiantionBuffer.data[idx].data_swap;
     if (any(isnan(tmp2))) tmp2 = vec3(0);
-    refractIllumiantionBuffer.data[idx].data = tmp2;
+    refractIllumiantionBuffer.data[idx].data = tmp2;*/
 }

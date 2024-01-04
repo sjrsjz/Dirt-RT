@@ -3,7 +3,7 @@
 #extension GL_EXT_buffer_reference : enable
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : enable
 #extension GL_EXT_ray_tracing : enable
-
+#define IN_VULKANITE
 #include "/lib/rt/payload.glsl"
 #include "/lib/rand.glsl"
 #include "/lib/constants.glsl"
@@ -623,12 +623,12 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
     diffuseIllumiantionBuffer.data[idx].data_swap = init_SH();
     reflectIllumiantionBuffer.data[idx].data_swap = vec3(0);
     refractIllumiantionBuffer.data[idx].data_swap = vec3(0);
-    diffuseIllumiantionBuffer.data[idx].normal = vec3(0);
+    diffuseIllumiantionBuffer.data[idx].normal = infos[0].macroNormal;
     diffuseIllumiantionBuffer.data[idx].pos = infos[0].p;
 
     vec3 r_rd,r_ro;
     vec3 r_rd_i=reflect(infos[0].rd_i,infos[0].n);
-    float t=raycast(infos[0].p,r_rd_i,r_rd,r_ro,false);
+    float t=raycast(infos[0].p,r_rd_i,r_ro,r_rd,false);
     reflectIllumiantionBuffer.data[idx].normal = faceforward(tmp_Payload.material.normal, tmp_Payload.material.normal, r_rd_i);
     reflectIllumiantionBuffer.data[idx].pos = r_ro;
     reflectIllumiantionBuffer.data[idx].distance=t;

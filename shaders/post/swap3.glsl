@@ -1,5 +1,5 @@
 #version 430 compatibility
-
+#define DIFFUSE_BUFFER
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
@@ -21,11 +21,12 @@ layout(location = 0) out vec4 fragColor;
 
 
 void main() {
+    diffuseIllumiantionData tmp=fetchDiffuse(ivec2(gl_FragCoord.xy));
+    tmp.data_swap.shY=texelFetch(colortex5,ivec2(gl_FragCoord.xy),0);
+    tmp.data_swap.CoCg=texelFetch(colortex6,ivec2(gl_FragCoord.xy),0).xy;
+    tmp.normal =texelFetch(colortex3,ivec2(gl_FragCoord.xy),0).xyz;
+    tmp.pos = texelFetch(colortex4,ivec2(gl_FragCoord.xy),0).xyz;
 
-    uint idx = getIdx(uvec2(gl_FragCoord.xy));
-    diffuseIllumiantionBuffer.data[idx].data_swap.shY=texelFetch(colortex5,ivec2(gl_FragCoord.xy),0);
-    diffuseIllumiantionBuffer.data[idx].data_swap.CoCg=texelFetch(colortex6,ivec2(gl_FragCoord.xy),0).xy;
-    diffuseIllumiantionBuffer.data[idx].lnormal =texelFetch(colortex3,ivec2(gl_FragCoord.xy),0).xyz;
-    diffuseIllumiantionBuffer.data[idx].lpos = texelFetch(colortex4,ivec2(gl_FragCoord.xy),0).xyz;
-
+    tmp.weight=length(tmp.data.shY)*100;
+    WriteDiffuse(tmp,ivec2(gl_FragCoord.xy));
 }

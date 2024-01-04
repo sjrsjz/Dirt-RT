@@ -1,5 +1,5 @@
 #version 430 compatibility
-
+#define DIFFUSE_BUFFER
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
@@ -11,32 +11,11 @@
 
 //2:pos
 
-uniform sampler2D colortex0;
-uniform sampler2D colortex1;
-uniform sampler2D colortex2;
 uniform sampler2D colortex3;
 uniform sampler2D colortex4;
 uniform sampler2D colortex5;
 uniform sampler2D colortex6;
-uniform sampler2D colortex7;
-uniform sampler2D colortex8;
-uniform sampler2D colortex9;
-uniform sampler2D depthtex0;
 
-uniform mat4 gbufferProjectionInverse;
-uniform mat4 gbufferModelViewInverse;
-uniform vec3 cameraPosition;
-
-uniform mat4 gbufferProjection;
-uniform mat4 gbufferModelView;
-uniform mat4 gbufferPreviousProjection;
-uniform mat4 gbufferPreviousModelView;
-uniform vec3 previousCameraPosition;
-
-uniform float near;
-uniform float far;
-uniform vec2 resolution;
-uniform int worldTime;
 
 /*
 const int colortex0Format = RGBA32F;
@@ -93,6 +72,7 @@ void main() {
     //shY=texelFetch(colortex5,ivec2(gl_FragCoord.xy),0);
     //CoCg=texelFetch(colortex6,ivec2(gl_FragCoord.xy),0);
     //return;
+        //WriteDiffuse(fetchDiffuse(ivec2(gl_FragCoord.xy)),ivec2(gl_FragCoord.xy));
     uint idx = getIdx(uvec2(gl_FragCoord.xy));
 
     bufferData info_ = denoiseBuffer.data[idx];
@@ -121,7 +101,7 @@ void main() {
     SH centerSH;
     centerSH.shY=texelFetch(colortex5,ivec2(gl_FragCoord.xy),0);
     centerSH.CoCg=texelFetch(colortex6,ivec2(gl_FragCoord.xy),0).xy;
-    float centerW=min(pow(diffuseIllumiantionBuffer.data[idx].weight,1.5)*0.003,0.2)*pow(R0,0.875);
+    float centerW=min(pow(fetchDiffuse(ivec2(gl_FragCoord.xy)).weight,1.5)*0.003,0.2)*pow(R0,0.875);
     for (int i = 0; i <= 2; i++) {
         samplePos.y=int(gl_FragCoord.y-R0);
         for (int j = 0; j <= 2; j++) {
@@ -153,4 +133,5 @@ void main() {
     SH tmp=scaleSH(A , 1/max(w, 0.01));
     shY=tmp.shY;
     CoCg.xy=tmp.CoCg;
+
 }

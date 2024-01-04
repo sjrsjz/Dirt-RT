@@ -1,6 +1,7 @@
 #version 430 compatibility
 
-#define DIFFUSE_BUFFER
+#define REFRACT_BUFFER
+
 
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
@@ -107,28 +108,27 @@ bool notInRange(vec2 p) {
     denoiseBuffer.data[idx].lastSample=denoiseBuffer.data[getIdx(uvec2(prevScreenPos.xy * texSize))].currSample;
 }*/
 
-diffuseIllumiantionData data1;
+
+vec3IllumiantionData data3;
 
 
 
-void MixDiffuse() {
-    /*if (notInRange(prevScreenPos.xy)) {
-        data1.weight = 1;
+void MixRefract() {
+    if (notInRange(prevScreenPos.xy)) {
+        data3.weight = 1;
         return;
-    }*/
-    diffuseIllumiantionData data = sampleDiffuse(ivec2(prevScreenPos.xy));
+    }
+    
+    vec3IllumiantionData data = sampleRefract(ivec2(prevScreenPos.xy));
 
-    float s = float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.normal, data1.normal) * svgfPositionWeight(data.pos, data1.pos, data1.normal,info_distance);
-
+    float s = float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.normal, data3.normal) * svgfPositionWeight(data.pos, data3.pos, data3.normal,info_distance);
     s = (min(1, s + 0.875) - 0.875)*8;
-    float prevW = data1.weight;
+    float prevW = data3.weight;
     prevW = max(1, min(prevW * s + 1, ACCUMULATION_LENGTH*2));
 
-    data1.data_swap = mix_SH(data.data,data1.data_swap,1/prevW);
-
-    data1.weight = prevW;
+    data3.data_swap =  data.data+(data3.data_swap-data.data)/prevW;
+    data3.weight = prevW;
 }
-
 
 void main() {
    //严重消耗性能，与200.glsl一同占据用时的1/4~1/3
@@ -136,17 +136,21 @@ void main() {
     idx = getIdx(uvec2(gl_FragCoord.xy));
 
     info_distance = denoiseBuffer.data[idx].distance;
-    data1=diffuseIllumiantionBuffer.data[idx];
+
+    data3=refractIllumiantionBuffer.data[idx];
 
     if (info_distance < -0.5) {
-        data1.weight = 0;
-        WriteDiffuse(data1,ivec2(gl_FragCoord.xy));
+
+        data3.weight = 0;
+
+        WriteRefract(data3,ivec2(gl_FragCoord.xy));
         return;
     }
     prevScreenPos = reproject2(diffuseIllumiantionBuffer.data[idx].pos);
     idx_l=getIdx(uvec2(prevScreenPos.xy*textureSize(colortex0,0)));
 
-    MixDiffuse();
-    WriteDiffuse(data1,ivec2(gl_FragCoord.xy));
 
+    MixRefract();
+
+    WriteRefract(data3,ivec2(gl_FragCoord.xy));
 }
