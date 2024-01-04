@@ -1,7 +1,0 @@
-option.SRR = Super-resolution Reconstruction
-value.SRR.1 = OFF
-value.SRR.0 = ON
-
-option.RAY_BOUNCES = Bounce count
-option.Refractive_Index = Refractive index
-option.ACCUMULATION_LENGTH = Accumulation length
