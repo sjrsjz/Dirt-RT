@@ -1,7 +1,7 @@
 #version 430
 #include "/lib/common.glsl"
 
-in vec2 texCoordRaw;
+in vec2 texCoord;
 uniform sampler2D colortex0;
 uniform sampler2D colortex1;
 
@@ -15,13 +15,13 @@ float kernel(float x) {
 void main() {
     //return;
     #ifdef SRR_
-    if (texCoordRaw.x > 0.5 || texCoordRaw.y > 0.5) return;
+    if (texCoord.x > 0.5 || texCoord.y > 0.5) return;
     #endif
     const int sampleN = 32;
     vec3 sumX = vec3(0);
-    float angleOffset = rand(texCoordRaw - 400) * 32 * PI;
+    float angleOffset = rand(texCoord - 400) * 32 * PI;
     const float angleShift = 2 * PI / sampleN;
-    float R = rand(texCoordRaw * 100 + 300);
+    float R = rand(texCoord * 100 + 300);
     
     float weight = kernel(R) / kernel(0);
 

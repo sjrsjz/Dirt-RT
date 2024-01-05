@@ -17,10 +17,10 @@ layout(location = 2) out vec4 shY;
 layout(location = 3) out vec4 CoCg;
 
 void main() {
-    //uint idx = getIdx(uvec2(gl_FragCoord.xy));
+    uint idx = getIdx(uvec2(gl_FragCoord.xy));
     diffuseIllumiantionData tmp = fetchDiffuse(ivec2(gl_FragCoord.xy));
-    diffuseNormal.xyz = tmp.normal;
-    diffusePos.xyz = tmp.pos;
+    diffuseNormal.xyz = diffuseIllumiantionBuffer.data[idx].normal;
+    diffusePos.xyz = diffuseIllumiantionBuffer.data[idx].pos;
     shY = tmp.data_swap.shY;
     CoCg.xy = tmp.data_swap.CoCg;
 }

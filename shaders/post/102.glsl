@@ -1,6 +1,6 @@
 #version 430 compatibility
 
-#define REFRACT_BUFFER
+#define REFRACT_BUFFER_MIN
 
 
 #include "/lib/constants.glsl"
@@ -14,7 +14,7 @@
 
 //2:pos
 
-in vec2 texCoordRaw;
+in vec2 texCoord;
 
 uniform sampler2D colortex0;
 
@@ -94,7 +94,7 @@ vec2 texSize;
 uint idx;
 
 bool notInRange(vec2 p) {
-    return clamp(p, vec2(0), texSize) != p;
+    return clamp(p, vec2(0), vec2(1)) != p;
     
 }
 
@@ -119,11 +119,11 @@ void MixRefract() {
         return;
     }
     
-    vec3IllumiantionData data = sampleRefract(ivec2(prevScreenPos.xy));
+    vec3IllumiantionData data = sampleRefract(prevScreenPos.xy*textureSize(colortex0,0));
 
     float s = float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.normal, data3.normal) * svgfPositionWeight(data.pos, data3.pos, data3.normal,info_distance);
     s = (min(1, s + 0.875) - 0.875)*8;
-    float prevW = data3.weight;
+    float prevW = data.weight;
     prevW = max(1, min(prevW * s + 1, ACCUMULATION_LENGTH*2));
 
     data3.data_swap =  data.data+(data3.data_swap-data.data)/prevW;
@@ -141,12 +141,12 @@ void main() {
 
     if (info_distance < -0.5) {
 
-        data3.weight = 0;
+        data3.weight = 1;
 
         WriteRefract(data3,ivec2(gl_FragCoord.xy));
         return;
     }
-    prevScreenPos = reproject2(diffuseIllumiantionBuffer.data[idx].pos);
+    prevScreenPos = reproject2(data3.pos);
     idx_l=getIdx(uvec2(prevScreenPos.xy*textureSize(colortex0,0)));
 
 

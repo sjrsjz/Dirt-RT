@@ -11,7 +11,7 @@
 
 //2:pos
 
-in vec2 texCoordRaw;
+in vec2 texCoord;
 
 
 /*
@@ -61,7 +61,7 @@ bool notInRange(vec2 p) {
 
 
 void MixDiffuse() {
-    diffuseIllumiantionData center = sampleDiffuse(texCoordRaw);
+    diffuseIllumiantionData center = sampleDiffuse(gl_FragCoord.xy);
     vec3 c0 = project_SH_irradiance(center.data_swap, center.normal2);
     const int S = 1;
     float w = 0;

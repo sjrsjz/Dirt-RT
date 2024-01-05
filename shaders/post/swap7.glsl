@@ -22,6 +22,8 @@ layout(location = 0) out vec4 fragColor;
 void main() {
     uint idx=getIdx(uvec2(gl_FragCoord.xy));
     vec3IllumiantionData tmp=fetchRefract(ivec2(gl_FragCoord.xy));
+    if (any(isnan(tmp.data_swap))) tmp.data_swap = vec3(0);
+    tmp.data=tmp.data_swap;
     tmp.data_swap=texelFetch(colortex5,ivec2(gl_FragCoord.xy),0).xyz;
     tmp.normal =texelFetch(colortex3,ivec2(gl_FragCoord.xy),0).xyz;
     tmp.pos = texelFetch(colortex4,ivec2(gl_FragCoord.xy),0).xyz;

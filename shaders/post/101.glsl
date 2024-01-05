@@ -1,6 +1,6 @@
 #version 430 compatibility
 
-#define REFLECT_BUFFER
+#define REFLECT_BUFFER_MIN
 
 
 #include "/lib/constants.glsl"
@@ -14,7 +14,7 @@
 
 //2:pos
 
-in vec2 texCoordRaw;
+in vec2 texCoord;
 
 uniform sampler2D colortex0;
 
@@ -52,7 +52,7 @@ const bool colortex8Clear = false;
 */
 
 const float NORMAL_PARAM = 16.0;
-const float POSITION_PARAM = 1.0;
+const float POSITION_PARAM = 4.0;
 const float LUMINANCE_PARAM = 4.0;
 
 float svgfNormalWeight(vec3 centerNormal, vec3 normal) {
@@ -94,7 +94,7 @@ vec2 texSize;
 uint idx;
 
 bool notInRange(vec2 p) {
-    return clamp(p, vec2(0), texSize) != p;
+    return clamp(p, vec2(0), vec2(1)) != p;
     
 }
 
@@ -118,12 +118,12 @@ void MixReflect() {
         return;
     }
     
-    vec3IllumiantionData data = sampleReflect(ivec2(prevScreenPos.xy));
+    vec3IllumiantionData data = sampleReflect(prevScreenPos.xy*textureSize(colortex0,0));
 
     float s = float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.normal, data2.normal) * svgfPositionWeight(data.pos, data2.pos, data2.normal,info_distance);
     s = (min(1, s + 0.875) - 0.875)*8;
-    float prevW = data2.weight;
-    prevW = max(1, min(prevW * s + 1, ACCUMULATION_LENGTH*2));
+    float prevW = data.weight;
+    prevW = max(1, min(prevW * s + 1, ACCUMULATION_LENGTH*5));
 
     data2.data_swap = data.data+(data2.data_swap-data.data)/prevW;
     data2.weight = prevW;
@@ -136,20 +136,18 @@ void main() {
 
     info_distance = denoiseBuffer.data[idx].distance;
     data2=reflectIllumiantionBuffer.data[idx];
-
-
     if (info_distance < -0.5) {
 
-        data2.weight = 0;
+        data2.weight = 1;
 
         WriteReflect(data2,ivec2(gl_FragCoord.xy));
 
         return;
     }
-    prevScreenPos = reproject2(diffuseIllumiantionBuffer.data[idx].pos);
+    prevScreenPos = reproject2(data2.pos);
     idx_l=getIdx(uvec2(prevScreenPos.xy*textureSize(colortex0,0)));
 
     MixReflect();
-    
+   // data2.weight=10;
     WriteReflect(data2,ivec2(gl_FragCoord.xy));
 }

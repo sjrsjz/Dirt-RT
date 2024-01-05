@@ -45,7 +45,7 @@ const bool colortex8Clear = false;
 /* RENDERTARGETS: 0 */
 
 void main() {
-    //return;
+    return;
     
     uint idx = getIdx(uvec2(gl_GlobalInvocationID.xy));
 

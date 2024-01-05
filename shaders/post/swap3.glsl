@@ -8,6 +8,7 @@
 #include "/lib/light_color.glsl"
 
 //2,3,4,5,6,7,8,9
+in vec2 texCoord;
 
 //2:pos
 uniform sampler2D colortex3;
@@ -21,12 +22,16 @@ layout(location = 0) out vec4 fragColor;
 
 
 void main() {
-    diffuseIllumiantionData tmp=fetchDiffuse(ivec2(gl_FragCoord.xy));
+    diffuseIllumiantionData tmp=sampleDiffuse(gl_FragCoord.xy);
+    if (any(isnan(tmp.data_swap.shY))) tmp.data_swap.shY = vec4(0);
+    if (any(isnan(tmp.data_swap.CoCg))) tmp.data_swap.CoCg = vec2(0);
+    tmp.data=tmp.data_swap;
+
     tmp.data_swap.shY=texelFetch(colortex5,ivec2(gl_FragCoord.xy),0);
     tmp.data_swap.CoCg=texelFetch(colortex6,ivec2(gl_FragCoord.xy),0).xy;
     tmp.normal =texelFetch(colortex3,ivec2(gl_FragCoord.xy),0).xyz;
     tmp.pos = texelFetch(colortex4,ivec2(gl_FragCoord.xy),0).xyz;
 
-    tmp.weight=length(tmp.data.shY)*100;
+    //tmp.weight=length(tmp.data.shY)*100;
     WriteDiffuse(tmp,ivec2(gl_FragCoord.xy));
 }

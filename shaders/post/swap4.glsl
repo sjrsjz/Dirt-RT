@@ -19,7 +19,9 @@ void main() {
 
     uint idx = getIdx(uvec2(gl_FragCoord.xy));
     vec3IllumiantionData tmp=fetchReflect(ivec2(gl_FragCoord.xy));
-    reflectNormal.xyz = tmp.normal;
-    reflectPos.xyz = tmp.pos;
+    reflectNormal.xyz = reflectIllumiantionBuffer.data[idx].normal;
+    reflectPos.xyz = reflectIllumiantionBuffer.data[idx].pos;
+    //reflectNormal.xyz = tmp.normal;
+    //reflectPos.xyz = tmp.pos;
     color.xyz=tmp.data_swap;
 }

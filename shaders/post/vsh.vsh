@@ -1,8 +1,8 @@
 #version 430 compatibility
 
-out vec2 texCoordRaw;
+out vec2 texCoord;
 
 void main() {
     gl_Position = ftransform();
-    texCoordRaw = gl_MultiTexCoord0.xy;
+    texCoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
 }

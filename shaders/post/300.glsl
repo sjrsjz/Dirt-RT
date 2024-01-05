@@ -72,7 +72,6 @@ void main() {
     //shY=texelFetch(colortex5,ivec2(gl_FragCoord.xy),0);
     //CoCg=texelFetch(colortex6,ivec2(gl_FragCoord.xy),0);
     //return;
-        //WriteDiffuse(fetchDiffuse(ivec2(gl_FragCoord.xy)),ivec2(gl_FragCoord.xy));
     uint idx = getIdx(uvec2(gl_FragCoord.xy));
 
     bufferData info_ = denoiseBuffer.data[idx];
