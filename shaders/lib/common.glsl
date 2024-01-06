@@ -268,7 +268,7 @@ float getRnd(){
 }
 
 vec3 rndS(vec3 pos){
-    return normalize(tan(vec3(getRnd()-0.5,getRnd()-0.5,getRnd()-0.5)));
+    return normalize(tan(vec3(rand(pos)-0.5,rand(pos)-0.5,rand(pos)-0.5)));
 }
 float luma(vec3 c){
     return dot(c,vec3(0.299,0.587,0.114));
@@ -316,8 +316,8 @@ vec3 DiffuseNormal(vec3 normal,vec3 pos){
     else
         randN0.xz=normal.xz*normal.y*inversesqrt(1-normal.y*normal.y);
     vec3 randN1=cross(normal,randN0);
-    float alpha=getRnd()*2*PI;
-    float tmp=getRnd();
+    float alpha=rand(pos)*2*PI;
+    float tmp=rand(pos);
     //float cosbeta=clamp(1-tmp*2,-1,1);
     //const float _1_div_sqrt_2=1/sqrt(2);
     return sqrt(1-tmp)*normal+sqrt(tmp)*(cos(alpha)*randN0+sin(alpha)*randN1);

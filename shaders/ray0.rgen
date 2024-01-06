@@ -72,7 +72,7 @@ void main() {
 
     
 
-    wseed=floatBitsToUint(rand(origin+direction));
+    wseed=floatBitsToUint(rand(origin+direction*iFrame));
 
     vec3 seed0=vec3(randcore4(),randcore4(),randcore4());
     wseed3.x=floatBitsToUint(seed0.x);
@@ -302,8 +302,8 @@ vec3 sampleSunlight(info A, vec3 lightDir, bool night,int type/*,int inwater*/) 
 
     vec3 ro = A.p;
 
-    float r1 = getRnd();
-    float alpha = getRnd() * 2 * PI;
+    float r1 = rand(ro);
+    float alpha = rand(ro+lightDir) * 2 * PI;
     float cosbeta = 1 - r1 * (1 - cosD_S);
 
     vec3 ro_o, rd_o;
@@ -442,7 +442,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         bool refract_;
         vec3 I;
         vec3 shade;
-        bool b = getRnd() < p;
+        bool b = rand(ro_o) < p;
         A.microNormal = microNormal;
         A.macroNormal = macroNormal;
         A.color2 = surface.Cs;
@@ -460,12 +460,12 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         } else {
             float rs = mA.x / mB.x;
             float F = max(fresnel(-rd_i, microNormal, rs), 0);
-            bool r = getRnd() < 1 - F;
+            bool r = rand(ro_o) < 1 - F;
             vec3 rd_refract = vec3(0);
 
             if (r) rd_refract = refract(rd_i, microNormal, rs);
 
-            refract_ = getRnd() < surface.S.y;
+            refract_ = rand(ro_o) < surface.S.y;
             I = surface.Cd;
 
             vec3 rd_o2;
@@ -576,11 +576,11 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         for (int i = count; i >= 0; i--) {
             float sr2 = infos[i].sampleRoughness * infos[i].sampleRoughness;
             float p = sr2 / A;
-            bool b0 = getRnd() < p && c0;
+            bool b0 = rand(ro_o-rd) < p && c0;
             j0 = a && b0 ? i : j0;
             p_0 = a && b0 ? p : p_0;
             c0 = a && b0 ? false : c0;
-            b0 = getRnd() < p && c1;
+            b0 = rand(ro_o+rd) < p && c1;
             j1 = a && b0 ? i : j1;
             p_1 = a && b0 ? p : p_1;
             c1 = a && b0 ? false : c1;
