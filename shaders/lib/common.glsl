@@ -233,7 +233,7 @@ void XYZ(vec3 n,out vec3 X,out vec3 Y,out vec3 Z){
 float rand_i=0.;
 float rand(vec3 p3)
 {
-    p3*=73;
+    p3*=31;
     rand_i += 0.4;
     p3 += rand_i+iFrame;
     p3  = fract(p3 * .1031);
@@ -303,8 +303,8 @@ vec3 GGXNormal(vec3 normal,float roughness,vec3 pos){
     else
         randN0.xz=normal.xz*normal.y*inversesqrt(1-normal.y*normal.y);
     vec3 randN1=cross(normal,randN0);
-    float alpha=getRnd()*2*PI;
-    float tmp=getRnd();
+    float alpha=rand(pos)*2*PI;
+    float tmp=rand(pos);
     float cosbeta=clamp(sqrt(max(0.,(1.-tmp)/(1.+tmp*(roughness*roughness-1.)))),0.,1.);
 
     return cosbeta*normal+sqrt(1-cosbeta*cosbeta)*(cos(alpha)*randN0+sin(alpha)*randN1);

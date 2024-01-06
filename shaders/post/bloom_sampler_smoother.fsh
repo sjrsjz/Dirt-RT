@@ -18,7 +18,7 @@ void main() {
     for (int i = -2; i <= 2; i++)
         for (int j = -2; j <= 2; j++)
             avg += texelFetch(colortex1, ivec2(gl_FragCoord.xy + vec2(i, j)), 0).rgb;
-    fragColor.xyz = (avg / 25  + texture(colortex0, texCoord).rgb);
+    fragColor.xyz = mix(avg/25  ,texture(colortex0, texCoord).rgb,0.75);
     if (any(isnan(fragColor.xyz))) fragColor.xyz = vec3(0);
     return;
     #else

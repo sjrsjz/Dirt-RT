@@ -1,5 +1,5 @@
 #version 430 compatibility
-#define DIFFUSE_BUFFER
+#define DIFFUSE_BUFFER_MIN
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
@@ -63,7 +63,7 @@ bool notInRange(vec2 p) {
 void MixDiffuse() {
     diffuseIllumiantionData center = sampleDiffuse(gl_FragCoord.xy);
     vec3 c0 = project_SH_irradiance(center.data_swap, center.normal2);
-    const int S = 1;
+    const int S = 0;
     float w = 0;
     
     vec3 sumX=vec3(0);
@@ -115,16 +115,14 @@ void MixDiffuse() {
 
 
 void main() {
-    
+    //return;
     idx = getIdx(uvec2(gl_FragCoord.xy));
-    
-    
     info_ = denoiseBuffer.data[idx];
     Emission=vec4(info_.emission,0);
     //return;
-    if (info_.distance < -0.5) {
+    /*if (info_.distance < -0.5) {
         return;
-    }
-    MixDiffuse();
+    }*/
+   // MixDiffuse();
     
 }

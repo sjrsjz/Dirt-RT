@@ -1,7 +1,7 @@
 #version 430
-#define DIFFUSE_BUFFER_MIN
-#define REFLECT_BUFFER_MIN
-#define REFRACT_BUFFER_MIN
+#define DIFFUSE_BUFFER_MIN2
+#define REFLECT_BUFFER_MIN2
+#define REFRACT_BUFFER_MIN2
 
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
@@ -18,7 +18,7 @@ void main() {
     uint idx = getIdx(uvec2(gl_FragCoord.xy));
     bufferData data = denoiseBuffer.data[idx];
     diffuseIllumiantionData tmp = fetchDiffuse(ivec2(gl_FragCoord.xy));
-    vec3IllumiantionData tmp2=fetchReflect(ivec2(gl_FragCoord.xy));
+    vec3IllumiantionData tmp2 = fetchReflect(ivec2(gl_FragCoord.xy));
     vec3IllumiantionData tmp3 = fetchRefract(ivec2(gl_FragCoord.xy));
 
     if (data.distance < -0.5) {
@@ -29,6 +29,6 @@ void main() {
         //fragColor.xyz=vec3(1)*tmp3.weight;
         
         //fragColor.xyz=vec3(abs(project_SH_irradiance(tmp.data,faceforward(tmp.normal2,tmp.normal2,-tmp.normal))));
-        fragColor.xyz =data.absorption * ((project_SH_irradiance(tmp.data_swap,tmp.normal2) + tmp3.data_swap) * data.albedo2 + tmp2.data_swap * data.albedo + data.light) + data.emission;
+        fragColor.xyz =data.absorption * ((project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2) + tmp3.data_swap) * data.albedo2 + tmp2.data_swap * data.albedo + data.light) + data.emission;
     }
 }

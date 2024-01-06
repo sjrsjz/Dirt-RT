@@ -151,7 +151,7 @@ layout(std140, set = 3, binding = 5) buffer RefractIllumiantionDataBuffer {
 } refractIllumiantionBuffer;
 
 
-#if defined(DIFFUSE_BUFFER) || defined(DIFFUSE_BUFFER_MIN)
+#if defined(DIFFUSE_BUFFER) || defined(DIFFUSE_BUFFER_MIN) || defined(DIFFUSE_BUFFER_MIN2)
 
 
 layout(rgba32f) uniform image2D diffuseIllumiantionData_shY_swap;
@@ -162,12 +162,11 @@ uniform sampler2D diffuseIllumiantionData_shY_swap_Sampler;
 uniform sampler2D diffuseIllumiantionData_CoCg_swap_Sampler;
 uniform sampler2D diffuseIllumiantionData_lnormal_Sampler;
 uniform sampler2D diffuseIllumiantionData_lpos_Sampler;
-#ifndef DIFFUSE_BUFFER_MIN
+#if !defined(DIFFUSE_BUFFER_MIN) && !defined(DIFFUSE_BUFFER_MIN2)
 layout(rgba32f) uniform image2D diffuseIllumiantionData_shY;
 layout(rg32f) uniform image2D diffuseIllumiantionData_CoCg;
 layout(rgba32f) uniform image2D diffuseIllumiantionData_lnormal;
 layout(rgba32f) uniform image2D diffuseIllumiantionData_lpos;
-
 #endif
 
 
@@ -196,31 +195,34 @@ diffuseIllumiantionData fetchDiffuse(ivec2 p) {
     tmp.data_swap.CoCg = tmp4.xy;
     tmp.data_swap.shY = texelFetch(diffuseIllumiantionData_shY_swap_Sampler, p, 0);
     tmp.weight = tmp4.z;
-    //#ifndef DIFFUSE_BUFFER_MIN
+    #ifndef DIFFUSE_BUFFER_MIN2
     tmp4 = texelFetch(diffuseIllumiantionData_CoCg_Sampler, p, 0);
     tmp.data.CoCg = tmp4.xy;
     tmp.data.shY = texelFetch(diffuseIllumiantionData_shY_Sampler, p, 0);
 
     tmp.normal = texelFetch(diffuseIllumiantionData_lnormal_Sampler, p, 0).xyz;
     tmp.pos = texelFetch(diffuseIllumiantionData_lpos_Sampler, p, 0).xyz;
-    //#endif
+    #endif
     return tmp;
 }
 
 diffuseIllumiantionData blendDiffuse(diffuseIllumiantionData A,diffuseIllumiantionData B,float x){
     diffuseIllumiantionData t;
     t.data_swap=mix_SH(A.data_swap,B.data_swap,x);
+    t.weight=(B.weight-A.weight)*x+A.weight;
+
+    #ifndef DIFFUSE_BUFFER_MIN2
     t.data=mix_SH(A.data,B.data,x);
     t.pos=mix(A.pos,B.pos,x);
     t.normal=mix(A.normal,B.normal,x);
-    t.weight=(B.weight-A.weight)*x+A.weight;
+    #endif
     return t;
 }
 
 diffuseIllumiantionData sampleDiffuse(vec2 p){
     
     //p*=textureSize(diffuseIllumiantionData_CoCg_swap_Sampler,0);
-    p-=0.375;
+    p-=0.2875;
     ivec2 p1=ivec2(p);
 
     vec2 p2=fract(p);
@@ -236,7 +238,7 @@ void WriteDiffuse(diffuseIllumiantionData data, ivec2 p) {
     
     imageStore(diffuseIllumiantionData_shY_swap, p, data.data_swap.shY);
     imageStore(diffuseIllumiantionData_CoCg_swap, p, vec4(data.data_swap.CoCg, data.weight, 0));
-    #if !defined(DIFFUSE_BUFFER_MIN)
+    #if !defined(DIFFUSE_BUFFER_MIN) && !defined(DIFFUSE_BUFFER_MIN2)
     imageStore(diffuseIllumiantionData_shY, p, data.data.shY);
     imageStore(diffuseIllumiantionData_CoCg, p, vec4(data.data.CoCg, 0, 0));
     
@@ -247,14 +249,14 @@ void WriteDiffuse(diffuseIllumiantionData data, ivec2 p) {
 }
 #endif
 
-#if defined(REFLECT_BUFFER) || defined(REFLECT_BUFFER_MIN) 
+#if defined(REFLECT_BUFFER) || defined(REFLECT_BUFFER_MIN) || defined(REFLECT_BUFFER_MIN2) 
 
 layout(rgba32f) uniform image2D reflectIllumiantionData_swap_color;
 uniform sampler2D reflectIllumiantionData_color_Sampler;
 uniform sampler2D reflectIllumiantionData_color_swap_Sampler;
 uniform sampler2D reflectIllumiantionData_lnormal_Sampler;
 uniform sampler2D reflectIllumiantionData_lpos_Sampler;
-#ifndef REFLECT_BUFFER_MIN
+#if !defined(REFLECT_BUFFER_MIN) && !defined(REFLECT_BUFFER_MIN2) 
 layout(rgba32f) uniform image2D reflectIllumiantionData_color;
 layout(rgba32f) uniform image2D reflectIllumiantionData_lnormal;
 layout(rgba32f) uniform image2D reflectIllumiantionData_lpos;
@@ -278,23 +280,25 @@ vec3IllumiantionData fetchReflect(ivec2 p) {
     vec4 tmp4 = texelFetch(reflectIllumiantionData_color_swap_Sampler, p, 0);
     tmp.data_swap = tmp4.xyz;
     tmp.weight = tmp4.w;
-    //#ifndef REFLECT_BUFFER_MIN
+    #ifndef REFLECT_BUFFER_MIN2
     tmp4 = texelFetch(reflectIllumiantionData_color_Sampler, p, 0);
     tmp.data = tmp4.xyz;
 
     tmp.normal = texelFetch(reflectIllumiantionData_lnormal_Sampler, p, 0).xyz;
     tmp.pos = texelFetch(reflectIllumiantionData_lpos_Sampler, p, 0).xyz;
-    //#endif
+    #endif
     return tmp;
 }
 
 vec3IllumiantionData blendReflect(vec3IllumiantionData A,vec3IllumiantionData B,float x){
     vec3IllumiantionData t;
     t.data_swap=mix(A.data_swap,B.data_swap,x);
+    t.weight=(B.weight-A.weight)*x+A.weight;    
+    #ifndef REFLECT_BUFFER_MIN2
     t.data=mix(A.data,B.data,x);
     t.pos=mix(A.pos,B.pos,x);
     t.normal=mix(A.normal,B.normal,x);
-    t.weight=(B.weight-A.weight)*x+A.weight;
+    #endif
     return t;
 }
 
@@ -315,7 +319,7 @@ vec3IllumiantionData sampleReflect(vec2 p){
 
 void WriteReflect(vec3IllumiantionData data, ivec2 p) {
     imageStore(reflectIllumiantionData_swap_color, p, vec4(data.data_swap, data.weight));
-    #ifndef REFLECT_BUFFER_MIN
+    #if !defined(REFLECT_BUFFER_MIN) && !defined(REFLECT_BUFFER_MIN2) 
     imageStore(reflectIllumiantionData_color, p, vec4(data.data, data.weight));
     imageStore(reflectIllumiantionData_lpos, p, vec4(data.pos, 0));
     imageStore(reflectIllumiantionData_lnormal, p, vec4(data.normal, 0));
@@ -323,14 +327,14 @@ void WriteReflect(vec3IllumiantionData data, ivec2 p) {
 }
 #endif
 
-#if defined(REFRACT_BUFFER) || defined(REFRACT_BUFFER_MIN)
+#if defined(REFRACT_BUFFER) || defined(REFRACT_BUFFER_MIN) || defined(REFRACT_BUFFER_MIN2)
 
 layout(rgba32f) uniform image2D refractIllumiantionData_swap_color;
 uniform sampler2D refractIllumiantionData_color_Sampler;
 uniform sampler2D refractIllumiantionData_color_swap_Sampler;
 uniform sampler2D refractIllumiantionData_lnormal_Sampler;
 uniform sampler2D refractIllumiantionData_lpos_Sampler;
-#ifndef REFRAECT_BUFFER_MIN
+#if !defined(REFRACT_BUFFER_MIN) && !defined(REFRACT_BUFFER_MIN2)
 layout(rgba32f) uniform image2D refractIllumiantionData_color;
 layout(rgba32f) uniform image2D refractIllumiantionData_lnormal;
 layout(rgba32f) uniform image2D refractIllumiantionData_lpos;
@@ -356,22 +360,25 @@ vec3IllumiantionData fetchRefract(ivec2 p) {
     vec4 tmp4 = texelFetch(refractIllumiantionData_color_swap_Sampler, p, 0);
     tmp.data_swap=tmp4.xyz;
     tmp.weight = tmp4.w;
-   // #ifndef REFRACT_BUFFER_MIN
+    #ifndef REFRACT_BUFFER_MIN2
     tmp4 = texelFetch(refractIllumiantionData_color_Sampler, p, 0);
     tmp.data = tmp4.xyz;
     tmp.normal = texelFetch(refractIllumiantionData_lnormal_Sampler, p, 0).xyz;
     tmp.pos = texelFetch(refractIllumiantionData_lpos_Sampler, p, 0).xyz;
-    //#endif
+    #endif
     return tmp;
 }
 
 vec3IllumiantionData blendRefract(vec3IllumiantionData A,vec3IllumiantionData B,float x){
     vec3IllumiantionData t;
     t.data_swap=mix(A.data_swap,B.data_swap,x);
+    t.weight=(B.weight-A.weight)*x+A.weight;
+
+    #ifndef REFRACT_BUFFER_MIN2
     t.data=mix(A.data,B.data,x);
     t.pos=mix(A.pos,B.pos,x);
     t.normal=mix(A.normal,B.normal,x);
-    t.weight=(B.weight-A.weight)*x+A.weight;
+    #endif
     return t;
 }
 
@@ -392,7 +399,7 @@ vec3IllumiantionData sampleRefract(vec2 p){
 void WriteRefract(vec3IllumiantionData data, ivec2 p) {
     
     imageStore(refractIllumiantionData_swap_color, p, vec4(data.data_swap, data.weight));
-    #ifndef REFRACT_BUFFER_MIN
+    #if !defined(REFRACT_BUFFER_MIN) && !defined(REFRACT_BUFFER_MIN2)
     imageStore(refractIllumiantionData_color, p, vec4(data.data, data.weight));
     imageStore(refractIllumiantionData_lpos, p, vec4(data.pos, 0));
     imageStore(refractIllumiantionData_lnormal, p, vec4(data.normal, 0));

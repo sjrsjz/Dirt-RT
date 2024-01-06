@@ -1,5 +1,5 @@
 #version 430 compatibility
-#define DIFFUSE_BUFFER
+#define DIFFUSE_BUFFER_MIN2
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
@@ -113,7 +113,7 @@ void main() {
             tmp.shY=texelFetch(colortex5,samplePos,0);
             tmp.CoCg=texelFetch(colortex6,samplePos,0).xy;
             float dL=centerW*sqrt((dot(tmp.shY-centerSH.shY,tmp.shY-centerSH.shY)+dot(tmp.CoCg-centerSH.CoCg,tmp.CoCg-centerSH.CoCg)));
-            float w0 = svgfNormalWeight(centerNormal, texelFetch(colortex3,(samplePos),0).xyz)
+            float w0 = svgfNormalWeight(centerNormal, texelFetch(colortex3,samplePos,0).xyz)
                      * svgfPositionWeight(centerPos, texelFetch(colortex4,samplePos,0).xyz, centerNormal)
                      * exp(-dL)
                      * w1;
