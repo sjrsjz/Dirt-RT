@@ -16,9 +16,9 @@ struct info{
     vec3 microNormal;
     vec3 macroNormal;
     vec3 p;
-    object o;
+    //object o;
     material surface;
-    vec4 rC;
+    //vec4 rC;
     float n_i;float n_o;
     float distance;
     float sampleDistance;
@@ -30,7 +30,7 @@ struct info{
     vec3 emission;
     float sampleRoughness;
     int type;
-    vec3 mix;
+    //vec3 mix;
 };
 
 //----------------------------------------------------------------------------------------
@@ -294,7 +294,7 @@ float GGX_Lamda(float VoN,float a){
 
 float GGX_G2(float VoN,float LoN,float a){
     float L1=GGX_Lamda(VoN,a);float L2=GGX_Lamda(LoN,a);
-    return clamp((1+L1)/(L2+L1),0,1);
+    return clamp((1+L1)/(1+L2+L1),0,1);
 }
 vec3 GGXNormal(vec3 normal,float roughness,vec3 pos){
     vec3 randN0;randN0.y=-length(normal.xz);
@@ -305,7 +305,7 @@ vec3 GGXNormal(vec3 normal,float roughness,vec3 pos){
     vec3 randN1=cross(normal,randN0);
     float alpha=rand(pos)*2*PI;
     float tmp=rand(pos);
-    float cosbeta=clamp(sqrt(max(0.,(1.-tmp)/(1.+tmp*(roughness*roughness-1.)))),0.,1.);
+    float cosbeta=min(sqrt(max(0.,(1.-tmp)/(1.+tmp*(roughness*roughness-1.)))),1.);
 
     return cosbeta*normal+sqrt(1-cosbeta*cosbeta)*(cos(alpha)*randN0+sin(alpha)*randN1);
 }
@@ -318,8 +318,6 @@ vec3 DiffuseNormal(vec3 normal,vec3 pos){
     vec3 randN1=cross(normal,randN0);
     float alpha=rand(pos)*2*PI;
     float tmp=rand(pos);
-    //float cosbeta=clamp(1-tmp*2,-1,1);
-    //const float _1_div_sqrt_2=1/sqrt(2);
     return sqrt(1-tmp)*normal+sqrt(tmp)*(cos(alpha)*randN0+sin(alpha)*randN1);
 }
 float GGXdf(float theta,float fai,float a){
@@ -344,24 +342,6 @@ float fresnel(vec3 v,vec3 n,float rs){
     A=(A*rs-A.yx)/max(A*rs+A.yx,1e-4);
     return 0.5*dot(A,A);
 }
-
-float noise( in vec2 x )
-{
-    vec2 p = floor(x);
-    vec2 w = fract(x);
-    vec2 u = w*w*(3.0-2.0*w);
-    float n = 176.74*p.x + 317.0*p.y ;
-    return mix( mix(hash(n+  0.0),hash(n+  1.0),u.x),
-                     mix(hash(n+317.07),hash(n+318.07),u.x),u.y);   
-}
-mat3 randM(vec2 pos,float b){
-    pos=floor(pos);mat3 m0;
-    for(int i=0;i<=2;i++)
-        for(int j=0;j<=2;j++)
-            m0[i][j]=b==0?floor(noise(pos+vec2(i,j))*2):noise(pos+vec2(i,j))+max(b,0)*i+max(-b,0)*j;
-    return m0;
-}
-
 
 mat2 rot(float a) {return mat2(cos(a),sin(a),-sin(a),cos(a));}
 
