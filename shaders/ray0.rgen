@@ -186,7 +186,7 @@ material newMaterial(vec3 Cs, vec3 Cd, vec2 S, vec4 R, vec3 light) {
     return a;
 }
 material Material_(vec3 pos, vec3 nor) {
-    vec3 albedo = tmp_Payload.material.albedo * (1 - tmp_Payload.material.metallic); //*(1-tmp_Payload.material.ambientOcclusion);
+    vec3 albedo = tmp_Payload.material.albedo ;//* (1 - tmp_Payload.material.metallic); //*(1-tmp_Payload.material.ambientOcclusion);
     bool water = tmp_Payload.material.block_id.x==1000;
     float trans = float(!water&&0.9<tmp_Payload.material.translucent&&tmp_Payload.material.block_id.x!=1001);
     float roughness = water ? 0 : tmp_Payload.material.roughness;

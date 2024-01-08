@@ -39,6 +39,7 @@ Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn) {
 
     // Albedo, F0 and metallic
     int f0Channel = int(specular.g * 255.0);
+    #if 0
     if (f0Channel < 230) {
         if (false){//material.translucent) {
             material.albedo = (1.0 - albedo.rgb) * albedo.a;
@@ -56,6 +57,12 @@ Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn) {
         material.F0 = albedo.rgb;
         material.metallic = 1.0;
     }
+    
+    #else
+    material.F0 = specular.ggg*albedo.rgb;
+    material.metallic = specular.b;
+    material.albedo = albedo.rgb*(1-material.F0);
+    #endif
 
     // Emission
     material.emission = albedo.rgb * EMISSION_INTENSITY * (specular.a == 1.0 ? 0.0 : specular.a);
