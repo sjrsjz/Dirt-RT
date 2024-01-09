@@ -11,8 +11,9 @@
 #include "/lib/rt/payload.glsl"
 #include "/lib/rt/fragment_info.glsl"
 #include "/lib/pbr/material.glsl"
-
 layout(location = 6) rayPayloadInEXT Payload payload;
+
+
 
 hitAttributeEXT vec2 baryCoord;
 
@@ -55,7 +56,7 @@ void main() {
 
     payload.hitData = vec4(worldPos, gl_HitTEXT);
     payload.geometryNormal = fragInfo.normal;
-    payload.material = getMaterial(albedo, normal, specular, tbn);
+    payload.material = getMaterial(albedo, normal, specular, tbn, payload.wetStrength_global, payload.wetness_global);
     payload.shadowTransmission *= exp(-0.1*gl_HitTEXT*(1-albedo.rgb)) * (1.0 - albedo.a);
     payload.material.block_id = quad.vertices[0].block_id;
     payload.material.mid_block = quad.vertices[0].mid_block;

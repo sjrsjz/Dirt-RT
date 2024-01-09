@@ -13,6 +13,9 @@ layout(std430,set=3, binding = 1) buffer frameData {
     float dTime_global;
     vec3 camX_global;
     vec3 camY_global;
+    float rainStrength_global;
+    float wetStrength_global;
+    float wetness_global;
 };
 struct gBufferData{
     vec4 pos;
