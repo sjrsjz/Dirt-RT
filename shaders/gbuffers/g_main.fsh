@@ -8,6 +8,7 @@ in vec3 normal;
 in vec3 position;
 uniform sampler2D colortex9;
 /*
+const int depthtex0Format = RGBA32F;
 const int colortex7Format = RGBA32F;
 const int colortex8Format = RGBA32F;
 const int colortex9Format = RGBA32F;

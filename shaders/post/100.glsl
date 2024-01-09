@@ -111,7 +111,7 @@ void MixDiffuse() {
 
     s = (min(1, s + 0.875) - 0.875)*8;
     float prevW = data.weight;
-    prevW =max(1, min(prevW * s + 1, ACCUMULATION_LENGTH*5));
+    prevW =max(1, min(prevW * s + 1, ACCUMULATION_LENGTH*10));
 
     data1.data_swap = mix_SH(data.data,data1.data_swap,1/prevW);
 

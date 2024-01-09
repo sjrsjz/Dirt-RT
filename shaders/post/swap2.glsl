@@ -23,4 +23,5 @@ void main() {
     diffusePos.xyz = diffuseIllumiantionBuffer.data[idx].pos;
     shY = tmp.data_swap.shY;
     CoCg.xy = tmp.data_swap.CoCg;
+    CoCg.z = tmp.weight;
 }

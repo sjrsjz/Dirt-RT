@@ -38,6 +38,7 @@ uniform float far;
 uniform vec2 resolution;
 uniform int worldTime;
 
+
 /*
 const int colortex0Format = RGBA32F;
 const int colortex1Format = RGBA32F;
@@ -72,7 +73,6 @@ float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal) {
     // Modified to check for distance from the center plane
     return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)));
 }
-
 
 /* RENDERTARGETS: 0,5 */
 
@@ -111,38 +111,37 @@ void main() {
     float s[3] = { 1, 2, 1 };
     float t[3] = { 1, 2, 1 };
     float w = 0;
-    vec3 centerNormal=texelFetch(colortex3,ivec2(gl_FragCoord.xy),0).xyz;
-    vec3 centerPos=texelFetch(colortex4,ivec2(gl_FragCoord.xy),0).xyz;
+    vec3 centerNormal = texelFetch(colortex3, ivec2(gl_FragCoord.xy), 0).xyz;
+    vec3 centerPos = texelFetch(colortex4, ivec2(gl_FragCoord.xy), 0).xyz;
     s[0] = 0.5 + K(cross(camX_global, camY_global), camX_global, centerNormal);
     t[0] = 0.5 + K(cross(camX_global, camY_global), camY_global, centerNormal);
     s[2] = s[0];
     t[2] = t[0];
 
-    
     //float isNotBackground[9];
     //uint idx_M[9];
     ivec2 samplePos;
-    samplePos.x=int(gl_FragCoord.x-R0);
+    samplePos.x = int(gl_FragCoord.x - R0);
     //int k=0;
-    
+    ivec2 texSize = textureSize(colortex3, 0);
     for (int i = 0; i <= 2; i++) {
-        samplePos.y=int(gl_FragCoord.y-R0);
+        samplePos.y = int(gl_FragCoord.y - R0);
         for (int j = 0; j <= 2; j++) {
-            uint idx2=getIdx(uvec2(samplePos));
-            float w1 =s[i] * t[j]* step(-0.5,denoiseBuffer.data[idx2].distance);
-            
+            uint idx2 = getIdx(uvec2(samplePos));
+            float w1 = s[i] * t[j] * step(-0.5, denoiseBuffer.data[idx2].distance);
+
             //idx_M[k]=idx2;
-            float w0 = svgfNormalWeight(centerNormal, texelFetch(colortex3,samplePos,0).xyz)
-                     * svgfPositionWeight(centerPos, texelFetch(colortex4,samplePos,0).xyz, centerNormal)
-                     * w1;
-            A+=texelFetch(colortex5,samplePos,0).xyz*w0;
+            float w0 = svgfNormalWeight(centerNormal, texelFetch(colortex3, samplePos, 0).xyz)
+                    * svgfPositionWeight(centerPos, texelFetch(colortex4, samplePos, 0).xyz, centerNormal)
+                    * w1 * float(samplePos == clamp(samplePos, vec2(0), texSize));
+            A += texelFetch(colortex5, samplePos, 0).xyz * w0;
             //isNotBackground[k] = w1;
             w += w0;
             //k++;
-            samplePos.y+=R0;
+            samplePos.y += R0;
         }
-        samplePos.x+=R0;
+        samplePos.x += R0;
     }
     if (any(isnan(A))) A = vec3(0);
-    color.xyz=A/max(w, 0.01);
+    color.xyz = A / max(w, 0.01);
 }

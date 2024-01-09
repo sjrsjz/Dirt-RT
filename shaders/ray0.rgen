@@ -191,7 +191,7 @@ material Material_(vec3 pos, vec3 nor) {
     float trans = float(!water&&0.9<tmp_Payload.material.translucent&&tmp_Payload.material.block_id.x!=1001);
     float roughness = water ? 0 : tmp_Payload.material.roughness;
     albedo = water ? vec3(1) : albedo;
-    return newMaterial(tmp_Payload.material.F0, albedo, vec2((1-tmp_Payload.material.metallic)*trans, 1 - trans), vec4(roughness > 0.01 ? max(roughness, 0.0125) : 0, trans, water, 1.9), tmp_Payload.material.emission*10);
+    return newMaterial(clamp(tmp_Payload.material.F0,0,1), albedo, vec2((1-tmp_Payload.material.metallic)*trans, 1 - trans), vec4(roughness > 0.01 ? max(roughness, 0.0125) : 0, trans, water, 1.9), tmp_Payload.material.emission*10);
 }
 
 //#define EnableObjectLight
@@ -328,7 +328,7 @@ vec3 sampleSunlight(info A, vec3 lightDir, bool night,int type/*,int inwater*/) 
     float OoN = dot(-A.n, sampleDir);
     float IoH = abs(dot(microNormal, A.rd_i));
     float weightA = GGXpdf(clamp(dot(microNormal, Y), 0, 1), 0, A.surface.R.x);
-    weightA *= GGX_G2(dot(A.n, A.rd_i), abs(OoN), A.surface.R.x);
+    weightA *= GGX_G2(dot(A.n, A.rd_i), abs(OoN),A.surface.R.x);
 
     vec3 sampleColor=vec3(0);
     switch(type){
@@ -502,10 +502,15 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
 
         A.rd_o = rd_o;
 
-        float change = float(A.sampleRoughness > sampleRoughness && sampleRoughness < 0.125 || count == 0);
+        /*float change = float(A.sampleRoughness > sampleRoughness && sampleRoughness < 0.125 || count == 0);
         sampleNormal = mix(sampleNormal, normal, change);
         samplePos = mix(samplePos, A.p, change);
         sampleRoughness = A.sampleRoughness * change + sampleRoughness * (1 - change);
+        */
+        bool change = A.sampleRoughness > sampleRoughness && sampleRoughness < 0.125 || count == 0;
+        sampleNormal = change?normal:sampleNormal;
+        samplePos = change?A.p:samplePos;
+        sampleRoughness =change?A.sampleRoughness:sampleRoughness;
 
         #ifdef Correction
         float correction = A.n_o * IoH / (A.n_i * dot(rd_o, -A.microNormal));
@@ -635,9 +640,9 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
     reflectIllumiantionBuffer.data[idx].pos = infos[0].p;//t<-0.5?infos[0].p:r_ro;
     reflectIllumiantionBuffer.data[idx].distance=t;
     //r_rd_i=refract(infos[0].rd_i,infos[0].n,infos[0].n_i/infos[0].n_o);
-    //raycast(infos[0].p,r_rd_i,r_rd,r_ro,false);
+    //raycast(infos[0].p-infos[0].n*0.001,r_rd_i,r_rd,r_ro,false);
 
-    refractIllumiantionBuffer.data[idx].normal = infos[0].n;//faceforward(tmp_Payload.material.normal, tmp_Payload.material.normal, r_rd_i);
+    if(infos[0].type==Refraction) refractIllumiantionBuffer.data[idx].normal =sampleNormal;//faceforward(tmp_Payload.material.normal, tmp_Payload.material.normal, r_rd_i);
     refractIllumiantionBuffer.data[idx].pos = infos[0].p;//r_ro;
 
 
@@ -657,8 +662,8 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         break;
         case Refraction:
         refractIllumiantionBuffer.data[idx].data_swap = illumiantion;
-        refractIllumiantionBuffer.data[idx].normal = sampleNormal;
-        refractIllumiantionBuffer.data[idx].pos = infos[0].p;
+        //refractIllumiantionBuffer.data[idx].normal = sampleNormal;
+        //refractIllumiantionBuffer.data[idx].pos = infos[0].p;
         break;
         default:
         break;

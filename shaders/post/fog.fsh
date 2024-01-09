@@ -26,7 +26,7 @@ void main() {
     }
     else
     {
-        //fragColor.xyz=vec3(1)*tmp3.weight;
+        //fragColor.xyz=vec3(1)*tmp3.data_swap;
         
         //fragColor.xyz=vec3(abs(project_SH_irradiance(tmp.data,faceforward(tmp.normal2,tmp.normal2,-tmp.normal))));
         fragColor.xyz =data.absorption * ((project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2) + tmp3.data_swap) * data.albedo2 + tmp2.data_swap * data.albedo + data.light) + data.emission;

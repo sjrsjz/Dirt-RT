@@ -59,9 +59,23 @@ Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn) {
     }
     
     #else
-    material.F0 = specular.ggg*albedo.rgb;
-    material.metallic = specular.b;
-    material.albedo = albedo.rgb*(1-material.F0);
+
+    if (f0Channel < 230) {
+        material.F0 = f0Channel*albedo.rgb/229.0;
+        material.metallic = 0;
+        material.albedo = albedo.rgb*(1-material.F0);
+    } else if (f0Channel < 238) {
+        material.F0 = HCM_METALS[f0Channel - 230];
+        material.metallic = 1;
+        material.albedo = vec3(0);
+    } else {
+        material.F0 = albedo.rgb;
+        material.metallic = 0;
+        material.albedo = vec3(0);
+    }
+
+
+
     #endif
 
     // Emission
