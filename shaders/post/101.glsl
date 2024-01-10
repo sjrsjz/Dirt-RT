@@ -56,12 +56,12 @@ const float POSITION_PARAM = 4.0;
 const float LUMINANCE_PARAM = 4.0;
 
 float svgfNormalWeight(vec3 centerNormal, vec3 normal, float distance) {
-    return pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM*(0.25+16*exp(-0.125*distance)));
+    return pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM*(0.25+8*exp(-0.125*distance)));
 }
 
 float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float distance) {
     // Modified to check for distance from the center plane
-    return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)*(0.25+64*exp(-0.25*distance))));
+    return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)*(0.25+16*exp(-0.25*distance))));
 }
 
 vec3 reproject(vec3 screenPos) {
@@ -122,7 +122,7 @@ void MixReflect() {
 
     float s = float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.normal, data2.normal,info_distance)
              * svgfPositionWeight(data.pos, data2.pos, data2.normal,info_distance);
-    s = pow((min(1, s + 0.575) - 0.575)/0.575,0.25);
+    s = pow((min(1, s + 0.57) - 0.57)/0.57,0.25);
     
     float prevW = data.weight;
     prevW = max(1, min(prevW * s + 1, ACCUMULATION_LENGTH*5));
