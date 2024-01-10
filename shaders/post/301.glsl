@@ -113,8 +113,8 @@ void main() {
     float w = 0;
     vec3 centerNormal = texelFetch(colortex3, ivec2(gl_FragCoord.xy), 0).xyz;
     vec3 centerPos = texelFetch(colortex4, ivec2(gl_FragCoord.xy), 0).xyz;
-    s[0] = 0.5 + K(cross(camX_global, camY_global), camX_global, centerNormal);
-    t[0] = 0.5 + K(cross(camX_global, camY_global), camY_global, centerNormal);
+    s[0] = 0.75 + K(cross(camX_global, camY_global), camX_global, centerNormal);
+    t[0] = 0.75 + K(cross(camX_global, camY_global), camY_global, centerNormal);
     s[2] = s[0];
     t[2] = t[0];
 

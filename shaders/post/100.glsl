@@ -108,8 +108,8 @@ void MixDiffuse() {
     diffuseIllumiantionData data = sampleDiffuse(prevScreenPos.xy*textureSize(colortex0,0));
 
     float s = float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.normal, data1.normal,info_distance) * svgfPositionWeight(data.pos, data1.pos, data1.normal,info_distance);
-
-    s = (min(1, s + 0.875) - 0.875)*8;
+    s = pow((min(1, s + 0.575) - 0.575)/0.575,0.25);
+    //s = (min(1, s + 0.875) - 0.875)*8;
     float prevW = data.weight;
     prevW =max(1, min(prevW * s + 1, ACCUMULATION_LENGTH*10));
 

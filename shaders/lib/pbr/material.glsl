@@ -1,6 +1,6 @@
 #ifndef MATERIAL_GLSL
 #define MATERIAL_GLSL
-
+#include "/lib/settings.glsl"
 const float EMISSION_INTENSITY = 0.55;
 
 const vec3 HCM_METALS[] = vec3[](
@@ -65,18 +65,18 @@ Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn, float we
 
     #else
     //int porosity = int(specular.b * 255.0);
-    float mix0 = min(wetStrength * max(material.normal.y + 0.15, 0) + wetness, 1) * 0.4; //* porosity/64.0*float(porosity<=64);
+    float mix0 = min(wetStrength * max(material.normal.y + 0.15, 0) + wetness, 1) * maxWetness; //* porosity/64.0*float(porosity<=64);
     material.roughness = (1 - mix0) * material.roughness;
 
     if (f0Channel < 230) {
         material.F0 = f0Channel * albedo.rgb / 229.0;
         material.F0 = mix(material.F0, vec3(1), mix0);
         material.metallic = 0;
-        material.albedo = albedo.rgb * (1 - material.F0);
+        material.albedo = albedo.rgb;//* (1 - material.F0);
     } else if (f0Channel < 238) {
         material.F0 = HCM_METALS[f0Channel - 230];
         material.F0 = mix(material.F0, vec3(1), mix0);
-        material.metallic = 1;
+        material.metallic = 0;
         material.albedo = vec3(0);
     } else {
         material.F0 = albedo.rgb;
