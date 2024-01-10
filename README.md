@@ -10,23 +10,23 @@ A simple path tracing shader for vulkanite mod,which uses Nvidia GPU's RT cores 
 
 ![2024-01-09_19 29 16](https://github.com/sjrsjz/Dirt-RT/assets/139971734/d3b0f5a3-8269-4f04-9fff-ec336621c306)
 
-## 晴雨对比
+## Sunny and rainy day comparison
 
-**晴天**
+**Sunny**
 
 ![2024-01-10_16 51 32](https://github.com/sjrsjz/Dirt-RT/assets/139971734/42ecba7d-b4c1-47d1-b1d4-8901bfb38c08)
 
-**雨天**
+**Rainy**
 
 ![2024-01-10_16 52 28](https://github.com/sjrsjz/Dirt-RT/assets/139971734/7345c4a5-9540-435e-80f3-ab4551d184f4)
 
-## 反射
+## Reflection
 
 ![2024-01-10_16 41 42](https://github.com/sjrsjz/Dirt-RT/assets/139971734/61c039d8-b3ab-4326-9797-8f42447c8314)
 
 
 ![2024-01-10_15 56 04](https://github.com/sjrsjz/Dirt-RT/assets/139971734/4c19651f-9ccd-4d22-9346-46658ae81408)
 
-## 支持LabPBR材质包
+## Support LabPBR
 
 ![2024-01-10_16 03 35](https://github.com/sjrsjz/Dirt-RT/assets/139971734/2e5cd62f-f091-4dfe-b8a3-b06f3a49a8d4)
