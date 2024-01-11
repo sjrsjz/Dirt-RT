@@ -101,7 +101,7 @@ void main() {
     ivec2 texSize = textureSize(colortex3, 0);
     centerSH.shY = texelFetch(colortex5, ivec2(gl_FragCoord.xy), 0);
     centerSH.CoCg = texelFetch(colortex6, ivec2(gl_FragCoord.xy), 0).xy;
-    float centerW = min(pow(fetchDiffuse(ivec2(gl_FragCoord.xy)).weight, 1.2wwwwwwwww5) * 0.002, 0.2) * pow(R0, 0.875);
+    float centerW = min(pow(fetchDiffuse(ivec2(gl_FragCoord.xy)).weight, 1.25) * 0.002, 0.2) * pow(R0, 0.875);
     for (int i = 0; i <= 2; i++) {
         samplePos.y = int(gl_FragCoord.y - R0);
         for (int j = 0; j <= 2; j++) {
