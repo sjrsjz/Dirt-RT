@@ -20,17 +20,18 @@ layout(location = 0) out vec4 fragColor;
 
 void main() {
     //return;
-    const int sampleN = 16;
+    const int sampleN = 24;
     vec3 sumX = vec3(0);
     float w0 = 0;
     vec2 texSize = textureSize(colortex2, 0);
-    for (int i = -sampleN; i <= sampleN; i++) {
+    for (int k = -sampleN; k <= sampleN; k++) {
+        int i=k;//int(sign(k)*pow(abs(k),1.25));
         #if STEP==1
-        float w = exp(-i * i * 0.0025) * step(-0.5,denoiseBuffer.data[getIdx(uvec2(gl_FragCoord.xy+vec2(i, 0)))].distance) *
+        float w = exp(-i * i * 0.015) * step(-0.5,denoiseBuffer.data[getIdx(uvec2(gl_FragCoord.xy+vec2(i, 0)))].distance) *
             float(clamp(gl_FragCoord.xy + vec2(i, 0), vec2(0), texSize) == gl_FragCoord.xy + vec2(i , 0));
         sumX += texelFetch(colortex2, ivec2(gl_FragCoord.xy + vec2(i, 0)), 0).xyz * w;
         #else
-        float w = exp(-i * i * 0.0025)*step(-0.5,denoiseBuffer.data[getIdx(uvec2(gl_FragCoord.xy+vec2(0, i)))].distance) *
+        float w = exp(-i * i * 0.015)*step(-0.5,denoiseBuffer.data[getIdx(uvec2(gl_FragCoord.xy+vec2(0, i)))].distance) *
         float(clamp(gl_FragCoord.xy + vec2(0, i), vec2(0), texSize) == gl_FragCoord.xy + vec2(0, i));
         sumX += texelFetch(colortex2, ivec2(gl_FragCoord.xy + vec2(0, i)), 0).xyz * w;
         #endif

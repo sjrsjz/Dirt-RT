@@ -24,11 +24,24 @@ struct Material {
     float ambientOcclusion;
     float translucent;
     ivec2 block_id;
-    vec3 mid_block;
+    vec3 light_texture;
     //vec2 block_texture;
 };
 
-Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn, float wetStrength, float wetness) {
+float adhesion(vec3 n,vec3 w,vec3 g,float a){
+    //w:wind direction
+    //g:gravity direction
+    //n:surface normal
+    //a:roughness
+    float tanA=sqrt(max(pow(abs(dot(n,w)),-2)-1,0));
+    float tanB=sqrt(max(pow(abs(dot(n,g)),-2)-1,0));
+    float a2=a*a;
+    float t=sqrt(tanB*tanB+a2);
+    return (float(dot(n,g)<0)*2*a2/
+        ((1+sqrt(1+a2*tanA*tanA))*(tanB+t)*t));
+}
+
+Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn, float wetStrength, float wetness ,float skylight ,vec3 macroNormal) {
     Material material;
 
     // Translucency
@@ -65,8 +78,11 @@ Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn, float we
 
     #else
     //int porosity = int(specular.b * 255.0);
-    float mix0 = min(wetStrength * max(material.normal.y + 0.15, 0) + wetness, 1) * maxWetness; //* porosity/64.0*float(porosity<=64);
+    float adhesion_ = clamp(adhesion(macroNormal,vec3(0,-1,0),vec3(0,-1,0),material.roughness)+0.25,0,1);
+    float mix0 = min(wetStrength*adhesion_*min(skylight/255,1) + wetness*0.15,1); //* porosity/64.0*float(porosity<=64);
+    mix0 *= maxWetness;
     material.roughness = (1 - mix0) * material.roughness;
+    material.normal=normalize(mix(material.normal,macroNormal,mix0));
 
     if (f0Channel < 230) {
         material.F0 = f0Channel * albedo.rgb / 229.0;

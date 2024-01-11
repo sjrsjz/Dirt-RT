@@ -2,7 +2,7 @@
 #define FRAME_DATA_GLSL
 #include "/lib/constants.glsl"
 
-layout(std430,set=3, binding = 1) buffer frameData {
+layout(std140,set=3, binding = 1) buffer frameData {
     float avgExposure;
     vec3 SunLight_global;
     vec3 MoonLight_global;
@@ -16,6 +16,7 @@ layout(std430,set=3, binding = 1) buffer frameData {
     float rainStrength_global;
     float wetStrength_global;
     float wetness_global;
+    int world_type_global;
 };
 struct gBufferData{
     vec4 pos;

@@ -10,7 +10,9 @@
 //2,3,4,5,6,7,8,9
 
 //2:pos
-
+uniform sampler2D colortex0;
+uniform sampler2D colortex1;
+uniform sampler2D colortex2;
 uniform sampler2D colortex3;
 uniform sampler2D colortex4;
 uniform sampler2D colortex5;
@@ -99,7 +101,7 @@ void main() {
     ivec2 texSize = textureSize(colortex3, 0);
     centerSH.shY = texelFetch(colortex5, ivec2(gl_FragCoord.xy), 0);
     centerSH.CoCg = texelFetch(colortex6, ivec2(gl_FragCoord.xy), 0).xy;
-    float centerW = min(pow(fetchDiffuse(ivec2(gl_FragCoord.xy)).weight, 1.5) * 0.003, 0.2) * pow(R0, 0.875);
+    float centerW = min(pow(fetchDiffuse(ivec2(gl_FragCoord.xy)).weight, 1.2wwwwwwwww5) * 0.002, 0.2) * pow(R0, 0.875);
     for (int i = 0; i <= 2; i++) {
         samplePos.y = int(gl_FragCoord.y - R0);
         for (int j = 0; j <= 2; j++) {
@@ -129,6 +131,7 @@ void main() {
     if (any(isnan(A.CoCg))) A.CoCg = vec2(0);
     SH tmp = scaleSH(A, 1 / max(w, 0.01));
     shY = tmp.shY;
-    CoCg.xy = tmp.CoCg;
     CoCg.z=texelFetch(colortex6, ivec2(gl_FragCoord.xy), 0).z;
+    CoCg.xy = tmp.CoCg;
+    
 }

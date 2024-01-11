@@ -21,6 +21,7 @@ layout(std140, binding = 0) uniform CameraInfo {
     vec4 moonPosition;
     uint frameId;
     uint flags;
+    uint world_type;
 } cam;
 
 layout(binding = 1) uniform accelerationStructureEXT acc;
@@ -46,6 +47,8 @@ void main() {
     initRNG(uvec2(0), cam.frameId);
     vec2 px = vec2(gl_LaunchIDEXT.xy); //+ randVec2();
     vec2 p = px / vec2(gl_LaunchSizeEXT.xy);
+    world_type_global=int(cam.world_type);
+
     #if SRR == 0
     #else
     if (p.x > 0.5 || p.y > 0.5) return;
@@ -62,10 +65,10 @@ void main() {
     // 3 -> eye is in powder snow
     //uint isEyeInWater = cam.flags & 3u;
     iFrame = cam.frameId;
-    isDarkened = (cam.flags & 4u) == 0;
+    isDarkened = world_type_global != World_OVERWORLD && world_type_global != World_THE_END && world_type_global != World_THE_NETHER;
     SunLight = isDarkened ? vec3(0) : vec3(0.1 * SunDivMoon);
     MoonLight = isDarkened ? vec3(0) : vec3(0.1);
-    b_k = 0.25 + rainStrength_global * 0.75;
+    
 
     vec4 celestialQuat = quatAxisAngle(vec3(1, 0, 0), radians(sunPathRotation));
     vec3 sunDir = quatRotate(normalize(mat3(cam.viewInverse) * cam.sunPosition.xyz), celestialQuat);
@@ -124,6 +127,7 @@ void main() {
     wseed3.y=floatBitsToUint(seed0.y);
     wseed3.z=floatBitsToUint(seed0.z);
     */
+    setSkyVars();
     vec4 color = Trace(uvec2(gl_LaunchIDEXT.xy), origin, direction, -sunDir);
 
     imageStore(RayTraceData, ivec2(gl_LaunchIDEXT), max(color, vec4(0)));
@@ -212,12 +216,17 @@ material newMaterial(vec3 Cs, vec3 Cd, vec2 S, vec4 R, vec3 light) {
     return a;
 }
 material Material_(vec3 pos, vec3 nor) {
-    vec3 albedo = tmp_Payload.material.albedo*(1-tmp_Payload.material.ambientOcclusion);; //* (1 - tmp_Payload.material.metallic); //*(1-tmp_Payload.material.ambientOcclusion);
+    vec3 albedo = tmp_Payload.material.albedo*(1-tmp_Payload.material.ambientOcclusion); //* (1 - tmp_Payload.material.metallic); //*(1-tmp_Payload.material.ambientOcclusion);
     bool water = tmp_Payload.material.block_id.x == 1000;
     float trans = float(!water && 0.9 < tmp_Payload.material.translucent && tmp_Payload.material.block_id.x != 1001);
+    trans = tmp_Payload.material.block_id.x == 1002 ? 0.25 : trans;
     float roughness = water ? 0 : tmp_Payload.material.roughness;
+    roughness = tmp_Payload.material.block_id.x == 1002 ? 0 : roughness;
     albedo = water ? vec3(1) : albedo;
-    return newMaterial(clamp(tmp_Payload.material.F0, 0, 1), albedo, vec2((1 - tmp_Payload.material.metallic) * trans, 1 - trans), vec4(roughness > 0.01 ? max(roughness, 0.0125) : 0, trans, water, 1.9), tmp_Payload.material.emission * 10);
+    tmp_Payload.material.emission = tmp_Payload.material.block_id.x == 1002 ? albedo *(1 - trans) : tmp_Payload.material.emission;
+    
+    tmp_Payload.material.emission *= 10;
+    return newMaterial(clamp(tmp_Payload.material.F0, 0, 1), albedo, vec2((1 - tmp_Payload.material.metallic) * trans, 1 - trans), vec4(roughness > 0.01 ? max(roughness, 0.0125) : 0, trans, water, 1.9), tmp_Payload.material.emission);
 }
 
 //#define EnableObjectLight
@@ -640,7 +649,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
     if (any(isnan(illumiantion))) {
         illumiantion = vec3(0);
     }
-    illumiantion = clamp(illumiantion, 0, 5/avgExposure);
+    illumiantion = clamp(illumiantion, 0, 25/avgExposure);
     /*vec3 o_seed1=o_seed;
 
         denoiseBuffer.data[idx].currSample=vec4(o_seed1,luma(illumiantion));
@@ -689,11 +698,14 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         infos[0].n = faceforward(infos[0].n, infos[0].n, -infos[0].macroNormal);
         diffuseIllumiantionBuffer.data[idx].normal2 = infos[0].n;
         diffuseIllumiantionBuffer.data[idx].pos = infos[0].p;
+
         break;
         case Reflection:
+        illumiantion = clamp(illumiantion, 0, 5/avgExposure);
         reflectIllumiantionBuffer.data[idx].data_swap = illumiantion;
         break;
         case Refraction:
+        illumiantion = clamp(illumiantion, 0, 5/avgExposure);
         refractIllumiantionBuffer.data[idx].data_swap = illumiantion;
         //refractIllumiantionBuffer.data[idx].normal = sampleNormal;
         //refractIllumiantionBuffer.data[idx].pos = infos[0].p;

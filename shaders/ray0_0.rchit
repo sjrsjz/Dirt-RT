@@ -13,8 +13,6 @@
 #include "/lib/pbr/material.glsl"
 layout(location = 6) rayPayloadInEXT Payload payload;
 
-
-
 hitAttributeEXT vec2 baryCoord;
 
 layout(std140, binding = 0) uniform CameraInfo {
@@ -23,18 +21,17 @@ layout(std140, binding = 0) uniform CameraInfo {
     vec3 sunAngle;
 } cam;
 
-layout(binding = 3) uniform  sampler2D blockTex;
-layout(binding = 4) uniform  sampler2D blockTexNormal;
-layout(binding = 5) uniform  sampler2D blockTexSpecular;
+layout(binding = 3) uniform sampler2D blockTex;
+layout(binding = 4) uniform sampler2D blockTexNormal;
+layout(binding = 5) uniform sampler2D blockTexSpecular;
 
 layout(set = 1, binding = 0) buffer Quads {
-    Quad quads[]; 
+    Quad quads[];
 } geometryBuffers[];
 
 Quad getRayQuad() {
-    return geometryBuffers[nonuniformEXT(gl_InstanceCustomIndexEXT + gl_GeometryIndexEXT)].quads[gl_PrimitiveID>>1];
+    return geometryBuffers[nonuniformEXT(gl_InstanceCustomIndexEXT + gl_GeometryIndexEXT)].quads[gl_PrimitiveID >> 1];
 }
-
 
 void main() {
     vec3 worldPos = gl_WorldRayOriginEXT + gl_HitTEXT * gl_WorldRayDirectionEXT;
@@ -48,17 +45,35 @@ void main() {
     vec4 albedo = texture(blockTex, fragInfo.uv);
     albedo.rgb = pow(albedo.rgb * shadeColor.rgb, vec3(2.2));
 
+    fragInfo.uv=fract(fragInfo.uv*vec2(64,32));
+
+    float AB=float(max(quad.vertices[1].position.x,quad.vertices[0].position.x)-min(quad.vertices[1].position.x,quad.vertices[0].position.x));
+
+    vec2 A = quad.vertices[0].light_texture.xy;
+    vec2 B = quad.vertices[1].light_texture.xy;
+    vec2 C = quad.vertices[2].light_texture.xy;
+    vec2 D = quad.vertices[3].light_texture.xy;
+    if(AB>0.5){
+        A = quad.vertices[3].light_texture.xy;
+        B = quad.vertices[0].light_texture.xy;
+        C = quad.vertices[1].light_texture.xy;
+        D = quad.vertices[2].light_texture.xy;
+    }
+
+
+    payload.material.light_texture = vec3(mix(mix(A,B,fragInfo.uv.y),mix(D,C,fragInfo.uv.y),fragInfo.uv.x),0);
+
     mat3 tbn = mat3(
-        fragInfo.tangent,
-        fragInfo.bitangent,
-        fragInfo.normal
-    );
+            fragInfo.tangent,
+            fragInfo.bitangent,
+            fragInfo.normal
+        );
 
     payload.hitData = vec4(worldPos, gl_HitTEXT);
     payload.geometryNormal = fragInfo.normal;
-    payload.material = getMaterial(albedo, normal, specular, tbn, payload.wetStrength_global, payload.wetness_global);
-    payload.shadowTransmission *= exp(-0.1*gl_HitTEXT*(1-albedo.rgb)) * (1.0 - albedo.a);
+    payload.material = getMaterial(albedo, normal, specular, tbn, payload.wetStrength_global, payload.wetness_global, payload.material.light_texture.y, fragInfo.normal);
+    payload.shadowTransmission *= exp(-0.1 * gl_HitTEXT * (1 - albedo.rgb)) * (1.0 - albedo.a);
     payload.material.block_id = quad.vertices[0].block_id;
-    payload.material.mid_block = quad.vertices[0].mid_block;
-    //payload.material.block_texture = quad.vertices[0].block_texture;
-}    
+    
+
+}

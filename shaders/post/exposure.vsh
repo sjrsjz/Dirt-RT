@@ -41,6 +41,15 @@ void main() {
         rainStrength_global = rainStrength;
         wetStrength_global = wetStrength_global * mix0 + rainStrength * (1 - mix0);
         wetness_global = wetness_global * mix0 + wetness * (1 - mix0);
+/*
+        #if defined(HELL)
+        world_type_global=World_HELL;
+        #elif defined(THE_END)
+        world_type_global=World_THE_END;
+        #else
+        world_type_global=World_OVERWORLD;
+        #endif
+*/
         float luminanceSum = 0.0;
         for (int i = 0; i < samples.length(); i++) {
             #ifdef SRR
