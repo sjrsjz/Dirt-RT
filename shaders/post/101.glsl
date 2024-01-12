@@ -42,13 +42,13 @@ const int colortex6Format = RGBA32F;
 const int colortex7Format = RGBA32F;
 const int colortex8Format = RGBA32F;
 
-const bool colortex0Clear = false;
+const bool colortex0Clear = true;
 const bool colortex1Clear = false;
 const bool colortex2Clear = false;
 
 const bool colortex6Clear = false;
-const bool colortex7Clear = false;
-const bool colortex8Clear = false;
+const bool colortex7Clear = true;
+const bool colortex8Clear = true;
 */
 
 const float NORMAL_PARAM = 4.0;
@@ -120,7 +120,7 @@ void MixReflect() {
     
     vec3IllumiantionData data = sampleReflect(prevScreenPos.xy*textureSize(colortex0,0));
 
-    float s = float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.normal, data2.normal,info_distance)
+    float s = exp(-10*abs(denoiseBuffer.data[idx_l].reflectWeight-data.mixWeight))*float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.normal, data2.normal,info_distance)
              * svgfPositionWeight(data.pos, data2.pos, data2.normal,info_distance);
     s = pow((min(1, s + 0.57) - 0.57)/0.57,0.25);
     
@@ -141,7 +141,7 @@ void main() {
     if (info_distance < -0.5) {
 
         data2.weight = 1;
-
+        data2.mixWeight = 0;
         WriteReflect(data2,ivec2(gl_FragCoord.xy));
 
         return;

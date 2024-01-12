@@ -47,7 +47,7 @@ void main() {
     initRNG(uvec2(0), cam.frameId);
     vec2 px = vec2(gl_LaunchIDEXT.xy); //+ randVec2();
     vec2 p = px / vec2(gl_LaunchSizeEXT.xy);
-    world_type_global=int(cam.world_type);
+    world_type_global = int(cam.world_type);
 
     #if SRR == 0
     #else
@@ -68,7 +68,6 @@ void main() {
     isDarkened = world_type_global != World_OVERWORLD && world_type_global != World_THE_END && world_type_global != World_THE_NETHER;
     SunLight = isDarkened ? vec3(0) : vec3(0.1 * SunDivMoon);
     MoonLight = isDarkened ? vec3(0) : vec3(0.1);
-    
 
     vec4 celestialQuat = quatAxisAngle(vec3(1, 0, 0), radians(sunPathRotation));
     vec3 sunDir = quatRotate(normalize(mat3(cam.viewInverse) * cam.sunPosition.xyz), celestialQuat);
@@ -80,29 +79,7 @@ void main() {
     wseed3.x = floatBitsToUint(seed0.x);
     wseed3.y = floatBitsToUint(seed0.y);
     wseed3.z = floatBitsToUint(seed0.z);
-    /*
-        o_seed=seed0;
-
-        vec4 lastInfo0=vec4(0);
-
-        float sumL=0;
-        for(int i=-1;i<=1;i++){
-            for(int j=-1;j<=1;j++){
-                vec4 lastInfo=denoiseBuffer.data[getIdx(uvec2(gl_LaunchIDEXT.xy+ivec2(i,j)))].lastSample;
-                sumL+=lastInfo.w;
-                lastInfo0=randcore4()*sumL<lastInfo.w?lastInfo:lastInfo0;
-            }
-        }
-        p0_g=iFrame>=1?0.5:1;
-        useLastFrameSample=false;
-        if(iFrame>=1&&rand(vec3(p.x*10,p.y*10,iFrame))>p0_g){
-            seed0=lastInfo0.xyz;
-            useLastFrameSample=true;
-        }
-
-        wseed3.x=floatBitsToUint(seed0.x);
-        wseed3.y=floatBitsToUint(seed0.y);
-        wseed3.z=floatBitsToUint(seed0.z);
+ 
     /*
     o_seed=seed0;
     
@@ -216,17 +193,17 @@ material newMaterial(vec3 Cs, vec3 Cd, vec2 S, vec4 R, vec3 light) {
     return a;
 }
 material Material_(vec3 pos, vec3 nor) {
-    vec3 albedo = tmp_Payload.material.albedo*(1-tmp_Payload.material.ambientOcclusion); //* (1 - tmp_Payload.material.metallic); //*(1-tmp_Payload.material.ambientOcclusion);
+    vec3 albedo = tmp_Payload.material.albedo * (1 - tmp_Payload.material.ambientOcclusion); //* (1 - tmp_Payload.material.metallic); //*(1-tmp_Payload.material.ambientOcclusion);
     bool water = tmp_Payload.material.block_id.x == 1000;
     float trans = float(!water && 0.9 < tmp_Payload.material.translucent && tmp_Payload.material.block_id.x != 1001);
     trans = tmp_Payload.material.block_id.x == 1002 ? 0.25 : trans;
     float roughness = water ? 0 : tmp_Payload.material.roughness;
     roughness = tmp_Payload.material.block_id.x == 1002 ? 0 : roughness;
     albedo = water ? vec3(1) : albedo;
-    tmp_Payload.material.emission = tmp_Payload.material.block_id.x == 1002 ? albedo *(1 - trans) : tmp_Payload.material.emission;
-    
+    tmp_Payload.material.emission = tmp_Payload.material.block_id.x == 1002 ? albedo * (1 - trans) : tmp_Payload.material.emission;
+
     tmp_Payload.material.emission *= 10;
-    return newMaterial(clamp(tmp_Payload.material.F0, 0, 1), albedo, vec2((1 - tmp_Payload.material.metallic) * trans, 1 - trans), vec4(roughness > 0.01 ? max(roughness, 0.0125) : 0, trans, water, 1.9), tmp_Payload.material.emission);
+    return newMaterial(clamp(tmp_Payload.material.F0, 0, 1), albedo, vec2((1 - tmp_Payload.material.metallic) * trans, 1 - trans), vec4(roughness > 0.01 ? max(roughness, 0.0125) : 0, trans, water, tmp_Payload.material.subsurface_scattering), tmp_Payload.material.emission);
 }
 
 //#define EnableObjectLight
@@ -313,6 +290,7 @@ vec3 sampleObjectLight(info A, vec3 center, float sR, int id, int type) {
     weightA *= GGX_G2(IoN, OoN, A.surface.R.x);
     float weightB = 1;
     vec3 sampleColor = vec3(0);
+
     switch (type) {
         case 0:
         sampleColor = (weightA * A.surface.Cs * rC.xyz * A.surface.S.x * 0.25 / IoH
@@ -327,7 +305,7 @@ vec3 sampleObjectLight(info A, vec3 center, float sR, int id, int type) {
         default:
         break;
     }
-    sampleColor *= light;
+    sampleColor *= light * 0.01;
     return float(t > -0.5) * sampleColor * (1 - cosD_S);
 }
 
@@ -365,13 +343,31 @@ vec3 sampleSunlight(info A, vec3 lightDir, bool night, int type /*,int inwater*/
     weightA *= GGX_G2(dot(A.n, A.rd_i), abs(OoN), A.surface.R.x);
 
     vec3 sampleColor = vec3(0);
+
+    #ifdef Method2
+    vec3 b_g0 = vec3(A.surface.R.w);
+    float a0 = dot(A.rd_i, sampleDir);
+    vec3 b_g1 = b_g0 * b_g0;
+    vec3 g = 1.5 / PI * (1. + a0 * a0) * (1. - b_g1) / (2. + b_g1) / pow(1. + b_g1 - 2. * b_g0 * dot(-sampleDir, A.rd_i), vec3(1.5));
+    #endif
+
     switch (type) {
         case 0:
+        #ifdef Method2
+        sampleColor = (weightA * A.surface.Cs * rC.xyz * A.surface.S.x * 0.25 / IoH
+                + A.surface.Cd * (1 - A.surface.S.x * rC.xyz) / (max(OoN, 0) + abs(dot(A.n, A.rd_i)) + 0.001) * g) * max(OoN, 0) ;
+        #else
         sampleColor = (weightA * A.surface.Cs * rC.xyz * A.surface.S.x * 0.25 / IoH
                 + A.surface.Cd * (1 - A.surface.S.x * rC.xyz)) * max(OoN, 0);
+        #endif
         break;
         case Diffussion:
+        #ifdef Method2
+        sampleColor = (A.surface.Cd) * max(OoN, 0) / (max(OoN, 0) + max(dot(A.n, -A.rd_i), 0) + 0.001) * g;
+        #else
         sampleColor = (A.surface.Cd) * max(OoN, 0);
+        #endif
+
         break;
         case Reflection:
         sampleColor = (weightA * A.surface.Cs * 0.25 / IoH) * max(OoN, 0);
@@ -425,6 +421,9 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         infos[count].distance = 1e10;
         infos[count].surface.light = vec3(0);
     }
+
+    vec2 mixWeight=vec2(0);
+
     for (count = 0; count < MaxRay; count++) {
         fogA = float(inverse_0) * fogColor;
         emissionA = float(inverse_0) * emission;
@@ -435,7 +434,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         ro_i = ro_o;
         rd_i = rd_o;
 
-        absorption = inverse_0 ? exp(-t * fogA.yzw) : exp(-b_Q * (b_P.x - ro_i.y) * t + 0.5 * b_Q * t * t * rd_i.y);
+        absorption = inverse_0 ? exp(-t * fogA.yzw) : exp(-max(b_Q * (b_P.x - ro_i.y) * t - 0.5 * b_Q * t * t * rd_i.y,0));
 
         vec3 normal = faceforward(tmp_Payload.material.normal, tmp_Payload.material.normal, rd_i);
         vec3 macroNormal = faceforward(tmp_Payload.geometryNormal, tmp_Payload.geometryNormal, rd_i);
@@ -445,11 +444,11 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         vec4 mA, mB;
 
         material surface = Material_(ro_o, normal);
-        if (abs(surface.R.z) > 0.5) {
+        if (surface.R.z > 0.5) {
             vec3 offset = fbm3D(ro_o * 0.125 + time_global * 0.125, 8).yzw * 0.25;
             vec3 dH = normalize(vec3(offset.x, 1, offset.z));
             dH = faceforward(dH, dH, normal);
-            normal = normalize(mix(normal, dH, max(-abs(normal.y), 0)));
+            normal = normalize(mix(normal, dH, max(0.25*abs(normal.y), 0)));
         }
         vec3 microNormal;
 
@@ -480,23 +479,32 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         A.macroNormal = macroNormal;
         A.color2 = surface.Cs;
         A.color3 = surface.Cd;
+
+
+        float rs = mA.x / mB.x;
+        float F = max(fresnel(-rd_i, microNormal, rs), 0);
+        bool r = rand(ro_o) < 1 - F;
+
+        if(count==0){
+            mixWeight.x=p;
+            mixWeight.y=(1-p)*min(F,1);
+        }
+
         if (b) {
             float IoN = dot(rd_i, normal);
             rd_o = reflect(rd_i, microNormal);
-            if(dot(rd_o,normal) > 0){
+            if (dot(rd_o, normal) > 0) {
                 A.n_o = mA.x;
                 float OoN = dot(rd_o, normal);
                 shade = vec3(GGX_G2(IoN, OoN, surface.R.x) * surface.S.x / max(p, 1e-5));
                 I = rC.rgb;
                 A.sampleRoughness = surface.R.x;
                 A.type = Reflection;
-            }else
-                b=false;
-        } 
-        if(!b) {
-            float rs = mA.x / mB.x;
-            float F = max(fresnel(-rd_i, microNormal, rs), 0);
-            bool r = rand(ro_o) < 1 - F;
+            } else
+                b = false;
+        }
+        if (!b) {
+
             vec3 rd_refract = vec3(0);
 
             if (r) rd_refract = refract(rd_i, microNormal, rs);
@@ -521,24 +529,29 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
                     A.n_o = mA.x;
                 }
                 A.sampleRoughness = surface.R.x;
+                shade = (1 - rC.rgb * surface.S.x) / max(1 - p, 1e-7);
             } else {
                 rd_o2 = DiffuseNormal(macroNormal, ro_o);
                 A.type = Diffussion;
                 A.sampleRoughness = 1;
                 A.n_o = mA.x;
+                #ifdef Method2
+                vec3 b_g0 = vec3(surface.R.w);
+                float a0 = dot(rd_i, rd_o2);
+                vec3 b_g1 = b_g0 * b_g0;
+                vec3 g = 1+0*3.0 / 2.0 * (1. + a0 * a0) * (1. - b_g1) / (2. + b_g1) / pow(1. + b_g1 - 2. * b_g0 * dot(rd_o2, rd_i), vec3(1.5));
+                shade = (1 - rC.rgb * surface.S.x) / (max(1 - p, 1e-7) * (abs(dot(normal, rd_i)) + abs(dot(normal, rd_o2)) + 0.001)) * g;
+                #else
+                shade = (1 - rC.rgb * surface.S.x) / max(1 - p, 1e-7);
+                #endif
             }
             A.color3 = I;
-            shade = (1 - rC.rgb * surface.S.x) / max(1 - p, 1e-7);
             rd_o = rd_o2;
             IoH = abs(dot(rd_o, microNormal));
         }
 
         A.rd_o = rd_o;
 
-        /*float change = float(A.sampleRoughness > sampleRoughness && sampleRoughness < 0.125 || count == 0);
-                sampleNormal = mix(sampleNormal, normal, change);
-                samplePos = mix(samplePos, A.p, change);
-                sampleRoughness = A.sampleRoughness * change + sampleRoughness * (1 - change);
         /*float change = float(A.sampleRoughness > sampleRoughness && sampleRoughness < 0.125 || count == 0);
         sampleNormal = mix(sampleNormal, normal, change);
         samplePos = mix(samplePos, A.p, change);
@@ -591,6 +604,8 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         denoiseBuffer.data[idx].distance = -1;
         denoiseBuffer.data[idx].rd = rd;
         denoiseBuffer.data[idx].absorption = inverse_0 ? vec3(0) : vec3(1);
+        denoiseBuffer.data[idx].reflectWeight=0;        
+        denoiseBuffer.data[idx].refractWeight=0;
         return vec4(back, -1);
     }
 
@@ -649,13 +664,8 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
     if (any(isnan(illumiantion))) {
         illumiantion = vec3(0);
     }
-    illumiantion = clamp(illumiantion, 0, 25/avgExposure);
-    /*vec3 o_seed1=o_seed;
+    illumiantion = clamp(illumiantion, 0, 25 / avgExposure);
 
-        denoiseBuffer.data[idx].currSample=vec4(o_seed1,luma(illumiantion));
-
-        if(iFrame>=1&&!useLastFrameSample) illumiantion*=0.5/p0_g;
-        if(iFrame>=1&&useLastFrameSample) illumiantion*=0.5/(1-p0_g);
     /*vec3 o_seed1=o_seed;
     
     denoiseBuffer.data[idx].currSample=vec4(o_seed1,luma(illumiantion));
@@ -663,6 +673,8 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
     if(iFrame>=1&&!useLastFrameSample) illumiantion*=0.5/p0_g;
     if(iFrame>=1&&useLastFrameSample) illumiantion*=0.5/(1-p0_g);
     */
+    denoiseBuffer.data[idx].reflectWeight=mixWeight.x;        
+    denoiseBuffer.data[idx].refractWeight=mixWeight.y;
     denoiseBuffer.data[idx].albedo = infos[0].color2;
     denoiseBuffer.data[idx].albedo2 = infos[0].color3;
     denoiseBuffer.data[idx].distance = infos[0].distance;
@@ -681,7 +693,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
     if (infos[0].surface.S.x <= 0.1) t = raycast(infos[0].p, r_rd_i, r_ro, r_rd, false);
     reflectIllumiantionBuffer.data[idx].normal = infos[0].surface.S.x > 0.1 ? r_rd_i : (t < -0.5 ? r_rd_i : faceforward(tmp_Payload.material.normal, tmp_Payload.material.normal, r_rd_i));
     reflectIllumiantionBuffer.data[idx].pos = infos[0].p; //t<-0.5?infos[0].p:r_ro;
-    reflectIllumiantionBuffer.data[idx].distance = t;
+    //reflectIllumiantionBuffer.data[idx].distance = t;
     //r_rd_i=refract(infos[0].rd_i,infos[0].n,infos[0].n_i/infos[0].n_o);
     //raycast(infos[0].p-infos[0].n*0.001,r_rd_i,r_rd,r_ro,false);
 
@@ -701,11 +713,11 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
 
         break;
         case Reflection:
-        illumiantion = clamp(illumiantion, 0, 5/avgExposure);
+        illumiantion = clamp(illumiantion, 0, 5 / avgExposure);
         reflectIllumiantionBuffer.data[idx].data_swap = illumiantion;
         break;
         case Refraction:
-        illumiantion = clamp(illumiantion, 0, 5/avgExposure);
+        illumiantion = clamp(illumiantion, 0, 5 / avgExposure);
         refractIllumiantionBuffer.data[idx].data_swap = illumiantion;
         //refractIllumiantionBuffer.data[idx].normal = sampleNormal;
         //refractIllumiantionBuffer.data[idx].pos = infos[0].p;

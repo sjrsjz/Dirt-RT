@@ -1,7 +1,11 @@
 
 #include "/lib/constants.glsl"
 #include "/lib/common.glsl"
-
+#include "/lib/buffers/frame_data.glsl"
+uint getIdx(uvec2 xy) {
+    //return xy.y * 1024u + clamp(xy.x, 0, 1023u);
+    return xy.y * resolution_global.x + clamp(xy.x, 0, resolution_global.x - 1);
+}
 struct bufferData {
     vec3 macroNormal;
     vec3 light;
@@ -12,8 +16,8 @@ struct bufferData {
     vec3 emission;
     vec3 rd;
     int illumiantionType;
-    //vec4 currSample;
-    //vec4 lastSample;
+    float reflectWeight;
+    float refractWeight;    
 };
 
 layout(std430, set = 3, binding = 0) buffer DenoiseBuffer {
@@ -125,28 +129,26 @@ struct diffuseIllumiantionData {
     vec3 normal2;
     //float sumX;
     //float sumX2;
-    //float lsumX;
-    //float lsumX2;
     float weight;
 };
-layout(std140, set = 3, binding = 3) buffer DiffuseIllumiantionDataBuffer {
+layout(std140, set = 3, binding = 2) buffer DiffuseIllumiantionDataBuffer {
     diffuseIllumiantionData data[];
 } diffuseIllumiantionBuffer;
 
 struct vec3IllumiantionData {
-    float distance;
     vec3 data;
     vec3 data_swap;
     vec3 pos;
     vec3 normal;
     float weight;
+    float mixWeight;
 };
 
-layout(std140, set = 3, binding = 4) buffer ReflectIllumiantionDataBuffer {
+layout(std140, set = 3, binding = 3) buffer ReflectIllumiantionDataBuffer {
     vec3IllumiantionData data[];
 } reflectIllumiantionBuffer;
 
-layout(std140, set = 3, binding = 5) buffer RefractIllumiantionDataBuffer {
+layout(std140, set = 3, binding = 4) buffer RefractIllumiantionDataBuffer {
     vec3IllumiantionData data[];
 } refractIllumiantionBuffer;
 
@@ -283,7 +285,7 @@ vec3IllumiantionData fetchReflect(ivec2 p) {
     #ifndef REFLECT_BUFFER_MIN2
     tmp4 = texelFetch(reflectIllumiantionData_color_Sampler, p, 0);
     tmp.data = tmp4.xyz;
-
+    tmp.mixWeight=tmp4.w;
     tmp.normal = texelFetch(reflectIllumiantionData_lnormal_Sampler, p, 0).xyz;
     tmp.pos = texelFetch(reflectIllumiantionData_lpos_Sampler, p, 0).xyz;
     #endif
@@ -298,6 +300,7 @@ vec3IllumiantionData blendReflect(vec3IllumiantionData A,vec3IllumiantionData B,
     t.data=mix(A.data,B.data,x);
     t.pos=mix(A.pos,B.pos,x);
     t.normal=mix(A.normal,B.normal,x);
+    t.mixWeight=(B.mixWeight-A.mixWeight)*x+A.mixWeight;    
     #endif
     return t;
 }
@@ -320,7 +323,7 @@ vec3IllumiantionData sampleReflect(vec2 p){
 void WriteReflect(vec3IllumiantionData data, ivec2 p) {
     imageStore(reflectIllumiantionData_swap_color, p, vec4(data.data_swap, data.weight));
     #if !defined(REFLECT_BUFFER_MIN) && !defined(REFLECT_BUFFER_MIN2) 
-    imageStore(reflectIllumiantionData_color, p, vec4(data.data, data.weight));
+    imageStore(reflectIllumiantionData_color, p, vec4(data.data, data.mixWeight));
     imageStore(reflectIllumiantionData_lpos, p, vec4(data.pos, 0));
     imageStore(reflectIllumiantionData_lnormal, p, vec4(data.normal, 0));
     #endif
@@ -363,6 +366,7 @@ vec3IllumiantionData fetchRefract(ivec2 p) {
     #ifndef REFRACT_BUFFER_MIN2
     tmp4 = texelFetch(refractIllumiantionData_color_Sampler, p, 0);
     tmp.data = tmp4.xyz;
+    tmp.mixWeight=tmp4.w;
     tmp.normal = texelFetch(refractIllumiantionData_lnormal_Sampler, p, 0).xyz;
     tmp.pos = texelFetch(refractIllumiantionData_lpos_Sampler, p, 0).xyz;
     #endif
@@ -378,6 +382,7 @@ vec3IllumiantionData blendRefract(vec3IllumiantionData A,vec3IllumiantionData B,
     t.data=mix(A.data,B.data,x);
     t.pos=mix(A.pos,B.pos,x);
     t.normal=mix(A.normal,B.normal,x);
+    t.mixWeight=(B.mixWeight-A.mixWeight)*x+A.mixWeight;
     #endif
     return t;
 }
@@ -400,7 +405,7 @@ void WriteRefract(vec3IllumiantionData data, ivec2 p) {
     
     imageStore(refractIllumiantionData_swap_color, p, vec4(data.data_swap, data.weight));
     #if !defined(REFRACT_BUFFER_MIN) && !defined(REFRACT_BUFFER_MIN2)
-    imageStore(refractIllumiantionData_color, p, vec4(data.data, data.weight));
+    imageStore(refractIllumiantionData_color, p, vec4(data.data, data.mixWeight));
     imageStore(refractIllumiantionData_lpos, p, vec4(data.pos, 0));
     imageStore(refractIllumiantionData_lnormal, p, vec4(data.normal, 0));
     #endif

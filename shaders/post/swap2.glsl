@@ -30,4 +30,5 @@ void main() {
     CoCg.xy = tmp0.CoCg;
 
     CoCg.z = tmp.weight;
+    
 }

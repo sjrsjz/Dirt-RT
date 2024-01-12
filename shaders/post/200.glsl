@@ -20,26 +20,11 @@ const int colortex8Format = RGBA32F;
 
 const bool colortex1Clear = false;
 const bool colortex2Clear = false;
-
-const bool colortex6Clear = false;
-const bool colortex7Clear = false;
-const bool colortex8Clear = false;
-/*
-const int colortex0Format = RGBA32F;
-const int colortex1Format = RGBA32F;
-const int colortex2Format = RGBA32F;
-const int colortex6Format = RGBA32F;
-const int colortex7Format = RGBA32F;
-const int colortex8Format = RGBA32F;
-
-
-const bool colortex1Clear = false;
-const bool colortex2Clear = false;
 const bool colortex3Clear = false;
 const bool colortex4Clear = false;
 const bool colortex6Clear = false;
-const bool colortex7Clear = false;
-const bool colortex8Clear = false;
+const bool colortex7Clear = true;
+const bool colortex8Clear = true;
 */
 
 /* RENDERTARGETS: 0 */

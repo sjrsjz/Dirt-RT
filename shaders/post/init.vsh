@@ -52,7 +52,8 @@ void main() {
         #else
         world_type_global=World_OVERWORLD;
         #endif
-*/
+*/  
+        return;
         float luminanceSum = 0.0;
         for (int i = 0; i < samples.length(); i++) {
             #ifdef SRR

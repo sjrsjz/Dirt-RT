@@ -21,7 +21,7 @@ uniform sampler2D colortex7;
 uniform sampler2D colortex8;
 uniform sampler2D colortex9;
 uniform sampler2D depthtex0;
-/* RENDERTARGETS: 7,8,9 */
+/* RENDERTARGETS: 0,8,9 */
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragData;
 layout(location = 2) out vec4 fragData2;
@@ -32,14 +32,12 @@ void main() {
     #else
     const int scale = 1;
     #endif
-    uint idx = getIdx(uvec2(gl_FragCoord.xy));
     vec4 entity = texture(colortex7, texCoord);
     bool mask = texture(colortex8, texCoord).w < texture(colortex9, texCoord).w;////&& gBuffer.data[idx].depth.x <= gBuffer.data[idx].depth.y;
-    //vec4 scene = avgExposure*texture(colortex0, texCoord);
     vec4 scene = avgExposure*texture(colortex0, texCoord);
-    //gBuffer.data[idx].depth = vec2(10);
-    fragColor = vec4(pow(ACESFilm(mask ? entity.rgb : scene.rgb), vec3(1 / 2.2)), 1);
 
+    fragColor.xyz = mask ? mix(scene.rgb,entity.rgb,entity.a) : scene.rgb;//vec4(pow(ACESFilm(mask ? mix(scene.rgb,entity.rgb,entity.a) : scene.rgb), vec3(1 / 2.2)), 1);
+    
 }
 
 //#endif

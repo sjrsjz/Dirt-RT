@@ -1,1 +1,1 @@
-#include "/gbuffers/textured.vsh"
+#include "/gbuffers/entities.vsh"

@@ -24,4 +24,5 @@ void main() {
     //reflectNormal.xyz = tmp.normal;
     //reflectPos.xyz = tmp.pos;
     color.xyz=tmp.data_swap;
+    color.w = denoiseBuffer.data[idx].reflectWeight;
 }

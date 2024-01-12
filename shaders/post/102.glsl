@@ -41,13 +41,13 @@ const int colortex6Format = RGBA32F;
 const int colortex7Format = RGBA32F;
 const int colortex8Format = RGBA32F;
 
-const bool colortex0Clear = false;
+const bool colortex0Clear = true;
 const bool colortex1Clear = false;
 const bool colortex2Clear = false;
 
 const bool colortex6Clear = false;
-const bool colortex7Clear = false;
-const bool colortex8Clear = false;
+const bool colortex7Clear = true;
+const bool colortex8Clear = true;
 */
 
 const float NORMAL_PARAM = 16.0;
@@ -123,7 +123,7 @@ void MixRefract() {
 
     vec3IllumiantionData data = sampleRefract(prevScreenPos.xy * textureSize(colortex0, 0));
 
-    float s = float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.normal, data3.normal) * svgfPositionWeight(data.pos, data3.pos, data3.normal, info_distance);
+    float s = exp(-10*abs(denoiseBuffer.data[idx_l].refractWeight-data.mixWeight))*float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.normal, data3.normal) * svgfPositionWeight(data.pos, data3.pos, data3.normal, info_distance);
     s = (min(1, s + 0.875) - 0.875) * 8;
     float prevW = data.weight;
     prevW = max(1, min(prevW * s + 1, ACCUMULATION_LENGTH * 2));

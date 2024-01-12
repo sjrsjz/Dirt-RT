@@ -17,8 +17,10 @@ layout(std140,set=3, binding = 1) buffer frameData {
     float wetStrength_global;
     float wetness_global;
     int world_type_global;
+    uvec2 resolution_global;
 };
-struct gBufferData{
+
+/*struct gBufferData{
     vec4 pos;
     vec4 normal;
     vec4 color;
@@ -29,7 +31,7 @@ struct gBufferData{
 layout(std430,set=3, binding = 2) buffer GBuffer{
     gBufferData data[];
 }gBuffer;
-
+*/
 mat3x4 mixAB(mat3x4 A,mat3x4 B,float x){
     return A+(B-A)*x;
 }

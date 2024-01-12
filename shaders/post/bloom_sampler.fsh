@@ -25,7 +25,7 @@ void main() {
     
     float weight = kernel(R*R) / kernel(0);
     
-    R *= 0.5;
+    R *= 0.75;
     mat2 rotM = mat2(cos(angleShift), sin(angleShift), -sin(angleShift), cos(angleShift));
     vec2 v = vec2(cos(angleOffset), sin(angleOffset)) * R * textureSize(colortex1, 0).x;
     //vec3 sumX_2 = vec3(0), sumX2 = vec3(0);

@@ -22,13 +22,13 @@ const int colortex6Format = RGBA32F;
 const int colortex7Format = RGBA32F;
 const int colortex8Format = RGBA32F;
 
-const bool colortex0Clear = false;
+const bool colortex0Clear = true;
 const bool colortex1Clear = false;
 const bool colortex2Clear = false;
 
 const bool colortex6Clear = false;
-const bool colortex7Clear = false;
-const bool colortex8Clear = false;
+const bool colortex7Clear = true;
+const bool colortex8Clear = true;
 */
 
 const float NORMAL_PARAM = 128.0;

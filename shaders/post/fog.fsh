@@ -1,5 +1,5 @@
 #version 430
-#define DIFFUSE_BUFFER_MIN
+#define DIFFUSE_BUFFER_MIN2
 #define REFLECT_BUFFER_MIN2
 #define REFRACT_BUFFER_MIN2
 
@@ -15,20 +15,20 @@ in vec2 texCoord;
 layout(location = 0) out vec4 fragColor;
 
 void main() {
-    setSkyVars();
     uint idx = getIdx(uvec2(gl_FragCoord.xy));
     bufferData data = denoiseBuffer.data[idx];
-    diffuseIllumiantionData tmp = fetchDiffuse(ivec2(gl_FragCoord.xy));
-    vec3IllumiantionData tmp2 = fetchReflect(ivec2(gl_FragCoord.xy));
-    vec3IllumiantionData tmp3 = fetchRefract(ivec2(gl_FragCoord.xy));
-
     if (data.distance < -0.5) {
+        setSkyVars();
         fragColor.xyz = data.absorption * getSkyColor(SunLight_global, MoonLight_global, camPos, data.rd, lightDir_global);
     }
     else
     {
+        diffuseIllumiantionData tmp = fetchDiffuse(ivec2(gl_FragCoord.xy));
+        vec3IllumiantionData tmp2 = fetchReflect(ivec2(gl_FragCoord.xy));
+        vec3IllumiantionData tmp3 = fetchRefract(ivec2(gl_FragCoord.xy));
+
         //fragColor.xyz=0.1*project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2);
-        //fragColor.xyz=tmp.normal;
+        //fragColor.xyz=vec3(data.reflectWeight,data.refractWeight,0);
         //fragColor.xyz=diffuseIllumiantionBuffer.data[idx].normal2;//vec3(abs(project_SH_irradiance(tmp.data,faceforward(tmp.normal2,tmp.normal2,-tmp.normal))));
         fragColor.xyz =data.absorption * ((project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2) + tmp3.data_swap) * data.albedo2 + tmp2.data_swap * data.albedo + data.light) + data.emission;
     }

@@ -25,4 +25,5 @@ void main() {
     //refractNormal.xyz = tmp.normal;
     //refractPos.xyz = tmp.pos;
     color.xyz=tmp.data_swap;
+    color.w = denoiseBuffer.data[idx].refractWeight;
 }

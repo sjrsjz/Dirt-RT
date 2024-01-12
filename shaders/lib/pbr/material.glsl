@@ -19,6 +19,7 @@ struct Material {
     vec3 F0;
     float metallic;
     float roughness;
+    float subsurface_scattering;
     vec3 emission;
     vec3 normal;
     float ambientOcclusion;
@@ -100,7 +101,7 @@ Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn, float we
         material.metallic = 0;
         material.albedo = vec3(0);
     }
-
+    material.subsurface_scattering=specular.b;
     #endif
 
     // Emission

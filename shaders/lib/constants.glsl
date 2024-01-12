@@ -17,6 +17,8 @@ const int Reflection = 1;
 const int Diffussion = 2;
 const int Refraction = 3;
 
+#define Method2
+
 //Vulkanite
 const int World_OVERWORLD = 0;
 const int World_THE_NETHER = 1;
@@ -25,7 +27,5 @@ const int World_OVERWORLD_CAVE = 3;
 
 //#define SRR //super-resolution reconstruction
 
-uint getIdx(uvec2 xy) {
-    return xy.y * 2560u + clamp(xy.x, 0, 2559u);
-}
+
 #endif // CONSTANTS_GLSL

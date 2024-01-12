@@ -27,5 +27,6 @@ void main() {
     tmp.data_swap=texelFetch(colortex5,ivec2(gl_FragCoord.xy),0).xyz;
     tmp.normal =texelFetch(colortex3,ivec2(gl_FragCoord.xy),0).xyz;
     tmp.pos = texelFetch(colortex4,ivec2(gl_FragCoord.xy),0).xyz;
+    tmp.mixWeight=denoiseBuffer.data[idx].refractWeight;
     WriteRefract(tmp,ivec2(gl_FragCoord.xy));
 }
