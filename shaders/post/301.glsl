@@ -98,7 +98,7 @@ void main() {
     float s[3] = { 1, 2, 1 };
     float t[3] = { 1, 2, 1 };
     float w = 0;
-    vec3 centerNormal = texelFetch(colortex3, ivec2(gl_FragCoord.xy), 0).xyz;
+    vec3 centerNormal = normalize(texelFetch(colortex3, ivec2(gl_FragCoord.xy), 0).xyz);
     vec3 centerPos = texelFetch(colortex4, ivec2(gl_FragCoord.xy), 0).xyz;
     float centerWeight=texelFetch(colortex5, ivec2(gl_FragCoord.xy), 0).w;
     s[0] = 0.75 + K(cross(camX_global, camY_global), camX_global, centerNormal);
@@ -118,7 +118,7 @@ void main() {
             float w1 = s[i] * t[j] * step(-0.5, denoiseBuffer.data[idx2].distance);
             vec4 c=texelFetch(colortex5, samplePos, 0);
             float dW=centerWeight-c.w;
-            float w0 = exp(-100*dW*dW)*svgfNormalWeight(centerNormal, texelFetch(colortex3, samplePos, 0).xyz)
+            float w0 = exp(-100*dW*dW)*svgfNormalWeight(centerNormal, normalize(texelFetch(colortex3, samplePos, 0).xyz))
                     * svgfPositionWeight(centerPos, texelFetch(colortex4, samplePos, 0).xyz, centerNormal)
                     * w1 * float(samplePos == clamp(samplePos, vec2(0), texSize));
             A += c.xyz * w0;

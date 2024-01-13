@@ -474,6 +474,14 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         bool refract_;
         vec3 I;
         vec3 shade;
+
+
+        float rs = mA.x / mB.x;
+        float F = clamp(fresnel(-rd_i, microNormal, rs), 0 , 1);
+        bool r = rand(ro_o) < 1 - F;
+
+        float p1 = p + (1-p)*F*surface.S.y;
+
         bool b = rand(ro_o) < p;
         A.microNormal = microNormal;
         A.macroNormal = macroNormal;
@@ -481,13 +489,9 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         A.color3 = surface.Cd;
 
 
-        float rs = mA.x / mB.x;
-        float F = max(fresnel(-rd_i, microNormal, rs), 0);
-        bool r = rand(ro_o) < 1 - F;
-
         if(count==0){
-            mixWeight.x=p;
-            mixWeight.y=(1-p)*min(F,1);
+            mixWeight.x=p1;
+            mixWeight.y=(1-p1)*(1-min(F,1))*surface.S.y;
         }
 
         if (b) {
@@ -689,9 +693,10 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
 
     vec3 r_rd, r_ro;
     vec3 r_rd_i = reflect(infos[0].rd_i, infos[0].n);
-    float t = 0;
+    float t = infos[0].distance;
     if (infos[0].surface.S.x <= 0.1) t = raycast(infos[0].p, r_rd_i, r_ro, r_rd, false);
-    reflectIllumiantionBuffer.data[idx].normal = infos[0].surface.S.x > 0.1 ? r_rd_i : (t < -0.5 ? r_rd_i : faceforward(tmp_Payload.material.normal, tmp_Payload.material.normal, r_rd_i));
+    reflectIllumiantionBuffer.data[idx].normal =t * (infos[0].surface.S.x > 0.1 ? r_rd_i : (t < -0.5 ? r_rd_i 
+                        : faceforward(tmp_Payload.material.normal, tmp_Payload.material.normal, r_rd_i)));
     reflectIllumiantionBuffer.data[idx].pos = infos[0].p; //t<-0.5?infos[0].p:r_ro;
     //reflectIllumiantionBuffer.data[idx].distance = t;
     //r_rd_i=refract(infos[0].rd_i,infos[0].n,infos[0].n_i/infos[0].n_o);

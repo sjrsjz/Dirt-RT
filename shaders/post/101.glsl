@@ -56,7 +56,8 @@ const float POSITION_PARAM = 4.0;
 const float LUMINANCE_PARAM = 4.0;
 
 float svgfNormalWeight(vec3 centerNormal, vec3 normal, float distance) {
-    return pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM*(0.25+8*exp(-0.125*distance)));
+    return exp(-5*abs(length(centerNormal)-length(normal)))*clamp(pow(max(dot(normalize(centerNormal),normalize(normal)), 0.0), NORMAL_PARAM*(0.25*0+8+0*8*exp(-0.125*distance))),0,1);
+//    clamp(exp(-5*length(centerNormal-normal)),0.,1.);
 }
 
 float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float distance) {
@@ -120,7 +121,7 @@ void MixReflect() {
     
     vec3IllumiantionData data = sampleReflect(prevScreenPos.xy*textureSize(colortex0,0));
 
-    float s = exp(-10*abs(denoiseBuffer.data[idx_l].reflectWeight-data.mixWeight))*float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.normal, data2.normal,info_distance)
+    float s = exp(-10*abs(denoiseBuffer.data[idx_l].reflectWeight-data.mixWeight))*float(denoiseBuffer.data[idx_l].distance > -0.5)* svgfNormalWeight(data.normal, data2.normal,info_distance)
              * svgfPositionWeight(data.pos, data2.pos, data2.normal,info_distance);
     s = pow((min(1, s + 0.57) - 0.57)/0.57,0.25);
     

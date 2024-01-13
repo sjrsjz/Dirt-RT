@@ -55,7 +55,7 @@ const float POSITION_PARAM = 1.0;
 const float LUMINANCE_PARAM = 4.0;
 
 float svgfNormalWeight(vec3 centerNormal, vec3 normal) {
-    return pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM);
+    return clamp(exp(-5*length(centerNormal-normal)),0.,1.);;//pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM);
 }
 
 float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float distance) {
