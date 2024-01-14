@@ -21,6 +21,8 @@ void main() {
     uint idx = getIdx(uvec2(gl_FragCoord.xy));
     vec3IllumiantionData tmp=fetchRefract(ivec2(gl_FragCoord.xy));
     refractNormal.xyz = refractIllumiantionBuffer.data[idx].normal;
+    refractNormal.w = step(-0.5,denoiseBuffer.data[idx].distance);
+
     refractPos.xyz = refractIllumiantionBuffer.data[idx].pos;
     //refractNormal.xyz = tmp.normal;
     //refractPos.xyz = tmp.pos;

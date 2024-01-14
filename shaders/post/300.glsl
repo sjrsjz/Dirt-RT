@@ -94,12 +94,15 @@ void main() {
     for (int i = 0; i <= 2; i++) {
         samplePos.y = int(gl_FragCoord.y - R0);
         for (int j = 0; j <= 2; j++) {
-            uint idx2 = getIdx(uvec2(samplePos));
-            float w1 = s[i] * t[j] * step(-0.5, denoiseBuffer.data[idx2].distance);
+//            uint idx2 = getIdx(uvec2(samplePos));
 
             SH tmp;
             tmp.shY = texelFetch(colortex5, samplePos, 0);
-            tmp.CoCg = texelFetch(colortex6, samplePos, 0).xy;
+            vec3 C=texelFetch(colortex6, samplePos, 0).xyw;
+
+            tmp.CoCg = C.xy;
+            float w1 = s[i] * t[j] * C.z;
+
             float dL = centerW * (dot(tmp.shY - centerSH.shY, tmp.shY - centerSH.shY) + dot(tmp.CoCg - centerSH.CoCg, tmp.CoCg - centerSH.CoCg));
             float w0 = svgfNormalWeight(centerNormal, texelFetch(colortex3, samplePos, 0).xyz)
                     * svgfPositionWeight(centerPos, texelFetch(colortex4, samplePos, 0).xyz, centerNormal)
@@ -116,6 +119,6 @@ void main() {
     if (any(isnan(A.CoCg))) A.CoCg = vec2(0);
     SH tmp = scaleSH(A, 1 / max(w, 0.01));
     shY = tmp.shY;
-    CoCg.z = texelFetch(colortex6, ivec2(gl_FragCoord.xy), 0).z;
+    CoCg.zw = texelFetch(colortex6, ivec2(gl_FragCoord.xy), 0).zw;
     CoCg.xy = tmp.CoCg;
 }

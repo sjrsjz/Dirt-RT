@@ -20,7 +20,7 @@ layout(location = 0) out vec4 fragColor;
 
 void main() {
     //return;
-    const int sampleN = 24;
+    const int sampleN = 16;
     vec3 sumX = vec3(0);
     float w0 = 0;
     vec2 texSize = textureSize(colortex2, 0);

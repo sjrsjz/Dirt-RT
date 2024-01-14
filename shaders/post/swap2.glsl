@@ -30,5 +30,6 @@ void main() {
     CoCg.xy = tmp0.CoCg;
 
     CoCg.z = tmp.weight;
+    CoCg.w =  step(-0.5,denoiseBuffer.data[idx].distance);
     
 }

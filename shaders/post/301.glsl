@@ -114,11 +114,11 @@ void main() {
     for (int i = 0; i <= 2; i++) {
         samplePos.y = int(gl_FragCoord.y - R0);
         for (int j = 0; j <= 2; j++) {
-            uint idx2 = getIdx(uvec2(samplePos));
-            float w1 = s[i] * t[j] * step(-0.5, denoiseBuffer.data[idx2].distance);
             vec4 c=texelFetch(colortex5, samplePos, 0);
             float dW=centerWeight-c.w;
-            float w0 = exp(-100*dW*dW)*svgfNormalWeight(centerNormal, normalize(texelFetch(colortex3, samplePos, 0).xyz))
+            vec4 B=texelFetch(colortex3, samplePos, 0);
+            float w1 = s[i] * t[j] * B.w;
+            float w0 = exp(-10*dW*dW)*svgfNormalWeight(centerNormal, normalize(B.xyz))
                     * svgfPositionWeight(centerPos, texelFetch(colortex4, samplePos, 0).xyz, centerNormal)
                     * w1 * float(samplePos == clamp(samplePos, vec2(0), texSize));
             A += c.xyz * w0;
@@ -130,4 +130,5 @@ void main() {
     }
     if (any(isnan(A))) A = vec3(0);
     color.xyz = A / max(w, 0.01);
+    color.w = centerWeight;
 }

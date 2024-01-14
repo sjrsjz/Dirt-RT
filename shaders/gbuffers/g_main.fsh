@@ -12,8 +12,8 @@ const int depthtex0Format = RGBA32F;
 const int colortex7Format = RGBA32F;
 const int colortex8Format = RGBA32F;
 const int colortex9Format = RGBA32F;
-const int colortex8Clear = true;
-const int colortex9Clear = true;
+const bool colortex8Clear = true;
+const bool colortex9Clear = true;
 */
 /* RENDERTARGETS: 7,9 */
 layout(location = 0) out vec4 fragColor;
