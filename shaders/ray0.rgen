@@ -240,7 +240,7 @@ vec4 sampleGodRay(vec3 b_Sun, vec3 b_Moon, vec3 ro, vec3 rd, float far, vec3 lig
         vec3 rd1, ro1;
         t = raycast(samplePos, -sampleDir, ro1, rd1, false);
         vec3 g = 3. / (8. * PI) * (1. + pow(dot(rd, lightDir), 2.)) * (1. - b_g0 * b_g0) / (2. + b_g0 * b_g0) / pow(1. + b_g0 * b_g0 - 2. * b_g0 * dot(-lightDir, rd), vec3(1.5));
-        c = float(t < -0.5) * g * getSkyColor(b_Sun, b_Moon, samplePos, sampleDir, -lightDir);
+        c = float(t < -0.5) * g * SampleSky(sampleDir);
     }
     c *= 0.125 * exp(-b_Q * h * sampleX + 0.5 * b_Q * sampleX * sampleX * sampleDir.y);
     return vec4(max(c, 0), t < -0.5 ? s : -1);
@@ -320,7 +320,7 @@ vec3 sampleSunlight(info A, vec3 lightDir, bool night, int type /*,int inwater*/
     float cosbeta = 1 - r1 * (1 - cosD_S);
 
     vec3 ro_o, rd_o;
-
+    
     vec3 sampleDir = cosbeta * Y + sqrt(1 - cosbeta * cosbeta) * (cos(alpha) * X + sin(alpha) * Z);
 
     float t = raycast(ro, -sampleDir, ro_o, rd_o, true, i16vec2(1000, 0));
@@ -331,7 +331,7 @@ vec3 sampleSunlight(info A, vec3 lightDir, bool night, int type /*,int inwater*/
         //else
         return vec3(0);
     }
-    vec3 sunlight = getSkyColor(SunLight, MoonLight, ro, -sampleDir, night ? lightDir : -lightDir).xyz;
+    vec3 sunlight = SampleSky(-sampleDir).xyz;
 
     XYZ(A.n, X, Y, Z);
     vec3 microNormal = -normalize(sampleDir + A.rd_i);
@@ -375,6 +375,7 @@ vec3 sampleSunlight(info A, vec3 lightDir, bool night, int type /*,int inwater*/
         default:
         break;
     }
+    
     sampleColor *= sunlight * tmp_Payload.shadowTransmission;
     return max(vec3(0), vec3(sampleColor) * (dot(sampleDir, lightDir) > cosD_S ? 1 : 0));
 }
@@ -587,8 +588,8 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
 
     count -= 1;
     vec3 ro_1, rd_1;
-    vec3 c = float(false || count + 1 < MaxRay) * getSkyColor(SunLight, MoonLight, ro_o, rd_o, -lightDir).xyz * absorption;
-    vec3 back = getSkyColor(SunLight, MoonLight, originalPos, rd_o, -lightDir).xyz * absorption;
+    vec3 c = float(false || count + 1 < MaxRay) * SampleSky(rd_o).xyz * absorption;
+    vec3 back = SampleSky(rd_o).xyz * absorption;
     if (count == -1) {
 
         //vec3 o_seed1=o_seed;

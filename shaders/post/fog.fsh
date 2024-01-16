@@ -1,4 +1,4 @@
-#version 430
+#version 430 compatibility
 #define DIFFUSE_BUFFER_MIN2
 #define REFLECT_BUFFER_MIN2
 #define REFRACT_BUFFER_MIN2
@@ -17,9 +17,11 @@ layout(location = 0) out vec4 fragColor;
 void main() {
     uint idx = getIdx(uvec2(gl_FragCoord.xy));
     bufferData data = denoiseBuffer.data[idx];
+    
     if (data.distance < -0.5) {
-        setSkyVars();
-        fragColor.xyz = data.absorption * getSkyColor(SunLight_global, MoonLight_global, camPos, data.rd, lightDir_global);
+        //setSkyVars();
+        //fragColor.xyz = data.absorption * getSkyColor(SunLight_global, MoonLight_global, camPos, data.rd, lightDir_global);
+        fragColor.xyz = SampleSky(data.rd);
     }
     else
     {
