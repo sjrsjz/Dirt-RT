@@ -105,7 +105,7 @@ Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn, float we
     #endif
 
     // Emission
-    material.emission = albedo.rgb * EMISSION_INTENSITY * (specular.a == 1.0 ? 0.0 : specular.a);
+    material.emission = albedo.rgb * (specular.a == 1.0 ? 0.0 : specular.a);
 
     // Ambient occlusion
     material.ambientOcclusion = 1.0 - normal.b;

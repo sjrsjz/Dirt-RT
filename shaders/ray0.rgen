@@ -588,7 +588,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
 
     count -= 1;
     vec3 ro_1, rd_1;
-    vec3 c = float(false || count + 1 < MaxRay) * SampleSky(rd_o).xyz * absorption;
+    vec3 c = float(count + 1 < MaxRay) * SampleSky(rd_o).xyz * absorption;
     vec3 back = SampleSky(rd_o).xyz * absorption;
     if (count == -1) {
 

@@ -123,7 +123,7 @@ void MixReflect() {
 
     float s = exp(-10*abs(denoiseBuffer.data[idx_l].reflectWeight-data.mixWeight))*float(denoiseBuffer.data[idx_l].distance > -0.5)* svgfNormalWeight(data.normal, data2.normal,info_distance)
              * svgfPositionWeight(data.pos, data2.pos, data2.normal,info_distance);
-    s = pow((min(1, s + 0.57) - 0.57)/0.57,0.25);
+    s = pow((min(1, s + 0.56) - 0.56)/0.56,0.25);
     
     float prevW = data.weight;
     prevW = max(1, min(prevW * s + 1, ACCUMULATION_LENGTH*5));
