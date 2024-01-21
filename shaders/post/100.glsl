@@ -121,7 +121,7 @@ void MixDiffuse() {
 
 void main() {
    //严重消耗性能，与200.glsl一同占据用时的1/4~1/3
-    vec2 texCoord=vec2(gl_GlobalInvocationID.xy)/(textureSize(colortex0,0)-1);
+    //vec2 texCoord=vec2(gl_GlobalInvocationID.xy)/(textureSize(colortex0,0));
     idx = getIdx(uvec2(gl_GlobalInvocationID.xy));
 
     info_distance = denoiseBuffer.data[idx].distance;

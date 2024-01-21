@@ -104,7 +104,7 @@ float cloud_density(vec3 p) {
     return clamp(fbm3D2(0.00000325 * p, 4).x - 1 + density, 0, 1) / density;
 }
 vec3 getClouds(vec3 b_Sun, vec3 b_Moon, vec3 pos, vec3 n, vec3 lightDir, float Far) {
-    if(world_type_global!=0)
+    if(world_type_global!=0) 
         return getSkyColor(b_Sun, b_Moon, pos, n, lightDir);
     const int step1 = 5;
     const int step2 = 5;
@@ -115,7 +115,7 @@ vec3 getClouds(vec3 b_Sun, vec3 b_Moon, vec3 pos, vec3 n, vec3 lightDir, float F
         vec3 pos1 = pos + n * L;
         c = getSkyColor(b_Sun, b_Moon, pos1, n, lightDir).xyz;
         float s0 = 0;
-            vec3 b_k1 = mix(Rayleigh, Mie, 0.95) * 250 / b_P / b_P;
+            vec3 b_k1 = mix(Rayleigh, Mie, 1) * 250 / b_P / b_P;
 
         for (int i = 0; i < step1; i++) {
             float s = (n.y < 5e-2 ? L / step1 : (b_P.x - pos.y) / (n.y * step1)) * (rand(pos1) + 0.5);

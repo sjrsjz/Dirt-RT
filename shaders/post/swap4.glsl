@@ -22,6 +22,7 @@ void main() {
     reflectNormal.xyz = reflectIllumiantionBuffer.data[idx].normal;
     reflectNormal.w = step(-0.5,denoiseBuffer.data[idx].distance);
     reflectPos.xyz = reflectIllumiantionBuffer.data[idx].pos;
+    reflectPos.w = tmp.weight;
     //reflectNormal.xyz = tmp.normal;
     //reflectPos.xyz = tmp.pos;
     color.xyz=tmp.data_swap;

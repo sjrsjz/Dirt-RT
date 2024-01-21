@@ -103,6 +103,9 @@ void main() {
     float centerWeight=texelFetch(colortex5, ivec2(gl_FragCoord.xy), 0).w;
     s[0] = 0.75 + K(cross(camX_global, camY_global), camY_global, centerNormal);
     t[0] = 0.75 + K(cross(camX_global, camY_global), camX_global, centerNormal);
+    s[1] = 2 + clamp(texelFetch(colortex4, ivec2(gl_FragCoord.xy), 0).w - 32, 0, 8)*0.25;
+    t[1]=s[1];
+
     s[2] = s[0];
     t[2] = t[0];
 
