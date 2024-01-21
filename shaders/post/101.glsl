@@ -121,7 +121,7 @@ void MixReflect() {
     
     vec3IllumiantionData data = sampleReflect(prevScreenPos.xy*textureSize(colortex0,0));
 
-    float s = exp(-10*abs(denoiseBuffer.data[idx_l].reflectWeight-data.mixWeight))*float(denoiseBuffer.data[idx_l].distance > -0.5)* svgfNormalWeight(data.normal, data2.normal,info_distance)
+    float s = exp(-abs(denoiseBuffer.data[idx_l].reflectWeight-data.mixWeight))*float(denoiseBuffer.data[idx_l].distance > -0.5)* svgfNormalWeight(data.normal, data2.normal,info_distance)
              * svgfPositionWeight(data.pos, data2.pos, data2.normal,info_distance);
     s = pow((min(1, s + 0.56) - 0.56)/0.56,0.25);
     
