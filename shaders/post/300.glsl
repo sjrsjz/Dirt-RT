@@ -75,11 +75,11 @@ void main() {
     float w = 0;
     vec3 centerNormal = texelFetch(colortex3, ivec2(gl_FragCoord.xy), 0).xyz;
     vec3 centerPos = texelFetch(colortex4, ivec2(gl_FragCoord.xy), 0).xyz;
-    s[0] = 0.75 + K(cross(camX_global, camY_global), camX_global, centerNormal);
-    t[0] = 0.75 + K(cross(camX_global, camY_global), camY_global, centerNormal);
+    s[0] = 1;//0.75 + K(cross(camX_global, camY_global), camX_global, centerNormal);
+    t[0] = 1;//0.75 + K(cross(camX_global, camY_global), camY_global, centerNormal);
     s[2] = s[0];
     t[2] = t[0];
-    s[1] = 2 * clamp(pow(texelFetch(colortex6, ivec2(gl_FragCoord.xy), 0).z, 0.25), 1, 50);
+    s[1] = 2 + clamp(texelFetch(colortex6, ivec2(gl_FragCoord.xy), 0).z - 16, 0, 8)*0.25;//2 * clamp(pow(texelFetch(colortex6, ivec2(gl_FragCoord.xy), 0).z, 0.25) - 1.5, 1, 50);
     t[1] = s[1];
 
     ivec2 samplePos;
