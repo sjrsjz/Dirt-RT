@@ -75,11 +75,12 @@ void main() {
     float w = 0;
     vec3 centerNormal = texelFetch(colortex3, ivec2(gl_FragCoord.xy), 0).xyz;
     vec3 centerPos = texelFetch(colortex4, ivec2(gl_FragCoord.xy), 0).xyz;
-    s[0] = 1;//0.75 + K(cross(camX_global, camY_global), camX_global, centerNormal);
-    t[0] = 1;//0.75 + K(cross(camX_global, camY_global), camY_global, centerNormal);
-    s[2] = s[0];
-    t[2] = t[0];
-    s[1] = 2 + clamp(texelFetch(colortex6, ivec2(gl_FragCoord.xy), 0).z - 16, 0, 8)*0.25;//2 * clamp(pow(texelFetch(colortex6, ivec2(gl_FragCoord.xy), 0).z, 0.25) - 1.5, 1, 50);
+    //s[0] = 1;//0.75 + K(cross(camX_global, camY_global), camX_global, centerNormal);
+    //t[0] = 1;//0.75 + K(cross(camX_global, camY_global), camY_global, centerNormal);
+    //s[2] = s[0];
+    //t[2] = t[0];
+    float Q= clamp(texelFetch(colortex6, ivec2(gl_FragCoord.xy), 0).z - 16, 0, 8)*0.25;
+    s[1] = 2 + Q;//2 * clamp(pow(texelFetch(colortex6, ivec2(gl_FragCoord.xy), 0).z, 0.25) - 1.5, 1, 50);
     t[1] = s[1];
 
     ivec2 samplePos;
@@ -90,7 +91,7 @@ void main() {
     centerSH.shY = texelFetch(colortex5, ivec2(gl_FragCoord.xy), 0);
     vec3 tex = texelFetch(colortex6, ivec2(gl_FragCoord.xy), 0).xyz;
     centerSH.CoCg = tex.xy;
-    float centerW = min(pow(max(tex.z-5,0), 1.25) * 0.002, 0.2) * pow(R0, 0.875) * 0.2;
+    float centerW = min(pow(max(tex.z-5,0), 1.25) * 0.002, 0.2) * R0 * (0.2 + Q);
     for (int i = 0; i <= 2; i++) {
         samplePos.y = int(gl_FragCoord.y - R0);
         for (int j = 0; j <= 2; j++) {
@@ -103,10 +104,10 @@ void main() {
             tmp.CoCg = C.xy;
             float w1 = s[i] * t[j] * C.z;
 
-            float dL = centerW * (dot(tmp.shY - centerSH.shY, tmp.shY - centerSH.shY) + dot(tmp.CoCg - centerSH.CoCg, tmp.CoCg - centerSH.CoCg));
+            float dL = min(centerW * (dot(tmp.shY - centerSH.shY, tmp.shY - centerSH.shY) + dot(tmp.CoCg - centerSH.CoCg, tmp.CoCg - centerSH.CoCg)),10);
             float w0 = svgfNormalWeight(centerNormal, texelFetch(colortex3, samplePos, 0).xyz)
                     * svgfPositionWeight(centerPos, texelFetch(colortex4, samplePos, 0).xyz, centerNormal)
-                    * exp(-dL)
+                    /(1+dL)
                     * w1 * float(samplePos == clamp(samplePos, vec2(0), texSize));
 
             accumulate_SH(A, tmp, w0);

@@ -224,7 +224,6 @@ diffuseIllumiantionData blendDiffuse(diffuseIllumiantionData A,diffuseIllumianti
 diffuseIllumiantionData sampleDiffuse(vec2 p){
     
     //p*=textureSize(diffuseIllumiantionData_CoCg_swap_Sampler,0);
-    p-=0.25;
     ivec2 p1=ivec2(p);
 
     vec2 p2=fract(p);

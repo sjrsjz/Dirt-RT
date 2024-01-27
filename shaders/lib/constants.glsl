@@ -6,7 +6,7 @@ const float PI = 3.141592654;
 #define Correction
 const float SunDivMoon = 10000;
 const float EPSILONS = 0.;
-const float EPSILON_MIN = 0.00025;
+const float EPSILON_MIN = 0.001;
 const float Far = 20000;
 const int MaxRay = RAY_BOUNCES;
 const float DOF_R = 0;

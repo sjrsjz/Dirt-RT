@@ -310,6 +310,7 @@ vec3 sampleObjectLight(info A, vec3 center, float sR, int id, int type) {
 }
 
 vec3 sampleSunlight(info A, vec3 lightDir, bool night, int type /*,int inwater*/ ) {
+    A.p += lightDir * EPSILON_MIN;
     vec3 X, Y, Z;
     XYZ(lightDir, X, Y, Z);
 
@@ -439,6 +440,8 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
 
         vec3 normal = faceforward(tmp_Payload.material.normal, tmp_Payload.material.normal, rd_i);
         vec3 macroNormal = faceforward(tmp_Payload.geometryNormal, tmp_Payload.geometryNormal, rd_i);
+        info A;
+        A.p = ro_o;
         vec3 ro_B = ro_o - macroNormal * EPSILON_MIN;
         ro_o += macroNormal * EPSILON_MIN;
 
@@ -463,10 +466,10 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
 
         float p = rC.w * surface.S.x;
 
-        info A;
+
         A.rd_i = rd_i;
         A.n = normal;
-        A.p = ro_o;
+ 
         A.n_i = mA.x;
         A.surface = surface;
 

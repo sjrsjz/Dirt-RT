@@ -52,11 +52,11 @@ const bool colortex7Clear = true;
 const bool colortex8Clear = true;
 */
 
-const float NORMAL_PARAM = 4.0;
-const float POSITION_PARAM = 1.0;
+const float NORMAL_PARAM = 1.0;
+const float POSITION_PARAM = 64.0;
 const float LUMINANCE_PARAM = 4.0;
 
-float svgfNormalWeight(vec3 centerNormal, vec3 normal, float distance) {
+float svgfNormalWeight(vec3 centerNormal, vec3 normal, float distance) { 
     return pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM*(0.25+16*exp(-0.25*distance)));
 }
 
@@ -73,7 +73,7 @@ vec3 reproject(vec3 screenPos) {
     vec3 prevPlayerPos = worldPos - previousCameraPosition;
     vec3 prevViewPos = (gbufferPreviousModelView * vec4(prevPlayerPos, 1.0)).xyz;
     vec4 prevClipPos = gbufferPreviousProjection * vec4(prevViewPos, 1.0);
-    return (prevClipPos.xyz / prevClipPos.w * 0.5 + 0.5);
+    return prevClipPos.xyz / prevClipPos.w * 0.5 + 0.5;
 }
 
 vec3 reproject2(vec3 worldPos) {
@@ -97,8 +97,6 @@ bool notInRange(vec2 p) {
 }
 
 diffuseIllumiantionData data1;
-
-
 
 void MixDiffuse() {
     if (notInRange(prevScreenPos.xy)) {
