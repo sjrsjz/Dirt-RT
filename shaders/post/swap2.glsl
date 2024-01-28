@@ -18,11 +18,11 @@ layout(location = 3) out vec4 CoCg;
 
 void main() {
     uint idx = getIdx(uvec2(gl_FragCoord.xy));
-    diffuseIllumiantionData tmp = fetchDiffuse(ivec2(gl_FragCoord.xy));
+    diffuseIllumiantionData tmp = sampleDiffuse(vec2(gl_FragCoord.xy));
     diffuseNormal.xyz = diffuseIllumiantionBuffer.data[idx].normal;
     diffusePos.xyz = diffuseIllumiantionBuffer.data[idx].pos;
-    float c=100/(avgExposure*min(tmp.weight,10));
-    SH tmp0=irradiance_to_SH(min(project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal),c),diffuseIllumiantionBuffer.data[idx].normal);
+    //float c=100/(avgExposure*min(tmp.weight,10));
+    SH tmp0=tmp.data_swap;//irradiance_to_SH(min(project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal),c),diffuseIllumiantionBuffer.data[idx].normal);
 //    shY = tmp.data_swap.shY;
 //    CoCg.xy = tmp.data_swap.CoCg;
 

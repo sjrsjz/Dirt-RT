@@ -101,7 +101,7 @@ Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn, float we
         material.metallic = 0;
         material.albedo = vec3(0);
     }
-    material.subsurface_scattering=specular.b;
+    material.subsurface_scattering = specular.b;
     #endif
 
     // Emission

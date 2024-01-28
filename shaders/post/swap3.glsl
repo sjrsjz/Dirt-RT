@@ -22,13 +22,14 @@ uniform sampler2D colortex6;
 
 
 void main() {
-    diffuseIllumiantionData tmp=sampleDiffuse(vec2(gl_GlobalInvocationID.xy));
+    diffuseIllumiantionData tmp=fetchDiffuse(ivec2(gl_GlobalInvocationID.xy));
     if (any(isnan(tmp.data_swap.shY))) tmp.data_swap.shY = vec4(0);
     if (any(isnan(tmp.data_swap.CoCg))) tmp.data_swap.CoCg = vec2(0);
     tmp.data=tmp.data_swap;
 
     tmp.data_swap.shY=texelFetch(colortex5,ivec2(gl_GlobalInvocationID.xy),0);
     tmp.data_swap.CoCg=texelFetch(colortex6,ivec2(gl_GlobalInvocationID.xy),0).xy;
+    //uint idx = getIdx(uvec2(gl_GlobalInvocationID.xy));
     tmp.normal =texelFetch(colortex3,ivec2(gl_GlobalInvocationID.xy),0).xyz;
     tmp.pos = texelFetch(colortex4,ivec2(gl_GlobalInvocationID.xy),0).xyz;
 
