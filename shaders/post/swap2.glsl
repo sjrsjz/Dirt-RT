@@ -9,7 +9,7 @@
 
 uniform sampler2D colortex0;
 
-/* RENDERTARGETS: 3,4,5,6 */
+/* RENDERTARGETS: 3,4,5,6,0 */
 
 layout(location = 0) out vec4 diffuseNormal;
 layout(location = 1) out vec4 diffusePos;
@@ -30,6 +30,6 @@ void main() {
     CoCg.xy = tmp0.CoCg;
 
     CoCg.z = tmp.weight;
-    CoCg.w =  step(-0.5,denoiseBuffer.data[idx].distance);
-    
+    //CoCg.w = step(-0.5,denoiseBuffer.data[idx].distance);
+    CoCg.w = 5*luma(project_SH_irradiance(tmp0,diffuseIllumiantionBuffer.data[idx].normal))/avgExposure;
 }

@@ -89,7 +89,7 @@ vec4 fbm3D2(in vec3 x, int n)
     vec3 d = vec3(0.0);
     for (int i = 0; i < n; i++)
     {
-        vec4 n = noised(f * x * scale+time_global*0.01*scale);
+        vec4 n = noised(f * x * scale+time_global * 0.0025 * scale);
         a += b * n.x; // accumulate values
         d += b * n.yzw * f * scale; // accumulate derivatives
         b *= 0.6; // amplitude decrease
@@ -99,9 +99,9 @@ vec4 fbm3D2(in vec3 x, int n)
     return vec4(a, d);
 }
 float cloud_density(vec3 p) {
-    float density = 0.1 + smoothstep(1000., 4000., p.y) * smoothstep(4000., 20000., p.y) * 0.15;
-    density+=rainStrength_global*0.25;
-    return clamp(fbm3D2(0.00000325 * p, 4).x - 1 + density, 0, 1) / density;
+    float density = 0.01 + smoothstep(3000., 4000., p.y) * smoothstep(4000., 6000., p.y) * 0.15;
+    density+=rainStrength_global * 0.25;
+    return clamp(fbm3D2(vec3(0.00000125,0.00000325,0.00000125) * p, 5).x - 1 + density, 0, 1) / density;
 }
 vec3 getClouds(vec3 b_Sun, vec3 b_Moon, vec3 pos, vec3 n, vec3 lightDir, float Far) {
     if(world_type_global!=0) 
@@ -183,7 +183,7 @@ void GenSky(vec3 b_Sun,vec3 b_Moon,vec3 lightDir,vec3 pos,ivec2 uv){
     skyBuffer.data[getSkyBufferIdx(uv)][0]=mix(c,skyBuffer.data[getSkyBufferIdx(uv)][0],0.975);
     if(any(isnan(skyBuffer.data[getSkyBufferIdx(uv)][0]))) skyBuffer.data[getSkyBufferIdx(uv)][0]=vec3(0);
 }
-const int blurR=4;
+const int blurR=8;
 const int blurSize=2*blurR+1;
 
 void BlurSkyX(ivec2 uv){

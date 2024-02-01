@@ -52,17 +52,17 @@ const bool colortex7Clear = true;
 const bool colortex8Clear = true;
 */
 
-const float NORMAL_PARAM = 4.0;
-const float POSITION_PARAM = 4.0;
+const float NORMAL_PARAM = 16.0;
+const float POSITION_PARAM = 16.0;
 const float LUMINANCE_PARAM = 4.0;
 
 float svgfNormalWeight(vec3 centerNormal, vec3 normal, float distance) { 
-    return pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM*(0.25+16*exp(-0.25*distance)));
+    return pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM*(0.25+4*exp(-0.125*distance)));
 }
 
 float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float distance) {
     // Modified to check for distance from the center plane
-    return max(exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)*(0.1+64*exp(-0.25*distance))))*2-1,0);
+    return max(exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)*(0.1+64*exp(-0.125*distance))))*2,0);
 }
 
 vec3 reproject(vec3 screenPos) {

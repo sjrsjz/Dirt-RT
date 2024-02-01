@@ -112,8 +112,8 @@ void MixDiffuse() {
 void main() {
     //return;
     idx = getIdx(uvec2(gl_FragCoord.xy));
-    info_ = denoiseBuffer.data[idx];
-    Emission = vec4(info_.emission, 0);
+    //info_ = denoiseBuffer.data[idx];
+    Emission = vec4(denoiseBuffer.data[idx].emission, 0);
     //return;
     /*if (info_.distance < -0.5) {
             return;

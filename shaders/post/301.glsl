@@ -132,6 +132,5 @@ void main() {
         samplePos.x += R0;
     }
     if (any(isnan(A))) A = vec3(0);
-    color.xyz = A / max(w, 0.01);
-    color.w = centerWeight;
+    color = vec4(A / max(w, 0.01), centerWeight);
 }

@@ -310,7 +310,7 @@ vec3 sampleObjectLight(info A, vec3 center, float sR, int id, int type) {
 }
 
 vec3 sampleSunlight(info A, vec3 lightDir, bool night, int type /*,int inwater*/ ) {
-    A.p += (lightDir+A.n*0.5) * EPSILON_MIN;
+    A.p += (lightDir+A.n*0.1) * EPSILON_MIN;
     vec3 X, Y, Z;
     XYZ(lightDir, X, Y, Z);
 
@@ -698,8 +698,8 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
     vec3 r_rd, r_ro;
     vec3 r_rd_i = reflect(infos[0].rd_i, infos[0].n);
     float t = infos[0].distance;
-    if (infos[0].surface.S.x <= 0.1) t = raycast(infos[0].p+infos[0].n*0.001, r_rd_i, r_ro, r_rd, false);
-    reflectIllumiantionBuffer.data[idx].normal =t * (infos[0].surface.S.x > 0.1 ? r_rd_i : (t < -0.5 ? r_rd_i 
+    if (infos[0].surface.R.x <= 0.00125) t = raycast(infos[0].p+infos[0].n*0.001, r_rd_i, r_ro, r_rd, false);
+    reflectIllumiantionBuffer.data[idx].normal =t * (infos[0].surface.R.x > 0.00125 ? r_rd_i : (t < -0.5 ? r_rd_i 
                         : faceforward(tmp_Payload.material.normal, tmp_Payload.material.normal, r_rd_i)));
     reflectIllumiantionBuffer.data[idx].pos = infos[0].p; //t<-0.5?infos[0].p:r_ro;
     //reflectIllumiantionBuffer.data[idx].distance = t;

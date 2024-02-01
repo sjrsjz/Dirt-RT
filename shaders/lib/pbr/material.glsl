@@ -86,7 +86,7 @@ Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn, float we
     material.normal=normalize(mix(material.normal,macroNormal,mix0));
 
     if (f0Channel < 230) {
-        material.F0 = f0Channel * albedo.rgb / 229.0;
+        material.F0 = sqrt(f0Channel * albedo.rgb / 229.0);
         material.F0 = mix(material.F0, vec3(1), mix0);
         material.metallic = 0;
         material.albedo = albedo.rgb;//* (1 - material.F0);
