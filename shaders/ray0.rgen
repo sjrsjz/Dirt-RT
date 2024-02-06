@@ -309,74 +309,65 @@ vec3 sampleObjectLight(info A, vec3 center, float sR, int id, int type) {
     return float(t > -0.5) * sampleColor * (1 - cosD_S);
 }
 
-vec3 sampleSunlight(info A, vec3 lightDir, bool night, int type /*,int inwater*/ ) {
-    A.p += (lightDir+A.n*0.1) * EPSILON_MIN;
+vec3 sampleSunlight(vec3 ro, vec3 normal ,vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S ,vec4 R, vec3 lightDir, bool night, int type /*,int inwater*/ ) {
+    ro += (lightDir+normal*0.1) * EPSILON_MIN;
     vec3 X, Y, Z;
     XYZ(lightDir, X, Y, Z);
-
-    vec3 ro = A.p;
+    vec3 ro_o, rd_o;
 
     float r1 = rand(ro);
     float alpha = rand(ro + lightDir) * 2 * PI;
     float cosbeta = 1 - r1 * (1 - cosD_S);
-
-    vec3 ro_o, rd_o;
-    
     vec3 sampleDir = cosbeta * Y + sqrt(1 - cosbeta * cosbeta) * (cos(alpha) * X + sin(alpha) * Z);
 
     float t = raycast(ro, -sampleDir, ro_o, rd_o, true, i16vec2(1000, 0));
     if (t > -0.5) {
-        //    if(inwater){
-
-        //}
-        //else
         return vec3(0);
     }
     vec3 sunlight = SampleSky(-sampleDir).xyz;
 
-    XYZ(A.n, X, Y, Z);
-    vec3 microNormal = -normalize(sampleDir + A.rd_i);
+    XYZ(normal, X, Y, Z);
+    vec3 microNormal = -normalize(sampleDir + rd_i);
 
-    vec4 rC = rColor(A.surface.Cs, dot(microNormal, -A.rd_i));
-    float OoN = dot(-A.n, sampleDir);
-    float IoH = abs(dot(microNormal, A.rd_i));
-    float weightA = GGXpdf(clamp(dot(microNormal, Y), 0, 1), 0, A.surface.R.x);
-    weightA *= GGX_G2(dot(A.n, A.rd_i), abs(OoN), A.surface.R.x);
+    vec4 rC = rColor(Cs, dot(microNormal, -rd_i));
+    float OoN = dot(-normal, sampleDir);
+    float IoH = abs(dot(microNormal, rd_i));
+    float weightA = GGXpdf(clamp(dot(microNormal, Y), 0, 1), 0, R.x);
+    weightA *= GGX_G2(dot(normal, rd_i), abs(OoN), R.x);
 
     vec3 sampleColor = vec3(0);
 
     #ifdef Method2
-    vec3 b_g0 = vec3(A.surface.R.w);
-    float a0 = dot(A.rd_i, sampleDir);
+    vec3 b_g0 = vec3(R.w);
+    float a0 = dot(rd_i, sampleDir);
     vec3 b_g1 = b_g0 * b_g0;
-    vec3 g = 1.5 / PI * (1. + a0 * a0) * (1. - b_g1) / (2. + b_g1) / pow(1. + b_g1 - 2. * b_g0 * dot(-sampleDir, A.rd_i), vec3(1.5));
+    vec3 g = 1.5 / PI * (1. + a0 * a0) * (1. - b_g1) / (2. + b_g1) / pow(1. + b_g1 - 2. * b_g0 * dot(-sampleDir, rd_i), vec3(1.5));
     #endif
 
     switch (type) {
         case 0:
         #ifdef Method2
-        sampleColor = (weightA * A.surface.Cs * rC.xyz * A.surface.S.x * 0.25 / IoH
-                + A.surface.Cd * (1 - A.surface.S.x * rC.xyz) / (max(OoN, 0) + abs(dot(A.n, A.rd_i)) + 0.001) * g) * max(OoN, 0) ;
+        sampleColor = (weightA * Cs * rC.xyz * S.x * 0.25 / IoH
+                + Cd * (1 - S.x * rC.xyz) / (max(OoN, 0) + abs(dot(normal, rd_i)) + 0.001) * g) * max(OoN, 0) ;
         #else
-        sampleColor = (weightA * A.surface.Cs * rC.xyz * A.surface.S.x * 0.25 / IoH
-                + A.surface.Cd * (1 - A.surface.S.x * rC.xyz)) * max(OoN, 0);
+        sampleColor = (weightA * Cs * rC.xyz * S.x * 0.25 / IoH
+                + Cd * (1 - S.x * rC.xyz)) * max(OoN, 0);
         #endif
         break;
         case Diffussion:
         #ifdef Method2
-        sampleColor = (A.surface.Cd) * max(OoN, 0) / (max(OoN, 0) + max(dot(A.n, -A.rd_i), 0) + 0.001) * g;
+        sampleColor = Cd * max(OoN, 0) / (max(OoN, 0) + max(dot(normal, -rd_i), 0) + 0.001) * g;
         #else
-        sampleColor = (A.surface.Cd) * max(OoN, 0);
+        sampleColor = Cd * max(OoN, 0);
         #endif
 
         break;
         case Reflection:
-        sampleColor = (weightA * A.surface.Cs * 0.25 / IoH) * max(OoN, 0);
+        sampleColor = (weightA * Cs * 0.25 / IoH) * max(OoN, 0);
         break;
         default:
         break;
     }
-    
     sampleColor *= sunlight * tmp_Payload.shadowTransmission;
     return max(vec3(0), vec3(sampleColor) * (dot(sampleDir, lightDir) > cosD_S ? 1 : 0));
 }
@@ -581,8 +572,8 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         A.shade = shade;
         A.absorption = absorption;
         A.emission = (1 - absorption) / max(fogA.yzw, 1e-5) * emissionA;
-        ;
         infos[count] = A;
+        infos[count].n=tmp_Payload.geometryNormal;
         ro_i = ro_o;
         rd_i = rd_o;
     }
@@ -651,9 +642,9 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
             a = c0 || c1;
             A -= float(a) * sr2;
         }
-
         if (j0 >= 0) {
-            vec3 sunL = sampleSunlight(infos[j0], faceforward(lightDir, vec3(0, 1, 0), lightDir), lightDir.y > 0, j0 != 0 ? 0 : infos[0].type);
+            vec3 sunL = sampleSunlight(infos[j0].p,infos[j0].n,infos[j0].surface.Cs,infos[j0].surface.Cd,infos[j0].rd_i,infos[j0].surface.S,infos[j0].surface.R,
+                                        faceforward(lightDir, vec3(0, 1, 0), lightDir), lightDir.y > 0, j0 != 0 ? 0 : infos[0].type);
             directLight0[j0] += float(infos[j0].type != Refraction) * sunL / max(p_0, 1e-5);
             //infos[j0].sampleDistance = 0;
         }
