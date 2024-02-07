@@ -214,9 +214,11 @@ int ids[1] = { 7 };
 #endif
 
 vec4 sampleGodRay(vec3 b_Sun, vec3 b_Moon, vec3 ro, vec3 rd, float far, vec3 lightDir, bool hitFace) {
+#if Sharp_Volumetric_Light
+    vec3 sampleDir = lightDir;
+#else
     vec3 X, Y, Z;
     XYZ(lightDir, X, Y, Z);
-
     float r1 = getRnd();
     float alpha = getRnd() * 2 * PI;
     float cosbeta = (1 - r1 * (1 - cosD_S));
@@ -224,6 +226,7 @@ vec4 sampleGodRay(vec3 b_Sun, vec3 b_Moon, vec3 ro, vec3 rd, float far, vec3 lig
     vec3 ro_o, rd_o;
 
     vec3 sampleDir = cosbeta * Y + sqrt(1 - cosbeta * cosbeta) * (cos(alpha) * X + sin(alpha) * Z);
+#endif
 
     if (isDarkened || sampleDir.y > 0) return vec4(0, 0, 0, 1e10);
     float rnd = getRnd();
@@ -238,7 +241,7 @@ vec4 sampleGodRay(vec3 b_Sun, vec3 b_Moon, vec3 ro, vec3 rd, float far, vec3 lig
         c = 0 * float(!hitFace) * getSkyColor(b_Sun, b_Moon, samplePos, rd, -lightDir);
     } else {
         vec3 rd1, ro1;
-        t = raycast(samplePos, -sampleDir, ro1, rd1, false);
+        t = raycast(samplePos, -sampleDir, ro1, rd1, true, i16vec2(1000, 0));
         vec3 g = 3. / (8. * PI) * (1. + pow(dot(rd, lightDir), 2.)) * (1. - b_g0 * b_g0) / (2. + b_g0 * b_g0) / pow(1. + b_g0 * b_g0 - 2. * b_g0 * dot(-lightDir, rd), vec3(1.5));
         c = float(t < -0.5) * g * SampleSky(sampleDir);
     }
@@ -399,7 +402,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
     vec3 samplePos = ro;
     float sampleRoughness = 0;
 
-    vec4 fogColor = vec4(0, 0.325, 0.295, 0.3) * 0.5;
+    vec4 fogColor = vec4(0, 0.325, 0.295, 0.3) * 2;
     vec3 emission = vec3(0);
     switch (isEyeInWater) {
         case 2u:
@@ -690,8 +693,9 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
     vec3 r_rd_i = reflect(infos[0].rd_i, infos[0].n);
     float t = infos[0].distance;
     if (infos[0].surface.R.x <= 0.00125) t = raycast(infos[0].p+infos[0].n*0.001, r_rd_i, r_ro, r_rd, false);
+    tmp_Payload.material.normal=tmp_Payload.material.roughness<0.00125?faceforward(tmp_Payload.material.normal, tmp_Payload.material.normal, r_rd_i):reflect(r_rd_i,tmp_Payload.geometryNormal);
     reflectIllumiantionBuffer.data[idx].normal =t * (infos[0].surface.R.x > 0.00125 ? r_rd_i : (t < -0.5 ? r_rd_i 
-                        : faceforward(tmp_Payload.material.normal, tmp_Payload.material.normal, r_rd_i)));
+                        : tmp_Payload.material.normal));
     reflectIllumiantionBuffer.data[idx].pos = infos[0].p; //t<-0.5?infos[0].p:r_ro;
     //reflectIllumiantionBuffer.data[idx].distance = t;
     //r_rd_i=refract(infos[0].rd_i,infos[0].n,infos[0].n_i/infos[0].n_o);
@@ -729,11 +733,11 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
     denoiseBuffer.data[idx].rd = infos[0].rd_i;
 
     vec3 sumGodRay=vec3(0);
-    for(int i=0;i<4;i++){
+    for(int i=0;i<Volumetric_Light_Samples;i++){
         sumGodRay+=sampleGodRay(SunLight, MoonLight, ro, rd, infos[0].distance, lightDir, true).xyz;
     }
 
-    denoiseBuffer.data[idx].emission = infos[0].emission + sumGodRay*0.25;
+    denoiseBuffer.data[idx].emission =mix(denoiseBuffer.data[idx].emission, infos[0].emission + sumGodRay * (1.0 / Volumetric_Light_Samples),0.75);
 
     return vec4(illumiantion, infos[0].distance);
 }

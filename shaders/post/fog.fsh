@@ -21,7 +21,7 @@ void main() {
     if (data.distance < -0.5) {
         //setSkyVars();
         //fragColor.xyz = data.absorption * getSkyColor(SunLight_global, MoonLight_global, camPos, data.rd, lightDir_global);
-        fragColor.xyz = SampleSky(data.rd);
+        fragColor.xyz = data.absorption *SampleSky(data.rd) + data.emission;
     }
     else
     {
@@ -31,7 +31,7 @@ void main() {
 
         //fragColor.xyz=project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2);
         //fragColor.xyz=vec3(tmp.weight*0.1);
-        //fragColor.xyz=diffuseIllumiantionBuffer.data[idx].normal;//vec3(abs(project_SH_irradiance(tmp.data,faceforward(tmp.normal2,tmp.normal2,-tmp.normal))));
-        fragColor.xyz =data.absorption * ((project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2) + tmp3.data_swap) * data.albedo2 + tmp2.data_swap * data.albedo + data.light) + data.emission;
+        //fragColor.xyz=reflectIllumiantionBuffer.data[idx].normal;//vec3(abs(project_SH_irradiance(tmp.data,faceforward(tmp.normal2,tmp.normal2,-tmp.normal))));
+        fragColor.xyz = data.absorption * ((project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2) + tmp3.data_swap) * data.albedo2 + tmp2.data_swap * data.albedo + data.light) + data.emission;
     }
 }

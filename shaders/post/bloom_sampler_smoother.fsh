@@ -23,7 +23,7 @@ void main() {
     fragColor.xyz = mix(avg/10  ,texture(colortex0, texCoord).rgb,0.75);
 
     fragColor.xyz = pow(ACESFilm(fragColor.xyz),vec3(1/2.2));
-
+    bloomColor = texture(colortex1, texCoord);
     if (any(isnan(fragColor.xyz))) fragColor.xyz = vec3(0);
     return;
     #else

@@ -51,18 +51,18 @@ const bool colortex7Clear = true;
 const bool colortex8Clear = true;
 */
 
-const float NORMAL_PARAM = 4.0;
+const float NORMAL_PARAM = 64.0;
 const float POSITION_PARAM = 4.0;
 const float LUMINANCE_PARAM = 4.0;
 
 float svgfNormalWeight(vec3 centerNormal, vec3 normal, float distance) {
-    return exp(-5*abs(length(centerNormal)-length(normal)))*clamp(pow(max(dot(normalize(centerNormal),normalize(normal)), 0.0), NORMAL_PARAM*(0.25*0+8+0*8*exp(-0.125*distance))),0,1);
+    return exp(-5*abs(length(centerNormal)-length(normal)))*clamp(pow(max(dot(normalize(centerNormal),normalize(normal)), 0.0), NORMAL_PARAM),0,1);
 //    clamp(exp(-5*length(centerNormal-normal)),0.,1.);
 }
 
 float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float distance) {
     // Modified to check for distance from the center plane
-    return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)*(0.25+16*exp(-0.25*distance))));
+    return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)*(1/(1+10*distance))));
 }
 
 vec3 reproject(vec3 screenPos) {
@@ -123,7 +123,7 @@ void MixReflect() {
 
     float s = exp(-abs(denoiseBuffer.data[idx_l].reflectWeight-data.mixWeight))*float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.normal, data2.normal,info_distance)
              * svgfPositionWeight(data.pos, data2.pos, data2.normal,info_distance);
-    s = pow((min(1, s + 0.52) - 0.52)/0.52,1);
+    s = pow((min(1, s + 0.5) - 0.5)/0.5,1);
     
     float prevW = data.weight;
     prevW = max(1, min(prevW * s + 1, ACCUMULATION_LENGTH*5));
