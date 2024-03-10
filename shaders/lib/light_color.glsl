@@ -15,7 +15,7 @@ vec3 Rayleigh = 4e10 * pow(vec3(1. / 700, 1. / 520, 1. / 450), vec3(4));
 vec3 b_k0 = mix(Rayleigh, Mie, b_k);
 
 vec3 b_Q = b_k0 / (b_P * b_P); //absorption
-vec3 b_g0 = mix(Rayleigh * 0.01, vec3(0.9), b_k); //single scatter
+vec3 b_g0 = mix(Rayleigh * 0.01, vec3(luma(Rayleigh)), b_k); //single scatter
 
 void setSkyVars() {
     S_R = 0.05;
@@ -50,7 +50,7 @@ void setSkyVars() {
 
     b_k0 = mix(Rayleigh, Mie, b_k);
     b_Q = b_k0 / (b_P * b_P); //absorption
-    b_g0 = mix(Rayleigh * 0.01, vec3(0.9), b_k); //single scatter
+    b_g0 = mix(Rayleigh * 0.01, vec3(luma(Rayleigh)), b_k); //single scatter
 }
 vec3 getSkyColor(vec3 b_Sun, vec3 b_Moon, in vec3 pos, in vec3 n, in vec3 lightDir) {
     vec3 n0 = n;

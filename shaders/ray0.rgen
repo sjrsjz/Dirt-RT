@@ -245,7 +245,7 @@ vec4 sampleGodRay(vec3 b_Sun, vec3 b_Moon, vec3 ro, vec3 rd, float far, vec3 lig
         vec3 g = 3. / (8. * PI) * (1. + pow(dot(rd, lightDir), 2.)) * (1. - b_g0 * b_g0) / (2. + b_g0 * b_g0) / pow(1. + b_g0 * b_g0 - 2. * b_g0 * dot(-lightDir, rd), vec3(1.5));
         c = float(t < -0.5) * g * SampleSky(sampleDir);
     }
-    c *= 0.25* exp(-b_Q * h * sampleX + 0.5 * b_Q * sampleX * sampleX * sampleDir.y);
+    c *= exp(-b_Q * h * sampleX + 0.5 * b_Q * sampleX * sampleX * sampleDir.y);
     return vec4(max(c, 0), t < -0.5 ? s : -1);
 }
 
@@ -576,7 +576,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         A.absorption = absorption;
         A.emission = (1 - absorption) / max(fogA.yzw, 1e-5) * emissionA;
         infos[count] = A;
-        infos[count].n=tmp_Payload.geometryNormal;
+
         ro_i = ro_o;
         rd_i = rd_o;
     }
@@ -737,7 +737,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         sumGodRay+=sampleGodRay(SunLight, MoonLight, ro, rd, infos[0].distance, lightDir, true).xyz;
     }
 
-    denoiseBuffer.data[idx].emission =mix(denoiseBuffer.data[idx].emission, infos[0].emission + sumGodRay * (1.0 / Volumetric_Light_Samples),0.75);
+    denoiseBuffer.data[idx].emission =mix(denoiseBuffer.data[idx].emission, infos[0].emission + sumGodRay * (1.0 / Volumetric_Light_Samples),1);
 
     return vec4(illumiantion, infos[0].distance);
 }

@@ -85,30 +85,30 @@ void main() {
     samplePos.x = int(gl_FragCoord.x - R0);
 
     SH centerSH;
-    ivec2 texSize = textureSize(colortex3, 0);
+    ivec2 texSize = textureSize(colortex3, 0) - 1;
     centerSH.shY = texelFetch(colortex5, ivec2(gl_FragCoord.xy), 0);
     vec4 tex = texelFetch(colortex6, ivec2(gl_FragCoord.xy), 0);
     centerSH.CoCg = tex.xy;
     //float Q = 0;//clamp(tex.z - 1, 0, 128) * 0.005 * R0;
     s[1] = 2 ;//2 * clamp(pow(texelFetch(colortex6, ivec2(gl_FragCoord.xy), 0).z, 0.25) - 1.5, 1, 50);
     t[1] = s[1];
-    float centerW = 0.025 * min(1/(64-clamp(tex.z-8,0,63)), 1) * pow(2,R0);
+    float centerW = 0.025 * min(1/(64-clamp(tex.z-8,0,63))-1.0/64.125, 1) * pow(2,R0);
     for (int i = 0; i <= 2; i++) {
         samplePos.y = int(gl_FragCoord.y - R0);
         for (int j = 0; j <= 2; j++) {
             //uint idx2 = getIdx(uvec2(samplePos));
-            ivec2 samplePos2=ivec2(clamp(samplePos, vec2(0), texSize));
+            ivec2 samplePos2=ivec2(clamp(samplePos, ivec2(0), texSize));
             SH tmp;
             tmp.shY = texelFetch(colortex5, samplePos2, 0);
             vec4 C0 = texelFetch(colortex6,samplePos2,0);
             tmp.CoCg = C0.xy;
-            float w1 = s[i] * t[j] * step(-0.5,denoiseBuffer.data[getIdx(uvec2(samplePos2))].distance);
+            float dL = clamp(centerW * (C0.w-tex.w)*(C0.w-tex.w),0,10);
+            float w1 = s[i] * t[j] * step(-0.5,denoiseBuffer.data[getIdx(uvec2(samplePos2))].distance)/ (1+dL*dL);
             //float dL = min(centerW * (dot(tmp.shY - centerSH.shY, tmp.shY - centerSH.shY) + dot(tmp.CoCg - centerSH.CoCg, tmp.CoCg - centerSH.CoCg)),20);
-            float dL = clamp(centerW * abs(C0.w-tex.w)-4,0,3);
+
             
             float w0 = svgfNormalWeight(centerNormal, texelFetch(colortex3, samplePos2, 0).xyz)
-                    * svgfPositionWeight(centerPos, texelFetch(colortex4, samplePos2, 0).xyz, centerNormal)
-                    / (1 + dL * dL)
+                    * svgfPositionWeight(centerPos, texelFetch(colortex4, samplePos2, 0).xyz, centerNormal)        
                     * w1;// * float(samplePos == clamp(samplePos, vec2(0), texSize));
 
             accumulate_SH(A, tmp, w0);
@@ -119,7 +119,9 @@ void main() {
     }
     if (any(isnan(A.shY))) A.shY = vec4(0);
     if (any(isnan(A.CoCg))) A.CoCg = vec2(0);
-    SH tmp = scaleSH(A, 1 / max(w, 0.01));
+    SH tmp = scaleSH(A, 1 / max(w, 0.00001));
     shY = tmp.shY;
     CoCg =vec4(tmp.CoCg, tex.zw);
+
+    CoCg.w= 10*luma(project_SH_irradiance(tmp,diffuseIllumiantionBuffer.data[idx].normal))/avgExposure* pow(2,R0);;
 }

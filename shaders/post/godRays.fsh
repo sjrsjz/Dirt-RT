@@ -19,7 +19,9 @@ uniform sampler2D colortex9;
 layout(location = 0) out vec4 fragColor;
 
 void main() {
-    //return;
+    if(denoiseBuffer.data[getIdx(uvec2(gl_FragCoord.xy))].distance<0){
+        return;
+    };
     const int sampleN = 16;
     vec3 sumX = vec3(0);
     float w0 = 0;

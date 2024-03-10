@@ -85,7 +85,7 @@ void main() {
         }
         luminanceSum = luminance(sumX2 / w3);
 
-        float exposure = clamp(calculateExposure(luminanceSum), 0.1, 25.0);
+        float exposure = clamp(calculateExposure(luminanceSum), 0.025, 25.0);
         if (frameCounter <= 1) {
             avgExposure = exposure;
         } else {
