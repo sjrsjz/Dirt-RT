@@ -231,7 +231,7 @@ vec4 sampleGodRay(vec3 b_Sun, vec3 b_Moon, vec3 ro, vec3 rd, float far, vec3 lig
     if (isDarkened || sampleDir.y > 0) return vec4(0, 0, 0, 1e10);
     float rnd = getRnd();
     float h = b_P.x - ro.y;
-    vec3 q = vec3(0.0000002);
+    vec3 q = vec3(0.000001);
     float sampleX = luma(abs(2 * log(rnd) / (q * (h + sqrt(max(vec3(0), h * h + 2 * log(rnd) / q * rd.y))))));
     vec3 c = vec3(0); 
     float s = min(far, sampleX);
@@ -599,7 +599,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         diffuseIllumiantionBuffer.data[idx].normal = vec3(0);
         reflectIllumiantionBuffer.data[idx].normal = infos[0].n;
         refractIllumiantionBuffer.data[idx].normal = vec3(0);
-        denoiseBuffer.data[idx].emission = emissionB + back;
+        denoiseBuffer.data[idx].emission = emissionB + back + sampleGodRay(SunLight, MoonLight, ro, rd, 10000, lightDir, true).xyz;
         denoiseBuffer.data[idx].albedo = vec3(1);
         denoiseBuffer.data[idx].albedo2 = vec3(1);
         denoiseBuffer.data[idx].light = vec3(0);
