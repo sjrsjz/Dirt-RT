@@ -95,7 +95,7 @@ void main() {
     vec4 tex = texelFetch(colortex6, ivec2(gl_FragCoord.xy), 0);
     centerSH.CoCg = tex.xy;
 
-    float centerW = 0.00125 * pow(1.5,R0) * (2 - abs(dot(denoiseBuffer.data[idx].rd,centerNormal))) * clamp((tex.z - 16) / 8, 1, 1.5);
+    float centerW = 0.00125 * pow(clamp(tex.z / 16, 1, 16),0.125 * R0) * (2 - abs(dot(denoiseBuffer.data[idx].rd,centerNormal))) * clamp((tex.z - 16) / 8, 1, 1.5);
 
     for (int i = 0; i <= 2; i++) {
         samplePos.y = int(gl_FragCoord.y) - R0;
