@@ -4,6 +4,7 @@
 
 layout(std140,set=3, binding = 1) buffer frameData {
     float avgExposure;
+    float div_avgExposure;
     vec3 SunLight_global;
     vec3 MoonLight_global;
     vec3 lightDir_global;

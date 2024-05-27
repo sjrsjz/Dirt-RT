@@ -95,6 +95,7 @@ void main() {
                         1 - exp(-dTime_global)
                     ));
         }
+        div_avgExposure = 1 / avgExposure;
     }
 
     gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;

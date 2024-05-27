@@ -20,13 +20,14 @@ layout(location = 0) out vec4 fragColor;
 
 
 void main() {
+    ivec2 pix = ivec2(gl_FragCoord.xy);
     uint idx=getIdx(uvec2(gl_FragCoord.xy));
-    vec3IllumiantionData tmp=fetchRefract(ivec2(gl_FragCoord.xy));
+    vec3IllumiantionData tmp=fetchRefract(pix);
     if (any(isnan(tmp.data_swap))) tmp.data_swap = vec3(0);
     tmp.data=tmp.data_swap;
-    tmp.data_swap=texelFetch(colortex5,ivec2(gl_FragCoord.xy),0).xyz;
-    tmp.normal =texelFetch(colortex3,ivec2(gl_FragCoord.xy),0).xyz;
-    tmp.pos = texelFetch(colortex4,ivec2(gl_FragCoord.xy),0).xyz;
+    tmp.data_swap=texelFetch(colortex5,pix,0).xyz;
+    tmp.normal =texelFetch(colortex3,pix,0).xyz;
+    tmp.pos = texelFetch(colortex4,pix,0).xyz;
     tmp.mixWeight=denoiseBuffer.data[idx].refractWeight;
-    WriteRefract(tmp,ivec2(gl_FragCoord.xy));
+    WriteRefract(tmp,pix);
 }

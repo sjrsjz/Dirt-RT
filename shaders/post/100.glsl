@@ -52,17 +52,17 @@ const bool colortex7Clear = true;
 const bool colortex8Clear = true;
 */
 
-const float NORMAL_PARAM = 16.0;
-const float POSITION_PARAM = 16.0;
+const float NORMAL_PARAM = 4.0;
+const float POSITION_PARAM = 64.0;
 const float LUMINANCE_PARAM = 4.0;
 
 float svgfNormalWeight(vec3 centerNormal, vec3 normal, float distance) { 
-    return pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM*(0.25+4*exp(-0.125*distance)));
+    return pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM*(0.25+4*exp(-0.25*distance)));
 }
 
 float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float distance) {
     // Modified to check for distance from the center plane
-    return max(exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)*(0.1+64*exp(-0.125*distance))))*2,0);
+    return max(exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)*(0.1+64*exp(-0.25*distance))))*2,0);
 }
 
 vec3 reproject(vec3 screenPos) {
@@ -106,10 +106,10 @@ void MixDiffuse() {
     diffuseIllumiantionData data = sampleDiffuse(prevScreenPos.xy*textureSize(colortex0,0));
 //
     float s = float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfPositionWeight(data.pos, data1.pos, data1.normal,info_distance) * svgfNormalWeight(data.normal, data1.normal,info_distance) ;
-    s = pow((min(1, s + 0.5) - 0.5)/0.5,0.25);
+    s = pow((min(1, s + 0.3) - 0.3)/0.3,0.125);
     //s = (min(1, s + 0.875) - 0.875)*8;
     float prevW = data.weight;
-    prevW =max(1, min(prevW * s + 1, ACCUMULATION_LENGTH*10));
+    prevW =max(1, min(prevW * s + 1, ACCUMULATION_LENGTH));
 
     data1.data_swap = mix_SH(data.data,data1.data_swap,1/prevW);
 

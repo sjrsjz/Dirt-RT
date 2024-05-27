@@ -21,13 +21,14 @@ uniform sampler2D colortex5;
 
 
 void main() {
+    ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
     uint idx=getIdx(uvec2(gl_GlobalInvocationID.xy));
-    vec3IllumiantionData tmp=fetchReflect(ivec2(gl_GlobalInvocationID.xy));
+    vec3IllumiantionData tmp=fetchReflect(pix);
     if (any(isnan(tmp.data_swap))) tmp.data_swap = vec3(0);
     tmp.data=tmp.data_swap;
-    tmp.data_swap=texelFetch(colortex5,ivec2(gl_GlobalInvocationID.xy),0).xyz;
-    tmp.normal =texelFetch(colortex3,ivec2(gl_GlobalInvocationID.xy),0).xyz;
-    tmp.pos = texelFetch(colortex4,ivec2(gl_GlobalInvocationID.xy),0).xyz;
+    tmp.data_swap=texelFetch(colortex5,pix,0).xyz;
+    tmp.normal =texelFetch(colortex3,pix,0).xyz;
+    tmp.pos = texelFetch(colortex4,pix,0).xyz;
     tmp.mixWeight=denoiseBuffer.data[idx].reflectWeight;
-    WriteReflect(tmp,ivec2(gl_GlobalInvocationID.xy));
+    WriteReflect(tmp,pix);
 }

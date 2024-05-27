@@ -27,7 +27,7 @@ void main() {
 //    CoCg.xy = tmp.data_swap.CoCg;
 
     shY = tmp.data_swap.shY;
-    CoCg =vec4( tmp.data_swap.CoCg,tmp.weight, 5*luma(project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal))/avgExposure);
+    CoCg =vec4(tmp.data_swap.CoCg, tmp.weight, 0*luma(project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal)) * div_avgExposure);
     if (any(isnan(shY))) shY=vec4(0);
     if (any(isnan(CoCg))) CoCg=vec4(0);
     

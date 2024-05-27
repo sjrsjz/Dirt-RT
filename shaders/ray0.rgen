@@ -232,7 +232,8 @@ vec4 sampleGodRay(vec3 b_Sun, vec3 b_Moon, vec3 ro, vec3 rd, float far, vec3 lig
     float rnd = getRnd();
     float h = b_P.x - ro.y;
     vec3 q = vec3(0.000001);
-    float sampleX = luma(abs(2 * log(rnd) / (q * (h + sqrt(max(vec3(0), h * h + 2 * log(rnd) / q * rd.y))))));
+    vec3 log_rnd = 2 * log(rnd) / q;
+    float sampleX = luma(abs(log_rnd / (h + sqrt(max(vec3(0), h * h + log_rnd * rd.y)))));
     vec3 c = vec3(0); 
     float s = min(far, sampleX);
     vec3 samplePos = ro + s * rd;
@@ -242,7 +243,11 @@ vec4 sampleGodRay(vec3 b_Sun, vec3 b_Moon, vec3 ro, vec3 rd, float far, vec3 lig
     } else {
         vec3 rd1, ro1;
         t = raycast(samplePos, -sampleDir, ro1, rd1, true, i16vec2(1000, 0));
-        vec3 g = 3. / (8. * PI) * (1. + pow(dot(rd, lightDir), 2.)) * (1. - b_g0 * b_g0) / (2. + b_g0 * b_g0) / pow(1. + b_g0 * b_g0 - 2. * b_g0 * dot(-lightDir, rd), vec3(1.5));
+        float dot_rd_lightDir = dot(rd, lightDir);
+        vec3 b_g0_2 = b_g0 * b_g0;
+        vec3 tmp_0 = 1. + b_g0_2 + 2. * b_g0 * dot_rd_lightDir;
+        tmp_0 *= tmp_0 * tmp_0;
+        vec3 g = 3. / (8. * PI) * (1. +  dot_rd_lightDir * dot_rd_lightDir) * (1. - b_g0_2) / (2. + b_g0_2) * inversesqrt(tmp_0);
         c = float(t < -0.5) * g * SampleSky(sampleDir);
     }
     c *= exp(-b_Q * h * sampleX + 0.5 * b_Q * sampleX * sampleX * sampleDir.y);
@@ -344,7 +349,9 @@ vec3 sampleSunlight(vec3 ro, vec3 normal ,vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S ,v
     vec3 b_g0 = vec3(R.w);
     float a0 = dot(rd_i, sampleDir);
     vec3 b_g1 = b_g0 * b_g0;
-    vec3 g = 1.5 / PI * (1. + a0 * a0) * (1. - b_g1) / (2. + b_g1) / pow(1. + b_g1 - 2. * b_g0 * dot(-sampleDir, rd_i), vec3(1.5));
+    vec3 tmp_x = 1. + b_g1 + 2. * b_g0 * a0;
+    tmp_x *= tmp_x * tmp_x;
+    vec3 g = 1.5 / PI * (1. + a0 * a0) * (1. - b_g1) / (2. + b_g1) * inversesqrt(tmp_x);
     #endif
 
     switch (type) {
@@ -541,7 +548,9 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
                 vec3 b_g0 = vec3(surface.R.w);
                 float a0 = dot(rd_i, rd_o2);
                 vec3 b_g1 = b_g0 * b_g0;
-                vec3 g = 3.0 / 2.0 * (1. + a0 * a0) * (1. - b_g1) / (2. + b_g1) / pow(1. + b_g1 - 2. * b_g0 * dot(rd_o2, rd_i), vec3(1.5));
+                vec3 tmp_x = 1. + b_g1 + 2. * b_g0 * a0;
+                tmp_x *= tmp_x * tmp_x;
+                vec3 g = 3.0 / 2.0 * (1. + a0 * a0) * (1. - b_g1) / (2. + b_g1) * inversesqrt(tmp_x);
                 shade = (1 - rC.rgb * surface.S.x) / (max(1 - p, 1e-7) * (abs(dot(normal, rd_i)) + abs(dot(normal, rd_o2)) + 0.001)) * g;
                 #else
                 shade = (1 - rC.rgb * surface.S.x) / max(1 - p, 1e-7);

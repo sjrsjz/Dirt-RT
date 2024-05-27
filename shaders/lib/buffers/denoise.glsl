@@ -216,7 +216,7 @@ diffuseIllumiantionData blendDiffuse(diffuseIllumiantionData A,diffuseIllumianti
     #ifndef DIFFUSE_BUFFER_MIN2
     t.data=mix_SH(A.data,B.data,x);
     t.pos=mix(A.pos,B.pos,x);
-    t.normal=normalize(mix(A.normal,B.normal,x));
+    t.normal=(mix(A.normal,B.normal,x));
     #endif
     return t;
 }
