@@ -127,9 +127,8 @@ struct diffuseIllumiantionData {
     vec3 pos;
     vec3 normal;
     vec3 normal2;
-    //float sumX;
-    //float sumX2;
     float weight;
+    float variance;
 };
 layout(std140, set = 3, binding = 2) buffer DiffuseIllumiantionDataBuffer {
     diffuseIllumiantionData data[];
@@ -197,6 +196,7 @@ diffuseIllumiantionData fetchDiffuse(ivec2 p) {
     tmp.data_swap.CoCg = tmp4.xy;
     tmp.data_swap.shY = texelFetch(diffuseIllumiantionData_shY_swap_Sampler, p, 0);
     tmp.weight = tmp4.z;
+    tmp.variance = tmp4.w;
     #ifndef DIFFUSE_BUFFER_MIN2
     tmp4 = texelFetch(diffuseIllumiantionData_CoCg_Sampler, p, 0);
     tmp.data.CoCg = tmp4.xy;
@@ -212,7 +212,7 @@ diffuseIllumiantionData blendDiffuse(diffuseIllumiantionData A,diffuseIllumianti
     diffuseIllumiantionData t;
     t.data_swap=mix_SH(A.data_swap,B.data_swap,x);
     t.weight=(B.weight-A.weight)*x+A.weight;
-
+    t.variance=(B.variance-A.variance)*x+A.variance;
     #ifndef DIFFUSE_BUFFER_MIN2
     t.data=mix_SH(A.data,B.data,x);
     t.pos=mix(A.pos,B.pos,x);
@@ -238,7 +238,7 @@ diffuseIllumiantionData sampleDiffuse(vec2 p){
 void WriteDiffuse(diffuseIllumiantionData data, ivec2 p) {
     
     imageStore(diffuseIllumiantionData_shY_swap, p, data.data_swap.shY);
-    imageStore(diffuseIllumiantionData_CoCg_swap, p, vec4(data.data_swap.CoCg, data.weight, 0));
+    imageStore(diffuseIllumiantionData_CoCg_swap, p, vec4(data.data_swap.CoCg, data.weight, data.variance));
     #if !defined(DIFFUSE_BUFFER_MIN) && !defined(DIFFUSE_BUFFER_MIN2)
     imageStore(diffuseIllumiantionData_shY, p, data.data.shY);
     imageStore(diffuseIllumiantionData_CoCg, p, vec4(data.data.CoCg, 0, 0));

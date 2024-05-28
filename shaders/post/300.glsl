@@ -108,7 +108,8 @@ void main() {
     float w = 0;
     ivec2 pix=ivec2(gl_FragCoord.xy);
     vec3 centerNormal = texelFetch(colortex3, pix, 0).xyz;
-    vec3 centerPos = texelFetch(colortex4, pix, 0).xyz;
+    vec4 tmp_=texelFetch(colortex4, pix, 0);
+    vec3 centerPos = tmp_.xyz;
 
     ivec2 samplePos;
     samplePos.x = pix.x - R0;
@@ -122,7 +123,7 @@ void main() {
     float centerW = clamp(tex.z / 16, 0, 4); //  pow(1.25,R0*clamp(tex.z / 32 - 1, 0, 2)*0.05) * (2 - abs(dot(denoiseBuffer.data[idx].rd,centerNormal))) * clamp(tex.z / 16, 1, 2);
     centerW += 0.1 * centerW * centerW;
     float weight = 0;
-    float scale = centerW * 0.075 * tex.w * sqrt(avgExposure);
+    float scale = centerW * 0.075 * tex.w * sqrt(avgExposure) / (0.35/(0.05*tex.w+1) + sqrt(tmp_.w)*avgExposure);
     for (int i = 0; i <= 2; i++) {
         samplePos.y = pix.y - R0;
         for (int j = 0; j <= 2; j++) {

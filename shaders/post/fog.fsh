@@ -29,7 +29,7 @@ void main() {
         vec3IllumiantionData tmp2 = fetchReflect(ivec2(gl_FragCoord.xy));
         vec3IllumiantionData tmp3 = fetchRefract(ivec2(gl_FragCoord.xy));
 
-        //fragColor.xyz=project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2);
+        //fragColor.xyz=vec3(1)*(tmp.variance);
         //fragColor.xyz=vec3(tmp.weight*0.1);
         //fragColor.xyz=reflectIllumiantionBuffer.data[idx].normal;//vec3(abs(project_SH_irradiance(tmp.data,faceforward(tmp.normal2,tmp.normal2,-tmp.normal))));
         fragColor.xyz = data.absorption * ((project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2) + tmp3.data_swap) * data.albedo2 + tmp2.data_swap * data.albedo + data.light) + data.emission;

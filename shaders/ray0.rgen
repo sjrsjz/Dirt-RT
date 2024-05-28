@@ -687,7 +687,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
     if (any(isnan(illumiantion))) {
         illumiantion = vec3(0);
     }
-    illumiantion = clamp(illumiantion, 0, 25 / avgExposure);
+    illumiantion = clamp(illumiantion, 0, 50 / avgExposure);
 
     /*vec3 o_seed1=o_seed;
     
@@ -742,6 +742,9 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         illumiantion2 = (weightA * infos[0].surface.Cs * rC.xyz * infos[0].surface.S.x * 0.25 / IoH
                 + weightB * infos[0].surface.Cd * (1 - infos[0].surface.S.x * rC.xyz)) * max(OoN, 0);
         illumiantion2 *=SampleSky(-infos[0].rd_o).xyz;
+        // 乘上光源面积占球面的比例
+        // 光源是角度均匀分布的，所以乘上cos(theta)即可, theta是光源夹角（决定了光源面积占球面的比例）
+        illumiantion2 *= sqrt(1- cosD_S*cosD_S);
         if (any(isnan(illumiantion2))) {
             illumiantion2 = vec3(0);
         }

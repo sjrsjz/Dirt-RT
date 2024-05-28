@@ -52,7 +52,7 @@ const bool colortex7Clear = true;
 const bool colortex8Clear = true;
 */
 
-const float NORMAL_PARAM = 1.0;
+const float NORMAL_PARAM = 2.0;
 const float POSITION_PARAM = 256.0;
 const float LUMINANCE_PARAM = 4.0;
 
@@ -98,18 +98,29 @@ bool notInRange(vec2 p) {
 
 diffuseIllumiantionData data1;
 
+// variance estimation
+float updateVariance(SH M_n, float D_n, SH X_nplus1, float w) { // w is the weight of the history average
+    vec2 diff_CoCg = X_nplus1.CoCg - M_n.CoCg;
+    vec4 diff_shY = X_nplus1.shY - M_n.shY;
+    float div_wp1 = 1.0/(w+1);
+    return (div_wp1 - div_wp1*div_wp1) * (D_n*w + (dot(diff_CoCg,diff_CoCg)+dot(diff_shY,diff_shY)));
+}
+
+
 void MixDiffuse() {
     if (notInRange(prevScreenPos.xy)) {
         data1.weight = 1;
         return;
     }
     diffuseIllumiantionData data = sampleDiffuse(prevScreenPos.xy*textureSize(colortex0,0));
-//
+
     float s = float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfPositionWeight(data.pos, data1.pos, data1.normal,info_distance) * svgfNormalWeight(data.normal, data1.normal,info_distance) ;
     s = pow((min(1, s + 0.5) - 0.5)/0.5,0.125);
     //s = (min(1, s + 0.875) - 0.875)*8;
     float prevW = data.weight;
-    prevW =clamp(prevW * s + 1,1,ACCUMULATION_LENGTH);
+    prevW *= s;
+    data1.variance = updateVariance(data1.data, data1.variance, data.data, prevW);
+    prevW = clamp(prevW + 1,1,ACCUMULATION_LENGTH);
 
     data1.data_swap = mix_SH(data.data,data1.data_swap,1/prevW);
 
@@ -133,5 +144,4 @@ void main() {
     idx_l=getIdx(uvec2(prevScreenPos.xy*textureSize(colortex0,0)));
     MixDiffuse();
     WriteDiffuse(data1,ivec2(gl_GlobalInvocationID.xy));
-
 }
