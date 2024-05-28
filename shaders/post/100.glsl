@@ -52,8 +52,8 @@ const bool colortex7Clear = true;
 const bool colortex8Clear = true;
 */
 
-const float NORMAL_PARAM = 4.0;
-const float POSITION_PARAM = 64.0;
+const float NORMAL_PARAM = 1.0;
+const float POSITION_PARAM = 256.0;
 const float LUMINANCE_PARAM = 4.0;
 
 float svgfNormalWeight(vec3 centerNormal, vec3 normal, float distance) { 
@@ -106,10 +106,10 @@ void MixDiffuse() {
     diffuseIllumiantionData data = sampleDiffuse(prevScreenPos.xy*textureSize(colortex0,0));
 //
     float s = float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfPositionWeight(data.pos, data1.pos, data1.normal,info_distance) * svgfNormalWeight(data.normal, data1.normal,info_distance) ;
-    s = pow((min(1, s + 0.3) - 0.3)/0.3,0.125);
+    s = pow((min(1, s + 0.5) - 0.5)/0.5,0.125);
     //s = (min(1, s + 0.875) - 0.875)*8;
     float prevW = data.weight;
-    prevW =max(1, min(prevW * s + 1, ACCUMULATION_LENGTH));
+    prevW =clamp(prevW * s + 1,1,ACCUMULATION_LENGTH);
 
     data1.data_swap = mix_SH(data.data,data1.data_swap,1/prevW);
 

@@ -104,14 +104,14 @@ void main() {
     }
 
     SH A = init_SH();
-    float st[3][3] = { { 1, 2, 1 }, { 2, 4, 2 }, { 1, 2, 1 } };
+    const float st[3][3] = { { 1, 2, 1 }, { 2, 4, 2 }, { 1, 2, 1 } };
     float w = 0;
     ivec2 pix=ivec2(gl_FragCoord.xy);
     vec3 centerNormal = texelFetch(colortex3, pix, 0).xyz;
     vec3 centerPos = texelFetch(colortex4, pix, 0).xyz;
 
     ivec2 samplePos;
-    samplePos.x = int(gl_FragCoord.x) - R0;
+    samplePos.x = pix.x - R0;
 
     SH centerSH;
     ivec2 texSize = textureSize(colortex3, 0) - 1;
@@ -151,7 +151,7 @@ void main() {
     }
 
     tex.w = tex.w * 0.75 + 0.25 * weight;
-    float w0 = 4 * step(-0.5, denoiseBuffer.data[getIdx(uvec2(pix))].distance) * float(pix == clamp(pix, vec2(0), texSize));
+    float w0 = 4 * step(-0.5, denoiseBuffer.data[getIdx(uvec2(pix))].distance);
     accumulate_SH(A, centerSH, w0);
     w += w0;
 

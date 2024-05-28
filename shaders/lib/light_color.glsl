@@ -39,7 +39,7 @@ void setSkyVars() {
         b_k = 0.5;
         break;
         default:
-        S_R = 0.05;
+        S_R = 0.025;
         cosD_S = 1 / sqrt(1 + S_R * S_R);
         Mie = vec3(0.2);
         Rayleigh = 4e10 * pow(vec3(1. / 700, 1. / 520, 1. / 450), vec3(4));

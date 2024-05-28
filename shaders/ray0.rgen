@@ -317,8 +317,12 @@ vec3 sampleObjectLight(info A, vec3 center, float sR, int id, int type) {
     return float(t > -0.5) * sampleColor * (1 - cosD_S);
 }
 
-vec3 sampleSunlight(vec3 ro, vec3 normal ,vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S ,vec4 R, vec3 lightDir, bool night, int type /*,int inwater*/ ) {
-    ro += (lightDir+normal*0.1) * EPSILON_MIN;
+vec3 sampleSunlight(vec3 ro, vec3 normal ,vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S ,vec4 R, vec3 lightDir, bool night, int type /*,int inwater*/ ,vec3 marcoNormal) {
+    ro += (dot(lightDir,marcoNormal)>0.15?lightDir:marcoNormal)*0.01;// (lightDir+normal) * 0.01;
+    
+    //return vec3(max(0,dot(lightDir,marcoNormal)),max(0,-dot(lightDir,marcoNormal)),0);
+    
+    
     vec3 X, Y, Z;
     XYZ(lightDir, X, Y, Z);
     vec3 ro_o, rd_o;
@@ -426,6 +430,8 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
     }
 
     vec2 mixWeight=vec2(0);
+
+    bool hitSmoothSurface = false;
 
     for (count = 0; count < MaxRay; count++) {
         fogA = float(inverse_0) * fogColor;
@@ -573,6 +579,12 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         samplePos = change ? A.p : samplePos;
         sampleRoughness = change ? A.sampleRoughness : sampleRoughness;
 
+        if(count==0){
+            if(A.sampleRoughness<0.05){
+                hitSmoothSurface=true;
+            }
+        }
+
         #ifdef Correction
         float correction = A.n_o * IoH / (A.n_i * dot(rd_o, -A.microNormal));
         correction *= correction;
@@ -656,7 +668,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         }
         if (j0 >= 0) {
             vec3 sunL = sampleSunlight(infos[j0].p,infos[j0].n,infos[j0].surface.Cs,infos[j0].surface.Cd,infos[j0].rd_i,infos[j0].surface.S,infos[j0].surface.R,
-                                        faceforward(lightDir, vec3(0, 1, 0), lightDir), lightDir.y > 0, j0 != 0 ? 0 : infos[0].type);
+                                        faceforward(lightDir, vec3(0, 1, 0), lightDir), lightDir.y > 0, j0 != 0 ? 0 : infos[0].type, infos[j0].macroNormal);
             directLight0[j0] += float(infos[j0].type != Refraction) * sunL / max(p_0, 1e-5);
             //infos[j0].sampleDistance = 0;
         }
@@ -712,6 +724,30 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
 
     if (infos[0].type == Refraction) refractIllumiantionBuffer.data[idx].normal = sampleNormal; //faceforward(tmp_Payload.material.normal, tmp_Payload.material.normal, r_rd_i);
     refractIllumiantionBuffer.data[idx].pos = infos[0].p; //r_ro;
+
+
+    if (hitSmoothSurface && t<-0.5){
+        // 做一次额外的反射，用于计算如水面等光滑表面的反射
+        vec3 illumiantion2 = vec3(0);
+        // 计算天空光照，同时考虑粗糙度，菲涅尔反射
+        vec4 rC = rColor(infos[0].surface.Cs, dot(infos[0].microNormal, -infos[0].rd_i));
+        float IoN = abs(dot(infos[0].n, infos[0].rd_i));
+        float OoN = abs(dot(infos[0].n, infos[0].rd_o));
+        float IoH = abs(dot(infos[0].microNormal, infos[0].rd_i));
+        vec3 Y, X, Z;
+        XYZ(infos[0].microNormal, X, Y, Z);
+        float weightA = GGXpdf(clamp(dot(infos[0].microNormal, Y), 0, 1), 0, infos[0].surface.R.x);
+        weightA *= GGX_G2(IoN, OoN, infos[0].surface.R.x);
+        float weightB = 1;
+        illumiantion2 = (weightA * infos[0].surface.Cs * rC.xyz * infos[0].surface.S.x * 0.25 / IoH
+                + weightB * infos[0].surface.Cd * (1 - infos[0].surface.S.x * rC.xyz)) * max(OoN, 0);
+        illumiantion2 *=SampleSky(-infos[0].rd_o).xyz;
+        if (any(isnan(illumiantion2))) {
+            illumiantion2 = vec3(0);
+        }
+        reflectIllumiantionBuffer.data[idx].data_swap = illumiantion2;
+
+    }
 
     switch (infos[0].type) {
         case 0:
