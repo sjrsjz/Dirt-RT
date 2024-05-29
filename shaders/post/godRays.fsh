@@ -19,9 +19,10 @@ uniform sampler2D colortex9;
 layout(location = 0) out vec4 fragColor;
 
 void main() {
-    if(denoiseBuffer.data[getIdx(uvec2(gl_FragCoord.xy))].distance<0){
+    /*if(denoiseBuffer.data[getIdx(uvec2(gl_FragCoord.xy))].distance<0){
         return;
-    };
+    };*/
+    float d=sign(denoiseBuffer.data[getIdx(uvec2(gl_FragCoord.xy))].distance);
     const int sampleN = 8;
     vec3 sumX = vec3(0);
     float w0 = 0;
@@ -30,11 +31,11 @@ void main() {
     for (int k = -sampleN; k <= sampleN; k++) {
         int i=k;//int(sign(k)*pow(abs(k),1.25));
         #if STEP==1 || STEP==3
-        float w = exp(-i * i * 0.0025) * step(-0.5,denoiseBuffer.data[getIdx(uvec2(gl_FragCoord.xy+vec2(i*scale, 0)))].distance) *
+        float w = exp(-i * i * 0.0025) * float(d == sign(denoiseBuffer.data[getIdx(uvec2(gl_FragCoord.xy+ vec2(i*scale , 0)))].distance)) *
             float(clamp(gl_FragCoord.xy + vec2(i*scale, 0), vec2(0), texSize) == gl_FragCoord.xy + vec2(i*scale , 0));
         sumX += texelFetch(colortex2, ivec2(gl_FragCoord.xy + vec2(i*scale, 0)), 0).xyz * w;
         #else
-        float w = exp(-i * i * 0.0025)*step(-0.5,denoiseBuffer.data[getIdx(uvec2(gl_FragCoord.xy+vec2(0, i*scale)))].distance) *
+        float w = exp(-i * i * 0.0025) * float(d == sign(denoiseBuffer.data[getIdx(uvec2(gl_FragCoord.xy+ vec2(0, i*scale)))].distance)) *
         float(clamp(gl_FragCoord.xy + vec2(0, i*scale), vec2(0), texSize) == gl_FragCoord.xy + vec2(0, i*scale));
         sumX += texelFetch(colortex2, ivec2(gl_FragCoord.xy + vec2(0, i*scale)), 0).xyz * w;
         #endif

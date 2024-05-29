@@ -48,7 +48,7 @@ void setSkyVars() {
         break;
     }
 
-    b_k0 = mix(Rayleigh, Mie, b_k);
+    b_k0 = mix(Rayleigh, Mie, b_k*0);
     b_Q = b_k0 / (b_P * b_P); //absorption
     b_g0 = mix(Rayleigh * 0.01, vec3(luma(Rayleigh)), b_k); //single scatter
 }
@@ -102,13 +102,13 @@ float fbm3D2(in vec3 x)
     return a;
 }
 float cloud_density(vec3 p) {
-    float density = 0.01 + smoothstep(3000., 4000., p.y) * smoothstep(4000., 6000., p.y) * 0.15;
-    density += rainStrength_global * 0.25;
+    float density = 0.01 + smoothstep(3000., 4000., p.y) * smoothstep(4000., 8000., p.y) * 0.15;
+    density += rainStrength_global * 0.15;
     return clamp(fbm3D2(vec3(0.000005,0.00002,0.000005) * p) - 1 + density, 0, 1) / density;
 }
 vec3 getClouds(vec3 b_Sun, vec3 b_Moon, vec3 pos, vec3 n, vec3 lightDir, float Far) {
     vec3 c;
-    const int step1 = 15;
+    const int step1 = 10;
     const int step2 = 8;
     vec3 b_k1 = mix(Rayleigh, Mie, 1) * 250 / b_P / b_P;
 
@@ -158,25 +158,26 @@ layout(std140, set = 3, binding = 5) buffer SkyBuffer {
     mat3x3 data[];
 }skyBuffer;
 
-const uint SkyW=512;
+const uint SkyW=1024;
 const uint SkyH=512;
+const int iSkyW=int(SkyW);
+const int iSkyH=int(SkyH);
 uint getSkyBufferIdx(ivec2 uv){
-    if(uv.y>int(SkyH)-1){
-        uv.y=2*int(SkyH)-uv.y-1;
+    if(uv.y>iSkyH-1){
+        uv.y=2*iSkyH-uv.y-1;
         uv.x=-uv.x;
     }
     if(uv.y<0){
         uv.y=-uv.y;
         uv.x=-uv.x;
     }
-    if(uv.x>int(SkyW)-1){
-        uv.x-=int(SkyW);
+    if(uv.x>iSkyW-1){
+        uv.x-=iSkyW;
     }
     if(uv.x<0){
-        uv.x+=int(SkyW);
+        uv.x+=iSkyW;
     }
-
-    return uint(uv.y*SkyW+uv.x);
+    return uint(uv.y*iSkyW+uv.x);
 }
 void GenSky(vec3 b_Sun,vec3 b_Moon,vec3 lightDir,vec3 pos,ivec2 uv){
 

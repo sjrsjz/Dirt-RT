@@ -2,6 +2,10 @@
 #define COMMON_GLSL
 #include "/lib/constants.glsl"
 
+#ifdef USE_NOISE_TEXTURE
+uniform sampler2D NoiseTexture;
+#endif
+
 uint iFrame = 0;
 //const float PI=3.14159265358;
 struct object {
@@ -472,19 +476,32 @@ float snoise(vec3 v) {
 float random_(vec3 st) {
     return fract(sin(dot(st.xyz, vec3(12.9898,78.233,45.1642))) * 43758.5453);
 }
+#ifdef USE_NOISE_TEXTURE
+float sample3Dnoise(in vec3 v) {
+    vec3 p = mod(floor(v), 256.0); // Add this line to make the noise repeat every 256 units
+    vec3 f = fract(v);
+    f = f*f*(3.-2.*f);
+    
+    vec2 uv = (p.xy+vec2(37.,17.)*p.z) + f.xy;
+    vec2 rg = textureLod( NoiseTexture, fract((uv+.5)/256.), 0.).yx;
+    return mix(rg.x, rg.y, f.z);
+}
+#endif
 float valueNoise(vec3 position) {
-    vec3 i = floor(position);
+#ifndef USE_NOISE_TEXTURE
+    vec3 p = floor(position);
     vec3 f = fract(position);
     vec3 u = f * f * (3.0 - 2.0 * f);
 
-    return mix(mix(mix( fasthash13(i + vec3(0.0,0.0,0.0)), 
-                         fasthash13(i + vec3(1.0,0.0,0.0)), u.x),
-                    mix( fasthash13(i + vec3(0.0,1.0,0.0)), 
-                         fasthash13(i + vec3(1.0,1.0,0.0)), u.x), u.y),
-               mix(mix( fasthash13(i + vec3(0.0,0.0,1.0)), 
-                         fasthash13(i + vec3(1.0,0.0,1.0)), u.x),
-                    mix( fasthash13(i + vec3(0.0,1.0,1.0)), 
-                         fasthash13(i + vec3(1.0,1.0,1.0)), u.x), u.y), u.z);
+    float n = p.x + p.y*157.0 + 113.0*p.z;
+    return mix(mix(mix( hash11(n+  0.0), hash11(n+  1.0),f.x),
+                   mix( hash11(n+157.0), hash11(n+158.0),f.x),f.y),
+               mix(mix( hash11(n+113.0), hash11(n+114.0),f.x),
+                   mix( hash11(n+270.0), hash11(n+271.0),f.x),f.y),f.z);
+#else
+    // 对二维噪声纹理进行三维采样
+    return sample3Dnoise(position);
+#endif
 }
 
 

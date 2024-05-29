@@ -6,7 +6,7 @@ layout(local_size_x = 16,local_size_y = 16) in;
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/light_color.glsl"
 
-const ivec3 workGroups = ivec3(32, 32, 1);
+const ivec3 workGroups = ivec3(64, 32, 1);
 
 void main(){
     BlurSkyX(ivec2(gl_GlobalInvocationID.xy));    
