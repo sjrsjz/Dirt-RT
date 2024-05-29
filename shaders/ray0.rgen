@@ -201,8 +201,7 @@ material Material_(vec3 pos, vec3 nor) {
     roughness = tmp_Payload.material.block_id.x == 1002 ? 0 : roughness;
     albedo = water ? vec3(1) : albedo;
     tmp_Payload.material.emission = tmp_Payload.material.block_id.x == 1002 ? albedo * (1 - trans) : tmp_Payload.material.emission;
-
-    tmp_Payload.material.emission *= 10;
+    tmp_Payload.material.emission *= 20;
     return newMaterial(clamp(tmp_Payload.material.F0, 0, 1), albedo, vec2((1 - tmp_Payload.material.metallic) * trans, 1 - trans), vec4(roughness > 0.01 ? max(roughness, 0.0125) : 0, trans, water, tmp_Payload.material.subsurface_scattering), tmp_Payload.material.emission);
 }
 
@@ -235,7 +234,7 @@ vec4 sampleGodRay(vec3 b_Sun, vec3 b_Moon, vec3 ro, vec3 rd, float far, vec3 lig
     vec3 log_rnd = 2 * log(rnd) / q;
     float sampleX = luma(abs(log_rnd / (h + sqrt(max(vec3(0), h * h + log_rnd * rd.y)))));
     vec3 c = vec3(0); 
-    float s = min(far, sampleX);
+    float s = min(far - 0.01, sampleX);
     vec3 samplePos = ro + s * rd;
     float t = 1;
     if (sampleX > far) {
@@ -579,11 +578,8 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         samplePos = change ? A.p : samplePos;
         sampleRoughness = change ? A.sampleRoughness : sampleRoughness;
 
-        if(count==0){
-            if(A.sampleRoughness<0.05){
-                hitSmoothSurface=true;
-            }
-        }
+
+        hitSmoothSurface= hitSmoothSurface || count==0 && surface.R.x<0.00125;
 
         #ifdef Correction
         float correction = A.n_o * IoH / (A.n_i * dot(rd_o, -A.microNormal));
@@ -730,21 +726,10 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         // 做一次额外的反射，用于计算如水面等光滑表面的反射
         vec3 illumiantion2 = vec3(0);
         // 计算天空光照，同时考虑粗糙度，菲涅尔反射
-        vec4 rC = rColor(infos[0].surface.Cs, dot(infos[0].microNormal, -infos[0].rd_i));
+        vec4 rC = rColor(infos[0].surface.Cs, dot(infos[0].microNormal, infos[0].rd_i));
         float IoN = abs(dot(infos[0].n, infos[0].rd_i));
         float OoN = abs(dot(infos[0].n, infos[0].rd_o));
-        float IoH = abs(dot(infos[0].microNormal, infos[0].rd_i));
-        vec3 Y, X, Z;
-        XYZ(infos[0].microNormal, X, Y, Z);
-        float weightA = GGXpdf(clamp(dot(infos[0].microNormal, Y), 0, 1), 0, infos[0].surface.R.x);
-        weightA *= GGX_G2(IoN, OoN, infos[0].surface.R.x);
-        float weightB = 1;
-        illumiantion2 = (weightA * infos[0].surface.Cs * rC.xyz * infos[0].surface.S.x * 0.25 / IoH
-                + weightB * infos[0].surface.Cd * (1 - infos[0].surface.S.x * rC.xyz)) * max(OoN, 0);
-        illumiantion2 *=SampleSky(-infos[0].rd_o).xyz;
-        // 乘上光源面积占球面的比例
-        // 光源是角度均匀分布的，所以乘上cos(theta)即可, theta是光源夹角（决定了光源面积占球面的比例）
-        illumiantion2 *= sqrt(1- cosD_S*cosD_S);
+        illumiantion2 = rC.xyz * GGX_G2(IoN, OoN, infos[0].surface.R.x * (1-infos[0].surface.S.y)) * SampleSky(infos[0].rd_o).xyz;
         if (any(isnan(illumiantion2))) {
             illumiantion2 = vec3(0);
         }
@@ -765,8 +750,10 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
 
         break;
         case Reflection:
-        illumiantion = clamp(illumiantion, 0, 5 / avgExposure);
-        reflectIllumiantionBuffer.data[idx].data_swap = illumiantion;
+        if(!hitSmoothSurface||count!=0){
+            illumiantion = clamp(illumiantion, 0, 5 / avgExposure);
+            reflectIllumiantionBuffer.data[idx].data_swap = illumiantion;
+        }
         break;
         case Refraction:
         illumiantion = clamp(illumiantion, 0, 5 / avgExposure);

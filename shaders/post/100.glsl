@@ -90,6 +90,7 @@ float info_distance;
 uint idx_l;
 vec2 texSize;
 uint idx;
+vec3 curr_rd;
 
 bool notInRange(vec2 p) {
     return clamp(p, vec2(0), vec2(1)) != p;
@@ -114,7 +115,12 @@ void MixDiffuse() {
     }
     diffuseIllumiantionData data = sampleDiffuse(prevScreenPos.xy*textureSize(colortex0,0));
 
-    float s = float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfPositionWeight(data.pos, data1.pos, data1.normal,info_distance) * svgfNormalWeight(data.normal, data1.normal,info_distance) ;
+    float prev_dot = denoiseBuffer.data[idx].last_rd_dot_n;
+    float curr_dot = -dot(data1.normal, curr_rd);
+    float s0 = exp(-16*max(0,curr_dot-prev_dot));// 当夹角变小时，说明历史信息不可信
+    denoiseBuffer.data[idx].last_rd_dot_n = curr_dot;
+
+    float s =  s0 *float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfPositionWeight(data.pos, data1.pos, data1.normal,info_distance) * svgfNormalWeight(data.normal, data1.normal,info_distance) ;
     s = pow((min(1, s + 0.5) - 0.5)/0.5,0.125);
     //s = (min(1, s + 0.875) - 0.875)*8;
     float prevW = data.weight;
@@ -134,6 +140,7 @@ void main() {
     idx = getIdx(uvec2(gl_GlobalInvocationID.xy));
 
     info_distance = denoiseBuffer.data[idx].distance;
+    curr_rd = normalize(denoiseBuffer.data[idx].rd);
     data1=diffuseIllumiantionBuffer.data[idx];
     if (info_distance < -0.5) {
         data1.weight = 1;

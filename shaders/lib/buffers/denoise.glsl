@@ -17,7 +17,8 @@ struct bufferData {
     vec3 rd;
     int illumiantionType;
     float reflectWeight;
-    float refractWeight;    
+    float refractWeight;   
+    float last_rd_dot_n; 
 };
 
 layout(std430, set = 3, binding = 0) buffer DenoiseBuffer {

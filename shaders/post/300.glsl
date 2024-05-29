@@ -120,10 +120,10 @@ void main() {
     vec4 tex = texelFetch(colortex6, pix, 0);
     centerSH.CoCg = tex.xy;
 
-    float centerW = clamp(tex.z / 16, 0, 4); //  pow(1.25,R0*clamp(tex.z / 32 - 1, 0, 2)*0.05) * (2 - abs(dot(denoiseBuffer.data[idx].rd,centerNormal))) * clamp(tex.z / 16, 1, 2);
-    centerW += 0.1 * centerW * centerW;
+    float centerW = clamp(pow(tex.z / 12,2), 0, 4); //  pow(1.25,R0*clamp(tex.z / 32 - 1, 0, 2)*0.05) * (2 - abs(dot(denoiseBuffer.data[idx].rd,centerNormal))) * clamp(tex.z / 16, 1, 2);
+    //centerW += 0.025 * centerW * centerW;
     float weight = 0;
-    float scale = centerW * 0.075 * tex.w * sqrt(avgExposure) / (0.35/(0.05*tex.w+1) + sqrt(tmp_.w)*avgExposure);
+    float scale = centerW * 0.125 * tex.w * sqrt(avgExposure) / (5/(0.5*tex.w+1) + tmp_.w * avgExposure * (log(R0)));
     for (int i = 0; i <= 2; i++) {
         samplePos.y = pix.y - R0;
         for (int j = 0; j <= 2; j++) {

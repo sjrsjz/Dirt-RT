@@ -52,7 +52,7 @@ const bool colortex8Clear = true;
 */
 
 const float NORMAL_PARAM = 256.0;
-const float POSITION_PARAM = 4.0;
+const float POSITION_PARAM = 64.0;
 const float LUMINANCE_PARAM = 4.0;
 
 float svgfNormalWeight(vec3 centerNormal, vec3 normal, float distance) {

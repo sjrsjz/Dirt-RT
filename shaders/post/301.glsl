@@ -117,8 +117,8 @@ void main() {
 
 
     ivec2 samplePos;
-    samplePos.x = pix.x - R0;
-    int y0 = pix.y - R0;
+    samplePos.x = int(gl_FragCoord.x - R0);
+    int y0 = int(gl_FragCoord.y - R0);
     ivec2 texSize = textureSize(colortex3, 0);
     for (int i = 0; i <= 2; i++) {
         samplePos.y = y0;
