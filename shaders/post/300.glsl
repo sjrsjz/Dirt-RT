@@ -120,10 +120,9 @@ void main() {
     vec4 tex = texelFetch(colortex6, pix, 0);
     centerSH.CoCg = tex.xy;
 
-    float centerW = clamp(pow(tex.z / 12,2), 0, 4); //  pow(1.25,R0*clamp(tex.z / 32 - 1, 0, 2)*0.05) * (2 - abs(dot(denoiseBuffer.data[idx].rd,centerNormal))) * clamp(tex.z / 16, 1, 2);
-    //centerW += 0.025 * centerW * centerW;
+    float centerW = clamp(tex.z, 0, 15); 
     float weight = 0;
-    float scale = centerW * 0.125 * tex.w * sqrt(avgExposure) / (5/(0.5*tex.w+1) + tmp_.w * avgExposure * (log(R0)));
+    float scale = centerW * 2 * tex.w * sqrt(avgExposure) / (30 / (0.25*tex.w+1) + tmp_.w * avgExposure * log(R0));
     for (int i = 0; i <= 2; i++) {
         samplePos.y = pix.y - R0;
         for (int j = 0; j <= 2; j++) {
@@ -137,7 +136,7 @@ void main() {
             tmp.CoCg = C0.xy;
             vec4 delta_shY = tmp.shY - centerSH.shY;
             vec2 delta_CoCg = tmp.CoCg - centerSH.CoCg;
-            float delta = exp(-scale * sqrt(sqrt(dot(delta_shY, delta_shY) + dot(delta_CoCg, delta_CoCg))));
+            float delta = exp(-scale * (sqrt(dot(delta_shY, delta_shY) + dot(delta_CoCg, delta_CoCg))));
             delta *= st[i][j];
             weight += delta;
             float w0 = svgfNormalWeight(centerNormal, texelFetch(colortex3, samplePos, 0).xyz)
@@ -151,8 +150,8 @@ void main() {
         samplePos.x += R0;
     }
 
-    tex.w = tex.w * 0.75 + 0.25 * weight;
-    float w0 = 4 * step(-0.5, denoiseBuffer.data[getIdx(uvec2(pix))].distance);
+    tex.w = tex.w * 0.875 + 0.125 * weight;
+    float w0 = 4 /(1+10*tmp_.w*avgExposure);
     accumulate_SH(A, centerSH, w0);
     w += w0;
 
