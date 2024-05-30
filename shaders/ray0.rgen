@@ -754,8 +754,8 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         // 计算天空光照，同时考虑粗糙度，菲涅尔反射
         vec4 rC = rColor(infos[0].surface.Cs, dot(infos[0].microNormal, infos[0].rd_i));
         float IoN = abs(dot(infos[0].n, infos[0].rd_i));
-        float OoN = abs(dot(infos[0].n, infos[0].rd_o));
-        illumiantion2 = rC.xyz * GGX_G2(IoN, OoN, infos[0].surface.R.x * (1 - infos[0].surface.S.y)) * SampleSky(infos[0].rd_o).xyz;
+        float OoN = abs(dot(infos[0].n, r_rd_i));
+        illumiantion2 = rC.xyz * GGX_G2(IoN, OoN, infos[0].surface.R.x * (1 - infos[0].surface.S.y)) * SampleSky(r_rd_i).xyz;
         if (any(isnan(illumiantion2))) {
             illumiantion2 = vec3(0);
         }
