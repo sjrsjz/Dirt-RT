@@ -671,7 +671,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
     vec3 r_rd_i = reflect(infos[0].rd_i, infos[0].n);
     float t = infos[0].distance;
     if (infos[0].surface.R.x <= 0.00125) {
-        t = raycast(infos[0].p + infos[0].n * 0.001, r_rd_i, r_ro, r_rd, false);
+        t = raycast(infos[0].p + infos[0].macroNormal * 0.00001, r_rd_i, r_ro, r_rd, false);
         if (t > -0.5) {
             vec3 reconstructed_pos=infos[0].p + reflect(r_ro-infos[0].p,infos[0].n);
             vec3 reconstructed_normal=reflect(tmp_Payload.material.normal,infos[0].n);
@@ -721,7 +721,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         break;
         case Reflection:
         if (!hitSmoothSurface || count != 0) {
-            illumiantion = clamp(illumiantion, 0, 5 / avgExposure);
+            illumiantion = clamp(illumiantion, 0, 2.5 / avgExposure);
             reflectIllumiantionBuffer.data[idx].data_swap = illumiantion;
         }
         break;

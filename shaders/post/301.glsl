@@ -49,7 +49,7 @@ const bool colortex7Clear = true;
 const bool colortex8Clear = true;
 */
 
-const float NORMAL_PARAM = 128.0;
+const float NORMAL_PARAM = 16.0;
 const float POSITION_PARAM = 16.0;
 const float LUMINANCE_PARAM = 4.0;
 
@@ -131,7 +131,7 @@ void main() {
             float dW=centerColor.w-c.w;
             vec4 B=texelFetch(colortex3, samplePos, 0);
             float w1 = st[i][j] * B.w;
-            float w0 = exp(-10*dW*dW)*svgfNormalWeight(centerNormal, normalize(B.xyz))
+            float w0 = exp(-1*dW*dW)*svgfNormalWeight(centerNormal, normalize(B.xyz))
                     * svgfPositionWeight(centerPos.xyz, texelFetch(colortex4, samplePos, 0).xyz, centerNormal)
                     * w1 * float(samplePos == clamp(samplePos, vec2(0), texSize));
             A += c.xyz * w0;
@@ -140,7 +140,7 @@ void main() {
         }
         samplePos.x += R0;
     }
-    float w0 = (4 + clamp(centerPos.w - 32, 0, 8)*0.25) * centerNormal_.w;
+    float w0 = (4 + clamp(centerPos.w*0.1, 0, 8)*0.25) * centerNormal_.w;
     A += centerColor.xyz * w0;
     w += w0;
 
