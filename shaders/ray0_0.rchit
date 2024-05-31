@@ -72,7 +72,7 @@ void main() {
     payload.hitData = vec4(worldPos, gl_HitTEXT);
     payload.geometryNormal = fragInfo.normal;
     payload.material = getMaterial(albedo, normal, specular, tbn, payload.wetStrength_global, payload.wetness_global, payload.material.light_texture.y, fragInfo.normal);
-    payload.shadowTransmission *= exp(-0.1 * gl_HitTEXT * (1 - albedo.rgb)) * (1.0 - albedo.a);
+    payload.shadowTransmission *= exp(-10*(1-albedo.rgb)* albedo.a);
     payload.material.block_id = quad.vertices[0].block_id;
     
 

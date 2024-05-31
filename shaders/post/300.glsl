@@ -65,18 +65,18 @@ const bool colortex4Clear = false;
 const bool colortex5Clear = false;
 const bool colortex6Clear = false;
 */
-
+float S_tex_w;
 const float NORMAL_PARAM = 8.0;
 const float POSITION_PARAM = 64.0;
 const float LUMINANCE_PARAM = 4.0;
 
 float svgfNormalWeight(vec3 centerNormal, vec3 normal) {
-    return pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM);
+    return pow(max(dot(centerNormal, normal), 0.0), clamp(S_tex_w,1,NORMAL_PARAM));
 }
 
 float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal) {
     // Modified to check for distance from the center plane
-    return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)));
+    return exp(-clamp(S_tex_w,1,POSITION_PARAM) * abs(dot(pixelPos - centerPos, normal)));
 }
 
 /* RENDERTARGETS: 5,6 */
@@ -120,9 +120,10 @@ void main() {
     vec4 tex = texelFetch(colortex6, pix, 0);
     centerSH.CoCg = tex.xy;
 
-    float centerW = clamp(tex.z, 0, 15); 
+    float centerW = clamp(tex.z, 0, 5)+clamp((tex.z-5)*0.5, 0, 10); 
     float weight = 0;
-    float scale = centerW * 2 * tex.w * sqrt(avgExposure) / (30 / (0.25*tex.w+1) + tmp_.w * avgExposure * log(R0));
+    float scale = centerW * 4 * tex.w * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
+    S_tex_w = tex.w;
     for (int i = 0; i <= 2; i++) {
         samplePos.y = pix.y - R0;
         for (int j = 0; j <= 2; j++) {
@@ -136,8 +137,7 @@ void main() {
             tmp.CoCg = C0.xy;
             vec4 delta_shY = tmp.shY - centerSH.shY;
             vec2 delta_CoCg = tmp.CoCg - centerSH.CoCg;
-            float delta = exp(-scale * (sqrt(dot(delta_shY, delta_shY) + dot(delta_CoCg, delta_CoCg))));
-            delta *= st[i][j];
+            float delta = st[i][j] / (1+scale * (sqrt(dot(delta_shY, delta_shY) + dot(delta_CoCg, delta_CoCg))));
             weight += delta;
             float w0 = svgfNormalWeight(centerNormal, texelFetch(colortex3, samplePos, 0).xyz)
                     * svgfPositionWeight(centerPos, texelFetch(colortex4, samplePos, 0).xyz, centerNormal)
@@ -150,7 +150,7 @@ void main() {
         samplePos.x += R0;
     }
 
-    tex.w = tex.w * 0.875 + 0.125 * weight;
+    tex.w = tex.w * 0.9 + 0.1 * weight;
     float w0 = 4 /(1+10*tmp_.w*avgExposure);
     accumulate_SH(A, centerSH, w0);
     w += w0;

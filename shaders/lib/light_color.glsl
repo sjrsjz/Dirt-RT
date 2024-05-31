@@ -102,8 +102,8 @@ float fbm3D2(in vec3 x)
     return a;
 }
 float cloud_density(vec3 p) {
-    float density = 0.01 + smoothstep(3000., 4000., p.y) * smoothstep(4000., 8000., p.y) * 0.15;
-    density += rainStrength_global * 0.15;
+    float density = 0.01 + smoothstep(3000., 4000., p.y) * smoothstep(4000., 8000., p.y) * 0.1;
+    density += rainStrength_global * 0.225;
     return clamp(fbm3D2(vec3(0.000005,0.00002,0.000005) * p) - 1 + density, 0, 1) / density;
 }
 vec3 getClouds(vec3 b_Sun, vec3 b_Moon, vec3 pos, vec3 n, vec3 lightDir, float Far) {
