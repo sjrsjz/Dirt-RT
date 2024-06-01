@@ -25,9 +25,10 @@ void main() {
     }
     else
     {
-        diffuseIllumiantionData tmp = fetchDiffuse(ivec2(gl_FragCoord.xy));
-        vec3IllumiantionData tmp2 = fetchReflect(ivec2(gl_FragCoord.xy));
-        vec3IllumiantionData tmp3 = fetchRefract(ivec2(gl_FragCoord.xy));
+        ivec2 pix = ivec2(gl_FragCoord.xy);
+        diffuseIllumiantionData tmp = fetchDiffuse(pix);
+        vec3IllumiantionData tmp2 = fetchReflect(pix);
+        vec3IllumiantionData tmp3 = fetchRefract(pix);
         diffuseIllumiantionBuffer.data[idx].weight=tmp.weight;
         //reflectIllumiantionBuffer.data[idx].mixWeight=data.reflectWeight;
         //fragColor.xyz = tmp2.data_swap;

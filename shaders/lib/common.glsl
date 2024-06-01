@@ -44,6 +44,7 @@ struct info {
     vec3 emission;
     float sampleRoughness;
     int type;
+    bool inside;
     //vec3 mix;
 };
 

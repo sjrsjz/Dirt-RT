@@ -12,6 +12,8 @@ struct Payload {
     Material material;  
     float wetStrength_global;
     float wetness_global;
+    bool inside_block;
+    float prev_distance;
 };
 
 #endif // PAYLOAD_GLSL
