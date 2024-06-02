@@ -118,6 +118,7 @@ void main() {
     ivec2 texSize = textureSize(colortex3, 0) - 1;
     centerSH.shY = texelFetch(colortex5, pix, 0);
     vec4 tex = texelFetch(colortex6, pix, 0);
+    
     centerSH.CoCg = tex.xy;
 
     float centerW = clamp(tex.z, 0, 5)+clamp((tex.z-5)*0.5, 0, 10); 
@@ -157,7 +158,7 @@ void main() {
 
     if (any(isnan(A.shY))) A.shY = vec4(0);
     if (any(isnan(A.CoCg))) A.CoCg = vec2(0);
-    SH tmp0 = scaleSH(A, 1 / max(w, 0.00001));
+    SH tmp0 = scaleSH(A, 1 / (w + 0.001));
 
     shY = tmp0.shY;
     CoCg = vec4(tmp0.CoCg, tex.zw);

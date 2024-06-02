@@ -75,7 +75,7 @@ void main() {
         }
         sumX /= w;
         sumX2 /= w;
-        vec3 sigma2 = 2 * max(sumX2 - sumX * sumX, 1e-3);
+        vec3 sigma2 = 2 * (sumX2 - sumX * sumX + 1e-3);
         vec3 w3 = vec3(0);
         sumX2 = vec3(0);
         for (int i = 0; i < samples.length(); i++) {
@@ -83,9 +83,9 @@ void main() {
             w3 += weight;
             sumX2 += sampleC[i] * weight;
         }
-        luminanceSum = luminance(sumX2 / w3);
-
-        float exposure = clamp(calculateExposure(luminanceSum), 0.025, 25.0);
+        luminanceSum = luminance(sumX2 / (w3 + 0.001));
+        luminanceSum = pow(luminanceSum, 0.75*exp(-luminanceSum*0.1)+0.25);
+        float exposure = clamp(calculateExposure(luminanceSum), 0.0025, 25.0);
         if (frameCounter <= 1) {
             avgExposure = exposure;
         } else {

@@ -32,17 +32,19 @@ void main() {
     float w0 = 0;
     vec2 texSize = textureSize(colortex0, 0);
     for (int i = -sampleN; i <= sampleN; i++) {
-        float w = exp(-i * i * 0.01);
+        
         #if STEP==1
+        float w = exp(-i * i * 0.01);
         w *= float(clamp(gl_FragCoord.xy + vec2(i * 5, 0), vec2(0), texSize) == gl_FragCoord.xy + vec2(i * 5, 0));
         sumX += texelFetch(colortex1, ivec2(gl_FragCoord.xy + vec2(i * 5, 0)), 0).xyz * w;
         #else
+        float w = exp(-i * i * 0.01);
         w *= float(clamp(gl_FragCoord.xy + vec2(0, i * 5), vec2(0), texSize) == gl_FragCoord.xy + vec2(0, i * 5));
         sumX += texelFetch(colortex1, ivec2(gl_FragCoord.xy + vec2(0, i * 5)), 0).xyz * w;
         #endif
         w0 += w;
     }
-    sumX /= max(w0, 1e-3);
+    sumX /= w0 + 1e-3;
     if (any(isnan(sumX))) sumX = vec3(0);
     bloomColor.xyz = sumX;
     #endif

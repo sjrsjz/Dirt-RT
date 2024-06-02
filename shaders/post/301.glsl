@@ -131,7 +131,7 @@ void main() {
             float dW=centerColor.w-c.w;
             vec4 B=texelFetch(colortex3, samplePos, 0);
             float w1 = st[i][j] * B.w;
-            float w0 = exp(-1*dW*dW)*svgfNormalWeight(centerNormal, normalize(B.xyz))
+            float w0 = exp(-dW*dW)*svgfNormalWeight(centerNormal, normalize(B.xyz))
                     * svgfPositionWeight(centerPos.xyz, texelFetch(colortex4, samplePos, 0).xyz, centerNormal)
                     * w1 * float(samplePos == clamp(samplePos, vec2(0), texSize));
             A += c.xyz * w0;
@@ -145,5 +145,5 @@ void main() {
     w += w0;
 
     if (any(isnan(A))) A = vec3(0);
-    color = vec4(A / max(w, 0.01), centerColor.w);
+    color = vec4(A / max(w , 0.01), centerColor.w);
 }

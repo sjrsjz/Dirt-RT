@@ -41,7 +41,7 @@ void main() {
         #endif
         w0 += w;
     }
-    sumX /= max(w0, 1e-3);
+    sumX /= w0 + 1e-3;
     if (any(isnan(sumX))) sumX = vec3(0);
     fragColor.xyz = sumX;
     #if STEP==4

@@ -31,8 +31,9 @@ void main() {
         vec3IllumiantionData tmp3 = fetchRefract(pix);
         diffuseIllumiantionBuffer.data[idx].weight=tmp.weight;
         //reflectIllumiantionBuffer.data[idx].mixWeight=data.reflectWeight;
-        //fragColor.xyz = tmp2.data_swap;
+        //fragColor.xyz = tmp3.normal;
         //fragColor.xyz = tmp2.normal;
+        //fragColor.xyz = diffuseIllumiantionBuffer.data[idx].normal2;
         
         //fragColor.xyz=vec3(1)*(project_SH_irradiance(tmp.data_swap,tmp.normal2)) ;
         //fragColor.xyz=vec3(diffuseIllumiantionBuffer.data[idx].weight);//*(50 - exp(-abs(diffuseIllumiantionBuffer.data[idx].weight)*0.1)*47.5);

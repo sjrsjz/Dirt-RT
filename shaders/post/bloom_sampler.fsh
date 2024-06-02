@@ -32,7 +32,7 @@ void main() {
     //vec3 s[sampleN];
     for (int i = 0; i < sampleN; i++) {
         v *= rotM;
-        vec3 A = texelFetch(colortex0, ivec2(gl_FragCoord.xy + v), 0).xyz;
+        vec3 A = texelFetch(colortex0, ivec2(gl_FragCoord.xy + v * (1+v.x*v.x)), 0).xyz;
         sumX += A;
         //sumX2 += A * A;
         //s[i] = A;

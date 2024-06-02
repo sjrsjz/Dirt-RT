@@ -103,7 +103,7 @@ diffuseIllumiantionData data1;
 float updateVariance(SH M_n, float D_n, SH X_nplus1, float w) { // w is the weight of the history average
     vec2 diff_CoCg = X_nplus1.CoCg - M_n.CoCg;
     vec4 diff_shY = X_nplus1.shY - M_n.shY;
-    return (D_n*w + (dot(diff_CoCg,diff_CoCg)+dot(diff_shY,diff_shY)))/max(1e-2,(w+1)*w);
+    return (D_n*w + (dot(diff_CoCg,diff_CoCg)+dot(diff_shY,diff_shY)))/(1 + (w+1)*w);
 }
 
 
