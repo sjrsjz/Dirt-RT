@@ -57,7 +57,7 @@ bool notInRange(vec2 p) {
     return clamp(p, vec2(0), texSize) != p;
 }
 uniform sampler2D colortex0;
-void MixDiffuse() {
+void MixDiffuse_() {
     diffuseIllumiantionData center = sampleDiffuse(gl_FragCoord.xy);
     //vec3 c0 = project_SH_irradiance(center.data_swap, center.normal2);
     const int S = 3;
@@ -120,16 +120,55 @@ void MixDiffuse() {
     WriteDiffuse(center, ivec2(gl_FragCoord.xy));
 }
 
+// variance estimation
+float updateVariance(SH M_n, float D_n, SH X_nplus1, float w) { // w is the weight of the history average
+    vec2 diff_CoCg = X_nplus1.CoCg - M_n.CoCg;
+    vec4 diff_shY = X_nplus1.shY - M_n.shY;
+    return w*(D_n + (dot(diff_CoCg,diff_CoCg)+dot(diff_shY,diff_shY))/(1+w))/(1+w);
+}
+
+void MixDiffuse() {
+    diffuseIllumiantionData center = fetchDiffuse(ivec2(gl_FragCoord.xy));
+    //vec3 c0 = project_SH_irradiance(center.data_swap, center.normal2);
+    const int S = 3;
+    float w = 0;
+
+    //vec3 sumX = vec3(0);
+    //vec3 sumX2 = vec3(0);
+    //float w_M[2 * S + 1][2 * S + 1];
+    //uint idx_M[2 * S + 1][2 * S + 1];
+    //vec3 c00[2 * S + 1][2 * S + 1];
+    ivec2 texSize = ivec2(textureSize(colortex0, 0));
+    SH avgSH = init_SH();
+    float D=0;
+    for (int i = -S; i <= S; i++) {
+        for (int j = -S; j <= S; j++) {
+            uint idx2 = getIdx(uvec2(gl_FragCoord.xy )+ ivec2(i, j));
+            SH sample1 = fetchDiffuse(ivec2(gl_FragCoord.xy )+ ivec2(i, j)).data_swap;
+            float w0 = float(denoiseBuffer.data[idx2].distance > -0.5);// * svgfNormalWeight(sample1.normal, center.normal) * svgfPositionWeight(sample1.pos, center.pos, center.normal);
+            w0 *= float(ivec2(gl_FragCoord.xy )+ ivec2(i, j)==clamp(ivec2(gl_FragCoord.xy )+ ivec2(i, j),ivec2(0),texSize));
+            D = updateVariance(avgSH, D, sample1, 1.0/max(1e-1,w0));
+            accumulate_SH(avgSH, sample1, w0);
+            w += w0;
+        }
+    }
+    D = max(D, 0.001);
+    avgSH = scaleSH(avgSH, 1 / (w + 0.01));
+    
+    float diff = dot(center.data_swap.shY - avgSH.shY, center.data_swap.shY - avgSH.shY) + dot(center.data_swap.CoCg - avgSH.CoCg, center.data_swap.CoCg - avgSH.CoCg);
+    float _2_sigma = 4 * sqrt(D);
+    if (diff > _2_sigma) {
+        center.data_swap = avgSH;
+    }
+
+    WriteDiffuse(center, ivec2(gl_FragCoord.xy));
+}
+
+
+
 void main() {
-    //return;
     idx = getIdx(uvec2(gl_FragCoord.xy));
-    //info_ = denoiseBuffer.data[idx];
     Emission = vec4(denoiseBuffer.data[idx].emission, 0);
-    //return;
-    /*if (info_.distance < -0.5) {
-            return;
-    /*if (info_.distance < -0.5) {
-        return;
-    }*/
+
     //MixDiffuse();
 }

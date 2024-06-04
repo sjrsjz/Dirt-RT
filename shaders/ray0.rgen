@@ -67,7 +67,7 @@ void main() {
     iFrame = cam.frameId;
     isDarkened = world_type_global != World_OVERWORLD && world_type_global != World_THE_END && world_type_global != World_THE_NETHER;
     SunLight = isDarkened ? vec3(0) : vec3(0.1 * SunDivMoon);
-    MoonLight = isDarkened ? vec3(0) : vec3(0.1);
+    MoonLight = isDarkened ? vec3(0) : vec3(10);
 
     vec4 celestialQuat = quatAxisAngle(vec3(1, 0, 0), radians(sunPathRotation));
     vec3 sunDir = quatRotate(normalize(mat3(cam.viewInverse) * cam.sunPosition.xyz), celestialQuat);
@@ -523,7 +523,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
                     A.n_o = mA.x;
                 }
                 A.sampleRoughness = surface.R.x;
-                shade = (1 - rC.rgb * surface.S.x) / (1 - p + 1e-7);
+                shade = (1 - rC.rgb * surface.S.x) / (1 - p + 1e-3);
             } else {
                 rd_o2 = DiffuseNormal(macroNormal, ro_o);
                 A.type = Diffussion;
@@ -536,9 +536,9 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
                 vec3 tmp_x = 1. + b_g1 + 2. * b_g0 * a0;
                 tmp_x *= tmp_x * tmp_x;
                 vec3 g = 3.0 / 2.0 * (1. + a0 * a0) * (1. - b_g1) / (2. + b_g1) * inversesqrt(tmp_x);
-                shade = (1 - rC.rgb * surface.S.x) / ((1 - p + 1e-7) * (abs(dot(normal, rd_i)) + abs(dot(normal, rd_o2)) + 0.001)) * g;
+                shade = (1 - rC.rgb * surface.S.x) / ((1 - p + 1e-3) * (abs(dot(normal, rd_i)) + abs(dot(normal, rd_o2)) + 0.001)) * g;
                 #else
-                shade = (1 - rC.rgb * surface.S.x) / (1 - p + 1e-7);
+                shade = (1 - rC.rgb * surface.S.x) / (1 - p + 1e-3);
                 #endif
             }
             A.color3 = I;
