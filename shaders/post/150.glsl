@@ -116,9 +116,9 @@ void MixDiffuse() {
     avgSH = scaleSH(avgSH, 1 / (w + 0.01));
     
     float diff = dot(centerSH.shY - avgSH.shY, centerSH.shY - avgSH.shY) + dot(centerSH.CoCg - avgSH.CoCg, centerSH.CoCg - avgSH.CoCg);
-    float sigma = (D);
+    float sigma = 10*(D);
     if (diff > sigma) {
-        centerSH = init_SH();
+        centerSH = avgSH;
     }
 
     writeSH(centerSH, ivec2(gl_FragCoord.xy));

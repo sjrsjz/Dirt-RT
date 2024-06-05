@@ -38,6 +38,7 @@ struct SH
 vec3 project_SH_irradiance(SH sh, vec3 N)
 {
     #if ENABLE_SH
+    /*
     float d = dot(sh.shY.xyz, N);
     float Y = 2.0 * (1.023326 * d + 0.886226 * sh.shY.w);
     Y = max(Y, 0.0);
@@ -50,6 +51,21 @@ vec3 project_SH_irradiance(SH sh, vec3 N)
     float R = B + sh.CoCg.x;
 
     return max(vec3(R, G, B), vec3(0.0));
+    */
+
+    float diffuse = max(1 - 2 * dot(sh.shY.xyz,sh.shY.xyz), 0);
+    float dot_ = max(dot(sh.shY.xyz, N),0);
+
+    float Y = sh.shY.w;
+    float T = Y - sh.CoCg.y * 0.5;
+    float G = sh.CoCg.y + T;
+    float B = T - sh.CoCg.x * 0.5;
+    float R = B + sh.CoCg.x;
+
+
+
+    vec3 color = vec3(R,G,B) *(dot_ * (1 - diffuse) + diffuse);
+    return max(color, vec3(0.0));
     #else
     return sh.shY.xyz;
     #endif
@@ -67,12 +83,15 @@ SH irradiance_to_SH(vec3 color, vec3 dir)
 
     result.CoCg = vec2(Co, Cg);
 
+    /*
     float L00 = 0.282095;
     float L1_1 = 0.488603 * dir.y;
     float L10 = 0.488603 * dir.z;
     float L11 = 0.488603 * dir.x;
-
     result.shY = vec4(L11, L1_1, L10, L00) * Y;
+    */
+
+    result.shY = vec4(dir,Y);
     #else
     result.shY = vec4(color, 0);
     result.CoCg = vec2(0);

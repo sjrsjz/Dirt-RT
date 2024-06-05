@@ -20,7 +20,7 @@ void main() {
     for (int i = -2; i <= 2; i++)
         for (int j = -2; j <= 2; j++)
             avg += texelFetch(colortex1, ivec2(gl_FragCoord.xy + vec2(i, j)), 0).rgb;
-    fragColor.xyz = mix(avg/25  ,texture(colortex0, texCoord).rgb,0.875);
+    fragColor.xyz = mix(avg/25  ,texture(colortex0, texCoord).rgb,0.75);
 
     fragColor.xyz = pow(ACESFilm(fragColor.xyz),vec3(1/2.2));
     bloomColor = texture(colortex1, texCoord);

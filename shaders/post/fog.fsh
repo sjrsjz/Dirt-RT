@@ -32,10 +32,10 @@ void main() {
         diffuseIllumiantionBuffer.data[idx].weight=tmp.weight;
         //reflectIllumiantionBuffer.data[idx].mixWeight=data.reflectWeight;
         //fragColor.xyz = tmp3.normal;
-        //fragColor.xyz = tmp2.normal;
+        //fragColor.xyz = diffuseIllumiantionBuffer.data[idx].normal2;
         //fragColor.xyz = diffuseIllumiantionBuffer.data[idx].normal2;
         
-        //fragColor.xyz=vec3(1)*(project_SH_irradiance(tmp.data_swap,tmp.normal2)) ;
+        //fragColor.xyz=vec3(1)*(project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2)) ;
         //fragColor.xyz=vec3(diffuseIllumiantionBuffer.data[idx].weight);//*(50 - exp(-abs(diffuseIllumiantionBuffer.data[idx].weight)*0.1)*47.5);
         //fragColor.xyz=reflectIllumiantionBuffer.data[idx].normal;//vec3(abs(project_SH_irradiance(tmp.data,faceforward(tmp.normal2,tmp.normal2,-tmp.normal))));
         fragColor.xyz = data.absorption * ((project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2) + tmp3.data_swap) * data.albedo2 + tmp2.data_swap * data.albedo + data.light) + data.emission;
