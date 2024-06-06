@@ -76,7 +76,7 @@ void main() {
         if (quad.vertices[0].block_id.x == 1000) {
             payload.shadowTransmission *= exp(-clamp(gl_HitTEXT - payload.prev_distance, 0, 100) * vec3(0.1,0.03,0.04));
         } else {
-            payload.shadowTransmission *= exp(-10 * clamp(gl_HitTEXT - payload.prev_distance, 0, 10) * (1 - albedo.rgb) * albedo.a);
+            payload.shadowTransmission *= exp(-10 * clamp(gl_HitTEXT - payload.prev_distance, 0, 10) * (1.05 - albedo.rgb) * albedo.a);
         }
     } 
     payload.material.block_id = quad.vertices[0].block_id;

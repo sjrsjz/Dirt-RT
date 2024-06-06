@@ -4,6 +4,7 @@
 #include "/lib/colors.glsl"
 #include "/lib/settings.glsl"
 #include "/lib/constants.glsl"
+#include "/lib/hdr.glsl"
 uniform sampler2D colortex0;
 uniform int frameCounter;
 uniform int worldTime;
@@ -55,13 +56,31 @@ void main() {
 */  
         return;
         float luminanceSum = 0.0;
+
+
+        float X_n[13];
+
+        float sum_X_n = 0.0;
+        float sum_X_n2 = 0.0;
+        float sum_X_n3 = 0.0;
+        float sum_X_n4 = 0.0;
+        
+
         for (int i = 0; i < samples.length(); i++) {
             #ifdef SRR
-            luminanceSum += luminance(texture(colortex0, samples[i].position * 0.5).rgb) * samples[i].weight;
+            float luminance = luminance(texture(colortex0, samples[i].position * 0.5).rgb);
             #else
-            luminanceSum += luminance(texture(colortex0, samples[i].position).rgb) * samples[i].weight;
+            float luminance = luminance(texture(colortex0, samples[i].position).rgb);
             #endif
+            X_n[i] = luminance;
+            luminanceSum +=  luminance * samples[i].weight;
+            sum_X_n += X_n[i];
+            sum_X_n2 += X_n[i] * X_n[i];
+            sum_X_n3 += X_n[i] * X_n[i] * X_n[i];
+            sum_X_n4 += X_n[i] * X_n[i] * X_n[i] * X_n[i];
         }
+
+
         float exposure = clamp(calculateExposure(luminanceSum), 0.1, 25.0);
         if (frameCounter <= 1) {
             avgExposure = exposure;

@@ -657,7 +657,8 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
     if (any(isnan(illumiantion))) {
         illumiantion = vec3(0);
     }
-    illumiantion = clamp(illumiantion, 0, 30 / avgExposure);
+    
+    illumiantion = clamp(illumiantion, 0, 25 / avgExposure);
 
     denoiseBuffer.data[idx].reflectWeight = mixWeight.x;
     denoiseBuffer.data[idx].refractWeight = mixWeight.y;

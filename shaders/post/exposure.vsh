@@ -4,6 +4,9 @@
 #include "/lib/colors.glsl"
 #include "/lib/settings.glsl"
 #include "/lib/constants.glsl"
+
+#include "/lib/hdr.glsl"
+
 uniform sampler2D colortex1;
 uniform int frameCounter;
 uniform int worldTime;
@@ -65,6 +68,21 @@ void main() {
         vec3 sumX = vec3(0);
         vec3 sumX2 = vec3(0);
         vec3 sampleC[samples.length()];
+
+
+        /*float sum_X_n = 0.0;
+        float sum_X_n2 = 0.0;
+        float sum_X_n3 = 0.0;
+        float sum_X_n4 = 0.0;
+        */
+
+        float sum_X = 0.0;
+        float sum_X2 = 0.0;
+        float sum_div = 0.0;
+        float sum_div_2 = 0.0;
+        float sum_div2 = 0.0;
+        float C=100;
+
         float w = 0;
         for (int i = 0; i < samples.length(); i++) {
             vec3 c = ExposureS * texture(colortex1, samples[i].position).rgb;
@@ -82,18 +100,35 @@ void main() {
             vec3 weight = exp(-(sampleC[i] - sumX) * (sampleC[i] - sumX) / sigma2);
             w3 += weight;
             sumX2 += sampleC[i] * weight;
+            float X_n = luminance(sampleC[i]);
+            /*sum_X_n += X_n;
+            sum_X_n2 += X_n * X_n;
+            sum_X_n3 += X_n * X_n * X_n;
+            sum_X_n4 += X_n * X_n * X_n * X_n;*/
+            sum_X += X_n;
+            sum_X2 += X_n * X_n;
+            sum_div += X_n /(C + X_n);
+            sum_div_2 += X_n * X_n / (C + X_n);
+            sum_div2 += X_n * X_n / (C + X_n) / (C + X_n);
         }
+        float A, B;
+        //linear_HDR_AB(sum_X_n, sum_X_n2, sum_X_n3, sum_X_n4, A, B);
+        div_HDR_AB(sum_X, sum_X2, sum_div, sum_div_2, sum_div2, A, B);
+        B=max(B, 0.0);
+        A=max(A, 0.0);
         luminanceSum = luminance(sumX2 / (w3 + 0.001));
         luminanceSum = pow(luminanceSum, 0.75*exp(-luminanceSum*0.1)+0.25);
         float exposure = clamp(calculateExposure(luminanceSum), 0.0025, 25.0);
         if (frameCounter <= 1) {
             avgExposure = exposure;
+            HDR_AB_global = vec2(0, avgExposure);
         } else {
             avgExposure = exp(mix(
                         log(avgExposure),
                         log(exposure),
                         1 - exp(-dTime_global)
                     ));
+            HDR_AB_global = mix(HDR_AB_global, vec2(A,B), 1 - exp(-dTime_global));
         }
         div_avgExposure = 1 / avgExposure;
     }

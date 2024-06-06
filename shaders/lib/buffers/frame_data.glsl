@@ -2,6 +2,8 @@
 #define FRAME_DATA_GLSL
 #include "/lib/constants.glsl"
 
+
+
 layout(std140,set=3, binding = 1) buffer frameData {
     float avgExposure;
     float div_avgExposure;
@@ -19,6 +21,8 @@ layout(std140,set=3, binding = 1) buffer frameData {
     float wetness_global;
     int world_type_global;
     uvec2 resolution_global;
+
+    vec2 HDR_AB_global;
 };
 
 /*struct gBufferData{

@@ -26,6 +26,8 @@ layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragData;
 layout(location = 2) out vec4 fragData2;
 
+#define HDR
+
 void main() {
     #ifdef SRR_
     const int scale = 2;
@@ -34,8 +36,17 @@ void main() {
     #endif
     vec4 entity = texture(colortex7, texCoord);
     bool mask = texture(colortex8, texCoord).w < texture(colortex9, texCoord).w;////&& gBuffer.data[idx].depth.x <= gBuffer.data[idx].depth.y;
-    vec4 scene = avgExposure*texture(colortex0, texCoord);
+    vec4 data = texture(colortex0, texCoord);
+#ifdef HDR
+    float luminance = dot(data.xyz, vec3(0.2126, 0.7152, 0.0722));
+    //vec4 scene = vec4(vec3(clamp(HDR_AB_global.x*luminance+HDR_AB_global.y,avgExposure*0.75,avgExposure*10)),1)*data;
 
+    vec4 scene = vec4(vec3(clamp(HDR_AB_global.x/(luminance+100)+HDR_AB_global.y,0,avgExposure*5)),1)*data;
+
+
+#else
+    vec4 scene = data*avgExposure;
+#endif
     fragColor.xyz = mask ? mix(scene.rgb,entity.rgb,entity.a) : scene.rgb;//vec4(pow(ACESFilm(mask ? mix(scene.rgb,entity.rgb,entity.a) : scene.rgb), vec3(1 / 2.2)), 1);
     
 }

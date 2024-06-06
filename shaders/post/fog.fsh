@@ -1,6 +1,6 @@
 #version 430 compatibility
-#define DIFFUSE_BUFFER_MIN2
-#define REFLECT_BUFFER_MIN
+#define DIFFUSE_BUFFER_MIN
+#define REFLECT_BUFFER_MIN2
 #define REFRACT_BUFFER_MIN2
 
 #include "/lib/buffers/frame_data.glsl"
@@ -30,10 +30,12 @@ void main() {
         vec3IllumiantionData tmp2 = fetchReflect(pix);
         vec3IllumiantionData tmp3 = fetchRefract(pix);
         diffuseIllumiantionBuffer.data[idx].weight=tmp.weight;
+        diffuseIllumiantionBuffer.data[idx].pos=tmp.pos;
+        
         //reflectIllumiantionBuffer.data[idx].mixWeight=data.reflectWeight;
         //fragColor.xyz = tmp3.normal;
         //fragColor.xyz = diffuseIllumiantionBuffer.data[idx].normal2;
-        //fragColor.xyz = diffuseIllumiantionBuffer.data[idx].normal2;
+        //fragColor.xyz = diffuseIllumiantionBuffer.data[idx].weight*vec3(1);
         
         //fragColor.xyz=vec3(1)*(project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2)) ;
         //fragColor.xyz=vec3(diffuseIllumiantionBuffer.data[idx].weight);//*(50 - exp(-abs(diffuseIllumiantionBuffer.data[idx].weight)*0.1)*47.5);

@@ -52,9 +52,9 @@ vec3 project_SH_irradiance(SH sh, vec3 N)
 
     return max(vec3(R, G, B), vec3(0.0));
     */
-
-    float diffuse = max(1 - 2 * dot(sh.shY.xyz,sh.shY.xyz), 0);
-    float dot_ = max(dot(sh.shY.xyz, N),0);
+    vec3 shY_divided = sh.shY.xyz / (sh.shY.w + 1e-6);
+    float diffuse = max(1 - 2 * dot(shY_divided,shY_divided), 0);
+    float dot_ = max(dot(shY_divided, N),0);
 
     float Y = sh.shY.w;
     float T = Y - sh.CoCg.y * 0.5;
@@ -64,7 +64,7 @@ vec3 project_SH_irradiance(SH sh, vec3 N)
 
 
 
-    vec3 color = vec3(R,G,B) *(dot_ * (1 - diffuse) + diffuse);
+    vec3 color = vec3(R,G,B) *(dot_ * (1 - diffuse) + diffuse * 0.5);
     return max(color, vec3(0.0));
     #else
     return sh.shY.xyz;
@@ -91,7 +91,7 @@ SH irradiance_to_SH(vec3 color, vec3 dir)
     result.shY = vec4(L11, L1_1, L10, L00) * Y;
     */
 
-    result.shY = vec4(dir,Y);
+    result.shY = vec4(dir*Y,Y);
     #else
     result.shY = vec4(color, 0);
     result.CoCg = vec2(0);
