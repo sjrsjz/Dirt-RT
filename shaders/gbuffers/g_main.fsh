@@ -29,7 +29,7 @@ void main() {
 
     float intensity=dot(lightDir_global,normal);
     vec3 sun=vec3(10);
-    vec3 final=clamp(sun*intensity,0.2,1);
+    vec3 final=clamp(sun*intensity,0.2,1) * 2;
     fragColor=pow(texture(gtexture, texCoord),vec4(2.2,2.2,2.2,1))*vec4(final,1);
     #ifdef LIGHT
     fragColor.xyz*=200;

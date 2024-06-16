@@ -41,7 +41,7 @@ void main() {
     float luminance = dot(data.xyz, vec3(0.2126, 0.7152, 0.0722));
     //vec4 scene = vec4(vec3(clamp(HDR_AB_global.x*luminance+HDR_AB_global.y,avgExposure*0.75,avgExposure*10)),1)*data;
 
-    vec4 scene = vec4(vec3(clamp(HDR_AB_global.x/(luminance+100)+HDR_AB_global.y,0,avgExposure*5)),1)*data;
+    vec4 scene = vec4(vec3(clamp(HDR_AB_global.x/(luminance+10)+HDR_AB_global.y,0,avgExposure*5)),1)*data;
 
 
 #else

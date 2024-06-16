@@ -48,7 +48,7 @@ float linear_HDR(float x, float A, float B){
 
 
 void div_HDR_AB(float sum_X,float sum_X2,float sum_div,float sum_div_2,float sum_div2, out float A,out float B){
-    float det = sum_div_2*sum_div_2-sum_div2*sum_X2;
+    float det = max(sum_div_2*sum_div_2-sum_div2*sum_X2,0);
     A=(sum_div_2*sum_X-sum_div*sum_X2)/det;
     B=(sum_div_2*sum_div-sum_X*sum_div2)/det;
 }

@@ -41,9 +41,13 @@ void setSkyVars() {
         default:
         S_R = 0.025;
         cosD_S = 1 / sqrt(1 + S_R * S_R);
-        Mie = vec3(0.005);
-        Rayleigh = 8e9 * pow(vec3(1. / 700, 1. / 520, 1. / 450), vec3(4));
-        b_P = vec3(300000);
+        //Mie = vec3(0.005);
+        
+        
+        //Rayleigh = 8e9 * pow(vec3(1. / 700, 1. / 520, 1. / 450), vec3(4));
+        Rayleigh = 5e9 * pow(vec3(1. / 700, 1. / 520, 1. / 450), vec3(4));
+        Mie = vec3(luma(Rayleigh))*0.1;
+        b_P = vec3(3000000);
         b_k = 0.25 + rainStrength_global * 0.75;
         break;
     }
@@ -59,7 +63,7 @@ vec3 getSkyColor(vec3 b_Sun, vec3 b_Moon, in vec3 pos, in vec3 n, in vec3 lightD
     vec3 b_g0_2 = b_g0 * b_g0;
     vec3 tmp_x=1. + b_g0_2 - 2. * b_g0 * dot_n_L;
     tmp_x *= tmp_x * tmp_x;
-    vec3 g = 3. / (8. * PI) * (1. + dot_n_L) * (1. - b_g0_2) / (2. + b_g0_2) * inversesqrt(tmp_x);
+    vec3 g = 3. / (8. * PI) * (1. + dot_n_L*dot_n_L) * (1. - b_g0_2) / (2. + b_g0_2) * inversesqrt(tmp_x);
     vec3 t = b_Q * 0.5 * (b_P - pos.y) * (b_P - pos.y);
     vec3 c = b_Sun * g * (exp(-t / n.y) - exp(-t / lightDir.y)) / (n.y - lightDir.y) * max(lightDir.y, 0.);
 
@@ -69,7 +73,7 @@ vec3 getSkyColor(vec3 b_Sun, vec3 b_Moon, in vec3 pos, in vec3 n, in vec3 lightD
 
     c += exp(-t / n.y) * b_Sun * exp(-sqrt(abs(min(dot(n0, lightDir) - cosD_S, 0)) * 6000));
     c += exp(-t / n.y) * b_Moon * exp(-sqrt(abs(min(dot(n0, -lightDir) - cosD_S, 0)) * 15000));
-    return abs(c);
+    return max(c,0);
 }
 vec3 getFogColor(vec3 b_Sun, vec3 b_Moon, in vec3 pos, in vec3 n, in vec3 lightDir, float s, vec3 col) {
     vec3 n0 = n;
@@ -81,7 +85,7 @@ vec3 getFogColor(vec3 b_Sun, vec3 b_Moon, in vec3 pos, in vec3 n, in vec3 lightD
     vec3 g = 3. / (8. * PI) * (1. + dot_n_L * dot_n_L) * (1. - b_g0_2) / (2. + b_g0_2) * inversesqrt(tmp_x);
     vec3 t = b_Q * 0.5 * (b_P - pos.y) * (b_P - pos.y);
     vec3 s1 = exp(b_Q * s * (0.5 * s * n.y - (b_P - pos.y)) * (1 - n.y / lightDir.y));
-    vec3 c = 0 * b_Sun * g * exp(-t / lightDir.y) * (1 - s1) / (-n.y + lightDir.y) * max(lightDir.y, 0.);
+    vec3 c = vec3(0);// * b_Sun * g * exp(-t / lightDir.y) * (1 - s1) / (-n.y + lightDir.y) * max(lightDir.y, 0.);
     c += exp(b_Q * 0.5 * n.y * s * s - b_Q * (b_P - pos.y) * s) * col;
     return c;
 }
@@ -95,64 +99,67 @@ float fbm3D2(in vec3 x)
     for (int i = 0; i < 4; i++)
     {
         a += b * valueNoise(f * x+time_global * 0.01+1000); // accumulate values
-        b *= 0.75; // amplitude decrease
-        f *= 1.75; // frequency increase
+        b *= 0.525; // amplitude decrease
+        f *= 2; // frequency increase
+        x.xz = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5)) * x.xz;
     }
 
     return a;
 }
 float cloud_density(vec3 p) {
-    float density = 0.01 + smoothstep(3000., 8000., p.y) * smoothstep(8000., 16000., p.y) * 0.1;
-    density += rainStrength_global * 0.2;
-    return clamp(fbm3D2(vec3(0.000005,0.00002,0.000005) * p) - 1 + density, 0, 1) / density;
+    float density = 0.001 + smoothstep(0., 250., p.y) * smoothstep(1000., 160000., p.y)*0.15;
+    density *= 1 + 4 * rainStrength_global;
+    return clamp(fbm3D2(vec3(0.000005,0.00004,0.000005) * p / clamp(p.y * 0.0000015,1,5)) - 1 + density, 0, 1) / density;
 }
 vec3 getClouds(vec3 b_Sun, vec3 b_Moon, vec3 pos, vec3 n, vec3 lightDir, float Far) {
     //return getSkyColor(b_Sun, b_Moon, pos, n, lightDir);
     vec3 c;
-    const int step1 = 10;
+    const int step1 = 15;
     const int step2 = 8;
-    vec3 b_k1 = mix(Rayleigh, Mie, 0.995) * 20000 / b_P / b_P;
+    vec3 b_k1 = mix(Rayleigh, Mie, 0.9875) * 100000 / b_P / b_P;
 
     if(world_type_global!=0) 
         c = getSkyColor(b_Sun, b_Moon, pos, n, lightDir);
-    else if (lightDir.y > 0.1) {
-        float L = n.y < 1e-2 ? Far : min((b_P.x - pos.y) / n.y, Far);
+    else if (lightDir.y > 0.05) {
+        float L = n.y < 1e-3 ? Far : min((b_P.x - pos.y) / n.y, Far);
         vec3 pos1 = pos + n * L;
         c = getSkyColor(b_Sun, b_Moon, pos1, n, lightDir).xyz;
         float s0 = 0;
 
         for (int i = 0; i < step1; i++) {
-            float s = (n.y < 5e-2 ? L / step1 : (b_P.x - pos.y) / (n.y * step1)) * (rand(pos1) + 0.5);
+            float s = (n.y < 5e-2 ? L / step1 : (b_P.x - pos.y) / (n.y * step1)) * (rand(pos1)+0.5);
             s0 += s;
             if (s0 > L) break;
             pos1 -= n * s;
             float d = cloud_density(pos1);
 
             vec3 b_Q1 = mix(b_Q, b_k1, d); //absorption
-            vec3 b_g1 = mix(b_g0, vec3(0), d);
+            vec3 b_g1 = mix(b_g0, vec3(0.1), d);
             vec3 b_g2 = b_g1 * b_g1;
-            vec3 t = b_Q1 * 0.5 * (2 * (b_P - pos1.y) * s - s * s * n.y);
-            vec3 tmp_x = 1. + b_g2 - 2. * b_g1 * dot(lightDir, n);
+            vec3 t = b_Q1 * 0.5 * (2* (b_P - pos1.y) * s - s * s * n.y);
+            float dot_l_n=dot(lightDir, n);
+            vec3 tmp_x = 1. + b_g2 - 2. * b_g1 * dot_l_n;
             tmp_x *= tmp_x * tmp_x;
-            vec3 g = 3. / (8. * PI) * (1. + pow(dot(n, lightDir), 2.)) * (1. - b_g2) / (2. + b_g2) * inversesqrt(tmp_x);
+            vec3 g = 3. / (8. * PI) * (1. + dot_l_n*dot_l_n) * (1. - b_g2) / (2. + b_g2) * inversesqrt(tmp_x);
             float s2 = (b_P.x - pos1.y) / (lightDir.y * step2);
             vec3 c1 = b_Sun;
             vec3 c0 = vec3(1);
             for (int j = 0; j < step2; j++) {
-                vec3 pos2 = pos1 + lightDir * (step2 - j) * s2 * (0.5 + rand(pos1));
+                vec3 pos2 = pos1 + lightDir * (step2 - j) * s2 * (1 + rand(pos1));
+                if (pos2.y > b_P.x) break;
                 float d = cloud_density(pos2);
                 vec3 b_Q1 = mix(b_Q, b_k1, d); //absorption
                 vec3 t = b_Q1 * 0.5 * (2 * (b_P - pos2.y) * s2 - s2 * s2 * lightDir.y);
-                c0 += max(t, 0);
+                c0 += t;
             }
-            c += exp(-c0) * c1 * g * b_Q1 * (b_P - pos1.y - s * n.y) * s;
+            c += exp(-max(c0,0)) * c1 * g * b_Q1 * (b_P - pos1.y - s * n.y) * s;
             c *= exp(-max(t, 0));
         }
     } else {
         c = getSkyColor(b_Sun, b_Moon, pos, n, lightDir).xyz;
     }
 
-    return c;
+    return max(c,0);
 }
 
 layout(std140, set = 3, binding = 5) buffer SkyBuffer {
@@ -186,7 +193,7 @@ void GenSky(vec3 b_Sun,vec3 b_Moon,vec3 lightDir,vec3 pos,ivec2 uv){
     float B=(clamp(float(uv.y)/(SkyH-1)*2-1,-1,1))*PI/2;
     vec3 n=vec3(cos(B)*cos(A),sin(B),cos(B)*sin(A));
     rand_i=sin(frame_id)*50+0.4;
-    vec3 c=getClouds(b_Sun,b_Moon,pos,n,lightDir,1000000);
+    vec3 c=getClouds(b_Sun,b_Moon,pos,n,lightDir,3000000);
 
     skyBuffer.data[getSkyBufferIdx(uv)][0]=mix(c,skyBuffer.data[getSkyBufferIdx(uv)][0],0.975);
     if(any(isnan(skyBuffer.data[getSkyBufferIdx(uv)][0]))) skyBuffer.data[getSkyBufferIdx(uv)][0]=vec3(0);

@@ -81,7 +81,7 @@ void main() {
         float sum_div = 0.0;
         float sum_div_2 = 0.0;
         float sum_div2 = 0.0;
-        float C=100;
+        float C=10;
 
         float w = 0;
         for (int i = 0; i < samples.length(); i++) {
@@ -93,7 +93,7 @@ void main() {
         }
         sumX /= w;
         sumX2 /= w;
-        vec3 sigma2 = 2 * (sumX2 - sumX * sumX + 1e-3);
+        vec3 sigma2 = 3 * (sumX2 - sumX * sumX + 1e-3);
         vec3 w3 = vec3(0);
         sumX2 = vec3(0);
         for (int i = 0; i < samples.length(); i++) {
