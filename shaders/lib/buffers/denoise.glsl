@@ -209,18 +209,39 @@ layout(rgba32f) uniform image2D diffuseIllumiantionData_lpos;
     return tmp;
 }*/
 
+
 diffuseIllumiantionData fetchDiffuse(ivec2 p) {
     diffuseIllumiantionData tmp;
 
-    vec4 tmp4 = texelFetch(diffuseIllumiantionData_CoCg_swap_Sampler, p, 0);
-    tmp.data_swap.CoCg = tmp4.xy;
-    tmp.data_swap.shY = texelFetch(diffuseIllumiantionData_shY_swap_Sampler, p, 0);
-    tmp.weight = tmp4.z;
-    tmp.variance = tmp4.w;
+    //vec4 tmp4 = texelFetch(diffuseIllumiantionData_CoCg_swap_Sampler, p, 0);
+    vec4 tmp4 = texelFetch(diffuseIllumiantionData_shY_swap_Sampler, p, 0);
+    
+    //tmp.data_swap.CoCg = tmp4.xy;
+    tmp.data_swap.CoCg = unpackHalf2x16(floatBitsToUint(tmp4.z));
+    vec2 w_v = unpackHalf2x16(floatBitsToUint(tmp4.w));
+
+    vec2 shY_xy = unpackHalf2x16(floatBitsToUint(tmp4.x));
+    vec2 shY_zw = unpackHalf2x16(floatBitsToUint(tmp4.y));
+    
+    tmp.data_swap.shY = vec4(shY_xy, shY_zw);
+    
+    //tmp.data_swap.shY = texelFetch(diffuseIllumiantionData_shY_swap_Sampler, p, 0);
+    //tmp.weight = tmp4.z;
+    //tmp.variance = tmp4.w;
+    tmp.weight = w_v.x;
+    tmp.variance = w_v.y;
+
     #ifndef DIFFUSE_BUFFER_MIN2
-    tmp4 = texelFetch(diffuseIllumiantionData_CoCg_Sampler, p, 0);
-    tmp.data.CoCg = tmp4.xy;
-    tmp.data.shY = texelFetch(diffuseIllumiantionData_shY_Sampler, p, 0);
+
+    //tmp4 = texelFetch(diffuseIllumiantionData_CoCg_Sampler, p, 0);
+    //tmp.data.CoCg = tmp4.xy;
+    //tmp.data.shY = texelFetch(diffuseIllumiantionData_shY_Sampler, p, 0);
+    tmp4 = texelFetch(diffuseIllumiantionData_shY_Sampler, p, 0);
+    tmp.data.CoCg = unpackHalf2x16(floatBitsToUint(tmp4.z));
+    shY_xy = unpackHalf2x16(floatBitsToUint(tmp4.x));
+    shY_zw = unpackHalf2x16(floatBitsToUint(tmp4.y));
+    tmp.data.shY = vec4(shY_xy, shY_zw);
+
 
     tmp.normal = texelFetch(diffuseIllumiantionData_lnormal_Sampler, p, 0).xyz;
     tmp.pos = texelFetch(diffuseIllumiantionData_lpos_Sampler, p, 0).xyz;
@@ -256,13 +277,24 @@ diffuseIllumiantionData sampleDiffuse(vec2 p){
 
 
 void WriteDiffuse(diffuseIllumiantionData data, ivec2 p) {
+    float shY_xy = uintBitsToFloat(packHalf2x16(data.data_swap.shY.xy));
+    float shY_zw = uintBitsToFloat(packHalf2x16(data.data_swap.shY.zw));
+    float CoCg = uintBitsToFloat(packHalf2x16(data.data_swap.CoCg));
+    float w_v = uintBitsToFloat(packHalf2x16(vec2(data.weight, data.variance)));
+    imageStore(diffuseIllumiantionData_shY_swap, p, vec4(shY_xy, shY_zw, CoCg, w_v));
+    //imageStore(diffuseIllumiantionData_shY_swap, p, data.data_swap.shY);
+    //imageStore(diffuseIllumiantionData_CoCg_swap, p, vec4(CoCg, data.weight, data.variance));
+    //imageStore(diffuseIllumiantionData_CoCg_swap, p, vec4(CoCg, w_v, 0, 0));
     
-    imageStore(diffuseIllumiantionData_shY_swap, p, data.data_swap.shY);
-    imageStore(diffuseIllumiantionData_CoCg_swap, p, vec4(data.data_swap.CoCg, data.weight, data.variance));
     #if !defined(DIFFUSE_BUFFER_MIN) && !defined(DIFFUSE_BUFFER_MIN2)
-    imageStore(diffuseIllumiantionData_shY, p, data.data.shY);
-    imageStore(diffuseIllumiantionData_CoCg, p, vec4(data.data.CoCg, 0, 0));
+    //imageStore(diffuseIllumiantionData_shY, p, data.data.shY);
+    //imageStore(diffuseIllumiantionData_CoCg, p, vec4(data.data.CoCg, 0, 0));
     
+    shY_xy = uintBitsToFloat(packHalf2x16(data.data.shY.xy));
+    shY_zw = uintBitsToFloat(packHalf2x16(data.data.shY.zw));
+    CoCg = uintBitsToFloat(packHalf2x16(data.data.CoCg));
+    imageStore(diffuseIllumiantionData_shY, p, vec4(shY_xy, shY_zw, CoCg, 0));
+
     imageStore(diffuseIllumiantionData_lpos, p, vec4(data.pos, 0));
     imageStore(diffuseIllumiantionData_lnormal, p, vec4(data.normal, 0));
 

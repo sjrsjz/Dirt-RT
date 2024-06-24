@@ -84,6 +84,8 @@ float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal) {
 layout(location = 0) out vec4 shY;
 layout(location = 1) out vec4 CoCg;
 
+
+
 float K(vec3 B, vec3 A, vec3 n) {
     float an = dot(A, n);
     float bn = dot(B, n);
@@ -130,20 +132,21 @@ void main() {
     vec4 tex = texelFetch(colortex6, pix, 0);
     
     centerSH.CoCg = tex.xy;
-//    float centerW = clamp(tex.z*0.5, 0, 5)+clamp((tex.z-5)*0.5, 0, 10); 
+    //float centerW = clamp(tex.z*0.5, 0, 5)+clamp((tex.z-5)*0.5, 0, 10); 
 
-    float centerW = clamp(tex.z*0.5, 0, 2.5)+pow(clamp((tex.z-5), 0, 30),0.5); 
+    float centerW = clamp(tex.z * 0.5, 0, 2.5)+pow(clamp((tex.z-10), 0, 100),0.5); 
     //float weight = 0;
     //float scale = centerW/(2+6*exp(-0.1*avgExposure)/(0.01+avgExposure)+tex.w * (avgExposure)) * (0.5 * log(R0)+1)/(0.25+0.75*pow(abs(dot(info_.rd,centerNormal)),1));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
     //float scale = centerW/(1+10*exp(-0.1*avgExposure)/(0.01+avgExposure)+0.025*tex.w * (avgExposure)) * (pow(R0,0.75)+1)/(0.5+0.5*pow(abs(dot(info_.rd,centerNormal)),1));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
     
-    float scale = 0.35*centerW/(1+15*exp(-0.1*avgExposure)/(0.01+avgExposure)+0.025*tex.w * avgExposure) * (pow(R0,0.75)+1)/(0.75+0.25*abs(dot(info_.rd,centerNormal)));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
+    float scale = float(R0>1)*0.4*centerW/(1+15*exp(-0.1*avgExposure)/(0.01+avgExposure)+0.5*tex.w * avgExposure) * (R0+1)/(0.75+0.25*abs(dot(info_.rd,centerNormal)));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
     
     S_tex_w = tex.w;
     float D = 0;
 #if STEP == 1
     float p_w=0;
 #endif
+
     SH avg_SH = centerSH;
     for (int i = 0; i <= 2; i++) {
         samplePos.y = pix.y - R0;
@@ -153,9 +156,9 @@ void main() {
                 continue;
             }
             SH tmp;
+            
             tmp.shY = texelFetch(colortex5, samplePos, 0);
-            vec4 C0 = texelFetch(colortex6, samplePos, 0);
-            tmp.CoCg = C0.xy;
+            tmp.CoCg = texelFetch(colortex6, samplePos, 0).xy;
             vec4 delta_shY = tmp.shY - centerSH.shY;
             vec2 delta_CoCg = tmp.CoCg - centerSH.CoCg;
             //float delta = st[i][j] / (1 + scale * (sqrt(dot(delta_shY, delta_shY) + dot(delta_CoCg, delta_CoCg))));
@@ -169,7 +172,7 @@ void main() {
 #if STEP == 1            
             p_w+=k;
 #endif
-            float w0 =svgfNormalWeight(centerNormal, sampleNormal)
+            float w0 =(1+exp(-0.5*texelFetch(colortex4, samplePos, 0).w))*svgfNormalWeight(centerNormal, sampleNormal)
                     * w1
                     * float(samplePos == clamp(samplePos, vec2(0), texSize)) * step(-0.5, d);
             D = updateVariance(avg_SH, D, tmp, (1+w) / (w0+1e-2));
@@ -186,12 +189,12 @@ void main() {
     //D *= avgExposure;
     //tex.w = max(tex.w,1.25*sqrt(D));//tex.w*0.25 + D*0.75;//+(1*D-tex.w)*exp(-max(tex.z,0)*0.0);//*0.5+tex.w * 0.5;
     
-    tex.w = max(tex.w,sqrt(D));//tex.w*0.25 + D*0.75;//+(1*D-tex.w)*exp(-max(tex.z,0)*0.0);//*0.5+tex.w * 0.5;
+    tex.w = max(tex.w,sqrt(D)/(R0*R0));//tex.w*0.25 + D*0.75;//+(1*D-tex.w)*exp(-max(tex.z,0)*0.0);//*0.5+tex.w * 0.5;
     
-    float w0 = 4 /(1+10*tmp_.w*avgExposure);
+    float w0 = 4 ;///(1+20*tmp_.w*avgExposure);
     accumulate_SH(avg_SH, centerSH, w0);
     w += w0;
-#if STEP == 1
+#if STEP == 1 && false
     if (false&&p_w > 7.5) {
         float s = exp(-0.05*(p_w-7.5)*(p_w-7.5));
         avg_SH.shY = avg_SH.shY * s;
@@ -205,6 +208,5 @@ void main() {
 
     shY = avg_SH.shY;
     CoCg = vec4(avg_SH.CoCg, tex.zw);
-
     //CoCg.w = tex.w+weight;//10 * luma(project_SH_irradiance(tmp0, diffuseIllumiantionBuffer.data[idx].normal)) / avgExposure * pow(2, R0);
 }

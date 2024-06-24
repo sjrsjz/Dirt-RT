@@ -82,9 +82,9 @@ Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn, float we
     float adhesion_ = clamp(adhesion(macroNormal,vec3(0,-1,0),vec3(0,-1,0),material.roughness)+0.25,0,1);
     float mix0 = min(wetStrength*adhesion_*min(skylight/255,1) + wetness*0.15,1); //* porosity/64.0*float(porosity<=64);
     mix0 *= maxWetness;
-    material.roughness = (1 - mix0) * material.roughness;
+    material.roughness = max(1 - mix0 * 1.5,0) * material.roughness;
     material.normal=normalize(mix(material.normal,macroNormal,mix0));
-
+    mix0 *= 0.25;
     if (f0Channel < 230) {
         material.F0 = sqrt(f0Channel * albedo.rgb / 229.0);
         material.F0 = mix(material.F0, vec3(1), mix0);

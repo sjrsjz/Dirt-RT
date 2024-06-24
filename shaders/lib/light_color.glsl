@@ -25,10 +25,11 @@ void setSkyVars() {
         case World_THE_END:
         S_R = 0.25;
         cosD_S = 1 / sqrt(1 + S_R * S_R);
-        Mie = vec3(0.01);
-        Rayleigh = 1e9 * pow(vec3(1. / 700, 1. / 520, 1. / 450), vec3(4));
+        Rayleigh = 5e9 * pow(vec3(1. / 700, 1. / 520, 1. / 450), vec3(4));
+
+        Mie = vec3(luma(Rayleigh))*0.1;
         b_P = vec3(4096);
-        b_k = 0.75;
+        b_k = 0.95;
         break;
         case World_THE_NETHER:
         S_R = 0.05;

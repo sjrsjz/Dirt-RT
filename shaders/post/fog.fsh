@@ -1,5 +1,5 @@
 #version 430 compatibility
-#define DIFFUSE_BUFFER_MIN
+#define DIFFUSE_BUFFER_MIN2
 #define REFLECT_BUFFER_MIN2
 #define REFRACT_BUFFER_MIN2
 
@@ -33,7 +33,7 @@ void main() {
         diffuseIllumiantionBuffer.data[idx].pos=tmp.pos;
         
         //reflectIllumiantionBuffer.data[idx].mixWeight=data.reflectWeight;
-        //fragColor.xyz = tmp3.normal;
+        //fragColor.xyz = abs(tmp3.normal);
         //fragColor.xyz = diffuseIllumiantionBuffer.data[idx].normal2;
         //fragColor.xyz = diffuseIllumiantionBuffer.data[idx].weight*vec3(1);
         
