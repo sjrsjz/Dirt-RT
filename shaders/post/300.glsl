@@ -115,7 +115,35 @@ void main() {
     }
 
     SH A = init_SH();
-    const float st[3][3] = { { 1, 2, 1 }, { 2, 4, 2 }, { 1, 2, 1 } };
+    #if STEP == 1
+    /*const float st[7][7] = {
+        {1,2,4,8,4,2,1},
+        {2,4,8,16,8,4,2},
+        {4,8,16,32,16,8,4},
+        {8,16,32,64,32,16,8},
+        {4,8,16,32,16,8,4},
+        {2,4,8,16,8,4,2},
+        {1,2,4,8,4,2,1}
+    };*/
+    const float st[7][7]={
+        {1,1,1,1,1,1,1},
+        {1,2,2,2,2,2,1},
+        {1,2,3.5,4,3.5,2,1},
+        {1,2,4,5,4,2,1},
+        {1,2,3.5,4,3.5,2,1},
+        {1,2,2,2,2,2,1},
+        {1,1,1,1,1,1,1}
+    };
+    #else    
+    //const float st[3][3] = { { 1, 2, 1 }, { 2, 4, 2 }, { 1, 2, 1 } };
+    const float st[5][5] = { 
+        { 1, 1 , 1.5, 1, 1 }, 
+        { 1, 2 , 2, 2, 1 }, 
+        { 1.5, 2 , 2, 2, 1.5 }, 
+        { 1, 2 , 2, 2, 1 }, 
+        { 1, 1 , 1.5, 1, 1 }
+    };
+    #endif
     float w = 0;
     ivec2 pix=ivec2(gl_FragCoord.xy);
     vec3 centerNormal = texelFetch(colortex3, pix, 0).xyz;
@@ -123,7 +151,6 @@ void main() {
     vec3 centerPos = tmp_.xyz;
 
     ivec2 samplePos;
-    samplePos.x = pix.x - R0;
 
     SH centerSH;// avg_SH;
 
@@ -134,53 +161,70 @@ void main() {
     centerSH.CoCg = tex.xy;
     //float centerW = clamp(tex.z*0.5, 0, 5)+clamp((tex.z-5)*0.5, 0, 10); 
 
-    float centerW = clamp(tex.z * 0.5, 0, 2.5)+pow(clamp((tex.z-10), 0, 100),0.5); 
+    //float centerW = clamp(tex.z * 0.5, 0, 2.5)+pow(clamp((tex.z-10), 0, 100),0.5); 
+    float centerW = clamp((tex.z - 1) * 0.25, 0, 2.5)+pow(clamp((tex.z-10), 0, 100),0.5); 
+
     //float weight = 0;
     //float scale = centerW/(2+6*exp(-0.1*avgExposure)/(0.01+avgExposure)+tex.w * (avgExposure)) * (0.5 * log(R0)+1)/(0.25+0.75*pow(abs(dot(info_.rd,centerNormal)),1));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
     //float scale = centerW/(1+10*exp(-0.1*avgExposure)/(0.01+avgExposure)+0.025*tex.w * (avgExposure)) * (pow(R0,0.75)+1)/(0.5+0.5*pow(abs(dot(info_.rd,centerNormal)),1));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
     
-    float scale = float(R0>1)*0.4*centerW/(1+15*exp(-0.1*avgExposure)/(0.01+avgExposure)+0.5*tex.w * avgExposure) * (R0+1)/(0.75+0.25*abs(dot(info_.rd,centerNormal)));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
+    float scale = float(R0>2)*centerW/(1+15*exp(-0.1*avgExposure)/(0.01+avgExposure)+0.5*tex.w * avgExposure) * (R0+1)/(0.75+0.25*abs(dot(info_.rd,centerNormal)));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
     
     S_tex_w = tex.w;
     float D = 0;
-#if STEP == 1
+#if STEP == 1 
     float p_w=0;
 #endif
 
     SH avg_SH = centerSH;
-    for (int i = 0; i <= 2; i++) {
-        samplePos.y = pix.y - R0;
-        for (int j = 0; j <= 2; j++) {
-            if (i == 1 && j == 1) {
-                samplePos.y += R0;
-                continue;
-            }
-            SH tmp;
-            
-            tmp.shY = texelFetch(colortex5, samplePos, 0);
-            tmp.CoCg = texelFetch(colortex6, samplePos, 0).xy;
-            vec4 delta_shY = tmp.shY - centerSH.shY;
-            vec2 delta_CoCg = tmp.CoCg - centerSH.CoCg;
-            //float delta = st[i][j] / (1 + scale * (sqrt(dot(delta_shY, delta_shY) + dot(delta_CoCg, delta_CoCg))));
-            float d = denoiseBuffer.data[getIdx(uvec2(samplePos))].distance;
-            
-            vec3 sampleNormal = texelFetch(colortex3, samplePos, 0).xyz;
-
-            float k = abs(dot(texelFetch(colortex4, samplePos, 0).xyz - centerPos, centerNormal));
-
-            float w1 = st[i][j] * exp( - k * POSITION_PARAM - scale * sqrt(dot(delta_shY, delta_shY) + dot(delta_CoCg, delta_CoCg)));
-#if STEP == 1            
-            p_w+=k;
+#if STEP == 1
+    #define A_ 6
+    #define B_ 3
+#else
+    #define A_ 4
+    #define B_ 2
 #endif
-            float w0 =(1+exp(-0.5*texelFetch(colortex4, samplePos, 0).w))*svgfNormalWeight(centerNormal, sampleNormal)
-                    * w1
-                    * float(samplePos == clamp(samplePos, vec2(0), texSize)) * step(-0.5, d);
-            D = updateVariance(avg_SH, D, tmp, (1+w) / (w0+1e-2));
-            accumulate_SH(avg_SH, tmp, w0);
-            w += w0;
-            samplePos.y += R0;
+    //samplePos.x = pix.x - R0*B_;
+
+    #define totalIterations (A_ + 1) * (A_ + 1)
+    for (int n = 0; n < totalIterations; n++) {
+        if (n==A_*(2*A_+1)+A_+1) {
+            continue;
         }
-        samplePos.x += R0;
+        int i = n / (A_ + 1);
+        int j = n % (A_ + 1);
+        samplePos.x = pix.x - R0 * B_ + R0 * i;
+        samplePos.y = pix.y - R0 * B_ + R0 * j;
+
+        SH tmp;
+        
+        tmp.shY = texelFetch(colortex5, samplePos, 0);
+        tmp.CoCg = texelFetch(colortex6, samplePos, 0).xy;
+        vec4 delta_shY = tmp.shY - centerSH.shY;
+        //vec2 delta_CoCg = tmp.CoCg - centerSH.CoCg;
+        //float delta = st[i][j] / (1 + scale * (sqrt(dot(delta_shY, delta_shY) + dot(delta_CoCg, delta_CoCg))));
+        float d = denoiseBuffer.data[getIdx(uvec2(samplePos))].distance;
+        
+        vec3 sampleNormal = texelFetch(colortex3, samplePos, 0).xyz;
+
+        float k = abs(dot(texelFetch(colortex4, samplePos, 0).xyz - centerPos, centerNormal));
+
+        //float w1 = st[i][j] * exp( - k * POSITION_PARAM - scale * sqrt(dot(delta_shY, delta_shY) + dot(delta_CoCg, delta_CoCg)));
+        float w1 = st[i][j] * exp( - k * POSITION_PARAM - scale * length(delta_shY));
+#if STEP == 1            
+        p_w+=k;
+#endif
+        //float w0 =(1+exp(-0.5*texelFetch(colortex4, samplePos, 0).w))*svgfNormalWeight(centerNormal, sampleNormal)
+
+        float w0 =svgfNormalWeight(centerNormal, sampleNormal)
+                * w1
+                * float(samplePos == clamp(samplePos, vec2(0), texSize)) * step(-0.5, d);
+        D = updateVariance(avg_SH, D, tmp, (1+w) / (w0+1e-2));
+        accumulate_SH(avg_SH, tmp, w0);
+        w += w0;
+            //samplePos.y += R0;
+        
+        //samplePos.x += R0;
     }
     //D=100*(D);
     avg_SH.shY-=centerSH.shY;
@@ -190,11 +234,15 @@ void main() {
     //tex.w = max(tex.w,1.25*sqrt(D));//tex.w*0.25 + D*0.75;//+(1*D-tex.w)*exp(-max(tex.z,0)*0.0);//*0.5+tex.w * 0.5;
     
     tex.w = max(tex.w,sqrt(D)/(R0*R0));//tex.w*0.25 + D*0.75;//+(1*D-tex.w)*exp(-max(tex.z,0)*0.0);//*0.5+tex.w * 0.5;
-    
-    float w0 = 4 ;///(1+20*tmp_.w*avgExposure);
+#if STEP == 1
+    float w0 = 5 ;///(1+20*tmp_.w*avgExposure);
+#else
+    float w0 = 2 ;///(1+20*tmp_.w*avgExposure);
+#endif
+
     accumulate_SH(avg_SH, centerSH, w0);
     w += w0;
-#if STEP == 1 && false
+#if STEP == 1 && 0
     if (false&&p_w > 7.5) {
         float s = exp(-0.05*(p_w-7.5)*(p_w-7.5));
         avg_SH.shY = avg_SH.shY * s;

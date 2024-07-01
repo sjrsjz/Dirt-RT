@@ -231,7 +231,7 @@ vec4 sampleGodRay(vec3 b_Sun, vec3 b_Moon, vec3 ro, vec3 rd, float far, vec3 lig
         c = float(t < -0.5) * g * SampleSky(-sampleDir);
     }
 
-    c *= tmp_Payload.shadowTransmission * max(0.5*sqrt(1-cosD_S*cosD_S) * (1 - 0.9 * clamp(-lightDir.y * 2, 0, 1)), rainStrength_global * 0.125) * exp(-b_Q * h * sampleX + 0.5 * b_Q * sampleX * sampleX * sampleDir.y);
+    c *= tmp_Payload.shadowTransmission * max(0.5*sqrt(1-cosD_S*cosD_S) * 0.25 * (1 - 0.5 * clamp(-lightDir.y * 2, 0, 1)), rainStrength_global * 0.125) * exp(-b_Q * h * sampleX + 0.5 * b_Q * sampleX * sampleX * sampleDir.y);
     return vec4(clamp(c, 0, 10), t < -0.5 ? s : -1);
 }
 
@@ -273,14 +273,14 @@ vec3 sampleSunlight(vec3 ro, vec3 normal, vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S, v
     vec3 b_g1 = b_g0 * b_g0;
     vec3 tmp_x = 1. + b_g1 + 2. * b_g0 * a0;
     tmp_x *= tmp_x * tmp_x;
-    vec3 g = 1.5 / PI * (1. + a0 * a0) * (1. - b_g1) / (2. + b_g1) * inversesqrt(tmp_x);
+    vec3 g = 1.5 / PI * (1. + a0 * a0) * (1. - b_g1) / (2. + b_g1) * inversesqrt(tmp_x) / (1-b_g0);
     #endif
 
     switch (type) {
         case 0:
         #ifdef Method2
         sampleColor = (weightA * Cs * rC.xyz * S.x * 0.25 / IoH
-                + Cd * (1 - S.x * rC.xyz) / (max(OoN, 0) + abs(dot(normal, rd_i)) + 0.001) * g) * max(OoN, 0);
+                + Cd * (1 - S.x * rC.xyz) / (max(-OoN, 0) + abs(dot(normal, rd_i)) + 0.001) * g) * max(OoN, 0);
         #else
         sampleColor = (weightA * Cs * rC.xyz * S.x * 0.25 / IoH
                 + Cd * (1 - S.x * rC.xyz)) * max(OoN, 0);
@@ -321,16 +321,9 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
     vec3 samplePos = ro;
     float sampleRoughness = 0;
 
-    vec4 fogColor = vec4(0, 0.325, 0.295, 0.3) * 2;
-    vec3 emission = vec3(0);
-    switch (isEyeInWater) {
-        case 2u:
-        fogColor = vec4(0, 0.05, 0.075, 0.1) * 5;
-        emission = vec3(1, 0.25, 0.05) * 10;
-        break;
-        default:
-        break;
-    }
+    vec4 fogColor = (isEyeInWater == 2u) ? vec4(0, 0.05, 0.075, 0.1) * 5 : vec4(0, 0.325, 0.295, 0.3) * 2;
+    vec3 emission = (isEyeInWater == 2u) ? vec3(1, 0.25, 0.05) * 10 : vec3(0);
+
 
     for (count = 0; count < MaxRay; count++) {
         infos[count].distance = 1e10;
@@ -462,14 +455,14 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
                 A.n_o = mA.x;
                 #ifdef Method2
                 vec3 b_g0 = vec3(surface.R.w);
-                float a0 = dot(rd_i, rd_o2);
+                float a0 = -dot(rd_i, rd_o2);
                 vec3 b_g1 = b_g0 * b_g0;
-                vec3 tmp_x = 1. + b_g1 + 2. * b_g0 * a0;
+                vec3 tmp_x = 1. + b_g1 - 2. * b_g0 * a0;
                 tmp_x *= tmp_x * tmp_x;
-                vec3 g = 3.0 / 2.0 * (1. + a0 * a0) * (1. - b_g1) / (2. + b_g1) * inversesqrt(tmp_x);
-                shade = (1 - rC.rgb * surface.S.x) / ((1 - p + 1e-3) * (abs(dot(normal, rd_i)) + abs(dot(normal, rd_o2)) + 0.001)) * g;
+                vec3 g = 3.0 / 2.0 * (1. + a0 * a0) * (1. - b_g1) / (2. + b_g1) * inversesqrt(tmp_x) / (1-b_g0);
+                shade = (1 - rC.rgb * surface.S.x) / ((max(1 - p,0.25) + 1e-3) * (abs(dot(rd_i,normal))+abs(dot(rd_o2,normal)))) * g;
                 #else
-                shade = (1 - rC.rgb * surface.S.x) / (1 - p + 1e-3);
+                shade = (1 - rC.rgb * surface.S.x) / (max(1 - p,0.25) + 1e-3);
                 #endif
             }
             A.color3 = I;
@@ -578,7 +571,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
     vec3 illumiantion = vec3(0);
 
     for (int i = count; i >= 0; i--) {
-        illumiantion = c * infos[i].shade + (directLight0[i]) / (infos[i].color + 1e-5);
+        illumiantion = c * infos[i].shade  + (directLight0[i]) / (infos[i].color + 1e-5);
         c = infos[i].absorption * getFogColor(SunLight, MoonLight, infos[i].p, infos[i].rd_i, -lightDir, infos[i].distance * FogS, infos[i].color * (illumiantion + infos[i].surface.light)) + infos[i].emission;
     }
 

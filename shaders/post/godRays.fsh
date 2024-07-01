@@ -22,12 +22,12 @@ void main() {
     /*if(denoiseBuffer.data[getIdx(uvec2(gl_FragCoord.xy))].distance<0){
         return;
     };*/
-    float d=sign(denoiseBuffer.data[getIdx(uvec2(gl_FragCoord.xy))].distance);
-    const int sampleN = 8;
+    float d = sign(denoiseBuffer.data[getIdx(uvec2(gl_FragCoord.xy))].distance);
+    const int sampleN = 4;
     vec3 sumX = vec3(0);
     float w0 = 0;
     vec2 texSize = textureSize(colortex2, 0);
-    float scale = STEP<=2 ? 3 : 1;
+    const float scale = STEP<=2 ? 3 : 1;
     for (int k = -sampleN; k <= sampleN; k++) {
         int i=k;//int(sign(k)*pow(abs(k),1.25));
         #if STEP==1 || STEP==3
