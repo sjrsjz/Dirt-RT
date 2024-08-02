@@ -34,8 +34,8 @@ void main() {
         v *= rotM;
         vec2 v1= v * vec2(1-i%2,i%2);
         float w;
-        if(i<8){
-            v1 = v;//(v1 + vec2(-v1.y,v1.x));
+        if(i<12 ){
+            v1 = v*3;//(v1 + vec2(-v1.y,v1.x));
             w=0.75;
         }else{
             v1 *= 2;

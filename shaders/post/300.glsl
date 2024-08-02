@@ -162,7 +162,7 @@ void main() {
     //float centerW = clamp(tex.z*0.5, 0, 5)+clamp((tex.z-5)*0.5, 0, 10); 
 
     //float centerW = clamp(tex.z * 0.5, 0, 2.5)+pow(clamp((tex.z-10), 0, 100),0.5); 
-    float centerW = clamp((tex.z - 1) * 0.25, 0, 2.5)+pow(clamp((tex.z-10), 0, 100),0.5); 
+    float centerW =  clamp((tex.z) * 1, 0, 2.5)+pow(clamp((tex.z-10), 0, 100),0.5); 
 
     //float weight = 0;
     //float scale = centerW/(2+6*exp(-0.1*avgExposure)/(0.01+avgExposure)+tex.w * (avgExposure)) * (0.5 * log(R0)+1)/(0.25+0.75*pow(abs(dot(info_.rd,centerNormal)),1));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
@@ -193,6 +193,9 @@ void main() {
         }
         int i = n / (A_ + 1);
         int j = n % (A_ + 1);
+        #if STEP % 2 !=0 && STEP > 2
+            if(i != B_ && j !=B_) continue;
+        #endif
         samplePos.x = pix.x - R0 * B_ + R0 * i;
         samplePos.y = pix.y - R0 * B_ + R0 * j;
 

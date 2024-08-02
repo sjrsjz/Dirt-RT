@@ -26,7 +26,7 @@ void main() {
 //    shY = tmp.data_swap.shY;
 //    CoCg.xy = tmp.data_swap.CoCg;
 
-    shY = tmp.data_swap.shY;
+    shY = tmp.data_swap.shY;//normalize(tmp.data_swap.shY)*clamp(length(tmp.data_swap.shY),0,0.5/avgExposure*(1+5*tmp.weight));
     CoCg = vec4(tmp.data_swap.CoCg, tmp.weight, 0);
     if (any(isnan(shY))) shY=vec4(0);
     if (any(isnan(CoCg))) CoCg=vec4(0);
