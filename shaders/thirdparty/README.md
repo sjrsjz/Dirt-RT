@@ -7,10 +7,6 @@ This project contains files from the **VulkaniteDemoPack** project, which is lic
 
 The license for the **VulkaniteDemoPack** project is included in this folder as `LICENSE`.
 
-## Modifications
-
-If you have made any modifications to the files, list them here. If there are no modifications, you can omit this section.
-
 ---
 
 ### Disclaimer
