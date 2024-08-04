@@ -1,4 +1,7 @@
-#version 430
+#version 430 compatibility
+#define DIFFUSE_BUFFER_MIN2
+#define REFLECT_BUFFER_MIN2
+#define REFRACT_BUFFER_MIN2
 
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
@@ -8,34 +11,35 @@
 
 in vec2 texCoord;
 
-uniform sampler2D colortex0;
-uniform sampler2D colortex1;
-uniform sampler2D colortex2;
-uniform sampler2D colortex4;
-uniform sampler2D colortex8;
-uniform sampler2D colortex9;
-
 /* RENDERTARGETS: 0 */
 layout(location = 0) out vec4 fragColor;
 
 void main() {
     uint idx = getIdx(uvec2(gl_FragCoord.xy));
     bufferData data = denoiseBuffer.data[idx];
-    diffuseIllumiantionData tmp = diffuseIllumiantionBuffer.data[idx];
-    vec3IllumiantionData tmp2 = reflectIllumiantionBuffer.data[idx];
-    vec3IllumiantionData tmp3 = refractIllumiantionBuffer.data[idx];
-
-    //float sigma=max(0,diffuseIllumiantionBuffer.data[idx].sumX2-diffuseIllumiantionBuffer.data[idx].sumX*diffuseIllumiantionBuffer.data[idx].sumX);
-
-    //fragColor.xyz=vec3(sigma*0.00125);//decodeSH(tmp.data_swap, tmp.normal2);
-
+    
     if (data.distance < -0.5) {
-        fragColor.xyz = data.absorption * getSkyColor(SunLight_global, MoonLight_global, camPos, data.rd, lightDir_global);
+        //setSkyVars();
+        //fragColor.xyz = data.absorption * getSkyColor(SunLight_global, MoonLight_global, camPos, data.rd, lightDir_global);
+        fragColor.xyz = data.absorption *SampleSky(data.rd) + data.emission;
     }
     else
     {
-        //fragColor.xyz=vec3(0.1)*tmp2.weight;
-        //fragColor.xyz=vec3(abs(project_SH_irradiance(tmp.data_swap,faceforward(tmp.normal2,tmp.normal2,-tmp.normal))));
-        fragColor.xyz = data.absorption * ((project_SH_irradiance(tmp.data_swap,tmp.normal2) + tmp3.data_swap) * data.albedo2 + tmp2.data_swap * data.albedo + data.light) + data.emission;
+        ivec2 pix = ivec2(gl_FragCoord.xy);
+        diffuseIllumiantionData tmp = fetchDiffuse(pix);
+        vec3IllumiantionData tmp2 = fetchReflect(pix);
+        vec3IllumiantionData tmp3 = fetchRefract(pix);
+        diffuseIllumiantionBuffer.data[idx].weight=tmp.weight;
+        diffuseIllumiantionBuffer.data[idx].pos=tmp.pos;
+        
+        //reflectIllumiantionBuffer.data[idx].mixWeight=data.reflectWeight;
+        //fragColor.xyz = abs(tmp3.normal);
+        //fragColor.xyz = diffuseIllumiantionBuffer.data[idx].normal2;
+        //fragColor.xyz = diffuseIllumiantionBuffer.data[idx].weight*vec3(1);
+        
+        //fragColor.xyz=vec3(1)*(project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2)) ;
+        //fragColor.xyz=vec3(diffuseIllumiantionBuffer.data[idx].weight);//*(50 - exp(-abs(diffuseIllumiantionBuffer.data[idx].weight)*0.1)*47.5);
+        //fragColor.xyz=reflectIllumiantionBuffer.data[idx].normal;//vec3(abs(project_SH_irradiance(tmp.data,faceforward(tmp.normal2,tmp.normal2,-tmp.normal))));
+        fragColor.xyz = data.absorption * ((project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2) + tmp3.data_swap) * data.albedo2 +tmp2.data_swap * data.albedo + data.light) + data.emission;
     }
 }

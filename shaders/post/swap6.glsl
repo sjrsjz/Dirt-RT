@@ -1,5 +1,5 @@
 #version 430 compatibility
-
+#define REFRACT_BUFFER
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
@@ -19,8 +19,13 @@ layout(location = 2) out vec4 color;
 void main() {
     
     uint idx = getIdx(uvec2(gl_FragCoord.xy));
-
+    vec3IllumiantionData tmp=fetchRefract(ivec2(gl_FragCoord.xy));
     refractNormal.xyz = refractIllumiantionBuffer.data[idx].normal;
+    refractNormal.w = step(-0.5,denoiseBuffer.data[idx].distance);
+
     refractPos.xyz = refractIllumiantionBuffer.data[idx].pos;
-    color.xyz=refractIllumiantionBuffer.data[idx].data_swap;
+    //refractNormal.xyz = tmp.normal;
+    //refractPos.xyz = tmp.pos;
+    color.xyz=tmp.data_swap;
+    color.w = denoiseBuffer.data[idx].refractWeight;
 }

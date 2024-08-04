@@ -7,11 +7,12 @@
 #extension GL_EXT_shader_8bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types : require
 
+
 #include "/lib/rt/data.glsl"
 #include "/lib/rt/payload.glsl"
 #include "/lib/rt/fragment_info.glsl"
-
 layout(location = 6) rayPayloadInEXT Payload payload;
+
 
 hitAttributeEXT vec2 baryCoord;
 
@@ -35,8 +36,16 @@ void main() {
     Quad quad = getRayQuad();
     vec2 uv = getFragmentUV(quad, baryCoord);
     vec4 texColor = texture(blockTex, uv);
-    payload.shadowTransmission *= exp(-0.1*gl_HitTEXT*(1-texColor.rgb)) * (1.0 - texColor.a);
-    if (texColor.a < 0.1||quad.vertices[0].block_id.x==payload.ignore_block_id.x) {
+    if (payload.inside_block) {
+        if (quad.vertices[0].block_id.x == 1000) {
+            payload.shadowTransmission *= exp(-clamp(gl_HitTEXT - payload.prev_distance, 0, 100) * vec3(0.1,0.03,0.04));
+        } else {
+            payload.shadowTransmission *= exp(-10 * clamp(gl_HitTEXT - payload.prev_distance, 0, 10) * (1.05 - texColor.rgb) * texColor.a);
+        }
+    }
+    if (texColor.a < 0.1||quad.vertices[0].block_id.x==payload.ignore_block_id.x||quad.vertices[0].block_id.x==1000&&payload.ignore_block_id.x!=0) {
+        payload.prev_distance = gl_HitTEXT;
+        payload.inside_block = !payload.inside_block;
         ignoreIntersectionEXT;
     }
     

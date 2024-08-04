@@ -1,2 +1,2 @@
-#define STEP 1
+#define STEP 3
 #include "/post/godRays.fsh"

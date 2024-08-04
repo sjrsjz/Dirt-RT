@@ -1,5 +1,8 @@
 #version 430 compatibility
 
+#define DIFFUSE_BUFFER_MIN
+
+layout(local_size_x = 16,local_size_y = 16) in;
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
@@ -11,16 +14,10 @@
 
 //2:pos
 
-in vec2 texCoordRaw;
+
+
 
 uniform sampler2D colortex0;
-uniform sampler2D colortex1;
-uniform sampler2D colortex2;
-uniform sampler2D colortex3;
-uniform sampler2D colortex6;
-uniform sampler2D colortex7;
-uniform sampler2D colortex8;
-uniform sampler2D colortex9;
 uniform sampler2D depthtex0;
 
 uniform mat4 gbufferProjectionInverse;
@@ -46,26 +43,26 @@ const int colortex6Format = RGBA32F;
 const int colortex7Format = RGBA32F;
 const int colortex8Format = RGBA32F;
 
-const bool colortex0Clear = false;
+const bool colortex0Clear = true;
 const bool colortex1Clear = false;
 const bool colortex2Clear = false;
 
 const bool colortex6Clear = false;
-const bool colortex7Clear = false;
-const bool colortex8Clear = false;
+const bool colortex7Clear = true;
+const bool colortex8Clear = true;
 */
 
-const float NORMAL_PARAM = 16.0;
-const float POSITION_PARAM = 1.0;
+const float NORMAL_PARAM = 2.0;
+const float POSITION_PARAM = 256.0;
 const float LUMINANCE_PARAM = 4.0;
 
-float svgfNormalWeight(vec3 centerNormal, vec3 normal) {
-    return pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM);
+float svgfNormalWeight(vec3 centerNormal, vec3 normal, float distance) { 
+    return pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM*(0.25+4*exp(-0.25*distance)));
 }
 
 float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float distance) {
     // Modified to check for distance from the center plane
-    return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)*(0.1+64*exp(-0.25*distance))));
+    return max(exp(-POSITION_PARAM * max(abs(dot(pixelPos - centerPos, normal))-0.05,0)*(0.1+64*exp(-0.25*distance)))*2,0);
 }
 
 vec3 reproject(vec3 screenPos) {
@@ -76,7 +73,7 @@ vec3 reproject(vec3 screenPos) {
     vec3 prevPlayerPos = worldPos - previousCameraPosition;
     vec3 prevViewPos = (gbufferPreviousModelView * vec4(prevPlayerPos, 1.0)).xyz;
     vec4 prevClipPos = gbufferPreviousProjection * vec4(prevViewPos, 1.0);
-    return (prevClipPos.xyz / prevClipPos.w * 0.5 + 0.5);
+    return prevClipPos.xyz / prevClipPos.w * 0.5 + 0.5;
 }
 
 vec3 reproject2(vec3 worldPos) {
@@ -87,107 +84,73 @@ vec3 reproject2(vec3 worldPos) {
 }
 
 
-/* RENDERTARGETS: 0 */
-
-layout(location = 0) out vec4 fragColor;
 
 vec3 prevScreenPos;
 float info_distance;
 uint idx_l;
 vec2 texSize;
 uint idx;
+vec3 curr_rd;
 
 bool notInRange(vec2 p) {
-    return clamp(p, vec2(0), texSize) != p;
+    return clamp(p, vec2(0), vec2(1)) != p;
+    
 }
 
-/*void MixSample() {
-    denoiseBuffer.data[idx].lastSample=denoiseBuffer.data[idx].currSample;
-    return;
-    if (notInRange(prevScreenPos.xy)) {
-        denoiseBuffer.data[idx].lastSample = vec4(0);
-        return;
-    }
-    denoiseBuffer.data[idx].lastSample=denoiseBuffer.data[getIdx(uvec2(prevScreenPos.xy * texSize))].currSample;
-}*/
+diffuseIllumiantionData data1;
+
+// variance estimation
+float updateVariance(SH M_n, float D_n, SH X_nplus1, float w) { // w is the weight of the history average
+    vec2 diff_CoCg = X_nplus1.CoCg - M_n.CoCg;
+    vec4 diff_shY = X_nplus1.shY - M_n.shY;
+    float w1 = 1.0 / (1.0 + w);
+    return w*(D_n*w + (dot(diff_CoCg,diff_CoCg)+dot(diff_shY,diff_shY))*w1)*w1;
+}
+
 
 void MixDiffuse() {
     if (notInRange(prevScreenPos.xy)) {
-        diffuseIllumiantionBuffer.data[idx].weight = 1;
-        //float k = luma(decodeSH(diffuseIllumiantionBuffer.data[idx].data_swap, diffuseIllumiantionBuffer.data[idx].normal2));
-        //diffuseIllumiantionBuffer.data[idx].sumX = k;
-        //diffuseIllumiantionBuffer.data[idx].sumX2 = k * k;
+        data1.weight = 1;
         return;
     }
-    
-    diffuseIllumiantionData data = sampleDiffuse(prevScreenPos.xy * texSize);
+    diffuseIllumiantionData data = sampleDiffuse(prevScreenPos.xy*textureSize(colortex0,0));
 
-    float s = float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.lnormal, diffuseIllumiantionBuffer.data[idx].normal) * svgfPositionWeight(data.lpos, diffuseIllumiantionBuffer.data[idx].pos, diffuseIllumiantionBuffer.data[idx].normal,info_distance);
-    s = (min(1, s + 0.875) - 0.875)*8;
+    float prev_dot = denoiseBuffer.data[idx].last_rd_dot_n;
+    float curr_dot = -dot(data1.normal, curr_rd);
+    float s0 = exp(-16*max(0,curr_dot-prev_dot));// 当夹角变小时，说明历史信息不可信
+    denoiseBuffer.data[idx].last_rd_dot_n = curr_dot;
+
+    float s =  s0 *float(denoiseBuffer.data[idx_l].distance > -0.5)
+                  * svgfPositionWeight(data.pos, data1.pos, data1.normal,info_distance) 
+                  * svgfNormalWeight(data.normal, data1.normal,info_distance) ;
+    s = pow((min(1, s + 0.5) - 0.5)/0.5,0.125);
+    //s = (min(1, s + 0.875) - 0.875)*8;
     float prevW = data.weight;
-    prevW = max(1, min(prevW * s + 1, ACCUMULATION_LENGTH*2));
+    prevW *= s;
+    data1.variance = updateVariance(data1.data, data1.variance, data.data, prevW);
+    prevW = clamp(prevW + 1,1,ACCUMULATION_LENGTH);
 
-    //float k = abs(luma(ACESFilm(avgExposure*decodeSH(diffuseIllumiantionBuffer.data[idx].data_swap,diffuseIllumiantionBuffer.data[idx].normal2))));
-    //diffuseIllumiantionBuffer.data[idx].sumX=data.lsumX+(k-data.lsumX)/prevW;
-    //diffuseIllumiantionBuffer.data[idx].sumX2=data.lsumX2+(k*k-data.lsumX2)/prevW;
+    data1.data_swap = mix_SH(data.data,data1.data_swap,1/prevW);
 
-    diffuseIllumiantionBuffer.data[idx].data_swap = mix_SH(data.data,diffuseIllumiantionBuffer.data[idx].data_swap,1/prevW);
-    diffuseIllumiantionBuffer.data[idx].weight = prevW;
+    data1.weight = prevW;
 }
 
-void MixReflect() {
-    if (notInRange(prevScreenPos.xy)) {
-        reflectIllumiantionBuffer.data[idx].weight = 1;
-        return;
-    }
-    vec3IllumiantionData data = sampleReflect(prevScreenPos.xy * texSize);
-
-    float s = float(reflectIllumiantionBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.lnormal, reflectIllumiantionBuffer.data[idx].normal) * svgfPositionWeight(data.lpos, reflectIllumiantionBuffer.data[idx].pos, reflectIllumiantionBuffer.data[idx].normal,info_distance);
-    s=float(reflectIllumiantionBuffer.data[idx].distance < -0.5&&reflectIllumiantionBuffer.data[idx_l].distance < -0.5)*(1-s)+s;
-    s = (min(1, s + 0.875) - 0.875)*8;
-    float prevW = data.weight;
-    prevW = max(1, min(prevW * s + 1, ACCUMULATION_LENGTH*10));
-
-    reflectIllumiantionBuffer.data[idx].data_swap = data.data - (data.data - reflectIllumiantionBuffer.data[idx].data_swap) / prevW;
-    reflectIllumiantionBuffer.data[idx].weight = prevW;
-}
-
-void MixRefract() {
-    if (notInRange(prevScreenPos.xy)) {
-        refractIllumiantionBuffer.data[idx].weight = 1;
-        return;
-    }
-    vec3IllumiantionData data = sampleRefract(prevScreenPos.xy * texSize);
-
-    float s = float(refractIllumiantionBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.lnormal, refractIllumiantionBuffer.data[idx].normal) * svgfPositionWeight(data.lpos, refractIllumiantionBuffer.data[idx].pos, refractIllumiantionBuffer.data[idx].normal,info_distance);
-
-    s = (min(1, s + 0.875) - 0.875)*8;
-    float prevW = data.weight;
-    prevW = max(1, min(prevW * s + 1, ACCUMULATION_LENGTH*10));
-
-    refractIllumiantionBuffer.data[idx].data_swap = data.data - (data.data - refractIllumiantionBuffer.data[idx].data_swap) / prevW;
-    refractIllumiantionBuffer.data[idx].weight = prevW;
-}
 
 void main() {
    //严重消耗性能，与200.glsl一同占据用时的1/4~1/3
-    
-    idx = getIdx(uvec2(gl_FragCoord.xy));
+    //vec2 texCoord=vec2(gl_GlobalInvocationID.xy)/(textureSize(colortex0,0));
+    idx = getIdx(uvec2(gl_GlobalInvocationID.xy));
 
     info_distance = denoiseBuffer.data[idx].distance;
-
+    curr_rd = normalize(denoiseBuffer.data[idx].rd);
+    data1=diffuseIllumiantionBuffer.data[idx];
     if (info_distance < -0.5) {
-        diffuseIllumiantionBuffer.data[idx].weight = 0;
-        reflectIllumiantionBuffer.data[idx].weight = 0;
-        refractIllumiantionBuffer.data[idx].weight = 0;
+        data1.weight = 1;
+        WriteDiffuse(data1,ivec2(gl_GlobalInvocationID.xy));
         return;
     }
-    texSize = textureSize(colortex0, 0);
-    prevScreenPos = reproject2(diffuseIllumiantionBuffer.data[idx].pos);
-    idx_l=getIdx(uvec2(prevScreenPos.xy * texSize));
-    //MixSample();
+    prevScreenPos = reproject2(data1.pos);
+    idx_l=getIdx(uvec2(prevScreenPos.xy*textureSize(colortex0,0)));
     MixDiffuse();
-    MixReflect();
-    MixRefract();
-
+    WriteDiffuse(data1,ivec2(gl_GlobalInvocationID.xy));
 }

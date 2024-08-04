@@ -1,5 +1,5 @@
 #version 430 compatibility
-
+#define REFLECT_BUFFER
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
@@ -18,8 +18,13 @@ layout(location = 2) out vec4 color;
 void main() {
 
     uint idx = getIdx(uvec2(gl_FragCoord.xy));
-
+    vec3IllumiantionData tmp=fetchReflect(ivec2(gl_FragCoord.xy));
     reflectNormal.xyz = reflectIllumiantionBuffer.data[idx].normal;
+    reflectNormal.w = step(-0.5,denoiseBuffer.data[idx].distance);
     reflectPos.xyz = reflectIllumiantionBuffer.data[idx].pos;
-    color.xyz=reflectIllumiantionBuffer.data[idx].data_swap;
+    reflectPos.w = tmp.weight;
+    //reflectNormal.xyz = tmp.normal;
+    //reflectPos.xyz = tmp.pos;
+    color.xyz=tmp.data_swap;
+    color.w = denoiseBuffer.data[idx].reflectWeight;
 }

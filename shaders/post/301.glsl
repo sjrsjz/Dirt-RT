@@ -7,21 +7,9 @@
 #include "/lib/buffers/denoise.glsl"
 #include "/lib/light_color.glsl"
 
-//2,3,4,5,6,7,8,9
-
-//2:pos
-
-uniform sampler2D colortex0;
-uniform sampler2D colortex1;
-uniform sampler2D colortex2;
 uniform sampler2D colortex3;
 uniform sampler2D colortex4;
 uniform sampler2D colortex5;
-uniform sampler2D colortex6;
-uniform sampler2D colortex7;
-uniform sampler2D colortex8;
-uniform sampler2D colortex9;
-uniform sampler2D depthtex0;
 
 uniform mat4 gbufferProjectionInverse;
 uniform mat4 gbufferModelViewInverse;
@@ -37,6 +25,7 @@ uniform float near;
 uniform float far;
 uniform vec2 resolution;
 uniform int worldTime;
+
 
 /*
 const int colortex0Format = RGBA32F;
@@ -56,11 +45,11 @@ const bool colortex3Clear = false;
 const bool colortex4Clear = false;
 const bool colortex5Clear = false;
 const bool colortex6Clear = false;
-const bool colortex7Clear = false;
-const bool colortex8Clear = false;
+const bool colortex7Clear = true;
+const bool colortex8Clear = true;
 */
 
-const float NORMAL_PARAM = 128.0;
+const float NORMAL_PARAM = 64.0;
 const float POSITION_PARAM = 16.0;
 const float LUMINANCE_PARAM = 4.0;
 
@@ -73,11 +62,9 @@ float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal) {
     return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)));
 }
 
+/* RENDERTARGETS: 5 */
 
-/* RENDERTARGETS: 0,5 */
-
-layout(location = 0) out vec4 variance;
-layout(location = 1) out vec4 color;
+layout(location = 0) out vec4 color;
 
 vec3 prevScreenPos;
 bufferData info_;
@@ -108,41 +95,55 @@ void main() {
 
     vec3 A = vec3(0);
 
-    float s[3] = { 1, 2, 1 };
-    float t[3] = { 1, 2, 1 };
+    //float s[3] = { 1, 2, 1 };
+    //float t[3] = { 1, 2, 1 };
+    const float st[3][3] = {
+        { 1, 3, 1 },
+        { 3, 4, 3 },
+        { 1, 3, 1 }
+    };
     float w = 0;
-    vec3 centerNormal=texelFetch(colortex3,ivec2(gl_FragCoord.xy),0).xyz;
-    vec3 centerPos=texelFetch(colortex4,ivec2(gl_FragCoord.xy),0).xyz;
-    s[0] = 0.5 + K(cross(camX_global, camY_global), camX_global, centerNormal);
-    t[0] = 0.5 + K(cross(camX_global, camY_global), camY_global, centerNormal);
-    s[2] = s[0];
-    t[2] = t[0];
+    ivec2 pix = ivec2(gl_FragCoord.xy);
+    vec4 centerNormal_ = texelFetch(colortex3, pix, 0);
+    vec3 centerNormal = normalize(centerNormal_.xyz);
+    vec4 centerPos = texelFetch(colortex4, pix, 0);
+    vec4 centerColor = texelFetch(colortex5, pix, 0);
+    //s[0] = 1;//0.75 + K(cross(camX_global, camY_global), camY_global, centerNormal);
+    //t[0] = 1;//0.75 + K(cross(camX_global, camY_global), camX_global, centerNormal);
+    //t[1] = s[1];
 
-    
-    //float isNotBackground[9];
-    //uint idx_M[9];
+    //s[2] = s[0];
+    //t[2] = t[0];
+
+
     ivec2 samplePos;
-    samplePos.x=int(gl_FragCoord.x-R0);
-    //int k=0;
-    
+    samplePos.x = int(gl_FragCoord.x - R0);
+    int y0 = int(gl_FragCoord.y - R0);
+    ivec2 texSize = textureSize(colortex3, 0);
     for (int i = 0; i <= 2; i++) {
-        samplePos.y=int(gl_FragCoord.y-R0);
+        samplePos.y = y0;
         for (int j = 0; j <= 2; j++) {
-            uint idx2=getIdx(uvec2(samplePos));
-            float w1 =s[i] * t[j]* step(-0.5,denoiseBuffer.data[idx2].distance);
-            
-            //idx_M[k]=idx2;
-            float w0 = svgfNormalWeight(centerNormal, texelFetch(colortex3,samplePos,0).xyz)
-                     * svgfPositionWeight(centerPos, texelFetch(colortex4,samplePos,0).xyz, centerNormal)
-                     * w1;
-            A+=texelFetch(colortex5,samplePos,0).xyz*w0;
-            //isNotBackground[k] = w1;
+            if (i == 1 && j == 1) {
+                samplePos.y += R0;
+                continue;
+            }
+            vec4 c=texelFetch(colortex5, samplePos, 0);
+            float dW=centerColor.w-c.w;
+            vec4 B=texelFetch(colortex3, samplePos, 0);
+            float w1 = st[i][j] * B.w;
+            float w0 = exp(- dW * dW - POSITION_PARAM * abs(dot(centerPos.xyz - texelFetch(colortex4, samplePos, 0).xyz, centerNormal)))
+                    * svgfNormalWeight(centerNormal, normalize(B.xyz))
+                    * w1 * float(samplePos == clamp(samplePos, vec2(0), texSize));
+            A += c.xyz * w0;
             w += w0;
-            //k++;
-            samplePos.y+=R0;
+            samplePos.y += R0;
         }
-        samplePos.x+=R0;
+        samplePos.x += R0;
     }
+    float w0 = (1 + min(0.125 * centerPos.w,16) + clamp(centerPos.w*0.1, 0, 8)*0.25) * centerNormal_.w;
+    A += centerColor.xyz * w0;
+    w += w0;
+
     if (any(isnan(A))) A = vec3(0);
-    color.xyz=A/max(w, 0.01);
+    color = vec4(A / max(w , 0.01), centerColor.w);
 }

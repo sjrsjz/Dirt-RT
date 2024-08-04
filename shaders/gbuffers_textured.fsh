@@ -1,1 +1,2 @@
-#include "/gbuffers/textured.fsh"
+#define LIGHT
+#include "/gbuffers/entities.fsh"

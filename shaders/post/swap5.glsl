@@ -1,5 +1,6 @@
 #version 430 compatibility
-
+layout(local_size_x = 16,local_size_y = 16) in;
+#define REFLECT_BUFFER
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
@@ -16,13 +17,18 @@ uniform sampler2D colortex5;
 
 /* RENDERTARGETS: 0 */
 
-layout(location = 0) out vec4 fragColor;
+//layout(location = 0) out vec4 fragColor;
 
 
 void main() {
-    uint idx=getIdx(uvec2(gl_FragCoord.xy));
-
-    reflectIllumiantionBuffer.data[idx].data_swap=texelFetch(colortex5,ivec2(gl_FragCoord.xy),0).xyz;
-    reflectIllumiantionBuffer.data[idx].lnormal =texelFetch(colortex3,ivec2(gl_FragCoord.xy),0).xyz;
-    reflectIllumiantionBuffer.data[idx].lpos = texelFetch(colortex4,ivec2(gl_FragCoord.xy),0).xyz;
+    ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    uint idx=getIdx(uvec2(gl_GlobalInvocationID.xy));
+    vec3IllumiantionData tmp=fetchReflect(pix);
+    if (any(isnan(tmp.data_swap))) tmp.data_swap = vec3(0);
+    tmp.data=tmp.data_swap;
+    tmp.data_swap=texelFetch(colortex5,pix,0).xyz;
+    tmp.normal =texelFetch(colortex3,pix,0).xyz;
+    tmp.pos = texelFetch(colortex4,pix,0).xyz;
+    tmp.mixWeight=denoiseBuffer.data[idx].reflectWeight;
+    WriteReflect(tmp,pix);
 }

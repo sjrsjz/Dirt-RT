@@ -10,6 +10,10 @@ struct Payload {
     vec3 shadowTransmission;
     i16vec2 ignore_block_id; 
     Material material;  
+    float wetStrength_global;
+    float wetness_global;
+    bool inside_block;
+    float prev_distance;
 };
 
 #endif // PAYLOAD_GLSL
