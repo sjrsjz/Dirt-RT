@@ -193,7 +193,7 @@ void main() {
         }
         int i = n / (A_ + 1);
         int j = n % (A_ + 1);
-        #if STEP % 2 !=0 && STEP > 2
+        #if STEP % 2 !=0 && STEP > 1
             if(i != B_ && j !=B_) continue;
         #endif
         samplePos.x = pix.x - R0 * B_ + R0 * i;

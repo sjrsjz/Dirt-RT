@@ -4,7 +4,7 @@
 const float PI = 3.141592654;
 //const float EPSILON = 0.0001;
 #define Correction
-const float SunDivMoon = 5000;
+const float SunDivMoon = 1000;
 const float EPSILONS = 0.;
 const float EPSILON_MIN = 0.001;
 const float Far = 20000;

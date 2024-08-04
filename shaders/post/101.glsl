@@ -64,7 +64,7 @@ float svgfNormalWeight(vec3 centerNormal, vec3 normal, float d) {
 
 float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float distance) {
     // Modified to check for distance from the center plane
-    return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)*(1/(1+10*distance))));
+    return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)*(10/(1+10*distance))));
 }
 
 vec3 reproject(vec3 screenPos) {
@@ -125,7 +125,7 @@ void MixReflect() {
 
     float s = float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.normal, data2.normal,info_distance)
              * svgfPositionWeight(data.pos, data2.pos, data2.normal,info_distance);
-    s = pow((min(1, s + 0.5) - 0.5)/0.5,1);
+    s = pow((min(1, s + 0.75) - 0.75)/0.25,0.125);
     
     float prevW = data.weight;
     prevW = max(1, min(prevW * s + 1, ACCUMULATION_LENGTH));

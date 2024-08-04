@@ -23,7 +23,7 @@ void main() {
         return;
     };*/
     float d = sign(denoiseBuffer.data[getIdx(uvec2(gl_FragCoord.xy))].distance);
-    const int sampleN = 4;
+    const int sampleN = 8;
     vec3 sumX = vec3(0);
     float w0 = 0;
     vec2 texSize = textureSize(colortex2, 0);

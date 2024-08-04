@@ -49,7 +49,7 @@ const bool colortex7Clear = true;
 const bool colortex8Clear = true;
 */
 
-const float NORMAL_PARAM = 32.0;
+const float NORMAL_PARAM = 64.0;
 const float POSITION_PARAM = 16.0;
 const float LUMINANCE_PARAM = 4.0;
 
@@ -98,9 +98,9 @@ void main() {
     //float s[3] = { 1, 2, 1 };
     //float t[3] = { 1, 2, 1 };
     const float st[3][3] = {
-        { 1, 2, 1 },
-        { 2, 4, 2 },
-        { 1, 2, 1 }
+        { 1, 3, 1 },
+        { 3, 4, 3 },
+        { 1, 3, 1 }
     };
     float w = 0;
     ivec2 pix = ivec2(gl_FragCoord.xy);

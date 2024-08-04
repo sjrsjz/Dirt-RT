@@ -18,8 +18,8 @@ vec3 b_Q = b_k0 / (b_P * b_P); //absorption
 vec3 b_g0 = mix(Rayleigh * 0.01, vec3(luma(Rayleigh)), b_k); //single scatter
 
 void setSkyVars() {
-    S_R = 0.05;
-    cosD_S = 1 / sqrt(1 + S_R * S_R);
+    //S_R = 0.05;
+    //cosD_S = 1 / sqrt(1 + S_R * S_R);
 
     switch (world_type_global) {
         case World_THE_END:
@@ -42,14 +42,14 @@ void setSkyVars() {
         default:
         S_R = 0.025;
         cosD_S = 1 / sqrt(1 + S_R * S_R);
-        //Mie = vec3(0.005);
+        Mie = vec3(0.005);
         
         
         //Rayleigh = 8e9 * pow(vec3(1. / 700, 1. / 520, 1. / 450), vec3(4));
         Rayleigh = 5e9 * pow(vec3(1. / 700, 1. / 520, 1. / 450), vec3(4));
-        Mie = vec3(luma(Rayleigh))*0.1;
-        b_P = vec3(3000000);
-        b_k = 0.25 + rainStrength_global * 0.75;
+        Mie = vec3(luma(Rayleigh));
+        b_P = vec3(300000);
+        b_k = 0.125 + rainStrength_global * 0.875;
         break;
     }
 
@@ -108,16 +108,17 @@ float fbm3D2(in vec3 x)
     return a;
 }
 float cloud_density(vec3 p) {
-    float density = 0.001 + smoothstep(0., 250., p.y) * smoothstep(1000., 160000., p.y)*0.15;
-    density *= 1 + 4 * rainStrength_global;
-    return clamp(fbm3D2(vec3(0.000005,0.00004,0.000005) * p / clamp(p.y * 0.0000015,1,5)) - 1 + density, 0, 1) / density;
+    float density = 0.001 + smoothstep(0., 250., p.y) * smoothstep(50000., 5000., p.y)*0.5;
+    density *= 1 + 2 * rainStrength_global;
+    float k = clamp(fbm3D2(vec3(0.000025,0.00005,0.000025)*2.5 * p / clamp(p.y * 0.000001,1,5)) - 1.1 + density, 0, 2);
+    return  min(k/ density,1);
 }
 vec3 getClouds(vec3 b_Sun, vec3 b_Moon, vec3 pos, vec3 n, vec3 lightDir, float Far) {
     //return getSkyColor(b_Sun, b_Moon, pos, n, lightDir);
     vec3 c;
     const int step1 = 15;
     const int step2 = 8;
-    vec3 b_k1 = mix(Rayleigh, Mie, 0.9875) * 100000 / b_P / b_P;
+    vec3 b_k1 = mix(Rayleigh, Mie, 0.9875) * 2500 / b_P / b_P;
 
     if(world_type_global!=0) 
         c = getSkyColor(b_Sun, b_Moon, pos, n, lightDir);
