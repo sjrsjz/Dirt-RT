@@ -17,7 +17,7 @@ const int Reflection = 1;
 const int Diffussion = 2;
 const int Refraction = 3;
 
-#define Method2
+//#define Method2
 
 //Vulkanite
 const int World_OVERWORLD = 0;

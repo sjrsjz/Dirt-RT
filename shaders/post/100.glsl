@@ -115,9 +115,9 @@ void MixDiffuse() {
     }
     diffuseIllumiantionData data = sampleDiffuse(prevScreenPos.xy*textureSize(colortex0,0));
 
-    float prev_dot = denoiseBuffer.data[idx].last_rd_dot_n;
-    float curr_dot = -dot(data1.normal, curr_rd);
-    float s0 = exp(-16*max(0,curr_dot-prev_dot));// 当夹角变小时，说明历史信息不可信
+    float prev_dot = denoiseBuffer.data[idx_l].last_rd_dot_n;
+    float curr_dot = -dot(normalize(data1.normal), curr_rd);
+    float s0 = exp(-4*(max(0.01,curr_dot-prev_dot)-0.01)/(prev_dot*prev_dot+0.1));// 当夹角变小时，说明历史信息不可信
     denoiseBuffer.data[idx].last_rd_dot_n = curr_dot;
 
     float s =  s0 *float(denoiseBuffer.data[idx_l].distance > -0.5)

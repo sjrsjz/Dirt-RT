@@ -34,7 +34,7 @@ void main() {
         
         //reflectIllumiantionBuffer.data[idx].mixWeight=data.reflectWeight;
         //fragColor.xyz = abs(tmp3.normal);
-        //fragColor.xyz = diffuseIllumiantionBuffer.data[idx].normal2;
+        //fragColor.xyz = diffuseIllumiantionBuffer.data[idx].normal;
         //fragColor.xyz = diffuseIllumiantionBuffer.data[idx].weight*vec3(1);
         
         //fragColor.xyz=vec3(1)*(project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2)) ;

@@ -66,7 +66,7 @@ const bool colortex5Clear = false;
 const bool colortex6Clear = false;
 */
 float S_tex_w;
-const float NORMAL_PARAM = 64.0;
+const float NORMAL_PARAM = 1;//64.0;
 const float POSITION_PARAM = 64.0;
 const float LUMINANCE_PARAM = 4.0;
 
@@ -126,22 +126,22 @@ void main() {
         {1,2,4,8,4,2,1}
     };*/
     const float st[7][7]={
-        {1,1,1,1,1,1,1},
+        {0.5,1,1,1,1,1,0.5},
         {1,2,2,2,2,2,1},
         {1,2,3.5,4,3.5,2,1},
         {1,2,4,5,4,2,1},
         {1,2,3.5,4,3.5,2,1},
         {1,2,2,2,2,2,1},
-        {1,1,1,1,1,1,1}
+        {0.5,1,1,1,1,1,0.5}
     };
     #else    
     //const float st[3][3] = { { 1, 2, 1 }, { 2, 4, 2 }, { 1, 2, 1 } };
     const float st[5][5] = { 
-        { 1, 1 , 1.5, 1, 1 }, 
+        { 0.5, 1 , 1.5, 1, 0.5 }, 
         { 1, 2 , 2, 2, 1 }, 
         { 1.5, 2 , 2, 2, 1.5 }, 
         { 1, 2 , 2, 2, 1 }, 
-        { 1, 1 , 1.5, 1, 1 }
+        { 0.5, 1 , 1.5, 1, 0.5 }
     };
     #endif
     float w = 0;
@@ -162,13 +162,13 @@ void main() {
     //float centerW = clamp(tex.z*0.5, 0, 5)+clamp((tex.z-5)*0.5, 0, 10); 
 
     //float centerW = clamp(tex.z * 0.5, 0, 2.5)+pow(clamp((tex.z-10), 0, 100),0.5); 
-    float centerW =  clamp((tex.z) * 1, 0, 2.5)+pow(clamp((tex.z-10), 0, 100),0.5); 
+    float centerW = 6 * clamp(tex.z, 0, 2.5)+pow(clamp((tex.z-10), 0, 100),0.5); 
 
     //float weight = 0;
     //float scale = centerW/(2+6*exp(-0.1*avgExposure)/(0.01+avgExposure)+tex.w * (avgExposure)) * (0.5 * log(R0)+1)/(0.25+0.75*pow(abs(dot(info_.rd,centerNormal)),1));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
     //float scale = centerW/(1+10*exp(-0.1*avgExposure)/(0.01+avgExposure)+0.025*tex.w * (avgExposure)) * (pow(R0,0.75)+1)/(0.5+0.5*pow(abs(dot(info_.rd,centerNormal)),1));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
     
-    float scale = float(R0>2)*centerW/(1+15*exp(-0.1*avgExposure)/(0.01+avgExposure)+0.5*tex.w * avgExposure) * (R0+1)/(0.75+0.25*abs(dot(info_.rd,centerNormal)));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
+    float scale = clamp(tex.z, 0, 20) * float(R0>2) * centerW / (1+15*exp(-0.1*avgExposure)/(0.01+avgExposure)+0.5*tex.w * avgExposure) * (R0+1)/(0.75+0.25*abs(dot(info_.rd,centerNormal)));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
     
     S_tex_w = tex.w;
     float D = 0;
@@ -204,6 +204,7 @@ void main() {
         tmp.shY = texelFetch(colortex5, samplePos, 0);
         tmp.CoCg = texelFetch(colortex6, samplePos, 0).xy;
         vec4 delta_shY = tmp.shY - centerSH.shY;
+        //delta_shY.xyz *= abs(delta_shY.w)*STEP*1000;
         //vec2 delta_CoCg = tmp.CoCg - centerSH.CoCg;
         //float delta = st[i][j] / (1 + scale * (sqrt(dot(delta_shY, delta_shY) + dot(delta_CoCg, delta_CoCg))));
         float d = denoiseBuffer.data[getIdx(uvec2(samplePos))].distance;
@@ -213,13 +214,13 @@ void main() {
         float k = abs(dot(texelFetch(colortex4, samplePos, 0).xyz - centerPos, centerNormal));
 
         //float w1 = st[i][j] * exp( - k * POSITION_PARAM - scale * sqrt(dot(delta_shY, delta_shY) + dot(delta_CoCg, delta_CoCg)));
-        float w1 = st[i][j] * exp( - k * POSITION_PARAM - scale * length(delta_shY));
+        float w1 = st[i][j] * exp( - k * k * POSITION_PARAM/max(0.1,0.005*d*d) - 0.25 * max(scale * (length(delta_shY.xyz)*(1+k*k*min(delta_shY.w*delta_shY.w,tex.z*0.0005)*200)),0));
 #if STEP == 1            
         p_w+=k;
 #endif
         //float w0 =(1+exp(-0.5*texelFetch(colortex4, samplePos, 0).w))*svgfNormalWeight(centerNormal, sampleNormal)
 
-        float w0 =svgfNormalWeight(centerNormal, sampleNormal)
+        float w0 = svgfNormalWeight(centerNormal, sampleNormal)
                 * w1
                 * float(samplePos == clamp(samplePos, vec2(0), texSize)) * step(-0.5, d);
         D = updateVariance(avg_SH, D, tmp, (1+w) / (w0+1e-2));
@@ -236,7 +237,7 @@ void main() {
     //D *= avgExposure;
     //tex.w = max(tex.w,1.25*sqrt(D));//tex.w*0.25 + D*0.75;//+(1*D-tex.w)*exp(-max(tex.z,0)*0.0);//*0.5+tex.w * 0.5;
     
-    tex.w = max(tex.w,sqrt(D)/(R0*R0));//tex.w*0.25 + D*0.75;//+(1*D-tex.w)*exp(-max(tex.z,0)*0.0);//*0.5+tex.w * 0.5;
+    tex.w = max(tex.w, 25 * sqrt(D)/(R0*R0));//tex.w*0.25 + D*0.75;//+(1*D-tex.w)*exp(-max(tex.z,0)*0.0);//*0.5+tex.w * 0.5;
 #if STEP == 1
     float w0 = 5 ;///(1+20*tmp_.w*avgExposure);
 #else

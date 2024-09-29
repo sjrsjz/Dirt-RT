@@ -17,7 +17,7 @@ void main() {
     #ifdef SRR_
     if (texCoord.x > 0.5 || texCoord.y > 0.5) return;
     #endif
-    const int sampleN = 16;
+    const int sampleN = 32;
     vec3 sumX = vec3(0);
     float angleOffset = rand(texCoord - 400) * 32 * PI;
     const float angleShift = 2 * PI / sampleN;
@@ -25,7 +25,7 @@ void main() {
     
     float weight = kernel(R*R) / kernel(0);
     
-    R *= 0.75;
+    R *= 0.5;
     mat2 rotM = mat2(cos(angleShift), sin(angleShift), -sin(angleShift), cos(angleShift));
     vec2 v = vec2(cos(angleOffset), sin(angleOffset)) * R * textureSize(colortex1, 0).x;
     //vec3 sumX_2 = vec3(0), sumX2 = vec3(0);
@@ -34,7 +34,7 @@ void main() {
         v *= rotM;
         vec2 v1= v * vec2(1-i%2,i%2);
         float w;
-        if(i<12 ){
+        if(i<24 ){
             v1 = v*3;//(v1 + vec2(-v1.y,v1.x));
             w=0.75;
         }else{
@@ -47,8 +47,8 @@ void main() {
         //sumX2 += A * A;
         //s[i] = A;
     }
-    vec3 validN3 = vec3(0);
-    sumX/=sampleN;
+    //vec3 validN3 = vec3(0);
+    sumX/=sampleN*(R*R+0.5);
     /*for (int i = 0; i < sampleN; i++) {
         vec3 w = exp(-pow(abs(s[i].xyz - sumX), vec3(0.3)));
         sumX_2 += s[i].xyz * w;
