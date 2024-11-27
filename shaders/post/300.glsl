@@ -126,13 +126,13 @@ void main() {
         {1,2,4,8,4,2,1}
     };*/
     const float st[7][7]={
-        {0.5,1,1,1,1,1,0.5},
-        {1,2,2,2,2,2,1},
+        {0.5,0.75,1,1,1,0.75,0.5},
+        {0.75,2,2,2,2,2,0.75},
         {1,2,3.5,4,3.5,2,1},
-        {1,2,4,5,4,2,1},
+        {1,2,4,4,4,2,1},
         {1,2,3.5,4,3.5,2,1},
-        {1,2,2,2,2,2,1},
-        {0.5,1,1,1,1,1,0.5}
+        {0.75,2,2,2,2,2,0.75},
+        {0.5,0.75,1,1,1,0.75,0.5}
     };
     #else    
     //const float st[3][3] = { { 1, 2, 1 }, { 2, 4, 2 }, { 1, 2, 1 } };
@@ -162,13 +162,13 @@ void main() {
     //float centerW = clamp(tex.z*0.5, 0, 5)+clamp((tex.z-5)*0.5, 0, 10); 
 
     //float centerW = clamp(tex.z * 0.5, 0, 2.5)+pow(clamp((tex.z-10), 0, 100),0.5); 
-    float centerW = 6 * clamp(tex.z, 0, 2.5)+pow(clamp((tex.z-10), 0, 100),0.5); 
+    float centerW = (3+sqrt(tex.w/R0)) * clamp(tex.z, 0, 5)+pow(clamp((tex.z-10), 0, 100),0.5); 
 
     //float weight = 0;
     //float scale = centerW/(2+6*exp(-0.1*avgExposure)/(0.01+avgExposure)+tex.w * (avgExposure)) * (0.5 * log(R0)+1)/(0.25+0.75*pow(abs(dot(info_.rd,centerNormal)),1));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
     //float scale = centerW/(1+10*exp(-0.1*avgExposure)/(0.01+avgExposure)+0.025*tex.w * (avgExposure)) * (pow(R0,0.75)+1)/(0.5+0.5*pow(abs(dot(info_.rd,centerNormal)),1));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
     
-    float scale = clamp(tex.z, 0, 20) * float(R0>2) * centerW / (1+15*exp(-0.1*avgExposure)/(0.01+avgExposure)+0.5*tex.w * avgExposure) * (R0+1)/(0.75+0.25*abs(dot(info_.rd,centerNormal)));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
+    float scale = 0.25 * clamp(tex.z + 1*tex.z*tex.z, 0, 1000) * float(R0>2) / (1 + 2*tex.w) * pow(R0,2) * sqrt(avgExposure) ;//* (3-3*exp(-R0*0.1));// (1+15*exp(-0.1*avgExposure)/(0.01+avgExposure)+0.5*tex.w * avgExposure) * (R0+1)/(0.75+0.25*abs(dot(info_.rd,centerNormal)));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
     
     S_tex_w = tex.w;
     float D = 0;
@@ -214,7 +214,7 @@ void main() {
         float k = abs(dot(texelFetch(colortex4, samplePos, 0).xyz - centerPos, centerNormal));
 
         //float w1 = st[i][j] * exp( - k * POSITION_PARAM - scale * sqrt(dot(delta_shY, delta_shY) + dot(delta_CoCg, delta_CoCg)));
-        float w1 = st[i][j] * exp( - k * k * POSITION_PARAM/max(0.1,0.005*d*d) - 0.25 * max(scale * (length(delta_shY.xyz)*(1+k*k*min(delta_shY.w*delta_shY.w,tex.z*0.0005)*200)),0));
+        float w1 = st[i][j] * exp( - k * k * POSITION_PARAM/max(0.1,0.25*d*d) - scale * (dot(delta_shY.xyz,delta_shY.xyz)) * (1+k) * abs(dot(centerNormal,info_.rd)));
 #if STEP == 1            
         p_w+=k;
 #endif
@@ -239,7 +239,7 @@ void main() {
     
     tex.w = max(tex.w, 25 * sqrt(D)/(R0*R0));//tex.w*0.25 + D*0.75;//+(1*D-tex.w)*exp(-max(tex.z,0)*0.0);//*0.5+tex.w * 0.5;
 #if STEP == 1
-    float w0 = 5 ;///(1+20*tmp_.w*avgExposure);
+    float w0 = 4 ;///(1+20*tmp_.w*avgExposure);
 #else
     float w0 = 2 ;///(1+20*tmp_.w*avgExposure);
 #endif

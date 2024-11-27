@@ -30,12 +30,13 @@ void main() {
         vec3IllumiantionData tmp2 = fetchReflect(pix);
         vec3IllumiantionData tmp3 = fetchRefract(pix);
         diffuseIllumiantionBuffer.data[idx].weight=tmp.weight;
+        diffuseIllumiantionBuffer.data[idx].variance=tmp.variance;
         diffuseIllumiantionBuffer.data[idx].pos=tmp.pos;
         
         //reflectIllumiantionBuffer.data[idx].mixWeight=data.reflectWeight;
         //fragColor.xyz = abs(tmp3.normal);
         //fragColor.xyz = diffuseIllumiantionBuffer.data[idx].normal;
-        //fragColor.xyz = diffuseIllumiantionBuffer.data[idx].weight*vec3(1);
+        //fragColor.xyz = diffuseIllumiantionBuffer.data[idx].variance*vec3(0.1);
         
         //fragColor.xyz=vec3(1)*(project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2)) ;
         //fragColor.xyz=vec3(diffuseIllumiantionBuffer.data[idx].weight);//*(50 - exp(-abs(diffuseIllumiantionBuffer.data[idx].weight)*0.1)*47.5);

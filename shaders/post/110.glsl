@@ -155,11 +155,13 @@ void MixDiffuse() {
     D = max(D, 0.001);
     avgSH = scaleSH(avgSH, 1 / (w + 0.01));
     
-    float diff = dot(center.data_swap.shY - avgSH.shY, center.data_swap.shY - avgSH.shY) + dot(center.data_swap.CoCg - avgSH.CoCg, center.data_swap.CoCg - avgSH.CoCg);
-    float _2_sigma = 4 * sqrt(D);
-    if (diff > _2_sigma) {
-        center.data_swap = avgSH;
-    }
+    float diff = dot(center.data_swap.shY - avgSH.shY, center.data_swap.shY - avgSH.shY) ;//+ dot(center.data_swap.CoCg - avgSH.CoCg, center.data_swap.CoCg - avgSH.CoCg);
+    float _2_sigma =  2 * D;
+    //if (diff > _2_sigma) {
+    //    center.data_swap = avgSH;
+    //}
+
+    center.variance = max(center.variance, D / (1+center.weight));
 
     WriteDiffuse(center, ivec2(gl_FragCoord.xy));
 }
@@ -170,5 +172,5 @@ void main() {
     idx = getIdx(uvec2(gl_FragCoord.xy));
     Emission = vec4(denoiseBuffer.data[idx].emission, 0);
 
-    //MixDiffuse();
+//    MixDiffuse();
 }

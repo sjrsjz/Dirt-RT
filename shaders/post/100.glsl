@@ -104,7 +104,7 @@ float updateVariance(SH M_n, float D_n, SH X_nplus1, float w) { // w is the weig
     vec2 diff_CoCg = X_nplus1.CoCg - M_n.CoCg;
     vec4 diff_shY = X_nplus1.shY - M_n.shY;
     float w1 = 1.0 / (1.0 + w);
-    return w*(D_n*w + (dot(diff_CoCg,diff_CoCg)+dot(diff_shY,diff_shY))*w1)*w1;
+    return w*(D_n*w + (dot(diff_CoCg,diff_CoCg)+10*dot(diff_shY,diff_shY))*w1)*w1*w1;
 }
 
 
@@ -127,8 +127,8 @@ void MixDiffuse() {
     //s = (min(1, s + 0.875) - 0.875)*8;
     float prevW = data.weight;
     prevW *= s;
-    data1.variance = updateVariance(data1.data, data1.variance, data.data, prevW);
-    prevW = clamp(prevW + 1,1,ACCUMULATION_LENGTH);
+    data1.variance =min(1000, updateVariance(data1.data, data1.variance, data.data, prevW));
+    prevW = clamp(prevW + 1,1,max(8,1/data1.variance));
 
     data1.data_swap = mix_SH(data.data,data1.data_swap,1/prevW);
 
