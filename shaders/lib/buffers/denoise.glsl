@@ -149,9 +149,19 @@ struct diffuseIllumiantionData {
     vec3 normal2;
     float weight;
     float variance;
+    float prev_weight;
+    float prev_variance;
 };
+
+struct diffuseIllumiantionBufferData {
+    SH data_swap;
+    vec3 pos;
+    vec3 normal;
+    vec3 normal2;
+};
+
 layout(std140, set = 3, binding = 2) buffer DiffuseIllumiantionDataBuffer {
-    diffuseIllumiantionData data[];
+    diffuseIllumiantionBufferData data[];
 } diffuseIllumiantionBuffer;
 
 struct vec3IllumiantionData {
@@ -170,6 +180,13 @@ layout(std140, set = 3, binding = 3) buffer ReflectIllumiantionDataBuffer {
 layout(std140, set = 3, binding = 4) buffer RefractIllumiantionDataBuffer {
     vec3IllumiantionData data[];
 } refractIllumiantionBuffer;
+
+
+/*layout(std140, set = 3, binding = 6) buffer ExtInfoBuffer {
+    vec2 data[];
+} extInfoBuffer;*/
+
+
 
 
 #if defined(DIFFUSE_BUFFER) || defined(DIFFUSE_BUFFER_MIN) || defined(DIFFUSE_BUFFER_MIN2)
@@ -238,6 +255,9 @@ diffuseIllumiantionData fetchDiffuse(ivec2 p) {
     //tmp.data.shY = texelFetch(diffuseIllumiantionData_shY_Sampler, p, 0);
     tmp4 = texelFetch(diffuseIllumiantionData_shY_Sampler, p, 0);
     tmp.data.CoCg = unpackHalf2x16(floatBitsToUint(tmp4.z));
+    vec2 w_v2 = unpackHalf2x16(floatBitsToUint(tmp4.w));
+    tmp.prev_weight = w_v2.x;
+    tmp.prev_variance = w_v2.y;
     shY_xy = unpackHalf2x16(floatBitsToUint(tmp4.x));
     shY_zw = unpackHalf2x16(floatBitsToUint(tmp4.y));
     tmp.data.shY = vec4(shY_xy, shY_zw);
@@ -258,6 +278,8 @@ diffuseIllumiantionData blendDiffuse(diffuseIllumiantionData A,diffuseIllumianti
     t.data=mix_SH(A.data,B.data,x);
     t.pos=mix(A.pos,B.pos,x);
     t.normal=(mix(A.normal,B.normal,x));
+    t.prev_weight=(B.prev_weight-A.prev_weight)*x+A.prev_weight;
+    t.prev_variance=(B.prev_variance-A.prev_variance)*x+A.prev_variance;
     #endif
     return t;
 }
@@ -293,7 +315,8 @@ void WriteDiffuse(diffuseIllumiantionData data, ivec2 p) {
     shY_xy = uintBitsToFloat(packHalf2x16(data.data.shY.xy));
     shY_zw = uintBitsToFloat(packHalf2x16(data.data.shY.zw));
     CoCg = uintBitsToFloat(packHalf2x16(data.data.CoCg));
-    imageStore(diffuseIllumiantionData_shY, p, vec4(shY_xy, shY_zw, CoCg, 0));
+    w_v = uintBitsToFloat(packHalf2x16(vec2(data.prev_weight, data.prev_variance)));
+    imageStore(diffuseIllumiantionData_shY, p, vec4(shY_xy, shY_zw, CoCg, w_v));
 
     imageStore(diffuseIllumiantionData_lpos, p, vec4(data.pos, 0));
     imageStore(diffuseIllumiantionData_lnormal, p, vec4(data.normal, 0));

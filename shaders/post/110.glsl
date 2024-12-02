@@ -166,11 +166,17 @@ void MixDiffuse() {
     WriteDiffuse(center, ivec2(gl_FragCoord.xy));
 }
 
-
+uniform sampler2D colortex5;
+uniform sampler2D extInfoBuffer_Sampler;
 
 void main() {
     idx = getIdx(uvec2(gl_FragCoord.xy));
     Emission = vec4(denoiseBuffer.data[idx].emission, 0);
-
+    
+    diffuseIllumiantionData tmp = fetchDiffuse(ivec2(gl_FragCoord.xy));
+    vec4 prev_data = texelFetch(extInfoBuffer_Sampler, ivec2(gl_FragCoord.xy), 0);
+    tmp.weight = prev_data.x;
+    tmp.variance = prev_data.y;
+    WriteDiffuse(tmp, ivec2(gl_FragCoord.xy));
 //    MixDiffuse();
 }

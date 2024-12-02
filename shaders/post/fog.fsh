@@ -17,7 +17,7 @@ layout(location = 0) out vec4 fragColor;
 void main() {
     uint idx = getIdx(uvec2(gl_FragCoord.xy));
     bufferData data = denoiseBuffer.data[idx];
-    
+
     if (data.distance < -0.5) {
         //setSkyVars();
         //fragColor.xyz = data.absorption * getSkyColor(SunLight_global, MoonLight_global, camPos, data.rd, lightDir_global);
@@ -29,14 +29,11 @@ void main() {
         diffuseIllumiantionData tmp = fetchDiffuse(pix);
         vec3IllumiantionData tmp2 = fetchReflect(pix);
         vec3IllumiantionData tmp3 = fetchRefract(pix);
-        diffuseIllumiantionBuffer.data[idx].weight=tmp.weight;
-        diffuseIllumiantionBuffer.data[idx].variance=tmp.variance;
-        diffuseIllumiantionBuffer.data[idx].pos=tmp.pos;
-        
         //reflectIllumiantionBuffer.data[idx].mixWeight=data.reflectWeight;
         //fragColor.xyz = abs(tmp3.normal);
         //fragColor.xyz = diffuseIllumiantionBuffer.data[idx].normal;
-        //fragColor.xyz = diffuseIllumiantionBuffer.data[idx].variance*vec3(0.1);
+        //fragColor.xyz = tmp.variance*vec3(0.1);
+        //fragColor.xyz = tmp.weight*vec3(0.1);
         
         //fragColor.xyz=vec3(1)*(project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2)) ;
         //fragColor.xyz=vec3(diffuseIllumiantionBuffer.data[idx].weight);//*(50 - exp(-abs(diffuseIllumiantionBuffer.data[idx].weight)*0.1)*47.5);
