@@ -117,7 +117,7 @@ vec3 getClouds(vec3 b_Sun, vec3 b_Moon, vec3 pos, vec3 n, vec3 lightDir, float F
     mediump vec3 c;
     const int step1 = 30;
     const int step2 = 60;
-    mediump vec3 b_k1 = mix(Rayleigh, Mie, 0.9) * 10000 / b_P / b_P;
+    mediump vec3 b_k1 = mix(Rayleigh, Mie, 0.9) * 2500 / b_P / b_P;
 
     if(world_type_global!=0) 
         c = getSkyColor(b_Sun, b_Moon, pos, n, lightDir);

@@ -98,9 +98,9 @@ void main() {
     //float s[3] = { 1, 2, 1 };
     //float t[3] = { 1, 2, 1 };
     const float st[3][3] = {
-        { 1, 3, 1 },
-        { 3, 4, 3 },
-        { 1, 3, 1 }
+        { 1, 2, 1 },
+        { 2, 4, 2 },
+        { 1, 2, 1 }
     };
     mediump float w = 0;
     ivec2 pix = ivec2(gl_FragCoord.xy);

@@ -62,7 +62,7 @@ float svgfNormalWeight(vec3 centerNormal, vec3 normal, float distance) {
 
 float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float distance) {
     // Modified to check for distance from the center plane
-    return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)));
+    return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)/sqrt(distance)));
 }
 
 vec3 reproject(vec3 screenPos) {
@@ -126,14 +126,15 @@ void MixDiffuse() {
     denoiseBuffer.data[idx].last_rd_dot_n = curr_dot;
 
     float s =  s0 *float(denoiseBuffer.data[idx_l].distance > -0.5)
-                  * svgfPositionWeight(data.pos, data1.pos, data1.normal,info_distance) 
+                  * svgfPositionWeight(data.pos, data1.pos, data1.normal,info_distance)
                   * svgfNormalWeight(data.normal, data1.normal,info_distance) ;
     s = pow((min(1, s + 0.5) - 0.5)/0.5,0.125);
-    s = (min(1, s + 0.875) - 0.875)*8;
+    //s = 1;// (min(1, s + 0.875) - 0.875)*8;
+    //s = pow(s, 0.125);
     float prevW = data.prev_weight;
     prevW *= s;
     output_variance = min(100, updateVariance(data1.data_swap, data.prev_variance, data.data, prevW));
-    prevW = clamp(prevW + 1,1,max(10,50*pow(output_variance*avgExposure,-0.125)));
+    prevW = clamp(prevW + 1,1,max(ACCUMULATION_LENGTH,50*pow(output_variance*avgExposure,-0.125)));
 
     out_data.data_swap = mix_SH(data.data,data1.data_swap,1/prevW);
 

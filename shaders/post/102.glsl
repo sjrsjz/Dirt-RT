@@ -126,7 +126,7 @@ void MixRefract() {
     float s = exp(-0.25*abs(denoiseBuffer.data[idx_l].refractWeight-data.mixWeight))*float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.normal, data3.normal) * svgfPositionWeight(data.pos, data3.pos, data3.normal, info_distance);
     //s = (min(1, s + 0.25) - 0.25) / 0.75;
     float prevW = data.weight;
-    prevW = max(1, min(prevW * s + 1, ACCUMULATION_LENGTH * 2));
+    prevW = max(1, min(prevW * s + 1, ACCUMULATION_LENGTH));
 
     data3.data_swap = data.data + (data3.data_swap - data.data) / prevW;
     data3.weight = prevW;

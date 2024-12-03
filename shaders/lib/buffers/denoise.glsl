@@ -71,6 +71,15 @@ vec3 project_SH_irradiance(SH sh, vec3 N)
     #endif
 }
 
+
+vec3 test_SH(SH sh){
+    vec3 color = vec3(0);
+    color.x = length(sh.shY.xyz);
+    color.y = sh.shY.w - length(sh.shY.xyz);
+    return color;
+}
+
+
 SH irradiance_to_SH(vec3 color, vec3 dir)
 {
     SH result;
@@ -277,7 +286,7 @@ diffuseIllumiantionData blendDiffuse(diffuseIllumiantionData A,diffuseIllumianti
     #ifndef DIFFUSE_BUFFER_MIN2
     t.data=mix_SH(A.data,B.data,x);
     t.pos=mix(A.pos,B.pos,x);
-    t.normal=(mix(A.normal,B.normal,x));
+    t.normal=normalize(mix(A.normal,B.normal,x));
     t.prev_weight=(B.prev_weight-A.prev_weight)*x+A.prev_weight;
     t.prev_variance=(B.prev_variance-A.prev_variance)*x+A.prev_variance;
     #endif
