@@ -33,8 +33,8 @@ const int colortex1Format = RGBA32F;
 const int colortex2Format = RGBA32F;
 const int colortex3Format = RGBA32F;
 const int colortex4Format = RGBA32F;
-const int colortex5Format = RGBA32F;
-const int colortex6Format = RGBA32F;
+const int colortex5Format = RGBA16F;
+const int colortex6Format = RGBA16F;
 const int colortex7Format = RGBA32F;
 const int colortex8Format = RGBA32F;
 
@@ -102,12 +102,12 @@ void main() {
         { 3, 4, 3 },
         { 1, 3, 1 }
     };
-    float w = 0;
+    mediump float w = 0;
     ivec2 pix = ivec2(gl_FragCoord.xy);
-    vec4 centerNormal_ = texelFetch(colortex3, pix, 0);
-    vec3 centerNormal = normalize(centerNormal_.xyz);
+    mediump vec4 centerNormal_ = texelFetch(colortex3, pix, 0);
+    mediump vec3 centerNormal = normalize(centerNormal_.xyz);
     vec4 centerPos = texelFetch(colortex4, pix, 0);
-    vec4 centerColor = texelFetch(colortex5, pix, 0);
+    mediump vec4 centerColor = texelFetch(colortex5, pix, 0);
     //s[0] = 1;//0.75 + K(cross(camX_global, camY_global), camY_global, centerNormal);
     //t[0] = 1;//0.75 + K(cross(camX_global, camY_global), camX_global, centerNormal);
     //t[1] = s[1];
@@ -130,8 +130,8 @@ void main() {
             vec4 c=texelFetch(colortex5, samplePos, 0);
             float dW=centerColor.w-c.w;
             vec4 B=texelFetch(colortex3, samplePos, 0);
-            float w1 = st[i][j] * B.w;
-            float w0 = exp(- dW * dW - POSITION_PARAM * abs(dot(centerPos.xyz - texelFetch(colortex4, samplePos, 0).xyz, centerNormal)))
+            mediump float w1 = st[i][j] * B.w;
+            mediump float w0 = exp(- dW * dW - POSITION_PARAM * abs(dot(centerPos.xyz - texelFetch(colortex4, samplePos, 0).xyz, centerNormal)))
                     * svgfNormalWeight(centerNormal, normalize(B.xyz))
                     * w1 * float(samplePos == clamp(samplePos, vec2(0), texSize));
             A += c.xyz * w0;
@@ -140,7 +140,7 @@ void main() {
         }
         samplePos.x += R0;
     }
-    float w0 = (1 + min(0.125 * centerPos.w,16) + clamp(centerPos.w*0.1, 0, 8)*0.25) * centerNormal_.w;
+    mediump float w0 = (1 + min(0.125 * centerPos.w,16) + clamp(centerPos.w*0.1, 0, 8)*0.25) * centerNormal_.w;
     A += centerColor.xyz * w0;
     w += w0;
 

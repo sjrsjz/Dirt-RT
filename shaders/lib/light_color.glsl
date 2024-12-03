@@ -27,7 +27,7 @@ void setSkyVars() {
         cosD_S = 1 / sqrt(1 + S_R * S_R);
         Rayleigh = 5e9 * pow(vec3(1. / 700, 1. / 520, 1. / 450), vec3(4));
 
-        Mie = vec3(luma(Rayleigh))*0.1;
+        Mie = vec3(luma(Rayleigh));
         b_P = vec3(4096);
         b_k = 0.95;
         break;
@@ -53,20 +53,20 @@ void setSkyVars() {
         break;
     }
 
-    b_k0 = mix(Rayleigh, Mie, b_k);
+    b_k0 = mix(Rayleigh,Mie, b_k);
     b_Q = b_k0 / (b_P * b_P); //absorption
-    b_g0 = mix(Rayleigh, vec3(0.9), b_k); //single scatter
+    b_g0 = mix(Rayleigh, vec3(0.75), b_k); //single scatter
 }
 vec3 getSkyColor(vec3 b_Sun, vec3 b_Moon, in vec3 pos, in vec3 n, in vec3 lightDir) {
-    vec3 n0 = n;
+    mediump vec3 n0 = n;
     n.y = max(n.y, 1e-5);
-    float dot_n_L = dot(n, lightDir);
-    vec3 b_g0_2 = b_g0 * b_g0;
-    vec3 tmp_x=1. + b_g0_2 - 2. * b_g0 * dot_n_L;
+    mediump float dot_n_L = dot(n, lightDir);
+    mediump vec3 b_g0_2 = b_g0 * b_g0;
+    mediump vec3 tmp_x=1. + b_g0_2 - 2. * b_g0 * dot_n_L;
     tmp_x *= tmp_x * tmp_x;
-    vec3 g = 3. / (8. * PI) * (1. + dot_n_L*dot_n_L) * (1. - b_g0_2) / (2. + b_g0_2) * inversesqrt(tmp_x);
-    vec3 t = b_Q * 0.5 * (b_P - pos.y) * (b_P - pos.y);
-    vec3 c = b_Sun * g * (exp(-t / n.y) - exp(-t / lightDir.y)) / (n.y - lightDir.y) * max(lightDir.y, 0.);
+    mediump vec3 g = 3. / (8. * PI) * (1. + dot_n_L*dot_n_L) * (1. - b_g0_2) / (2. + b_g0_2) * inversesqrt(tmp_x);
+    mediump vec3 t = b_Q * 0.5 * (b_P - pos.y) * (b_P - pos.y);
+    mediump vec3 c = b_Sun * g * (exp(-t / n.y) - exp(-t / lightDir.y)) / (n.y - lightDir.y) * max(lightDir.y, 0.);
 
     //g=3./(8.*PI)*(1.+pow(dot(n,lightDir1),2.))*(1.-b_g0*b_g0)/(2.+b_g0*b_g0)/pow(1.+b_g0*b_g0-2.*b_g0*dot(lightDir1,n),vec3(1.5));
     //t=b_Q*0.5*(b_P-pos.y)*(b_P-pos.y);
@@ -77,48 +77,47 @@ vec3 getSkyColor(vec3 b_Sun, vec3 b_Moon, in vec3 pos, in vec3 n, in vec3 lightD
     return max(c,0);
 }
 vec3 getFogColor(vec3 b_Sun, vec3 b_Moon, in vec3 pos, in vec3 n, in vec3 lightDir, float s, vec3 col) {
-    vec3 n0 = n;
+    mediump vec3 n0 = n;
     if (n.y > 0) s = min((b_P.x - pos.y) / n.y, s);
     float dot_n_L = dot(n, lightDir);
-    vec3 b_g0_2 = b_g0 * b_g0;
-    vec3 tmp_x = 1. + b_g0_2 - 2. * b_g0 * dot_n_L;
+    mediump vec3 b_g0_2 = b_g0 * b_g0;
+    mediump vec3 tmp_x = 1. + b_g0_2 - 2. * b_g0 * dot_n_L;
     tmp_x *= tmp_x * tmp_x;
-    vec3 g = 3. / (8. * PI) * (1. + dot_n_L * dot_n_L) * (1. - b_g0_2) / (2. + b_g0_2) * inversesqrt(tmp_x);
-    vec3 t = b_Q * 0.5 * (b_P - pos.y) * (b_P - pos.y);
-    vec3 s1 = exp(b_Q * s * (0.5 * s * n.y - (b_P - pos.y)) * (1 - n.y / lightDir.y));
-    vec3 c = vec3(0);// * b_Sun * g * exp(-t / lightDir.y) * (1 - s1) / (-n.y + lightDir.y) * max(lightDir.y, 0.);
+    mediump vec3 g = 3. / (8. * PI) * (1. + dot_n_L * dot_n_L) * (1. - b_g0_2) / (2. + b_g0_2) * inversesqrt(tmp_x);
+    mediump vec3 t = b_Q * 0.5 * (b_P - pos.y) * (b_P - pos.y);
+    mediump vec3 s1 = exp(b_Q * s * (0.5 * s * n.y - (b_P - pos.y)) * (1 - n.y / lightDir.y));
+    mediump vec3 c = vec3(0);// * b_Sun * g * exp(-t / lightDir.y) * (1 - s1) / (-n.y + lightDir.y) * max(lightDir.y, 0.);
     c += exp(b_Q * 0.5 * n.y * s * s - b_Q * (b_P - pos.y) * s) * col;
     return c;
 }
 
 float fbm3D2(in vec3 x)
 {
-    float a = 0.0;
-    float b = 0.5;
-    float f = 1.0;
-    vec3 d = vec3(0.0);
+    mediump float a = 0.0;
+    mediump float b = 0.5;
+    mediump float f = 1.0;
     for (int i = 0; i < 4; i++)
     {
-        a += b * valueNoise(f * x+time_global * 0.01+1000); // accumulate values
-        b *= 0.525; // amplitude decrease
-        f *= 2; // frequency increase
+        a += b * valueNoise(f * x + b * time_global * 0.1+1000); // accumulate values
+        b *= 0.6; // amplitude decrease
+        f *= 3; // frequency increase
         x.xz = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5)) * x.xz;
     }
 
     return a;
 }
 float cloud_density(vec3 p) {
-    float density = 0.001 + smoothstep(0., 250., p.y) * smoothstep(50000., 5000., p.y)*0.5;
-    density *= 1 + 2 * rainStrength_global;
-    float k = clamp(fbm3D2(vec3(0.000025,0.00005,0.000025)*2.5 * p / clamp(p.y * 0.000001,1,5)) - 1.1 + density, 0, 2);
+    lowp float density = 0.005 + smoothstep(0., 350., p.y) * smoothstep(50000., 5000., p.y)*0.5;
+    density *= 1 + 0.5 * rainStrength_global;
+    lowp float k = clamp(fbm3D2(vec3(0.000025,0.000035,0.000025)*2.5 * p / clamp(p.y * 0.0000001,1,5)) - 1.1 + density, 0, 2);
     return  min(k/ density,1);
 }
 vec3 getClouds(vec3 b_Sun, vec3 b_Moon, vec3 pos, vec3 n, vec3 lightDir, float Far) {
     //return getSkyColor(b_Sun, b_Moon, pos, n, lightDir);
-    vec3 c;
-    const int step1 = 15;
-    const int step2 = 8;
-    vec3 b_k1 = mix(Rayleigh, Mie, 0.9875) * 2500 / b_P / b_P;
+    mediump vec3 c;
+    const int step1 = 30;
+    const int step2 = 60;
+    mediump vec3 b_k1 = mix(Rayleigh, Mie, 0.9) * 10000 / b_P / b_P;
 
     if(world_type_global!=0) 
         c = getSkyColor(b_Sun, b_Moon, pos, n, lightDir);
@@ -135,23 +134,23 @@ vec3 getClouds(vec3 b_Sun, vec3 b_Moon, vec3 pos, vec3 n, vec3 lightDir, float F
             pos1 -= n * s;
             float d = cloud_density(pos1);
 
-            vec3 b_Q1 = mix(b_Q, b_k1, d); //absorption
-            vec3 b_g1 = mix(b_g0, vec3(0.1), d);
-            vec3 b_g2 = b_g1 * b_g1;
-            vec3 t = b_Q1 * 0.5 * (2* (b_P - pos1.y) * s - s * s * n.y);
-            float dot_l_n=dot(lightDir, n);
-            vec3 tmp_x = 1. + b_g2 - 2. * b_g1 * dot_l_n;
+            lowp vec3 b_Q1 = mix(b_Q, b_k1, d); //absorption
+            lowp vec3 b_g1 = mix(b_g0, vec3(0.1), d);
+            lowp vec3 b_g2 = b_g1 * b_g1;
+            lowp vec3 t = b_Q1 * 0.5 * (2* (b_P - pos1.y) * s - s * s * n.y);
+            lowp float dot_l_n=dot(lightDir, n);
+            lowp vec3 tmp_x = 1. + b_g2 - 2. * b_g1 * dot_l_n;
             tmp_x *= tmp_x * tmp_x;
-            vec3 g = 3. / (8. * PI) * (1. + dot_l_n*dot_l_n) * (1. - b_g2) / (2. + b_g2) * inversesqrt(tmp_x);
-            float s2 = (b_P.x - pos1.y) / (lightDir.y * step2);
-            vec3 c1 = b_Sun;
-            vec3 c0 = vec3(1);
+            lowp vec3 g = 3. / (8. * PI) * (1. + dot_l_n*dot_l_n) * (1. - b_g2) / (2. + b_g2) * inversesqrt(tmp_x);
+            lowp float s2 = (b_P.x - pos1.y) / (lightDir.y * step2);
+            lowp vec3 c1 = b_Sun;
+            lowp vec3 c0 = vec3(1);
             for (int j = 0; j < step2; j++) {
-                vec3 pos2 = pos1 + lightDir * (step2 - j) * s2 * (1 + rand(pos1));
+                lowp vec3 pos2 = pos1 + lightDir * (step2 - j) * s2 * (1 + rand(pos1));
                 if (pos2.y > b_P.x) break;
-                float d = cloud_density(pos2);
-                vec3 b_Q1 = mix(b_Q, b_k1, d); //absorption
-                vec3 t = b_Q1 * 0.5 * (2 * (b_P - pos2.y) * s2 - s2 * s2 * lightDir.y);
+                lowp float d = cloud_density(pos2);
+                lowp vec3 b_Q1 = mix(b_Q, b_k1, d); //absorption
+                lowp vec3 t = b_Q1 * 0.5 * (2 * (b_P - pos2.y) * s2 - s2 * s2 * lightDir.y);
                 c0 += t;
             }
             c += exp(-max(c0,0)) * c1 * g * b_Q1 * (b_P - pos1.y - s * n.y) * s;

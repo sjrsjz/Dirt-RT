@@ -93,7 +93,7 @@ void main() {
         }
         sumX /= w;
         sumX2 /= w;
-        vec3 sigma2 = 3 * (sumX2 - sumX * sumX + 1e-3);
+        vec3 sigma2 = 2 * (sumX2 - sumX * sumX + 1e-3);
         vec3 w3 = vec3(0);
         sumX2 = vec3(0);
         for (int i = 0; i < samples.length(); i++) {
@@ -116,9 +116,10 @@ void main() {
         div_HDR_AB(sum_X, sum_X2, sum_div, sum_div_2, sum_div2, A, B);
         B=max(B, 0.0);
         A=max(A, 0.0);
-        luminanceSum = luminance(sumX2 / (w3 + 0.001));
-        luminanceSum = pow(luminanceSum, 0.75*exp(-luminanceSum*0.1)+0.25);
-        float exposure = clamp(calculateExposure(luminanceSum), 0.0025, 25.0);
+        luminanceSum = luminance(sumX2 / (w3 + 0.00001));
+        //luminanceSum = pow(luminanceSum, 0.75*exp(-luminanceSum*0.1)+0.25);
+        float exposure = clamp(calculateExposure(luminanceSum), 0.00025, 25.0);
+        dTime_global*=0.5;
         if (frameCounter <= 1) {
             avgExposure = exposure;
             HDR_AB_global = vec2(0, avgExposure);

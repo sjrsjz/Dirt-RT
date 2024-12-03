@@ -27,8 +27,8 @@ layout(std430, set = 3, binding = 0) buffer DenoiseBuffer {
 
 struct SH
 {
-    vec4 shY;
-    vec2 CoCg;
+    mediump vec4 shY;
+    mediump vec2 CoCg;
 };
 
 // Switch to enable or disable the *look* of spherical harmonics lighting.
@@ -115,8 +115,8 @@ vec3 SH_to_irradiance(SH sh)
 SH mix_SH(SH a, SH b, float s)
 {
     SH result;
-    result.shY = mix(a.shY, b.shY, vec4(s));
-    result.CoCg = mix(a.CoCg, b.CoCg, vec2(s));
+    result.shY = mix(a.shY, b.shY, s);
+    result.CoCg = mix(a.CoCg, b.CoCg, s);
     return result;
 }
 
@@ -145,19 +145,19 @@ struct diffuseIllumiantionData {
     SH data;
     SH data_swap;
     vec3 pos;
-    vec3 normal;
-    vec3 normal2;
-    float weight;
-    float variance;
-    float prev_weight;
-    float prev_variance;
+    mediump vec3 normal;
+    mediump vec3 normal2;
+    mediump float weight;
+    mediump float variance;
+    mediump float prev_weight;
+    mediump float prev_variance;
 };
 
 struct diffuseIllumiantionBufferData {
     SH data_swap;
     vec3 pos;
-    vec3 normal;
-    vec3 normal2;
+    mediump vec3 normal;
+    mediump vec3 normal2;
 };
 
 layout(std140, set = 3, binding = 2) buffer DiffuseIllumiantionDataBuffer {
@@ -165,12 +165,12 @@ layout(std140, set = 3, binding = 2) buffer DiffuseIllumiantionDataBuffer {
 } diffuseIllumiantionBuffer;
 
 struct vec3IllumiantionData {
-    vec3 data;
-    vec3 data_swap;
+    mediump vec3 data;
+    mediump vec3 data_swap;
     vec3 pos;
-    vec3 normal;
-    float weight;
-    float mixWeight;
+    mediump vec3 normal;
+    mediump float weight;
+    mediump float mixWeight;
 };
 
 layout(std140, set = 3, binding = 3) buffer ReflectIllumiantionDataBuffer {
@@ -235,10 +235,10 @@ diffuseIllumiantionData fetchDiffuse(ivec2 p) {
     
     //tmp.data_swap.CoCg = tmp4.xy;
     tmp.data_swap.CoCg = unpackHalf2x16(floatBitsToUint(tmp4.z));
-    vec2 w_v = unpackHalf2x16(floatBitsToUint(tmp4.w));
+    mediump vec2 w_v = unpackHalf2x16(floatBitsToUint(tmp4.w));
 
-    vec2 shY_xy = unpackHalf2x16(floatBitsToUint(tmp4.x));
-    vec2 shY_zw = unpackHalf2x16(floatBitsToUint(tmp4.y));
+    mediump vec2 shY_xy = unpackHalf2x16(floatBitsToUint(tmp4.x));
+    mediump vec2 shY_zw = unpackHalf2x16(floatBitsToUint(tmp4.y));
     
     tmp.data_swap.shY = vec4(shY_xy, shY_zw);
     
@@ -255,9 +255,9 @@ diffuseIllumiantionData fetchDiffuse(ivec2 p) {
     //tmp.data.shY = texelFetch(diffuseIllumiantionData_shY_Sampler, p, 0);
     tmp4 = texelFetch(diffuseIllumiantionData_shY_Sampler, p, 0);
     tmp.data.CoCg = unpackHalf2x16(floatBitsToUint(tmp4.z));
-    vec2 w_v2 = unpackHalf2x16(floatBitsToUint(tmp4.w));
-    tmp.prev_weight = w_v2.x;
-    tmp.prev_variance = w_v2.y;
+    w_v = unpackHalf2x16(floatBitsToUint(tmp4.w));
+    tmp.prev_weight = w_v.x;
+    tmp.prev_variance = w_v.y;
     shY_xy = unpackHalf2x16(floatBitsToUint(tmp4.x));
     shY_zw = unpackHalf2x16(floatBitsToUint(tmp4.y));
     tmp.data.shY = vec4(shY_xy, shY_zw);

@@ -107,7 +107,7 @@ float updateVariance(SH M_n, float D_n, SH X_nplus1, float w) { // w is the weig
     vec2 diff_CoCg = X_nplus1.CoCg - M_n.CoCg;
     vec4 diff_shY = X_nplus1.shY - M_n.shY;
     float w1 = 1.0 / (1.0 + w);
-    return w*(D_n*w + (dot(diff_CoCg,diff_CoCg)+10*dot(diff_shY,diff_shY))*w1)*w1*w1;
+    return w*(D_n*w + (dot(diff_CoCg,diff_CoCg)+dot(diff_shY,diff_shY))*w1)*w1*w1;
 }
 
 float output_weight = 0;

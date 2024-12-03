@@ -21,31 +21,19 @@ void main() {
     vec3 sumX = vec3(0);
     float angleOffset = rand(texCoord - 400) * 32 * PI;
     const float angleShift = 2 * PI / sampleN;
-    float R = rand(texCoord * 100 + 300);
+    float R = pow(log(0.01+0.99*rand(texCoord * 100 + 300)),2);
     
     float weight = kernel(R*R) / kernel(0);
-    
-    R *= 0.5;
+    R = (pow(R+1,4)-1)*0.125;
+    //R *= 0.5;
     mat2 rotM = mat2(cos(angleShift), sin(angleShift), -sin(angleShift), cos(angleShift));
     vec2 v = vec2(cos(angleOffset), sin(angleOffset)) * R * textureSize(colortex1, 0).x;
     //vec3 sumX_2 = vec3(0), sumX2 = vec3(0);
     //vec3 s[sampleN];
     for (int i = 0; i < sampleN; i++) {
         v *= rotM;
-        vec2 v1= v * vec2(1-i%2,i%2);
-        float w;
-        if(i<24 ){
-            v1 = v*3;//(v1 + vec2(-v1.y,v1.x));
-            w=0.75;
-        }else{
-            v1 *= 2;
-            v1.y *= 0.5;
-            w=1.25;        
-        }
-        vec3 A = texelFetch(colortex0, ivec2(gl_FragCoord.xy + v1*0.25), 0).xyz;
-        sumX += A*w;
-        //sumX2 += A * A;
-        //s[i] = A;
+        vec3 A = texelFetch(colortex0, ivec2(gl_FragCoord.xy + v), 0).xyz;
+        sumX += A;
     }
     //vec3 validN3 = vec3(0);
     sumX/=sampleN*(R*R+0.5);
