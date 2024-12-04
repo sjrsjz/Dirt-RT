@@ -225,7 +225,7 @@ $ 1/n sum_(i=1)^n sqrt(1/n^2 |arrow(mu)|^2 + |arrow(e)_i|^2) = sqrt(1/n^2 |arrow
 
 则方差估计为
 
-$ D(T(V)) = 1/n omega(T(V))^2 - 1/n^2 Lambda (T(V))^2 $
+$ D(T(V)) = 1/n^2 omega(T(V))^2 - 1/n^2 Lambda (T(V))^2 $
 
 简记为 $D(T(V)) = sigma^2(V)$
 

@@ -125,7 +125,7 @@ void main() {
     #endif
     mediump float w = 0;
     ivec2 pix=ivec2(gl_FragCoord.xy);
-    mediump vec3 centerNormal = texelFetch(colortex3, pix, 0).xyz;
+    lowp vec3 centerNormal = texelFetch(colortex3, pix, 0).xyz;
     vec4 tmp_=texelFetch(colortex4, pix, 0);
     vec3 centerPos = tmp_.xyz;
 
@@ -193,7 +193,7 @@ void main() {
         //float delta = st[i][j] / (1 + scale * (sqrt(dot(delta_shY, delta_shY) + dot(delta_CoCg, delta_CoCg))));
         float d = denoiseBuffer.data[getIdx(uvec2(samplePos))].distance;
         
-        mediump vec3 sampleNormal = texelFetch(colortex3, samplePos, 0).xyz;
+        lowp vec3 sampleNormal = texelFetch(colortex3, samplePos, 0).xyz;
 
         mediump float k = abs(dot(texelFetch(colortex4, samplePos, 0).xyz - centerPos, centerNormal));
 

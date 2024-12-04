@@ -11,6 +11,5 @@ uniform sampler2D colortex0;
 layout(location = 0) out vec4 fragColor;
 
 void main() {
-    //discard;
     fragColor=texture(colortex0,texCoord);
 }

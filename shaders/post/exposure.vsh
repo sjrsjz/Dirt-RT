@@ -17,6 +17,10 @@ uniform float viewWidth;
 uniform float viewHeight;
 out vec2 texCoord;
 
+uniform mat4 gbufferPreviousProjection;
+uniform mat4 gbufferPreviousModelView;
+uniform vec3 previousCameraPosition;
+
 struct Sample {
     vec2 position;
     float weight;
@@ -132,6 +136,12 @@ void main() {
             HDR_AB_global = mix(HDR_AB_global, vec2(A,B), 1 - exp(-dTime_global));
         }
         div_avgExposure = 1 / avgExposure;
+
+
+
+        gbufferPreviousModelView_global = gbufferPreviousModelView;
+        gbufferPreviousProjection_global = gbufferPreviousProjection;
+        previousCameraPosition_global = previousCameraPosition;
     }
 
     gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;

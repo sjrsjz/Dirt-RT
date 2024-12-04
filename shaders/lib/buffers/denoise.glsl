@@ -38,31 +38,11 @@ struct SH
 vec3 project_SH_irradiance(SH sh, vec3 N)
 {
     #if ENABLE_SH
-    /*
-    float d = dot(sh.shY.xyz, N);
-    float Y = 2.0 * (1.023326 * d + 0.886226 * sh.shY.w);
-    Y = max(Y, 0.0);
-
-    sh.CoCg *= Y * 0.282095 / (sh.shY.w + 1e-6);
-
-    float T = Y - sh.CoCg.y * 0.5;
-    float G = sh.CoCg.y + T;
-    float B = T - sh.CoCg.x * 0.5;
-    float R = B + sh.CoCg.x;
-
-    return max(vec3(R, G, B), vec3(0.0));
-    */
-    //vec3 shY_divided = sh.shY.xyz / (sh.shY.w + 1e-6);
-    //float diffuse = max(1 - 2 * dot(shY_divided,shY_divided), 0);
-    //float dot_ = max(dot(shY_divided, N),0);
-
     float Y = sh.shY.w;
     float T = Y - sh.CoCg.y * 0.5;
     float G = sh.CoCg.y + T;
     float B = T - sh.CoCg.x * 0.5;
     float R = B + sh.CoCg.x;
-
-
 
     vec3 color = vec3(R,G,B) * (max(dot(sh.shY.xyz, N),0) + (Y - length(sh.shY.xyz))) / (Y+1e-3);
     return max(color, vec3(0.0));
@@ -91,14 +71,6 @@ SH irradiance_to_SH(vec3 color, vec3 dir)
     float Y = max(t + Cg * 0.5, 0.0);
 
     result.CoCg = vec2(Co, Cg);
-
-    /*
-    float L00 = 0.282095;
-    float L1_1 = 0.488603 * dir.y;
-    float L10 = 0.488603 * dir.z;
-    float L11 = 0.488603 * dir.x;
-    result.shY = vec4(L11, L1_1, L10, L00) * Y;
-    */
 
     result.shY = vec4(dir * Y,Y);
     #else
@@ -154,8 +126,8 @@ struct diffuseIllumiantionData {
     SH data;
     SH data_swap;
     vec3 pos;
-    mediump vec3 normal;
-    mediump vec3 normal2;
+    lowp vec3 normal;
+    lowp vec3 normal2;
     mediump float weight;
     mediump float variance;
     mediump float prev_weight;
@@ -165,13 +137,23 @@ struct diffuseIllumiantionData {
 struct diffuseIllumiantionBufferData {
     SH data_swap;
     vec3 pos;
-    mediump vec3 normal;
-    mediump vec3 normal2;
+    lowp vec3 normal;
+    lowp vec3 normal2;
 };
-
-layout(std140, set = 3, binding = 2) buffer DiffuseIllumiantionDataBuffer {
+struct diffuseIllumiantionBufferDataW {
+    SH data_swap;
+    vec3 pos;
+    lowp vec3 normal;
+    lowp vec3 normal2;
+    mediump float weight;
+};
+layout(std430, set = 3, binding = 2) buffer DiffuseIllumiantionDataBuffer {
     diffuseIllumiantionBufferData data[];
 } diffuseIllumiantionBuffer;
+
+layout(std430, set = 3, binding = 6) buffer PrevDiffuseIllumiantionDataBuffer {
+    diffuseIllumiantionBufferDataW data[];
+} prevDiffuseIllumiantionBuffer; // for temporal reprojection
 
 struct vec3IllumiantionData {
     mediump vec3 data;
@@ -182,24 +164,50 @@ struct vec3IllumiantionData {
     mediump float mixWeight;
 };
 
-layout(std140, set = 3, binding = 3) buffer ReflectIllumiantionDataBuffer {
+layout(std430, set = 3, binding = 3) buffer ReflectIllumiantionDataBuffer {
     vec3IllumiantionData data[];
 } reflectIllumiantionBuffer;
 
-layout(std140, set = 3, binding = 4) buffer RefractIllumiantionDataBuffer {
+layout(std430, set = 3, binding = 4) buffer RefractIllumiantionDataBuffer {
     vec3IllumiantionData data[];
 } refractIllumiantionBuffer;
 
 
-/*layout(std140, set = 3, binding = 6) buffer ExtInfoBuffer {
-    vec2 data[];
-} extInfoBuffer;*/
+#if defined(PREV_DIFFUSE_BUFFER)
 
+diffuseIllumiantionBufferDataW fetchPrevDiffuse(ivec2 p) {
+    return prevDiffuseIllumiantionBuffer.data[getIdx(p)];
+}
+
+diffuseIllumiantionBufferDataW blendPrevDiffuse(diffuseIllumiantionBufferDataW A,diffuseIllumiantionBufferDataW B,float x){
+    diffuseIllumiantionBufferDataW t;
+    t.data_swap=mix_SH(A.data_swap,B.data_swap,x);
+    t.pos=mix(A.pos,B.pos,x);
+    t.normal=normalize(mix(A.normal,B.normal,x));
+    t.weight = mix(A.weight,B.weight,x);
+    return t;
+}
+
+diffuseIllumiantionBufferDataW samplePrevDiffuse(vec2 p) {
+    ivec2 p1=ivec2(p);
+
+    vec2 p2=fract(p);
+    diffuseIllumiantionBufferDataW A=fetchPrevDiffuse(p1);
+    diffuseIllumiantionBufferDataW B=fetchPrevDiffuse(p1+ivec2(1,0));
+    diffuseIllumiantionBufferDataW C=fetchPrevDiffuse(p1+ivec2(0,1));
+    diffuseIllumiantionBufferDataW D=fetchPrevDiffuse(p1+ivec2(1,1));
+    return blendPrevDiffuse(blendPrevDiffuse(A,B,p2.x),blendPrevDiffuse(C,D,p2.x),p2.y);
+}
+
+void WritePrevDiffuse(diffuseIllumiantionBufferDataW data, ivec2 p) {
+    prevDiffuseIllumiantionBuffer.data[getIdx(p)] = data;
+}
+
+#endif
 
 
 
 #if defined(DIFFUSE_BUFFER) || defined(DIFFUSE_BUFFER_MIN) || defined(DIFFUSE_BUFFER_MIN2)
-
 
 layout(rgba32f) uniform image2D diffuseIllumiantionData_shY_swap;
 layout(rgba32f) uniform image2D diffuseIllumiantionData_CoCg_swap;
@@ -305,7 +313,6 @@ diffuseIllumiantionData sampleDiffuse(vec2 p){
     diffuseIllumiantionData D=fetchDiffuse(p1+ivec2(1,1));
     return blendDiffuse(blendDiffuse(A,B,p2.x),blendDiffuse(C,D,p2.x),p2.y);
 }
-
 
 void WriteDiffuse(diffuseIllumiantionData data, ivec2 p) {
     float shY_xy = uintBitsToFloat(packHalf2x16(data.data_swap.shY.xy));

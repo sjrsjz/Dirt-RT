@@ -29,9 +29,7 @@ struct info {
     vec3 microNormal;
     vec3 macroNormal;
     vec3 p;
-    //object o;
     material surface;
-    //vec4 rC;
     float n_i;
     float n_o;
     float distance;
@@ -45,7 +43,6 @@ struct info {
     float sampleRoughness;
     int type;
     bool inside;
-    //vec3 mix;
 };
 
 //----------------------------------------------------------------------------------------
@@ -58,15 +55,6 @@ float hash11(float p)
     return fract(p);
 }
 
-//----------------------------------------------------------------------------------------
-//  1 out, 2 in...
-float hash12(vec2 p)
-{
-    vec3 p3 = fract(vec3(p.xyx) * .1031);
-    p3 = fract(tan(dot(p3, p3) * 20 * atan(p3)));
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-}
 
 //----------------------------------------------------------------------------------------
 //  1 out, 3 in...
@@ -77,143 +65,11 @@ float hash13(vec3 p3)
     p3 += dot(p3, p3.zyx + 31.32);
     return fract((p3.x + p3.y) * p3.z);
 }
-float fasthash13(vec3 p3)
-{
-    p3 = fract(p3 * .1031);
-    p3 += dot(p3, p3.zyx + 31.32);
-    return fract((p3.x + p3.y) * p3.z);
-}
-//----------------------------------------------------------------------------------------
-// 1 out 4 in...
-float hash14(vec4 p4)
-{
-    p4 = fract(p4 * vec4(.1031, .1030, .0973, .1099));
-    p4 = fract(tan(dot(p4, p4) * 20 * atan(p4)));
-
-    p4 += dot(p4, p4.wzxy + 33.33);
-    return fract((p4.x + p4.y) * (p4.z + p4.w));
-}
-
-//----------------------------------------------------------------------------------------
-//  2 out, 1 in...
-vec2 hash21(float p)
-{
-    vec3 p3 = fract(vec3(p) * vec3(.1031, .1030, .0973));
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.xx + p3.yz) * p3.zy);
-}
-
-//----------------------------------------------------------------------------------------
-///  2 out, 2 in...
-vec2 hash22(vec2 p)
-{
-    vec3 p3 = fract(vec3(p.xyx) * vec3(.1031, .1030, .0973));
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.xx + p3.yz) * p3.zy);
-}
-
-//----------------------------------------------------------------------------------------
-///  2 out, 3 in...
-vec2 hash23(vec3 p3)
-{
-    p3 = fract(p3 * vec3(.1031, .1030, .0973));
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.xx + p3.yz) * p3.zy);
-}
-
-//----------------------------------------------------------------------------------------
-//  3 out, 1 in...
-vec3 hash31(float p)
-{
-    vec3 p3 = fract(vec3(p) * vec3(.1031, .1030, .0973));
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.xxy + p3.yzz) * p3.zyx);
-}
-
-//----------------------------------------------------------------------------------------
-///  3 out, 2 in...
-vec3 hash32(vec2 p)
-{
-    vec3 p3 = fract(vec3(p.xyx) * vec3(.1031, .1030, .0973));
-    p3 += dot(p3, p3.yxz + 33.33);
-    return fract((p3.xxy + p3.yzz) * p3.zyx);
-}
-
-//----------------------------------------------------------------------------------------
-///  3 out, 3 in...
-vec3 hash33(vec3 p3)
-{
-    p3 = fract(p3 * vec3(.1031, .1030, .0973));
-    p3 += dot(p3, p3.yxz + 33.33);
-    return fract((p3.xxy + p3.yxx) * p3.zyx);
-}
-
-//----------------------------------------------------------------------------------------
-// 4 out, 1 in...
-vec4 hash41(float p)
-{
-    vec4 p4 = fract(vec4(p) * vec4(.1031, .1030, .0973, .1099));
-    p4 += dot(p4, p4.wzxy + 33.33);
-    return fract((p4.xxyz + p4.yzzw) * p4.zywx);
-}
-
-//----------------------------------------------------------------------------------------
-// 4 out, 2 in...
-vec4 hash42(vec2 p)
-{
-    vec4 p4 = fract(vec4(p.xyxy) * vec4(.1031, .1030, .0973, .1099));
-    p4 += dot(p4, p4.wzxy + 33.33);
-    return fract((p4.xxyz + p4.yzzw) * p4.zywx);
-}
-
-//----------------------------------------------------------------------------------------
-// 4 out, 3 in...
-vec4 hash43(vec3 p)
-{
-    vec4 p4 = fract(vec4(p.xyzx) * vec4(.1031, .1030, .0973, .1099));
-    p4 += dot(p4, p4.wzxy + 33.33);
-    return fract((p4.xxyz + p4.yzzw) * p4.zywx);
-}
-
-//----------------------------------------------------------------------------------------
-// 4 out, 4 in...
-vec4 hash44(vec4 p4)
-{
-    p4 = fract(p4 * vec4(.1031, .1030, .0973, .1099));
-    p4 += dot(p4, p4.wzxy + 33.33);
-    return fract((p4.xxyz + p4.yzzw) * p4.zywx);
-}
 
 vec2 rot(vec2 a, float theata) {
     return a.xx * vec2(cos(theata), sin(theata)) + a.yy * vec2(-sin(theata), cos(theata));
 }
-vec3 rot(vec3 a, vec3 range) {
-    a.yz = rot(a.yz, range.x);
-    a.xz = rot(a.xz, range.y);
-    a.xy = rot(a.xy, range.z);
-    return a;
-}
-float mix2(float A, float B, float x) {
-    return (B - A) * x + A;
-}
-vec2 cMul(vec2 a, vec2 b) {
-    return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
-}
-vec2 cLog(vec2 a) {
-    float b = atan(a.y, a.x);
-    if (b < 0.0) b += 2.0 * 3.1415926535;
-    return vec2(log(length(a)), b);
-}
-vec2 cExp(vec2 z) {
-    return exp(z.x) * vec2(cos(z.y), sin(z.y));
-}
-vec2 cPow(vec2 z, vec2 a) {
-    return cExp(cMul(cLog(z), a));
-}
-vec2 cDiv(vec2 a, vec2 b) {
-    float d = dot(b, b);
-    return vec2(dot(a, b), a.y * b.x - a.x * b.y) / d;
-}
+
 
 float hash(float n)
 {
@@ -289,20 +145,6 @@ float luma(vec3 c) {
 vec4 rColor(vec3 c, float cosA) {
     vec3 F0 = c + (1.0 - c) * pow(1.0 - abs(cosA), 5.0);
     return vec4(F0, luma(F0));
-
-    /*cosA=abs(cosA);
-        vec3 A0=1-sqrt(c);vec3 A1=1+sqrt(c);
-        vec3 B=sqrt(4*sqrt(c)+cosA*cosA*A0*A0);
-        vec3 s0=(cosA*A0-B)/max(cosA*A0+B,1e-5);
-        vec3 s1=(B*A0-cosA*A1*A1)/max(B*A0+cosA*A1*A1,1e-5);
-        vec3 R=0.5*(s0*s0+s1*s1);
-    /*cosA=abs(cosA);
-    vec3 A0=1-sqrt(c);vec3 A1=1+sqrt(c);
-    vec3 B=sqrt(4*sqrt(c)+cosA*cosA*A0*A0);
-    vec3 s0=(cosA*A0-B)/max(cosA*A0+B,1e-5);
-    vec3 s1=(B*A0-cosA*A1*A1)/max(B*A0+cosA*A1*A1,1e-5);
-    vec3 R=0.5*(s0*s0+s1*s1);
-    return vec4(R,luma(R));*/
 }
 
 float GGX_Lamda(float VoN, float a) {
@@ -340,11 +182,30 @@ vec3 DiffuseNormal(vec3 normal, vec3 pos) {
     float tmp = rand(pos);
     return sqrt(1 - tmp) * normal + sqrt(tmp) * (cos(alpha) * randN0 + sin(alpha) * randN1);
 }
-float GGXdf(float theta, float fai, float a) {
-    float a2 = a * a;
-    float cos2 = cos(theta);
-    cos2 *= cos2;
-    return (1 - cos2) / (1 + (2 * a2 - 1) * cos2);
+
+// 方向重要性采样
+vec4 WeightedDiffuse(vec3 normal, vec3 pos, float power) {
+    // 返回采样方向和权重
+    vec3 randN0;
+    randN0.y = -length(normal.xz);
+    if (normal.y > 0.99 || normal.y < -0.99)
+        randN0.xz = vec2(1, 0);
+    else
+        randN0.xz = normal.xz * normal.y * inversesqrt(1 - normal.y * normal.y);
+    vec3 randN1 = cross(normal, randN0);
+
+    // 生成随机方向
+    float alpha = rand(pos) * 2 * PI;
+    float rnd = rand(pos);
+    float tmp = 1 - 2 * pow(rnd,power);
+    vec3 n = tmp * normal + sqrt(1 - tmp * tmp) * (cos(alpha) * randN0 + sin(alpha) * randN1);
+
+    // 计算权重
+    float pdf = pow(max(rnd,1e-5),1-power) / (PI*power);
+
+
+
+    return vec4(n, pdf);
 }
 float GGXpdf(float costheta, float fai, float a) {
     float a2 = a * a;
@@ -361,10 +222,6 @@ float fresnel(vec3 v, vec3 n, float rs) {
     A.y = sqrt(max(1 - (1 - A.x * A.x) * (rs * rs), 0));
     A = (A * rs - A.yx) / max(A * rs + A.yx, 1e-4);
     return 0.5 * dot(A, A);
-}
-
-mat2 rot(float a) {
-    return mat2(cos(a), sin(a), -sin(a), cos(a));
 }
 
 vec4 noised(in vec3 x)
@@ -398,85 +255,7 @@ vec4 noised(in vec3 x)
         du * (vec3(k1, k2, k3) + u.yzx * vec3(k4, k5, k6) + u.zxy * vec3(k6, k4, k5) + k7 * u.yzx * u.zxy));
 }
 
-vec3 mod289(vec3 x) {
-    return x - floor(x * (1.0 / 289.0)) * 289.0;
-}
 
-vec4 mod289(vec4 x) {
-    return x - floor(x * (1.0 / 289.0)) * 289.0;
-}
-
-vec4 permute(vec4 x) {
-    return mod289(((x*34.0)+1.0)*x);
-}
-
-vec4 taylorInvSqrt(vec4 r) {
-    return 1.79284291400159 - 0.85373472095314 * r;
-}
-
-float snoise(vec3 v) { 
-    const vec2  C = vec2(1.0/6.0, 1.0/3.0) ;
-    const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
-
-    vec3 i  = floor(v + dot(v, C.yyy) );
-    vec3 x0 =   v - i + dot(i, C.xxx) ;
-
-    vec3 g = step(x0.yzx, x0.xyz);
-    vec3 l = 1.0 - g;
-    vec3 i1 = min( g.xyz, l.zxy );
-    vec3 i2 = max( g.xyz, l.zxy );
-
-    vec3 x1 = x0 - i1 + C.xxx;
-    vec3 x2 = x0 - i2 + C.yyy;
-    vec3 x3 = x0 - D.yyy;
-
-    i = mod289(i); 
-    vec4 p = permute( permute( permute( 
-                i.z + vec4(0.0, i1.z, i2.z, 1.0 ))
-              + i.y + vec4(0.0, i1.y, i2.y, 1.0 )) 
-              + i.x + vec4(0.0, i1.x, i2.x, 1.0 ));
-
-    float n_ = 0.142857142857;
-    vec3  ns = n_ * D.wyz - D.xzx;
-
-    vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
-
-    vec4 x_ = floor(j * ns.z);
-    vec4 y_ = floor(j - 7.0 * x_ );
-
-    vec4 x = x_ *ns.x + ns.yyyy;
-    vec4 y = y_ *ns.x + ns.yyyy;
-    vec4 h = 1.0 - abs(x) - abs(y);
-
-    vec4 b0 = vec4( x.xy, y.xy );
-    vec4 b1 = vec4( x.zw, y.zw );
-
-    vec4 s0 = floor(b0)*2.0 + 1.0;
-    vec4 s1 = floor(b1)*2.0 + 1.0;
-    vec4 sh = -step(h, vec4(0.0));
-
-    vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy ;
-    vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww ;
-
-    vec3 p0 = vec3(a0.xy,h.x);
-    vec3 p1 = vec3(a0.zw,h.y);
-    vec3 p2 = vec3(a1.xy,h.z);
-    vec3 p3 = vec3(a1.zw,h.w);
-
-    vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2, p2), dot(p3,p3)));
-    p0 *= norm.x;
-    p1 *= norm.y;
-    p2 *= norm.z;
-    p3 *= norm.w;
-
-    vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
-    m = m * m;
-    return 42.0 * dot( m*m, vec4( dot(p0,x0), dot(p1,x1), 
-                                dot(p2,x2), dot(p3,x3) ) );
-}
-float random_(vec3 st) {
-    return fract(sin(dot(st.xyz, vec3(12.9898,78.233,45.1642))) * 43758.5453);
-}
 #ifdef USE_NOISE_TEXTURE
 float sample3Dnoise(in vec3 v) {
     vec3 p = mod(floor(v), 256.0); // Add this line to make the noise repeat every 256 units
@@ -526,16 +305,4 @@ vec4 fbm3D(in vec3 x, int n)
 
     return vec4(a, d);
 }
-
-float R2(float X, float Y, float Z, float XY, float XZ, float YZ, float X2, float Y2, float Z2) {//correlation index
-    float DX = X2 - X * X;
-    float DY = Y2 - Y * Y;
-    float DZ = Z2 - Z * Z;
-    float a0 = X * X * Y2 + Y * Y * X2 - 2 * X * Y * XY;
-    float A = a0 * Z * Z + DX * YZ * YZ + DY * XZ * XZ;
-    float B = ((-2 * Y2 * X + 2 * XY * Y) * XZ + 2 * (X * XY - X2 * Y) * YZ) * Z + 2 * YZ * (X * Y - XY) * XZ;
-    float C = DZ * (a0 + XY * XY - X2 * Y2);
-    return 1 + A * B / max(C, 1e-6);
-}
-
 #endif COMMON_GLSL

@@ -223,7 +223,7 @@ Considering the original problem, we have $ E(V^2) = 1/n omega(T(V))^2 $
 
 Then the variance estimation is
 
-$ D(T(V)) = 1/n omega(T(V))^2 - 1/n^2 Lambda (T(V))^2 $
+$ D(T(V)) = 1/n^2 omega(T(V))^2 - 1/n^2 Lambda (T(V))^2 $
 
 Simplified as $D(T(V)) = sigma^2(V)$
 

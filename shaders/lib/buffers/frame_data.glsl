@@ -23,6 +23,10 @@ layout(std140,set=3, binding = 1) buffer frameData {
     uvec2 resolution_global;
 
     vec2 HDR_AB_global;
+
+    mat4 gbufferPreviousProjection_global;
+    mat4 gbufferPreviousModelView_global;
+    vec3 previousCameraPosition_global;
 };
 
 /*struct gBufferData{
