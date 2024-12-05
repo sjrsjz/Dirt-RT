@@ -32,9 +32,9 @@ void setSkyVars() {
         b_k = 0.95;
         break;
         case World_THE_NETHER:
-        S_R = 0.05;
+        S_R = 0.5;
         cosD_S = 1 / sqrt(1 + S_R * S_R);
-        Mie = vec3(0.2);
+        Mie = vec3(0.9);
         Rayleigh = 4e11 * pow(vec3(1. / 700, 1. / 520, 1. / 450), vec3(4));
         b_P = vec3(600000);
         b_k = 0.5;

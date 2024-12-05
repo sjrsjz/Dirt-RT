@@ -184,7 +184,7 @@ material Material_(vec3 pos, vec3 nor) {
     roughness = tmp_Payload.material.block_id.x == 1002 ? 0 : roughness;
     albedo = water ? vec3(1) : albedo;
     tmp_Payload.material.emission = tmp_Payload.material.block_id.x == 1002 ? albedo * (1 - trans) : tmp_Payload.material.emission;
-    tmp_Payload.material.emission *= 20;
+    tmp_Payload.material.emission *= 10;
     return newMaterial(clamp(tmp_Payload.material.F0, 0, 1), albedo, vec2((1 - tmp_Payload.material.metallic) * trans, 1 - trans), vec4(roughness > 0.01 ? max(roughness, 0.0125) : 0, trans, water, tmp_Payload.material.subsurface_scattering), tmp_Payload.material.emission);
 }
 
@@ -194,13 +194,6 @@ vec3 reproject(vec3 worldPos) {
     vec4 prevClipPos = gbufferPreviousProjection_global * vec4(prevViewPos, 1.0);
     return prevClipPos.xyz / prevClipPos.w * 0.5 + 0.5;
 }
-
-uint fetchPreviousFrame(vec3 worldPos) {
-    uint idx_l=getIdx(uvec2(reproject(worldPos).xy*imageSize(RayTraceData)+0.5).xy);
-    return idx_l;
-}
-
-
 
 vec4 sampleGodRay(vec3 b_Sun, vec3 b_Moon, vec3 ro, vec3 rd, float far, vec3 lightDir, bool hitFace, bool inside) {
     #if Sharp_Volumetric_Light
@@ -473,19 +466,20 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
                 diffuseIllumiantionBufferDataW data0 = samplePrevDiffuse(prev_coord.xy*resolution_global);
 
                 float w = 1;
-                if(count > 0 || rand(ro_o) <0. + 1*exp(- 1 * max(data0.weight-10,0)) || dot(data0.data_swap.shY.xyz,data0.data_swap.shY.xyz) < 0.00001)
+                float length_shY = length(data0.data_swap.shY.xyz);
+                if(count > 0 || data0.data_swap.shY.w * rand(ro_o) < data0.data_swap.shY.w-length_shY || length_shY < 1e-6)
                 {
                     rd_o2 = DiffuseNormal(macroNormal, ro_o);
                 }
                 else
                 {
                     // 基于上一帧的数据，计算新的法线
-                    vec4 Nv = WeightedDiffuse(normalize(data0.data_swap.shY.xyz),ro_o,3);
+                    vec4 Nv = WeightedDiffuse(normalize(data0.data_swap.shY.xyz),ro_o,length_shY/(1e-2+data0.data_swap.shY.w));
                     rd_o2 = Nv.xyz;
                     if(dot(rd_o2,macroNormal) < 0)
                         rd_o2 = DiffuseNormal(macroNormal, ro_o);
                     else
-                        w = max(0,dot(rd_o2,macroNormal))/max(Nv.w,0.1);
+                        w = max(0,dot(rd_o2,macroNormal)) * Nv.w;
                 }
                 
                 A.type = Diffussion;

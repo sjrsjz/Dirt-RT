@@ -197,15 +197,15 @@ vec4 WeightedDiffuse(vec3 normal, vec3 pos, float power) {
     // 生成随机方向
     float alpha = rand(pos) * 2 * PI;
     float rnd = rand(pos);
-    float tmp = 1 - 2 * pow(rnd,power);
+    float tmp = 1+ log(1-rnd+rnd*exp(-2*power))/power;
     vec3 n = tmp * normal + sqrt(1 - tmp * tmp) * (cos(alpha) * randN0 + sin(alpha) * randN1);
 
     // 计算权重
-    float pdf = pow(max(rnd,1e-5),1-power) / (PI*power);
+    float div_pdf = exp(- power *tmp) * PI*(exp(power) - 1)/power;
 
 
 
-    return vec4(n, pdf);
+    return vec4(n, div_pdf);
 }
 float GGXpdf(float costheta, float fai, float a) {
     float a2 = a * a;
