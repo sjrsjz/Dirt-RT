@@ -47,7 +47,7 @@ void setSkyVars() {
         
         //Rayleigh = 8e9 * pow(vec3(1. / 700, 1. / 520, 1. / 450), vec3(4));
         Rayleigh = 5e9 * pow(vec3(1. / 700, 1. / 520, 1. / 450), vec3(4));
-        Mie = vec3(luma(Rayleigh));
+        Mie = vec3(luma(Rayleigh)*0.1);
         b_P = vec3(300000);
         b_k = 0.125 + rainStrength_global * 0.875;
         break;
@@ -109,15 +109,15 @@ float fbm3D2(in vec3 x)
 float cloud_density(vec3 p) {
     lowp float density = 0.005 + smoothstep(0., 350., p.y) * smoothstep(50000., 5000., p.y)*0.5;
     density *= 1 + 0.5 * rainStrength_global;
-    lowp float k = clamp(fbm3D2(vec3(0.000025,0.000035,0.000025)*2.5 * p / clamp(p.y * 0.0000001,1,5)) - 1.1 + density, 0, 2);
-    return  min(k/ density,1);
+    lowp float k = clamp(fbm3D2(vec3(0.0000125,0.000035,0.0000125)* 2.5 * p / clamp(p.y * 0.00000001,1,5)) - 1.1 + density, 0, 2)*10;
+    return  min(k/ density,100);
 }
 vec3 getClouds(vec3 b_Sun, vec3 b_Moon, vec3 pos, vec3 n, vec3 lightDir, float Far) {
     //return getSkyColor(b_Sun, b_Moon, pos, n, lightDir);
     mediump vec3 c;
     const int step1 = 30;
     const int step2 = 60;
-    mediump vec3 b_k1 = mix(Rayleigh, Mie, 0.9) * 2500 / b_P / b_P;
+    mediump vec3 b_k1 = mix(Rayleigh, Mie, 0.975) * 5000 / b_P / b_P;
 
     if(world_type_global!=0) 
         c = getSkyColor(b_Sun, b_Moon, pos, n, lightDir);
