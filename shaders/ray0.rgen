@@ -69,6 +69,7 @@ void main() {
     iFrame = cam.frameId;
     isDarkened = world_type_global != World_OVERWORLD && world_type_global != World_THE_END && world_type_global != World_THE_NETHER;
     SunLight = isDarkened ? vec3(0) : vec3(2.5 * SunDivMoon * (1-0.975*rainStrength_global));
+    SunLight = mix(SunLight, vec3(0.125 * SunDivMoon), float(world_type_global == World_THE_END));
     MoonLight = isDarkened ? vec3(0) : vec3(0.025);
 
     vec4 celestialQuat = quatAxisAngle(vec3(1, 0, 0), radians(sunPathRotation));
@@ -697,34 +698,34 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
             illumiantion2 = vec3(0);
         }
         reflectIllumiantionBuffer.data[idx].data_swap = illumiantion2;
-        reflectIllumiantionBuffer.data[getIdx(coord-uvec2(1,0))].data_swap = illumiantion2;
+        //reflectIllumiantionBuffer.data[getIdx(coord-uvec2(1,0))].data_swap = illumiantion2;
     }
     switch (infos[0].type) {
         case 0:
         reflectIllumiantionBuffer.data[idx].data_swap = illumiantion;
         break;
         case Diffussion:
-        if(coord.x%2==0){
+        //if(true||int(coord.x)%2==0){
             SH tmpSH = irradiance_to_SH(illumiantion, infos[0].rd_o);
 
 
             diffuseIllumiantionBuffer.data[idx].data_swap = tmpSH;
-            diffuseIllumiantionBuffer.data[getIdx(coord+uvec2(1,0))].data_swap = tmpSH;
-        }
+           // diffuseIllumiantionBuffer.data[getIdx(coord+uvec2(1,0))].data_swap = tmpSH;
+        //}
         break;
         case Reflection:
-        if ((!hitSmoothSurface || count != 0)&&coord.x%2==1) {
+        if ((!hitSmoothSurface || count != 0) && coord.x % 2 == 0) {
             illumiantion = clamp(illumiantion, 0, 5 / avgExposure);
             reflectIllumiantionBuffer.data[idx].data_swap = illumiantion;
-            reflectIllumiantionBuffer.data[getIdx(coord-uvec2(1,0))].data_swap = illumiantion;
+            //reflectIllumiantionBuffer.data[getIdx(coord-uvec2(1,0))].data_swap = illumiantion;
         }
         break;
         case Refraction:
-        if (coord.x%2==0) {
+        //if (coord.x%2==0) {
             illumiantion = clamp(illumiantion, 0, 5 / avgExposure);
             refractIllumiantionBuffer.data[idx].data_swap = illumiantion;
-            refractIllumiantionBuffer.data[getIdx(coord+uvec2(1,0))].data_swap = illumiantion;
-        }
+            //refractIllumiantionBuffer.data[getIdx(coord+uvec2(1,0))].data_swap = illumiantion;
+        //}
         //refractIllumiantionBuffer.data[idx].normal = sampleNormal;
         //refractIllumiantionBuffer.data[idx].pos = infos[0].p;
         break;

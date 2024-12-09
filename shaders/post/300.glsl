@@ -147,7 +147,7 @@ void main() {
     //float scale = centerW/(2+6*exp(-0.1*avgExposure)/(0.01+avgExposure)+tex.w * (avgExposure)) * (0.5 * log(R0)+1)/(0.25+0.75*pow(abs(dot(info_.rd,centerNormal)),1));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
     //float scale = centerW/(1+10*exp(-0.1*avgExposure)/(0.01+avgExposure)+0.025*tex.w * (avgExposure)) * (pow(R0,0.75)+1)/(0.5+0.5*pow(abs(dot(info_.rd,centerNormal)),1));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
     
-    mediump float scale = 0.125 * clamp(tex.z + 0.5*tex.z*tex.z, 0, 500) * float(R0>2) / (1 + 2*tex.w) * pow(R0,2) * sqrt(avgExposure) ;//* (3-3*exp(-R0*0.1));// (1+15*exp(-0.1*avgExposure)/(0.01+avgExposure)+0.5*tex.w * avgExposure) * (R0+1)/(0.75+0.25*abs(dot(info_.rd,centerNormal)));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
+    mediump float scale = 0.05 * clamp(tex.z + 0.5*tex.z*tex.z, 0, 500) * float(R0>2) / (1 + 5 * tex.w) * pow(R0,2) * sqrt(avgExposure) ;//* (3-3*exp(-R0*0.1));// (1+15*exp(-0.1*avgExposure)/(0.01+avgExposure)+0.5*tex.w * avgExposure) * (R0+1)/(0.75+0.25*abs(dot(info_.rd,centerNormal)));// centerW *35 / (1+tex.w)*tex.z/(20+tex.z) / (1+avgExposure) ;//(100/(tex.z+1)+1000*tex.w);// * sqrt(avgExposure) / (30 / (0.5*tex.w+1) + tmp_.w * avgExposure );
     
     S_tex_w = tex.w;
     mediump float D = 0;
@@ -170,7 +170,7 @@ void main() {
     mediump float sum_D=0;
 
     for (int n = 0; n < totalIterations; n++) {
-        if (n==A_*(2*A_+1)+A_+1) {
+        if (n==A_*(2*A_+2)+1) {
             continue;
         }
         int i = n / (A_ + 1);
@@ -188,44 +188,38 @@ void main() {
         tmp.CoCg = CoCgWV.xy;
         
         mediump vec4 delta_shY = tmp.shY - centerSH.shY;
-        //delta_shY.xyz *= abs(delta_shY.w)*STEP*1000;
-        //vec2 delta_CoCg = tmp.CoCg - centerSH.CoCg;
-        //float delta = st[i][j] / (1 + scale * (sqrt(dot(delta_shY, delta_shY) + dot(delta_CoCg, delta_CoCg))));
+
         float d = denoiseBuffer.data[getIdx(uvec2(samplePos))].distance;
         
         lowp vec3 sampleNormal = texelFetch(colortex3, samplePos, 0).xyz;
 
         mediump float k = abs(dot(texelFetch(colortex4, samplePos, 0).xyz - centerPos, centerNormal));
 
-        //float w1 = st[i][j] * exp( - k * POSITION_PARAM - scale * sqrt(dot(delta_shY, delta_shY) + dot(delta_CoCg, delta_CoCg)));
-        mediump float w1 = st[i][j] * exp( - k * k * POSITION_PARAM/max(1,0.5*d*d)/(tex.w+1) -  scale * (dot(delta_shY.xyz,delta_shY.xyz)) * abs(dot(centerNormal,info_.rd))*(1+0.05*d));
+        mediump float w1 = st[i][j] * exp( - k * k * POSITION_PARAM/max(1,0.5*d*d)/(tex.w+1) -  scale * (dot(delta_shY,delta_shY)) * abs(dot(centerNormal,info_.rd))*(1+0.05*d));
 #if STEP == 1            
-        p_w+=k;
+        //p_w+=k;
 #endif
-        //float w0 =(1+exp(-0.5*texelFetch(colortex4, samplePos, 0).w))*svgfNormalWeight(centerNormal, sampleNormal)
 
         mediump float w0 = svgfNormalWeight(centerNormal, sampleNormal)
                 * w1
                 * float(samplePos == clamp(samplePos, vec2(0), texSize)) * step(-0.5, d);
-        D = updateVariance(avg_SH, D, tmp, (1+w) / (w0+1e-2));
+        D = updateVariance(avg_SH, D, tmp, w);
         accumulate_SH(avg_SH, tmp, w0);
         w += w0;
         sum_D += CoCgWV.w * w0;
-            //samplePos.y += R0;
-        
-        //samplePos.x += R0;
+
     }
     //D=100*(D);
-    avg_SH.shY-=centerSH.shY;
-    avg_SH.CoCg-=centerSH.CoCg;
+    //avg_SH.shY-=centerSH.shY;
+    //avg_SH.CoCg-=centerSH.CoCg;
 
     //D *= avgExposure;
     //tex.w = max(tex.w,1.25*sqrt(D));//tex.w*0.25 + D*0.75;//+(1*D-tex.w)*exp(-max(tex.z,0)*0.0);//*0.5+tex.w * 0.5;
     
     #if STEP == 1
-    tex.w =10* max((tex.w * 4 + sum_D)/(w+1e-3), sqrt(D));//pow(R0,2);//tex.w*0.25 + D*0.75;//+(1*D-tex.w)*exp(-max(tex.z,0)*0.0);//*0.5+tex.w * 0.5;
+    tex.w = max((tex.w * 40 + sum_D*40)/(w+1e-3), 10 * (D));//pow(R0,2);//tex.w*0.25 + D*0.75;//+(1*D-tex.w)*exp(-max(tex.z,0)*0.0);//*0.5+tex.w * 0.5;
     #else
-    tex.w = (tex.w + sqrt(D)) * 0.5;//pow(R0,2);//tex.w*0.25 + D*0.75;//+(1*D-tex.w)*exp(-max(tex.z,0)*0.0);//*0.5+tex.w * 0.5;
+    tex.w = (tex.w + (D)) * 0.5;//pow(R0,2);//tex.w*0.25 + D*0.75;//+(1*D-tex.w)*exp(-max(tex.z,0)*0.0);//*0.5+tex.w * 0.5;
 
     #endif
 

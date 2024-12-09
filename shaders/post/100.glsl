@@ -1,6 +1,7 @@
 #version 430 compatibility
 
 #define DIFFUSE_BUFFER_MIN
+#define PREV_DIFFUSE_BUFFER
 
 //layout(local_size_x = 16,local_size_y = 16) in;
 #include "/lib/constants.glsl"
@@ -118,6 +119,9 @@ void MixDiffuse() {
         return;
     }
     diffuseIllumiantionData data = sampleDiffuse(prevScreenPos.xy*textureSize(colortex0,0));
+    
+    //diffuseIllumiantionBufferDataW prev_data = samplePrevDiffuse(prevScreenPos.xy*textureSize(colortex0,0));
+    
     //diffuseIllumiantionData data = fetchDiffuse(ivec2(prevScreenPos.xy*(textureSize(colortex0,0))+0.5));
 
     float prev_dot = denoiseBuffer.data[idx_l].last_rd_dot_n;
@@ -133,6 +137,7 @@ void MixDiffuse() {
     //s = pow(s, 0.125);
     float prevW = data.prev_weight;
     prevW *= s;
+
     output_variance = min(100, updateVariance(data1.data_swap, data.prev_variance, data.data, prevW));
     prevW = clamp(prevW + 1,1,max(ACCUMULATION_LENGTH,50*pow(output_variance*avgExposure,-0.125)));
 

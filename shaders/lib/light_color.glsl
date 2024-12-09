@@ -93,9 +93,9 @@ vec3 getFogColor(vec3 b_Sun, vec3 b_Moon, in vec3 pos, in vec3 n, in vec3 lightD
 
 float fbm3D2(in vec3 x)
 {
-    mediump float a = 0.0;
-    mediump float b = 0.5;
-    mediump float f = 1.0;
+    lowp float a = 0.0;
+    lowp float b = 0.5;
+    lowp float f = 1.0;
     for (int i = 0; i < 4; i++)
     {
         a += b * valueNoise(f * x + b * time_global * 0.1+1000); // accumulate values
@@ -107,7 +107,7 @@ float fbm3D2(in vec3 x)
     return a;
 }
 float cloud_density(vec3 p) {
-    lowp float density = 0.005 + smoothstep(0., 350., p.y) * smoothstep(50000., 5000., p.y)*0.5;
+    lowp float density = 0.0025 + smoothstep(0., 350., p.y) * smoothstep(50000., 5000., p.y)*0.5;
     density *= 1 + 0.5 * rainStrength_global;
     lowp float k = clamp(fbm3D2(vec3(0.0000125,0.000035,0.0000125)* 2.5 * p / clamp(p.y * 0.00000001,1,5)) - 1.1 + density, 0, 2)*10;
     return  min(k/ density,100);

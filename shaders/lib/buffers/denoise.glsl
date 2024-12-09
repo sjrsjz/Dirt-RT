@@ -27,17 +27,14 @@ layout(std430, set = 3, binding = 0) buffer DenoiseBuffer {
 
 struct SH
 {
-    mediump vec4 shY;
+    mediump vec4 shY; // (I arrow(d), I), not spherical harmonics
     mediump vec2 CoCg;
 };
 
-// Switch to enable or disable the *look* of spherical harmonics lighting.
-// Does not affect the performance, just for A/B image comparison.
-#define ENABLE_SH 1
+// due to historical reasons, the SH is actually **T**, look for more details in “Algorithm Implementation” section in the paper
 
 vec3 project_SH_irradiance(SH sh, vec3 N)
 {
-    #if ENABLE_SH
     float Y = sh.shY.w;
     float T = Y - sh.CoCg.y * 0.5;
     float G = sh.CoCg.y + T;
@@ -46,11 +43,27 @@ vec3 project_SH_irradiance(SH sh, vec3 N)
 
     vec3 color = vec3(R,G,B) * (max(dot(sh.shY.xyz, N),0) + (Y - length(sh.shY.xyz))) / (Y+1e-3);
     return max(color, vec3(0.0));
-    #else
-    return sh.shY.xyz;
-    #endif
 }
 
+float directional_light_strength(SH sh)
+{
+    return length(sh.shY.xyz);
+}
+
+float ambient_light_strength(SH sh)
+{
+    return sh.shY.w - length(sh.shY.xyz);
+}
+
+float light_strength(SH sh)
+{
+    return sh.shY.w;
+}
+
+float light_sigma(SH sh)
+{
+    return sh.shY.w * sh.shY.w - dot(sh.shY.xyz, sh.shY.xyz);
+}
 
 vec3 test_SH(SH sh){
     vec3 color = vec3(0);
@@ -64,7 +77,6 @@ SH irradiance_to_SH(vec3 color, vec3 dir)
 {
     SH result;
 
-    #if ENABLE_SH
     float Co = color.r - color.b;
     float t = color.b + Co * 0.5;
     float Cg = color.g - t;
@@ -73,25 +85,10 @@ SH irradiance_to_SH(vec3 color, vec3 dir)
     result.CoCg = vec2(Co, Cg);
 
     result.shY = vec4(dir * Y,Y);
-    #else
-    result.shY = vec4(color, 0);
-    result.CoCg = vec2(0);
-    #endif
 
     return result;
 }
 
-vec3 SH_to_irradiance(SH sh)
-{
-    float Y = sh.shY.w / 0.282095;
-
-    float T = Y - sh.CoCg.y * 0.5;
-    float G = sh.CoCg.y + T;
-    float B = T - sh.CoCg.x * 0.5;
-    float R = B + sh.CoCg.x;
-
-    return max(vec3(R, G, B), vec3(0.0));
-}
 
 SH mix_SH(SH a, SH b, float s)
 {
