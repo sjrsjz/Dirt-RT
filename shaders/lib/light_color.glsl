@@ -72,8 +72,8 @@ vec3 getSkyColor(vec3 b_Sun, vec3 b_Moon, in vec3 pos, in vec3 n, in vec3 lightD
     //t=b_Q*0.5*(b_P-pos.y)*(b_P-pos.y);
     //c+=b_Moon*g*(exp(-t/n.y)-exp(-t/lightDir1.y))/(n.y-lightDir1.y)*max(lightDir1.y,0.);
 
-    c += exp(-t / n.y) * b_Sun * exp(-sqrt(abs(min(dot(n0, lightDir) - cosD_S, 0)) * 6000));
-    c += exp(-t / n.y) * b_Moon * exp(-sqrt(abs(min(dot(n0, -lightDir) - cosD_S, 0)) * 15000));
+    c += exp(-t / n.y) * b_Sun * exp(-sqrt(abs(min(dot(n0, lightDir) - cosD_S, 0)) * 6000)) * 10;
+    c += exp(-t / n.y) * b_Moon * exp(-sqrt(abs(min(dot(n0, -lightDir) - cosD_S, 0)) * 15000)) * 10;
     return max(c,0);
 }
 vec3 getFogColor(vec3 b_Sun, vec3 b_Moon, in vec3 pos, in vec3 n, in vec3 lightDir, float s, vec3 col) {

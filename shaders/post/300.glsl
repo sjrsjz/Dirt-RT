@@ -173,8 +173,8 @@ void main() {
         if (n==A_*(2*A_+2)+1) {
             continue;
         }
-        int i = n / (A_ + 1);
-        int j = n % (A_ + 1);
+        const int i = n / (A_ + 1);
+        const int j = n % (A_ + 1);
         #if STEP % 2 !=0 && STEP > 1
             if(i != B_ && j !=B_) continue;
         #endif
@@ -184,7 +184,7 @@ void main() {
         SH tmp;
         
         tmp.shY = texelFetch(colortex5, samplePos, 0);
-        mediump vec4 CoCgWV = texelFetch(colortex6, samplePos, 0);
+        lowp vec4 CoCgWV = texelFetch(colortex6, samplePos, 0);
         tmp.CoCg = CoCgWV.xy;
         
         mediump vec4 delta_shY = tmp.shY - centerSH.shY;
@@ -217,7 +217,7 @@ void main() {
     //tex.w = max(tex.w,1.25*sqrt(D));//tex.w*0.25 + D*0.75;//+(1*D-tex.w)*exp(-max(tex.z,0)*0.0);//*0.5+tex.w * 0.5;
     
     #if STEP == 1
-    tex.w = max((tex.w * 40 + sum_D*40)/(w+1e-3), 10 * (D));//pow(R0,2);//tex.w*0.25 + D*0.75;//+(1*D-tex.w)*exp(-max(tex.z,0)*0.0);//*0.5+tex.w * 0.5;
+    tex.w = max((tex.w  + sum_D)/(w+1e-3), 10 * (D));//pow(R0,2);//tex.w*0.25 + D*0.75;//+(1*D-tex.w)*exp(-max(tex.z,0)*0.0);//*0.5+tex.w * 0.5;
     #else
     tex.w = (tex.w + (D)) * 0.5;//pow(R0,2);//tex.w*0.25 + D*0.75;//+(1*D-tex.w)*exp(-max(tex.z,0)*0.0);//*0.5+tex.w * 0.5;
 

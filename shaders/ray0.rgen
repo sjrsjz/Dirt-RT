@@ -3,6 +3,7 @@
 #extension GL_EXT_buffer_reference : enable
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : enable
 #extension GL_EXT_ray_tracing : enable
+#extension GL_ARB_shader_texture_lod : enable
 #define IN_VULKANITE
 
 #define PREV_DIFFUSE_BUFFER
@@ -68,7 +69,7 @@ void main() {
 
     iFrame = cam.frameId;
     isDarkened = world_type_global != World_OVERWORLD && world_type_global != World_THE_END && world_type_global != World_THE_NETHER;
-    SunLight = isDarkened ? vec3(0) : vec3(2.5 * SunDivMoon * (1-0.975*rainStrength_global));
+    SunLight = isDarkened ? vec3(0) : vec3(1 * SunDivMoon * (1-0.975*rainStrength_global));
     SunLight = mix(SunLight, vec3(0.125 * SunDivMoon), float(world_type_global == World_THE_END));
     MoonLight = isDarkened ? vec3(0) : vec3(0.025);
 
@@ -234,7 +235,7 @@ vec4 sampleGodRay(vec3 b_Sun, vec3 b_Moon, vec3 ro, vec3 rd, float far, vec3 lig
         c = float(t < -0.5) * g * SampleSky(-sampleDir);
     }
 
-    c *= tmp_Payload.shadowTransmission * max(0.5*sqrt(1-cosD_S*cosD_S) * 0.25 * (1 - 0.5 * clamp(-lightDir.y * 2, 0, 1)), rainStrength_global * 0.125) * exp(-b_Q * h * sampleX + 0.5 * b_Q * sampleX * sampleX * sampleDir.y);
+    c *= 0.25 * tmp_Payload.shadowTransmission * max(0.5*sqrt(1-cosD_S*cosD_S) * 0.25 * (1 - 0.5 * clamp(-lightDir.y * 2, 0, 1)), rainStrength_global * 0.125) * exp(-b_Q * h * sampleX + 0.5 * b_Q * sampleX * sampleX * sampleDir.y);
     return vec4(clamp(c, 0, 10), t < -0.5 ? s : -1);
 }
 

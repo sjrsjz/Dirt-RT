@@ -6,6 +6,7 @@
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_8bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types : require
+#extension GL_ARB_shader_texture_lod : enable
 
 #include "/lib/rt/data.glsl"
 #include "/lib/rt/payload.glsl"
