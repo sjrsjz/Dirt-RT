@@ -9,6 +9,7 @@ uniform sampler2D colortex1;
 /*
 const int colortex1Format = RGBA32F;
 */
+const bool colortex0MipmapEnabled = true;
 /* RENDERTARGETS: 0,1 */
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 bloomColor;
@@ -20,7 +21,7 @@ void main() {
     for (int i = -2; i <= 2; i++)
         for (int j = -2; j <= 2; j++)
             avg += texelFetch(colortex1, ivec2(gl_FragCoord.xy + vec2(i, j)), 0).rgb;
-    fragColor.xyz = mix(avg/25,texture(colortex0, texCoord).rgb,0.875);
+    fragColor.xyz = mix(avg/25,textureLod(colortex0, texCoord,4).rgb,0.875);
 
     fragColor.xyz = pow(ACESFilm(fragColor.xyz),vec3(1/2.2));
     bloomColor = texture(colortex1, texCoord);

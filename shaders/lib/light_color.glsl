@@ -113,7 +113,7 @@ float cloud_density(vec3 p) {
     return  min(k/ density,100);
 }
 vec3 getClouds(vec3 b_Sun, vec3 b_Moon, vec3 pos, vec3 n, vec3 lightDir, float Far) {
-    //return getSkyColor(b_Sun, b_Moon, pos, n, lightDir);
+    return getSkyColor(b_Sun, b_Moon, pos, n, lightDir);
     mediump vec3 c;
     const int step1 = 30;
     const int step2 = 60;

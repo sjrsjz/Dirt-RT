@@ -71,7 +71,7 @@ void main() {
     isDarkened = world_type_global != World_OVERWORLD && world_type_global != World_THE_END && world_type_global != World_THE_NETHER;
     SunLight = isDarkened ? vec3(0) : vec3(1 * SunDivMoon * (1-0.975*rainStrength_global));
     SunLight = mix(SunLight, vec3(0.125 * SunDivMoon), float(world_type_global == World_THE_END));
-    MoonLight = isDarkened ? vec3(0) : vec3(0.025);
+    MoonLight = isDarkened ? vec3(0) : vec3(0.2);
 
     vec4 celestialQuat = quatAxisAngle(vec3(1, 0, 0), radians(sunPathRotation));
     vec3 sunDir = quatRotate(normalize(mat3(cam.viewInverse) * cam.sunPosition.xyz), celestialQuat);
@@ -186,7 +186,7 @@ material Material_(vec3 pos, vec3 nor) {
     roughness = tmp_Payload.material.block_id.x == 1002 ? 0 : roughness;
     albedo = water ? vec3(1) : albedo;
     tmp_Payload.material.emission = tmp_Payload.material.block_id.x == 1002 ? albedo * (1 - trans) : tmp_Payload.material.emission;
-    tmp_Payload.material.emission *= 10;
+    tmp_Payload.material.emission *= 50;
     return newMaterial(clamp(tmp_Payload.material.F0, 0, 1), albedo, vec2((1 - tmp_Payload.material.metallic) * trans, 1 - trans), vec4(roughness > 0.01 ? max(roughness, 0.0125) : 0, trans, water, tmp_Payload.material.subsurface_scattering), tmp_Payload.material.emission);
 }
 
@@ -469,7 +469,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
 
                 float w = 1;
                 float length_shY = length(data0.data_swap.shY.xyz);
-                if(count > 0 || data0.data_swap.shY.w * rand(ro_o) < data0.data_swap.shY.w-length_shY || length_shY < 1e-6)
+                if(count > 0 || data0.data_swap.shY.w * rand(ro_o) < data0.data_swap.shY.w-length_shY || length_shY < 1e-6 || prev_coord.x<0 || prev_coord.x>1 || prev_coord.y<0 || prev_coord.y>1)
                 {
                     rd_o2 = DiffuseNormal(macroNormal, ro_o);
                 }
