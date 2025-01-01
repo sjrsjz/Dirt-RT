@@ -51,14 +51,14 @@ const bool colortex7Clear = true;
 const bool colortex8Clear = true;
 */
 
-const float NORMAL_PARAM = 32.0;
-const float POSITION_PARAM = 64.0;
+const float NORMAL_PARAM = 64.0;
+const float POSITION_PARAM = 32.0;
 const float LUMINANCE_PARAM = 4.0;
 
 float svgfNormalWeight(vec3 centerNormal, vec3 normal, float d) {
-    float A=exp(-40*(max(abs(length(centerNormal)-length(normal)),0.1)-0.1));
-    float B=exp(-40*(max(distance(normalize(centerNormal),normalize(normal)),0.05)-0.05));
-    return A*B*clamp(pow(max(dot(normalize(centerNormal),normalize(normal)), 0.0), NORMAL_PARAM),0,1);
+    float A=exp(-abs(length(centerNormal)-length(normal)));
+    float B=exp(-distance(normalize(centerNormal),normalize(normal)));
+    return min(1,A*B*clamp(pow(max(dot(normalize(centerNormal),normalize(normal)), 0.0), NORMAL_PARAM),0,1)+0.1);
 //    clamp(exp(-5*length(centerNormal-normal)),0.,1.);
 }
 
@@ -125,10 +125,10 @@ void MixReflect() {
 
     float s = float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.normal, data2.normal,info_distance)
              * svgfPositionWeight(data.pos, data2.pos, data2.normal,info_distance);
-    s = pow((min(1, s + 0.75) - 0.75)/0.25,0.125);
+    //s = pow((min(1, s + 0.75) - 0.75)/0.25,0.125);
     
-    float prevW = data.weight;
-    prevW = max(1, min(prevW * s + 1, ACCUMULATION_LENGTH));
+    float prevW = data.prev_weight;
+    prevW = max(1, min(prevW * s + 1, 10*ACCUMULATION_LENGTH));
 
     data2.data_swap = data.data+(data2.data_swap-data.data)/prevW;
     data2.weight = prevW;
@@ -150,7 +150,7 @@ void main() {
         return;
     }
     prevScreenPos = reproject2(data2.pos);
-    idx_l=getIdx(uvec2(prevScreenPos.xy*textureSize(colortex0,0)));
+    idx_l=getIdx(uvec2(prevScreenPos.xy*textureSize(colortex0,0)+0.5));
 
     MixReflect();
    // data2.weight=10;

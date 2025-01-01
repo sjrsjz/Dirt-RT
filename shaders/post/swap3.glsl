@@ -28,7 +28,7 @@ void main() {
     if (any(isnan(tmp.data_swap.CoCg))) tmp.data_swap.CoCg = vec2(0);
     tmp.data = tmp.data_swap;
     tmp.prev_weight=tmp.weight;
-    tmp.prev_variance=tmp.variance;
+    tmp.prev_variance= tmp.variance;
     
     tmp.data_swap.shY=texelFetch(colortex5,pix,0);
     tmp.data_swap.CoCg=texelFetch(colortex6,pix,0).xy;

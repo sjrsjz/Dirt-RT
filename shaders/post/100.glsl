@@ -130,9 +130,9 @@ void MixDiffuse() {
     denoiseBuffer.data[idx].last_rd_dot_n = curr_dot;
 
     float s =  s0 *float(denoiseBuffer.data[idx_l].distance > -0.5)
-                  * svgfPositionWeight(data.pos, data1.pos, data1.normal,info_distance)
-                  * svgfNormalWeight(data.normal, data1.normal,info_distance) ;
-    s = pow((min(1, s + 0.5) - 0.5)/0.5,0.125);
+                  * svgfPositionWeight(data.pos, data1.pos, data1.normal,info_distance);
+                  //* svgfNormalWeight(data.normal, data1.normal,info_distance) ;
+    //s = pow((min(1, s + 0.5) - 0.5)/0.5,0.125);
     //s = 1;// (min(1, s + 0.875) - 0.875)*8;
     //s = pow(s, 0.125);
     float prevW = data.prev_weight;

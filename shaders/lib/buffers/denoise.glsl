@@ -158,6 +158,7 @@ struct vec3IllumiantionData {
     vec3 pos;
     mediump vec3 normal;
     mediump float weight;
+    mediump float prev_weight;
     mediump float mixWeight;
 };
 
@@ -368,11 +369,14 @@ vec3IllumiantionData fetchReflect(ivec2 p) {
     vec3IllumiantionData tmp;
     vec4 tmp4 = texelFetch(reflectIllumiantionData_color_swap_Sampler, p, 0);
     tmp.data_swap = tmp4.xyz;
-    tmp.weight = tmp4.w;
+    vec2 w_mw = unpackHalf2x16(floatBitsToUint(tmp4.w)); // weight, mixWeight
+    tmp.weight = w_mw.x;
+    tmp.mixWeight = w_mw.y;
     #ifndef REFLECT_BUFFER_MIN2
     tmp4 = texelFetch(reflectIllumiantionData_color_Sampler, p, 0);
     tmp.data = tmp4.xyz;
-    tmp.mixWeight=tmp4.w;
+    w_mw = unpackHalf2x16(floatBitsToUint(tmp4.w)); // prev_weight, 0
+    tmp.prev_weight = w_mw.x;
     tmp.normal = texelFetch(reflectIllumiantionData_lnormal_Sampler, p, 0).xyz;
     tmp.pos = texelFetch(reflectIllumiantionData_lpos_Sampler, p, 0).xyz;
     #endif
@@ -382,8 +386,9 @@ vec3IllumiantionData fetchReflect(ivec2 p) {
 vec3IllumiantionData blendReflect(vec3IllumiantionData A,vec3IllumiantionData B,float x){
     vec3IllumiantionData t;
     t.data_swap=mix(A.data_swap,B.data_swap,x);
-    t.weight=(B.weight-A.weight)*x+A.weight;    
+    t.weight=(B.weight-A.weight)*x+A.weight;
     #ifndef REFLECT_BUFFER_MIN2
+    t.prev_weight=(B.prev_weight-A.prev_weight)*x+A.prev_weight;
     t.data=mix(A.data,B.data,x);
     t.pos=mix(A.pos,B.pos,x);
     t.normal=mix(A.normal,B.normal,x);
@@ -408,9 +413,11 @@ vec3IllumiantionData sampleReflect(vec2 p){
 
 
 void WriteReflect(vec3IllumiantionData data, ivec2 p) {
-    imageStore(reflectIllumiantionData_swap_color, p, vec4(data.data_swap, data.weight));
-    #if !defined(REFLECT_BUFFER_MIN) && !defined(REFLECT_BUFFER_MIN2) 
-    imageStore(reflectIllumiantionData_color, p, vec4(data.data, data.mixWeight));
+    float packed_w_mw = uintBitsToFloat(packHalf2x16(vec2(data.weight, data.mixWeight)));
+    imageStore(reflectIllumiantionData_swap_color, p, vec4(data.data_swap, packed_w_mw));
+    #if !defined(REFLECT_BUFFER_MIN) && !defined(REFLECT_BUFFER_MIN2)
+    packed_w_mw = uintBitsToFloat(packHalf2x16(vec2(data.prev_weight, 0)));
+    imageStore(reflectIllumiantionData_color, p, vec4(data.data, packed_w_mw));
     imageStore(reflectIllumiantionData_lpos, p, vec4(data.pos, 0));
     imageStore(reflectIllumiantionData_lnormal, p, vec4(data.normal, 0));
     #endif

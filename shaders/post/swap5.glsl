@@ -30,5 +30,6 @@ void main() {
     tmp.normal =texelFetch(colortex3,pix,0).xyz;
     tmp.pos = texelFetch(colortex4,pix,0).xyz;
     tmp.mixWeight=denoiseBuffer.data[idx].reflectWeight;
+    tmp.prev_weight=tmp.weight;
     WriteReflect(tmp,pix);
 }

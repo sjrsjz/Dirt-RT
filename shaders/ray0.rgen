@@ -69,7 +69,7 @@ void main() {
 
     iFrame = cam.frameId;
     isDarkened = world_type_global != World_OVERWORLD && world_type_global != World_THE_END && world_type_global != World_THE_NETHER;
-    SunLight = isDarkened ? vec3(0) : vec3(1 * SunDivMoon * (1-0.975*rainStrength_global));
+    SunLight = isDarkened ? vec3(0) : vec3(SunDivMoon * (1-0.975*rainStrength_global));
     SunLight = mix(SunLight, vec3(0.125 * SunDivMoon), float(world_type_global == World_THE_END));
     MoonLight = isDarkened ? vec3(0) : vec3(0.2);
 
@@ -286,7 +286,7 @@ vec3 sampleSunlight(vec3 ro, vec3 normal, vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S, v
         sampleColor = (weightA * Cs * rC.xyz * S.x * 0.25 / IoH
                 + Cd * (1 - S.x * rC.xyz) / (max(-OoN, 0) + abs(dot(normal, rd_i)) + 0.001) * g) * max(OoN, 0);
         #else
-        sampleColor = (weightA * Cs * rC.xyz * S.x * 0.25 / IoH
+        sampleColor = (weightA * Cs * rC.xyz * S.x  / IoH
                 + Cd * (1 - S.x * rC.xyz)) * max(OoN, 0);
         #endif
         break;
@@ -299,7 +299,7 @@ vec3 sampleSunlight(vec3 ro, vec3 normal, vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S, v
 
         break;
         case Reflection:
-        sampleColor = (weightA * Cs * 0.25 / IoH) * max(OoN, 0);
+        sampleColor = (weightA * Cs  / IoH) * max(OoN, 0);
         break;
         default:
         break;
@@ -372,7 +372,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
             vec3 offset = fbm3D(ro_o * 0.125 + time_global * 0.125, 5).yzw * 0.25;
             vec3 dH = normalize(vec3(offset.x, 1, offset.z));
             dH = faceforward(dH, dH, normal);
-            normal = normalize(mix(normal, dH, max(0.25 * abs(normal.y), 0)));
+            normal = normalize(mix(normal, dH, max(0.125 * abs(normal.y), 0)));
         }
         vec3 microNormal;
 
@@ -426,7 +426,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
             if (dot(rd_o, normal) > 0) {
                 A.n_o = mA.x;
                 float OoN = dot(rd_o, normal);
-                shade = vec3(GGX_G2(IoN, OoN, surface.R.x) * surface.S.x / (max(p,0.125) + 1e-5)) *0.25;
+                shade = vec3(GGX_G2(IoN, OoN, surface.R.x) * surface.S.x / (max(p,0.125) + 1e-5));// *0.25;
                 I = rC.rgb;
                 A.sampleRoughness = surface.R.x;
                 A.type = Reflection;
@@ -476,7 +476,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
                 else
                 {
                     // 基于上一帧的数据，计算新的法线
-                    vec4 Nv = WeightedDiffuse(normalize(data0.data_swap.shY.xyz),ro_o,length_shY/(1e-2+data0.data_swap.shY.w-length_shY));
+                    vec4 Nv = WeightedDiffuseEx(normalize(data0.data_swap.shY.xyz),ro_o,length_shY/(1e-2+data0.data_swap.shY.w));
                     rd_o2 = Nv.xyz;
                     if(dot(rd_o2,macroNormal) < 0)
                         rd_o2 = DiffuseNormal(macroNormal, ro_o);
@@ -723,7 +723,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) { //return vec4(0);
         break;
         case Refraction:
         //if (coord.x%2==0) {
-            illumiantion = clamp(illumiantion, 0, 5 / avgExposure);
+            //illumiantion = clamp(illumiantion, 0, 50 / avgExposure);
             refractIllumiantionBuffer.data[idx].data_swap = illumiantion;
             //refractIllumiantionBuffer.data[getIdx(coord+uvec2(1,0))].data_swap = illumiantion;
         //}

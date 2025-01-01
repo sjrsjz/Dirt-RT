@@ -35,7 +35,9 @@ void main() {
         
         //fragColor.xyz = abs(tmp3.normal);
         //fragColor.xyz = diffuseIllumiantionBuffer.data[idx].normal;
-        //fragColor.xyz = tmp.variance*vec3(0.1);
+        //fragColor.xyz = sqrt(tmp.variance)*vec3(1);
+        
+        //fragColor.xyz = tmp2.weight*vec3(0.5);
         //fragColor.xyz = vec3(1) * (dot(tmp.data_swap.shY.xyz,diffuseIllumiantionBuffer.data[idx].normal2));
         
         //fragColor.xyz=vec3(1)*(project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2)) ;

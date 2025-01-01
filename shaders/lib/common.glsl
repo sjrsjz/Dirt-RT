@@ -184,6 +184,8 @@ vec3 DiffuseNormal(vec3 normal, vec3 pos) {
 }
 
 // 方向重要性采样
+// E(x) = coth(power) - 1/power
+
 vec4 WeightedDiffuse(vec3 normal, vec3 pos, float power) {
     // 返回采样方向和权重
     vec3 randN0;
@@ -202,11 +204,31 @@ vec4 WeightedDiffuse(vec3 normal, vec3 pos, float power) {
 
     // 计算权重
     float div_pdf = exp(- power *tmp) * PI*(exp(power) - 1)/power;
-
-
-
     return vec4(n, div_pdf);
 }
+
+vec4 WeightedDiffuseEx(vec3 normal, vec3 pos, float Ex) {
+    float power = Ex * (3 - Ex*Ex)/(1 - Ex*Ex);
+    // 返回采样方向和权重
+    vec3 randN0;
+    randN0.y = -length(normal.xz);
+    if (normal.y > 0.99 || normal.y < -0.99)
+        randN0.xz = vec2(1, 0);
+    else
+        randN0.xz = normal.xz * normal.y * inversesqrt(1 - normal.y * normal.y);
+    vec3 randN1 = cross(normal, randN0);
+    // 生成随机方向
+    float alpha = rand(pos) * 2 * PI;
+    float rnd = rand(pos);
+    float tmp = 1+ log(1-rnd+rnd*exp(-2*power))/power;
+    vec3 n = tmp * normal + sqrt(1 - tmp * tmp) * (cos(alpha) * randN0 + sin(alpha) * randN1);
+    // 计算权重
+    float div_pdf = exp(- power *tmp) * PI*(exp(power) - 1)/power;
+    return vec4(n, div_pdf);
+}
+
+
+
 float GGXpdf(float costheta, float fai, float a) {
     float a2 = a * a;
     float b = 1 + (a2 - 1) * costheta * costheta;

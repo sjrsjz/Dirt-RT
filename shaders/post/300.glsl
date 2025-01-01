@@ -80,7 +80,7 @@ void main() {
     vec4 tex = texelFetch(colortex6, pix, 0);
     
     centerSH.CoCg = tex.xy;
-    mediump float scale = 0.025 * clamp(tex.z + 0.5*tex.z*tex.z, 0, 100) * float(R0>2) / (1 + 5 * tex.w) * pow(R0,2) * sqrt(avgExposure) * abs(dot(centerNormal,info_.rd));
+    mediump float scale = 0.025 * clamp(tex.z + 0.5*tex.z*tex.z, 0, 100)  / (1 + 5 * tex.w)* float(R0>2) * pow(R0,2) * sqrt(avgExposure) * abs(dot(centerNormal,info_.rd));
     
     S_tex_w = tex.w;
     mediump float D = 0;
@@ -101,13 +101,17 @@ void main() {
  
     mediump float pos_scale = POSITION_PARAM/(max(1,0.005*info_.distance));
  
+
+    ivec2 rand_offset = ivec2(round(rand(vec2(pix))*2-1),round(rand(vec2(pix+10))*2-1));
+
+
     SH tmp;
     for (int i = -B_; i <= B_; i++) {
         for (int j = -B_; j <= B_; j++) {
             if (i==0 && j==0) {
                 continue;
             }
-            samplePos = pix + R0 * ivec2(i,j);
+            samplePos = pix + R0 * ivec2(i,j) + rand_offset;
             
             tmp.shY = texelFetch(colortex5, samplePos, 0);
             vec4 CoCgWV = texelFetch(colortex6, samplePos, 0);
@@ -119,8 +123,14 @@ void main() {
             
             vec3 sampleNormal = texelFetch(colortex3, samplePos, 0).xyz;
 
+#if STEP == 1
             mediump float k = abs(dot(texelFetch(colortex4, samplePos, 0).xyz - centerPos, centerNormal)) + 0.3;
-            mediump float w1 = exp(-sqrt(R0)*0.025*(i*i+j*j) - k * k * pos_scale -  scale * dot(delta_shY,delta_shY));
+            mediump float w1 = exp(-sqrt(R0)*0.025*(i*i+j*j) - k * k * pos_scale - scale * dot(delta_shY,delta_shY)/ (tex.w) * tex.z);
+#else
+            mediump float k = abs(dot(texelFetch(colortex4, samplePos, 0).xyz - centerPos, centerNormal)) + 0.3;
+            mediump float w1 = exp(-sqrt(R0)*0.025*(i*i+j*j) - k * k * pos_scale - scale * dot(delta_shY,delta_shY));
+#endif
+
             mediump float w0 = max(dot(centerNormal, sampleNormal),0)
                     * w1
                     * float(samplePos == clamp(samplePos, vec2(0), texSize)) * step(-0.5, d);
@@ -133,9 +143,14 @@ void main() {
         #endif
         }
     }
-
+#if STEP == 1
+    //accumulate_SH(avg_SH, centerSH, D * sqrt(avgExposure) * 10.25);
+    //w += D * sqrt(avgExposure) * 10.25;
+#endif
+    //avg_SH = centerSH;
+    //w = 1;
     #if STEP == 1
-    tex.w = max((tex.w  + sum_D)/(w+1e-3), 10 * D);
+    tex.w = max(tex.w  + (sum_D)/(w+1e-3), 10 * D);
     #else
     tex.w = (tex.w + D) * 0.5;
 
