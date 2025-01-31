@@ -20,8 +20,11 @@ uniform sampler2D colortex6;
 
 //layout(location = 0) out vec4 fragColor;
 
-
+uniform vec2 resolution;
 void main() {
+    // if(gl_GlobalInvocationID.x >= resolution.x/2 || gl_GlobalInvocationID.y >= resolution.y/2) {
+    //     return;
+    // }
     ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
     diffuseIllumiantionData tmp=fetchDiffuse(pix);
     if (any(isnan(tmp.data_swap.shY))) tmp.data_swap.shY = vec4(0);

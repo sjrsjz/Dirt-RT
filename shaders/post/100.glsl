@@ -40,7 +40,6 @@ uniform int worldTime;
 const int colortex0Format = RGBA32F;
 const int colortex1Format = RGBA32F;
 const int colortex2Format = RGBA32F;
-const int colortex6Format = RGBA32F;
 const int colortex7Format = RGBA32F;
 const int colortex8Format = RGBA32F;
 
@@ -54,7 +53,7 @@ const bool colortex8Clear = true;
 */
 
 const float NORMAL_PARAM = 32.0;
-const float POSITION_PARAM = 64.0;
+const float POSITION_PARAM = 256.0;
 const float LUMINANCE_PARAM = 4.0;
 
 float svgfNormalWeight(vec3 centerNormal, vec3 normal, float distance) { 
@@ -63,7 +62,7 @@ float svgfNormalWeight(vec3 centerNormal, vec3 normal, float distance) {
 
 float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float distance) {
     // Modified to check for distance from the center plane
-    return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)/sqrt(distance)));
+    return exp(-(pow(POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)/sqrt(distance)),4)));
 }
 
 vec3 reproject(vec3 screenPos) {
@@ -118,23 +117,28 @@ void MixDiffuse() {
     if (notInRange(prevScreenPos.xy)) {
         return;
     }
-    diffuseIllumiantionData data = sampleDiffuse(prevScreenPos.xy*textureSize(colortex0,0));
-    
-    //diffuseIllumiantionBufferDataW prev_data = samplePrevDiffuse(prevScreenPos.xy*textureSize(colortex0,0));
-    
-    //diffuseIllumiantionData data = fetchDiffuse(ivec2(prevScreenPos.xy*(textureSize(colortex0,0))+0.5));
+    vec2 prev_screen = prevScreenPos.xy * textureSize(colortex0,0);
+    diffuseIllumiantionData data = sampleDiffuse(prev_screen);
 
-    float prev_dot = denoiseBuffer.data[idx_l].last_rd_dot_n;
-    float curr_dot = -dot(normalize(data1.normal), curr_rd);
-    float s0 = 1;//exp(-16*(max(0.01,curr_dot-prev_dot)-0.01)/(prev_dot*prev_dot+0.1));// 当夹角变小时，说明历史信息不可信
-    denoiseBuffer.data[idx].last_rd_dot_n = curr_dot;
+    float pos_weight = 0;
+    for(int i=-1;i<=1;i++){
+        for(int j=-1;j<=1;j++){
+            vec2 offset = vec2(i,j);
+            vec3 pos = sampleDiffusePos(prev_screen + offset);
+            float w = svgfPositionWeight(pos, data1.pos, data1.normal,info_distance);
+            //pos_weight += w*w;
+            pos_weight = max(pos_weight, w);
+        }
 
-    float s =  s0 *float(denoiseBuffer.data[idx_l].distance > -0.5)
-                  * svgfPositionWeight(data.pos, data1.pos, data1.normal,info_distance);
-                  //* svgfNormalWeight(data.normal, data1.normal,info_distance) ;
-    //s = pow((min(1, s + 0.5) - 0.5)/0.5,0.125);
-    //s = 1;// (min(1, s + 0.875) - 0.875)*8;
-    //s = pow(s, 0.125);
+    }
+    //pos_weight = sqrt(pos_weight/9);  // 实际上这玩意成了一种几何边缘检测，也许可以用来阻止降噪器在几何边缘失效的问题
+
+    //diffuseIllumiantionData data = sampleDiffuse(prevScreenPos.xy*textureSize(colortex0,0)-0.5);
+    
+
+
+    float s =  float(denoiseBuffer.data[idx].distance > -0.5)*pos_weight;
+                  //* svgfPositionWeight(data.pos, data1.pos, data1.normal,info_distance);
     float prevW = data.prev_weight;
     prevW *= s;
 
@@ -144,9 +148,6 @@ void MixDiffuse() {
     out_data.data_swap = mix_SH(data.data,data1.data_swap,1/prevW);
 
     output_weight = prevW;
-
-    //out_data.weight = prevW;
-    //out_data.variance = output_variance;
 }
 /* RENDERTARGETS: 5 */
 layout(location = 0) out vec4 output_data;
@@ -154,15 +155,25 @@ layout(location = 0) out vec4 output_data;
 layout(rgba32f) uniform image2D extInfoBuffer;
 
 void main() {
-   //严重消耗性能，与200.glsl一同占据用时的1/4~1/3
-    //vec2 texCoord=vec2(gl_GlobalInvocationID.xy)/(textureSize(colortex0,0));
+    // if(gl_FragCoord.x > resolution.x/2 || gl_FragCoord.y > resolution.y/2) {
+    //     return;
+    // }
 
+
+    // uvec2 pix = uvec2(gl_FragCoord.xy * 2);
     uvec2 pix = uvec2(gl_FragCoord.xy);
+    
     idx = getIdx(pix);
 
     info_distance = denoiseBuffer.data[idx].distance;
     curr_rd = normalize(denoiseBuffer.data[idx].rd);
     data1 = diffuseIllumiantionBuffer.data[idx];
+
+    //
+    // accumulate_SH(data1.data_swap, diffuseIllumiantionBuffer.data[getIdx(uvec2(gl_FragCoord.xy) * 2 + uvec2(0,1))].data_swap, 1.);
+    // accumulate_SH(data1.data_swap, diffuseIllumiantionBuffer.data[getIdx(uvec2(gl_FragCoord.xy) * 2 + uvec2(1,0))].data_swap, 1.);
+    // accumulate_SH(data1.data_swap, diffuseIllumiantionBuffer.data[getIdx(uvec2(gl_FragCoord.xy) * 2 + uvec2(1,1))].data_swap, 1.);
+    // data1.data_swap = scaleSH(data1.data_swap, 1.0/4.0);
 
     out_data.data_swap = data1.data_swap;
     out_data.data = init_SH();
@@ -177,7 +188,7 @@ void main() {
         return;
     }
     prevScreenPos = reproject2(data1.pos);
-    //prevScreenPos = reproject(vec3(texCoord,texelFetch(depthtex0,ivec2(gl_FragCoord.xy),0).r));
+    //prevScreenPos = reproject2(data1.pos) * vec3(0.5,0.5,1);
     
     idx_l=getIdx(uvec2(prevScreenPos.xy*textureSize(colortex0,0)+0.5));
     MixDiffuse();

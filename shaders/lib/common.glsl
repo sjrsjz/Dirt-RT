@@ -218,8 +218,8 @@ vec4 WeightedDiffuseEx(vec3 normal, vec3 pos, float Ex) {
         randN0.xz = normal.xz * normal.y * inversesqrt(1 - normal.y * normal.y);
     vec3 randN1 = cross(normal, randN0);
     // 生成随机方向
-    float alpha = rand(pos) * 2 * PI;
-    float rnd = rand(pos);
+    float alpha = rand(pos + normal) * 2 * PI;
+    float rnd = rand(pos + normal);
     float tmp = 1+ log(1-rnd+rnd*exp(-2*power))/power;
     vec3 n = tmp * normal + sqrt(1 - tmp * tmp) * (cos(alpha) * randN0 + sin(alpha) * randN1);
     // 计算权重

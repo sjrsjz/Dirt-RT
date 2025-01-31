@@ -41,7 +41,7 @@ vec3 project_SH_irradiance(SH sh, vec3 N)
     float B = T - sh.CoCg.x * 0.5;
     float R = B + sh.CoCg.x;
 
-    vec3 color = vec3(R,G,B) * (max(dot(sh.shY.xyz, N),0) + (Y - length(sh.shY.xyz))) / (Y+1e-3);
+    vec3 color = vec3(R, G, B)* (max(dot(sh.shY.xyz, N),0) + (Y - length(sh.shY.xyz))) / (Y+1e-3);
     return max(color, vec3(0.0));
 }
 
@@ -80,9 +80,9 @@ SH irradiance_to_SH(vec3 color, vec3 dir)
     float Co = color.r - color.b;
     float t = color.b + Co * 0.5;
     float Cg = color.g - t;
-    float Y = max(t + Cg * 0.5, 0.0);
+    float Y = max(t + Cg * 0.5, 0);
 
-    result.CoCg = vec2(Co, Cg);
+    result.CoCg = max(vec2(Co, Cg), 0);
 
     result.shY = vec4(dir * Y,Y);
 
@@ -311,8 +311,24 @@ diffuseIllumiantionData sampleDiffuse(vec2 p){
     diffuseIllumiantionData D=fetchDiffuse(p1+ivec2(1,1));
     return blendDiffuse(blendDiffuse(A,B,p2.x),blendDiffuse(C,D,p2.x),p2.y);
 }
-
+vec3 sampleDiffusePos(vec2 p) {
+    ivec2 p1 = ivec2(p);
+    vec2 p2 = fract(p);    
+    vec3 posA = texelFetch(diffuseIllumiantionData_lpos_Sampler, p1, 0).xyz;
+    vec3 posB = texelFetch(diffuseIllumiantionData_lpos_Sampler, p1 + ivec2(1,0), 0).xyz;
+    vec3 posC = texelFetch(diffuseIllumiantionData_lpos_Sampler, p1 + ivec2(0,1), 0).xyz;
+    vec3 posD = texelFetch(diffuseIllumiantionData_lpos_Sampler, p1 + ivec2(1,1), 0).xyz;
+    return mix(
+        mix(posA, posB, p2.x),
+        mix(posC, posD, p2.x),
+        p2.y
+    );
+}
 void WriteDiffuse(diffuseIllumiantionData data, ivec2 p) {
+    data.weight = clamp(data.weight, 0.0, 65504);
+    data.variance = clamp(data.variance, 0.0, 65504);
+
+
     float shY_xy = uintBitsToFloat(packHalf2x16(data.data_swap.shY.xy));
     float shY_zw = uintBitsToFloat(packHalf2x16(data.data_swap.shY.zw));
     float CoCg = uintBitsToFloat(packHalf2x16(data.data_swap.CoCg));
@@ -325,7 +341,11 @@ void WriteDiffuse(diffuseIllumiantionData data, ivec2 p) {
     #if !defined(DIFFUSE_BUFFER_MIN) && !defined(DIFFUSE_BUFFER_MIN2)
     //imageStore(diffuseIllumiantionData_shY, p, data.data.shY);
     //imageStore(diffuseIllumiantionData_CoCg, p, vec4(data.data.CoCg, 0, 0));
-    
+    data.data.shY = clamp(data.data.shY, vec4(-65504), vec4(65504));
+    data.data.CoCg = clamp(data.data.CoCg, vec2(-65504), vec2(65504));
+    data.prev_weight = clamp(data.prev_weight, 0.0, 65504);
+    data.prev_variance = clamp(data.prev_variance, 0.0, 65504);
+ 
     shY_xy = uintBitsToFloat(packHalf2x16(data.data.shY.xy));
     shY_zw = uintBitsToFloat(packHalf2x16(data.data.shY.zw));
     CoCg = uintBitsToFloat(packHalf2x16(data.data.CoCg));

@@ -42,21 +42,75 @@ void setSkyVars() {
         default:
         S_R = 0.025;
         cosD_S = 1 / sqrt(1 + S_R * S_R);
-        Mie = vec3(0.005);
+        //Mie = vec3(0.005);
         
         
         //Rayleigh = 8e9 * pow(vec3(1. / 700, 1. / 520, 1. / 450), vec3(4));
-        Rayleigh = 5e9 * pow(vec3(1. / 700, 1. / 520, 1. / 450), vec3(4));
-        Mie = vec3(luma(Rayleigh)*0.1);
-        b_P = vec3(300000);
-        b_k = 0.125 + rainStrength_global * 0.875;
+        Rayleigh = 1e10 * pow(vec3(1. / 700, 1. / 520, 1. / 450), vec3(4));
+        Mie = vec3(luma(Rayleigh));
+        b_P = vec3(30000);
+        b_k = 0.1 + rainStrength_global * 0.9;
         break;
     }
 
     b_k0 = mix(Rayleigh,Mie, b_k);
     b_Q = b_k0 / (b_P * b_P); //absorption
-    b_g0 = mix(Rayleigh, vec3(0.75), b_k); //single scatter
+    b_g0 = mix(Rayleigh, vec3(0.7), b_k); //single scatter
 }
+
+
+float distance_to_surface(float R,float y,float A){
+    //return (R-y)/A;
+    return max(sqrt(R*R-y*y*(1.-A*A))-y*A,0.);
+}
+vec3 background_0(float pos_y, in vec3 n, in vec3 lightDir) {
+    vec3 moonDir = -lightDir;
+    vec3 n0 = n;
+    const float P = 30000.; //大气层厚度
+    const float R = 6370000*1.25; //地球半径
+    
+    const vec3 Sun = 100.*vec3(10,10,10); //太阳光颜色
+    const vec3 Moon = Sun * 0.0001; //月光颜色 (较暗的蓝白色)
+    
+    mediump vec3 b_g0_2 = b_g0 * b_g0;
+    
+    // 太阳光散射
+    mediump float dot_n_L = dot(n, lightDir);
+    mediump vec3 tmp_x = 1. + b_g0_2 - 2. * b_g0 * dot_n_L;
+    tmp_x *= tmp_x * tmp_x;
+    mediump vec3 g_sun = 3. / (8. * PI) * (1. + dot_n_L*dot_n_L) * (1. - b_g0_2) / (2. + b_g0_2) * inversesqrt(tmp_x);
+    
+    // 月光散射
+    mediump float dot_n_M = dot(n, moonDir);
+    mediump vec3 tmp_x_moon = 1. + b_g0_2 - 2. * b_g0 * dot_n_M;
+    tmp_x_moon *= tmp_x_moon * tmp_x_moon;
+    mediump vec3 g_moon = 3. / (8. * PI) * (1. + dot_n_M*dot_n_M) * (1. - b_g0_2) / (2. + b_g0_2) * inversesqrt(tmp_x_moon);
+    
+    vec3 t = b_Q * 0.5 * (P-pos_y);
+    
+    float n_distance = distance_to_surface(P+R, R+pos_y, n.y);
+    float s_distance = distance_to_surface(P+R, R+pos_y, lightDir.y);
+    float m_distance = distance_to_surface(P+R, R+pos_y, moonDir.y);
+    
+    vec3 sun_intersect = vec3(0,R+pos_y,0) - lightDir*s_distance;
+    vec3 moon_intersect = vec3(0,R+pos_y,0) - moonDir*m_distance;
+    
+    vec3 sun_normal = normalize(sun_intersect);
+    vec3 moon_normal = normalize(moon_intersect);
+    
+    // 太阳光贡献
+    vec3 c_sun = Sun * g_sun;
+    c_sun *= abs((exp(-t*n_distance)-exp(-t*s_distance))/(n.y-lightDir.y)) * max(dot(lightDir,sun_normal),0.);
+    c_sun += 10*exp(-t*n_distance)*Sun*smoothstep(0.999,0.9995,dot(n0,lightDir));
+    
+    // 月光贡献
+    vec3 c_moon = Moon * g_moon;
+    c_moon *= abs((exp(-t*n_distance)-exp(-t*m_distance))/(n.y-moonDir.y)) * max(dot(moonDir,moon_normal),0.);
+    c_moon += 10*exp(-t*n_distance)*Moon*smoothstep(0.999,0.9995,dot(n0,moonDir));
+    
+    return clamp(c_sun + c_moon, 0., 10000.);
+}
+
 vec3 getSkyColor(vec3 b_Sun, vec3 b_Moon, in vec3 pos, in vec3 n, in vec3 lightDir) {
     mediump vec3 n0 = n;
     n.y = max(n.y, 1e-5);
@@ -72,8 +126,8 @@ vec3 getSkyColor(vec3 b_Sun, vec3 b_Moon, in vec3 pos, in vec3 n, in vec3 lightD
     //t=b_Q*0.5*(b_P-pos.y)*(b_P-pos.y);
     //c+=b_Moon*g*(exp(-t/n.y)-exp(-t/lightDir1.y))/(n.y-lightDir1.y)*max(lightDir1.y,0.);
 
-    c += exp(-t / n.y) * b_Sun * exp(-sqrt(abs(min(dot(n0, lightDir) - cosD_S, 0)) * 6000)) * 10;
-    c += exp(-t / n.y) * b_Moon * exp(-sqrt(abs(min(dot(n0, -lightDir) - cosD_S, 0)) * 15000)) * 10;
+    c += exp(-t / n.y) * b_Sun * exp(-sqrt(abs(min(dot(n0, lightDir) - cosD_S, 0)) * 6000)) * 25;
+    c += exp(-t / n.y) * b_Moon * exp(-sqrt(abs(min(dot(n0, -lightDir) - cosD_S, 0)) * 15000)) * 25;
     return max(c,0);
 }
 vec3 getFogColor(vec3 b_Sun, vec3 b_Moon, in vec3 pos, in vec3 n, in vec3 lightDir, float s, vec3 col) {
@@ -113,7 +167,8 @@ float cloud_density(vec3 p) {
     return  min(k/ density,100);
 }
 vec3 getClouds(vec3 b_Sun, vec3 b_Moon, vec3 pos, vec3 n, vec3 lightDir, float Far) {
-    return getSkyColor(b_Sun, b_Moon, pos, n, lightDir);
+    return background_0(pos.y, n, lightDir);
+    //return getSkyColor(b_Sun, b_Moon, pos, n, lightDir);
     mediump vec3 c;
     const int step1 = 30;
     const int step2 = 60;

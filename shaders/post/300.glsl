@@ -13,8 +13,8 @@
 uniform sampler2D colortex0;
 uniform sampler2D colortex3;
 uniform sampler2D colortex4;
-uniform sampler2D colortex5;
-uniform sampler2D colortex6;
+uniform mediump sampler2D colortex5;
+uniform mediump sampler2D colortex6;
 
 
 
@@ -41,10 +41,10 @@ float svgfNormalWeight(vec3 centerNormal, vec3 normal) {
 
 /* RENDERTARGETS: 5,6 */
 
-layout(location = 0) out vec4 shY;
-layout(location = 1) out vec4 CoCg;
+layout(location = 0) out mediump vec4 shY;
+layout(location = 1) out mediump vec4 CoCg;
 
-
+uniform vec2 resolution;
 float updateVariance(SH M_n, float D_n, SH X_nplus1, float w) { // w is the weight of the history average
     vec2 diff_CoCg = X_nplus1.CoCg - M_n.CoCg;
     vec4 diff_shY = X_nplus1.shY - M_n.shY;
@@ -56,6 +56,15 @@ void main() {
     //shY=texelFetch(colortex5,ivec2(gl_FragCoord.xy),0);
     //CoCg=texelFetch(colortex6,ivec2(gl_FragCoord.xy),0);
     //return;
+
+    // if(gl_FragCoord.x >= resolution.x/2 || gl_FragCoord.y >= resolution.y/2) {
+    //     return;
+    // }
+    
+    //ivec2 texSize = textureSize(colortex3, 0)/2 - 1;
+    ivec2 texSize = textureSize(colortex3, 0) - 1;
+    
+    //uint idx = getIdx(uvec2(gl_FragCoord.xy)*2);
     uint idx = getIdx(uvec2(gl_FragCoord.xy));
 
     bufferData info_ = denoiseBuffer.data[idx];
@@ -75,12 +84,12 @@ void main() {
 
     SH centerSH;// avg_SH;
 
-    ivec2 texSize = textureSize(colortex3, 0) - 1;
+
     centerSH.shY = texelFetch(colortex5, pix, 0);
     vec4 tex = texelFetch(colortex6, pix, 0);
     
     centerSH.CoCg = tex.xy;
-    mediump float scale = 0.025 * clamp(tex.z + 0.5*tex.z*tex.z, 0, 100)  / (1 + 5 * tex.w)* float(R0>2) * pow(R0,2) * sqrt(avgExposure) * abs(dot(centerNormal,info_.rd));
+    mediump float scale = 0.0125 * clamp(tex.z + tex.z*tex.z, 0, 500)  / (1 + 5 * tex.w)* float(R0>2) * pow(R0,2) * sqrt(avgExposure) * abs(dot(centerNormal,info_.rd));
     
     S_tex_w = tex.w;
     mediump float D = 0;
@@ -120,18 +129,19 @@ void main() {
             mediump vec4 delta_shY = tmp.shY - centerSH.shY;
 
             float d = denoiseBuffer.data[getIdx(uvec2(samplePos))].distance;
+            //float d = denoiseBuffer.data[getIdx(uvec2(samplePos)*2)].distance;
             
             vec3 sampleNormal = texelFetch(colortex3, samplePos, 0).xyz;
 
 #if STEP == 1
             mediump float k = abs(dot(texelFetch(colortex4, samplePos, 0).xyz - centerPos, centerNormal)) + 0.3;
-            mediump float w1 = exp(-sqrt(R0)*0.025*(i*i+j*j) - k * k * pos_scale - scale * dot(delta_shY,delta_shY)/ (tex.w) * tex.z);
+            mediump float w1 = exp(-(R0)*(k-0.29)*(i*i+j*j) - k * k * pos_scale - scale * dot(delta_shY,delta_shY));
 #else
             mediump float k = abs(dot(texelFetch(colortex4, samplePos, 0).xyz - centerPos, centerNormal)) + 0.3;
-            mediump float w1 = exp(-sqrt(R0)*0.025*(i*i+j*j) - k * k * pos_scale - scale * dot(delta_shY,delta_shY));
+            mediump float w1 = exp(-(R0)*(k-0.29)*(i*i+j*j) - k * k * pos_scale - scale * dot(delta_shY,delta_shY));
 #endif
 
-            mediump float w0 = max(dot(centerNormal, sampleNormal),0)
+            mediump float w0 = pow(max(dot(centerNormal, sampleNormal),0),16)
                     * w1
                     * float(samplePos == clamp(samplePos, vec2(0), texSize)) * step(-0.5, d);
             D = updateVariance(avg_SH, D, tmp, w);

@@ -11,7 +11,6 @@ layout(local_size_x = 16,local_size_y = 16) in;
 const int colortex0Format = RGBA32F;
 const int colortex1Format = RGBA32F;
 const int colortex2Format = RGBA32F;
-const int colortex6Format = RGBA32F;
 const int colortex7Format = RGBA32F;
 const int colortex8Format = RGBA32F;
 

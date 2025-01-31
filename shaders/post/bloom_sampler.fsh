@@ -24,7 +24,7 @@ void main() {
     float R = pow(log(0.01+0.99*rand(texCoord * 100 + 300)),2);
     
     float weight = kernel(R*R) / kernel(0);
-    R = (pow(R+1,4)-1)*0.125;
+    R = (pow(R+1,4)-1)*0.1;
     //R *= 0.5;
     mat2 rotM = mat2(cos(angleShift), sin(angleShift), -sin(angleShift), cos(angleShift));
     vec2 v = vec2(cos(angleOffset), sin(angleOffset)) * R * textureSize(colortex1, 0).x;
