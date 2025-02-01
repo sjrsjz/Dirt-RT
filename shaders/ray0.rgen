@@ -482,7 +482,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) { //retur
                 else
                 {
                     // 基于上一帧的数据，计算新的法线
-                    vec4 Nv = WeightedDiffuseEx(normalize(data0.data_swap.shY.xyz),ro_o,clamp(length_shY/(1e-2 + data0.data_swap.shY.w), 1e-5, 0.975));
+                    vec4 Nv = WeightedDiffuseEx(normalize(data0.data_swap.shY.xyz),ro_o,clamp(length_shY/(1e-2 + data0.data_swap.shY.w), 1e-5, 0.5));
                     rd_o2 = Nv.xyz;
                     if(dot(rd_o2,macroNormal) < 0)
                         rd_o2 = DiffuseNormal(macroNormal, ro_o);

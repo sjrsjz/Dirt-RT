@@ -34,4 +34,35 @@ FragmentInfo getFragmentInfo(Quad quad, vec2 baryCoords) {
     return FragmentInfo(uv, tangent, bitangent, normal);
 }
 
+vec4 getTextureAtlasBox(Quad quad, bool isSideA) {
+    // 获取三个顶点的UV
+    vec2 t0 = quad.vertices[0].block_texture * 0.0000152587890625;
+    vec2 t1 = (isSideA ? quad.vertices[1].block_texture : quad.vertices[2].block_texture) * 0.0000152587890625;
+    vec2 t2 = (isSideA ? quad.vertices[2].block_texture : quad.vertices[3].block_texture) * 0.0000152587890625;
+    
+    // 计算UV边界
+    vec2 minUV = min(min(t0, t1), t2);
+    vec2 maxUV = max(max(t0, t1), t2);
+    
+    // 返回 (x_offset, y_offset, width, height)
+    return vec4(minUV, maxUV - minUV);
+}
+
+vec4 getTextureAtlasBox(Quad quad) {
+    bool isSideA = (gl_PrimitiveID & 1) == 0;
+    return getTextureAtlasBox(quad, isSideA);
+}
+
+vec2 getRelativeUV(vec2 uv, Quad quad) {
+    bool isSideA = (gl_PrimitiveID & 1) == 0;
+    vec4 atlas = getTextureAtlasBox(quad, isSideA);
+    
+    // 转换到相对坐标 (0-1范围)
+    return (uv - atlas.xy) / atlas.zw;
+}
+
+vec2 getRelativeUV(vec2 uv, vec4 atlas) {
+    return (uv - atlas.xy) / atlas.zw;
+}
+
 #endif // FRAGMENT_INFO_GLSL
