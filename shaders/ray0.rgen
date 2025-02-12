@@ -51,7 +51,7 @@ void main() {
     vec2 px = vec2(gl_LaunchIDEXT.xy);
     if(px.x >= gl_LaunchSizeEXT.x || px.y >= gl_LaunchSizeEXT.y) return;
     vec2 p = px / vec2(gl_LaunchSizeEXT.xy);
-   vec2 half_p = p * 2;
+    vec2 half_p = p * 2;
 
     world_type_global = int(cam.world_type);
 
@@ -63,10 +63,10 @@ void main() {
 
     vec3 origin = cam.viewInverse[3].xyz;
     vec3 target = mix(mix(cam.corners[0], cam.corners[2], p.y), mix(cam.corners[1], cam.corners[3], p.y), p.x);
-    vec3 direction = (cam.viewInverse * vec4(normalize(target.xyz), 0.0)).xyz;
+    vec3 direction = normalize((cam.viewInverse * vec4(target.xyz, 0.0)).xyz);
 
     vec3 half_target = mix(mix(cam.corners[0], cam.corners[2], half_p.y), mix(cam.corners[1], cam.corners[3], half_p.y), half_p.x);
-    vec3 half_direction = (cam.viewInverse * vec4(normalize(target.xyz), 0.0)).xyz;
+    vec3 half_direction = normalize((cam.viewInverse * vec4(target.xyz, 0.0)).xyz);
 
     // 0 -> eye is in air
     // 1 -> eye is in water
@@ -247,7 +247,7 @@ vec4 sampleGodRay(vec3 b_Sun, vec3 b_Moon, vec3 ro, vec3 rd, float far, vec3 lig
 
 
 vec3 sampleSunlight(vec3 ro, vec3 normal, vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S, vec4 R, vec3 lightDir, bool night, int type /*,int inwater*/ , vec3 marcoNormal, bool inside) {
-    ro += (dot(lightDir, marcoNormal) > 0.15 ? lightDir : marcoNormal) * 0.01; 
+    ro += (dot(lightDir, marcoNormal) > 0.15 ? lightDir : marcoNormal) * 0.0001; 
 
     //return vec3(max(0,dot(lightDir,marcoNormal)),max(0,-dot(lightDir,marcoNormal)),0);
 
@@ -654,13 +654,14 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) { //retur
     diffuseIllumiantionBuffer.data[idx].pos = infos[0].p;
 
     vec3 r_rd, r_ro;
-    vec3 r_rd_i = reflect(infos[0].rd_i, infos[0].n);
+    vec3 r_n = normalize(mix(infos[0].n, infos[0].macroNormal, 1 - exp(-0.05*infos[0].distance)));
+    vec3 r_rd_i = reflect(infos[0].rd_i, r_n);
     float t = infos[0].distance;
     if (infos[0].surface.R.x <= 0.000125 ) {
         t = raycast(infos[0].p + infos[0].macroNormal * 0.0001, r_rd_i, r_ro, r_rd, false);
         if (t > -0.5) {
-            vec3 reconstructed_pos=infos[0].p + reflect(r_ro-infos[0].p,infos[0].n);
-            vec3 reconstructed_normal = reflect(tmp_Payload.material.normal,infos[0].n);
+            vec3 reconstructed_pos=infos[0].p + reflect(r_ro-infos[0].p,r_n);
+            vec3 reconstructed_normal = reflect(tmp_Payload.material.normal,r_n);
             reflectIllumiantionBuffer.data[idx].normal = t * reconstructed_normal;
             reflectIllumiantionBuffer.data[idx].pos = reconstructed_pos;
         }

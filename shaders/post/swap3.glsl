@@ -37,9 +37,8 @@ void main() {
     tmp.data_swap.CoCg=texelFetch(colortex6,pix,0).xy;
 
     //uint idx = getIdx(uvec2(gl_GlobalInvocationID.xy));
-    vec4 tmp_=texelFetch(colortex4,pix,0);
     tmp.normal =texelFetch(colortex3,pix,0).xyz;
-    tmp.pos = tmp_.xyz;
+    tmp.pos = texelFetch(colortex4,pix,0).xyz;
     //tmp.weight=length(tmp.data.shY)*100;
     WriteDiffuse(tmp,pix);
 }

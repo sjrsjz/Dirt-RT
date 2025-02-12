@@ -49,7 +49,7 @@ const bool colortex7Clear = true;
 const bool colortex8Clear = true;
 */
 
-const float NORMAL_PARAM = 128.0;
+const float NORMAL_PARAM = 16.0;
 const float POSITION_PARAM = 64.0;
 const float LUMINANCE_PARAM = 4.0;
 
@@ -115,7 +115,7 @@ void main() {
     //s[2] = s[0];
     //t[2] = t[0];
 
-    ivec2 rand_offset = ivec2(round(rand(vec2(pix))*2-1),round(rand(vec2(pix+10))*2-1));
+    ivec2 rand_offset = ivec2(round(rand(vec2(pix + R0))*2-1),round(rand(vec2(pix + 10 + R0))*2-1));
     ivec2 samplePos;
     samplePos.x = int(gl_FragCoord.x - R0);
     int y0 = int(gl_FragCoord.y - R0);
@@ -131,7 +131,7 @@ void main() {
             float dW=centerColor.w-c.w;
             vec4 B=texelFetch(colortex3, samplePos + rand_offset, 0);
             mediump float w1 = st[i][j] * B.w;
-            mediump float w0 = exp(- dW * dW - POSITION_PARAM * abs(dot(centerPos.xyz - texelFetch(colortex4, samplePos + rand_offset, 0).xyz, centerNormal)))
+            mediump float w0 = exp(- dW * dW - 0 * POSITION_PARAM * abs(dot(centerPos.xyz - texelFetch(colortex4, samplePos + rand_offset, 0).xyz, centerNormal)))
                     * svgfNormalWeight(centerNormal, normalize(B.xyz))
                     * w1 * float(samplePos == clamp(samplePos, vec2(0), texSize));
             A += c.xyz * w0;

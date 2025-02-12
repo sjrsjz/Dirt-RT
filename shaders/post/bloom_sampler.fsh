@@ -3,7 +3,7 @@
 
 in vec2 texCoord;
 uniform sampler2D colortex0;
-uniform sampler2D colortex1;
+uniform sampler2D colortex5;
 
 /* RENDERTARGETS: 1 */
 layout(location = 0) out vec4 fragColor;
@@ -24,15 +24,15 @@ void main() {
     float R = pow(log(0.01+0.99*rand(texCoord * 100 + 300)),2);
     
     float weight = kernel(R*R) / kernel(0);
-    R = (pow(R+1,4)-1)*0.1;
+    R = max(pow(R+1,4)-1.125,0)*0.1;
     //R *= 0.5;
     mat2 rotM = mat2(cos(angleShift), sin(angleShift), -sin(angleShift), cos(angleShift));
-    vec2 v = vec2(cos(angleOffset), sin(angleOffset)) * R * textureSize(colortex1, 0).x;
+    vec2 v = vec2(cos(angleOffset), sin(angleOffset)) * R * textureSize(colortex5, 0).x;
     //vec3 sumX_2 = vec3(0), sumX2 = vec3(0);
     //vec3 s[sampleN];
     for (int i = 0; i < sampleN; i++) {
         v *= rotM;
-        vec3 A = texelFetch(colortex0, ivec2(gl_FragCoord.xy + v), 0).xyz;
+        vec3 A = texelFetch(colortex5, ivec2(gl_FragCoord.xy + v), 0).xyz;
         sumX += A;
     }
     //vec3 validN3 = vec3(0);

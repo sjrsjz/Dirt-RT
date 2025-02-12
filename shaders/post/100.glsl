@@ -113,6 +113,11 @@ float updateVariance(SH M_n, float D_n, SH X_nplus1, float w) { // w is the weig
 float output_weight = 0;
 float output_variance = 0;
 
+float visible_factor(vec3 normal, vec3 local_position, vec3 rd){
+    return 1/(abs(dot(normal,rd)) + 1e-2)  * length(local_position);
+}
+
+
 void MixDiffuse() {
     if (notInRange(prevScreenPos.xy)) {
         return;
@@ -129,8 +134,17 @@ void MixDiffuse() {
             //pos_weight += w*w;
             pos_weight = max(pos_weight, w);
         }
-
     }
+
+    //vec3 move_vector = cameraPosition - previousCameraPosition;
+    //float move_weight = exp(- 0.25 * max(-dot(move_vector, data1.normal), 0.0));
+    //pos_weight *= move_weight;
+
+    float f1 = visible_factor(data1.normal, data1.pos - cameraPosition, curr_rd);
+    float f2 = visible_factor(data.normal, data.pos - previousCameraPosition, curr_rd);
+    pos_weight *= exp(-0.25 * max(f2 - f1, 0));
+
+
     //pos_weight = sqrt(pos_weight/9);  // 实际上这玩意成了一种几何边缘检测，也许可以用来阻止降噪器在几何边缘失效的问题
 
     //diffuseIllumiantionData data = sampleDiffuse(prevScreenPos.xy*textureSize(colortex0,0)-0.5);

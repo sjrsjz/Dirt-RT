@@ -52,6 +52,16 @@ float updateVariance(SH M_n, float D_n, SH X_nplus1, float w) { // w is the weig
     return w*(D_n*w + (dot(diff_CoCg,diff_CoCg)+dot(diff_shY,diff_shY))*w1)*w1*w1;
 }
 
+
+float K(vec3 B, vec3 A, vec3 n) {
+    float an = dot(A, n);
+    float bn = dot(B, n);
+    float ab = dot(A, B);
+    vec3 x = an * B - bn * A;
+    return abs(bn) * sqrt(1 - an * an) / max(0.01, dot(x, x));
+}
+
+
 void main() {
     //shY=texelFetch(colortex5,ivec2(gl_FragCoord.xy),0);
     //CoCg=texelFetch(colortex6,ivec2(gl_FragCoord.xy),0);
@@ -72,11 +82,19 @@ void main() {
         return;
     }
 
+
     SH A = init_SH();
 
     mediump float w = 1;
     ivec2 pix=ivec2(gl_FragCoord.xy);
     lowp vec3 centerNormal = texelFetch(colortex3, pix, 0).xyz;
+
+    float axis_A = 1 / max(K(cross(camX_global, camY_global), camX_global, centerNormal), 0.5);
+    float axis_B = 1 / max(K(cross(camX_global, camY_global), camY_global, centerNormal), 0.5);
+
+    axis_A *= axis_A;
+    axis_B *= axis_B;
+
     vec4 tmp_=texelFetch(colortex4, pix, 0);
     vec3 centerPos = tmp_.xyz;
 
@@ -90,7 +108,7 @@ void main() {
     
     centerSH.CoCg = tex.xy;
     mediump float scale = 0.0125 * clamp(tex.z + tex.z*tex.z, 0, 500)  / (1 + 5 * tex.w)* float(R0>2) * pow(R0,2) * sqrt(avgExposure) * abs(dot(centerNormal,info_.rd));
-    
+    mediump float scale2 = pow(tex.w,0.25) * avgExposure * scale * 0.25;
     S_tex_w = tex.w;
     mediump float D = 0;
 
@@ -108,10 +126,9 @@ void main() {
     mediump float sum_D=0;
     #endif
  
-    mediump float pos_scale = POSITION_PARAM/(max(1,0.005*info_.distance));
- 
+    mediump float pos_scale = POSITION_PARAM * 0.3;
 
-    ivec2 rand_offset = ivec2(round(rand(vec2(pix))*2-1),round(rand(vec2(pix+10))*2-1));
+    ivec2 rand_offset = ivec2(round(rand(vec2(pix + R0))*2-1),round(rand(vec2(pix + 10 + R0))*2-1));
 
 
     SH tmp;
@@ -135,13 +152,13 @@ void main() {
 
 #if STEP == 1
             mediump float k = abs(dot(texelFetch(colortex4, samplePos, 0).xyz - centerPos, centerNormal)) + 0.3;
-            mediump float w1 = exp(-(R0)*(k-0.29)*(i*i+j*j) - k * k * pos_scale - scale * dot(delta_shY,delta_shY));
+            mediump float w1 = exp(-(k-0.225)*(axis_A*i*i+axis_B*j*j) - k  * pos_scale - scale * dot(delta_shY,delta_shY));
 #else
             mediump float k = abs(dot(texelFetch(colortex4, samplePos, 0).xyz - centerPos, centerNormal)) + 0.3;
-            mediump float w1 = exp(-(R0)*(k-0.29)*(i*i+j*j) - k * k * pos_scale - scale * dot(delta_shY,delta_shY));
+            mediump float w1 = exp(-(R0)*(k-0.28)*(axis_A*i*i+axis_B*j*j) - k  * pos_scale -  scale2 * dot(delta_shY,delta_shY));
 #endif
 
-            mediump float w0 = pow(max(dot(centerNormal, sampleNormal),0),16)
+            mediump float w0 = 1//pow(max(dot(centerNormal, sampleNormal),0),16)
                     * w1
                     * float(samplePos == clamp(samplePos, vec2(0), texSize)) * step(-0.5, d);
             D = updateVariance(avg_SH, D, tmp, w);

@@ -1,1 +1,1 @@
-#include "/post/final.fsh"
+#include "/post/bloom_sampler_downscale.fsh"
