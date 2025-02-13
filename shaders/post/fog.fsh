@@ -40,6 +40,7 @@ void main() {
         
         //fragColor.xyz = sqrt(tmp.variance)*vec3(1);
         
+        //fragColor.xyz = (tmp.weight)*vec3(1);
         //fragColor.xyz = tmp2.weight*vec3(0.5);
         //fragColor.xyz = vec3(1) * max(0,dot(tmp.data_swap.shY.xyz,diffuseIllumiantionBuffer.data[idx].normal2));
         

@@ -131,7 +131,7 @@ void main() {
             float dW=centerColor.w-c.w;
             vec4 B=texelFetch(colortex3, samplePos + rand_offset, 0);
             mediump float w1 = st[i][j] * B.w;
-            mediump float w0 = exp(- dW * dW - 0 * POSITION_PARAM * abs(dot(centerPos.xyz - texelFetch(colortex4, samplePos + rand_offset, 0).xyz, centerNormal)))
+            mediump float w0 = exp(- dW * dW - POSITION_PARAM * abs(dot(centerPos.xyz - texelFetch(colortex4, samplePos + rand_offset, 0).xyz, centerNormal)))
                     * svgfNormalWeight(centerNormal, normalize(B.xyz))
                     * w1 * float(samplePos == clamp(samplePos, vec2(0), texSize));
             A += c.xyz * w0;

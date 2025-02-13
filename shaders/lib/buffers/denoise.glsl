@@ -291,8 +291,8 @@ diffuseIllumiantionData blendDiffuse(diffuseIllumiantionData A,diffuseIllumianti
     t.variance=(B.variance-A.variance)*x+A.variance;
     #ifndef DIFFUSE_BUFFER_MIN2
     t.data=mix_SH(A.data,B.data,x);
-    t.pos=mix(A.pos,B.pos,x);
-    t.normal=normalize(mix(A.normal,B.normal,x));
+    t.pos=mix(A.pos,B.pos,round(x));
+    t.normal=normalize(mix(A.normal,B.normal,round(x)));
     t.prev_weight=(B.prev_weight-A.prev_weight)*x+A.prev_weight;
     t.prev_variance=(B.prev_variance-A.prev_variance)*x+A.prev_variance;
     #endif
@@ -312,17 +312,18 @@ diffuseIllumiantionData sampleDiffuse(vec2 p){
     return blendDiffuse(blendDiffuse(A,B,p2.x),blendDiffuse(C,D,p2.x),p2.y);
 }
 vec3 sampleDiffusePos(vec2 p) {
-    ivec2 p1 = ivec2(p);
-    vec2 p2 = fract(p);    
-    vec3 posA = texelFetch(diffuseIllumiantionData_lpos_Sampler, p1, 0).xyz;
-    vec3 posB = texelFetch(diffuseIllumiantionData_lpos_Sampler, p1 + ivec2(1,0), 0).xyz;
-    vec3 posC = texelFetch(diffuseIllumiantionData_lpos_Sampler, p1 + ivec2(0,1), 0).xyz;
-    vec3 posD = texelFetch(diffuseIllumiantionData_lpos_Sampler, p1 + ivec2(1,1), 0).xyz;
-    return mix(
-        mix(posA, posB, p2.x),
-        mix(posC, posD, p2.x),
-        p2.y
-    );
+    // ivec2 p1 = ivec2(p);
+    // vec2 p2 = fract(p);    
+    // vec3 posA = texelFetch(diffuseIllumiantionData_lpos_Sampler, p1, 0).xyz;
+    // vec3 posB = texelFetch(diffuseIllumiantionData_lpos_Sampler, p1 + ivec2(1,0), 0).xyz;
+    // vec3 posC = texelFetch(diffuseIllumiantionData_lpos_Sampler, p1 + ivec2(0,1), 0).xyz;
+    // vec3 posD = texelFetch(diffuseIllumiantionData_lpos_Sampler, p1 + ivec2(1,1), 0).xyz;
+    // return mix(
+    //     mix(posA, posB, round(p2.x)),
+    //     mix(posC, posD, round(p2.x)),
+    //     round(p2.y)
+    // );
+    return texelFetch(diffuseIllumiantionData_lpos_Sampler, ivec2(floor(p) + round(fract(p))), 0).xyz;
 }
 void WriteDiffuse(diffuseIllumiantionData data, ivec2 p) {
     data.weight = clamp(data.weight, 0.0, 65504);

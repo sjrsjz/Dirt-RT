@@ -27,14 +27,14 @@ void main() {
     diffuseIllumiantionData tmp = fetchDiffuse(ivec2(gl_FragCoord.xy));
     diffuseNormal.xyz = diffuseIllumiantionBuffer.data[idx].normal;
     if(tmp.weight <= 1+1e-3){
-        diffusePos = vec4(diffuseIllumiantionBuffer.data[idx].pos, 100);
+        diffusePos = vec4(diffuseIllumiantionBuffer.data[idx].pos, 1000);
     }
     else{
         diffusePos = vec4(diffuseIllumiantionBuffer.data[idx].pos, tmp.variance * tmp.weight / (tmp.weight - 1));
     }
     
-    shY = tmp.data_swap.shY;
-    CoCg = vec4(tmp.data_swap.CoCg, tmp.weight, 0);
+    shY = clamp(tmp.data_swap.shY, 0, 100 / avgExposure);
+    CoCg = clamp(vec4(tmp.data_swap.CoCg, tmp.weight, 0), 0, 100 / avgExposure);
     if (any(isnan(shY))) shY=vec4(0);
     if (any(isnan(CoCg))) CoCg=vec4(0);
     
