@@ -314,6 +314,12 @@ vec3 sampleSunlight(vec3 ro, vec3 normal, vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S, v
     return max(vec3(0), vec3(sampleColor) * (dot(sampleDir, lightDir) > cosD_S ? 1 : 0));
 }
 
+vec3 GetSpecularDominantDirection(vec3 N, vec3 V, float R){
+    float f = (1 - R) * (sqrt(1 - R) + R);
+    vec3 R0 = reflect(V, N);
+    return normalize(mix(N, R0, f));
+}
+
 
 vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) { //return vec4(0);
     uint isEyeInWater = cam.flags & 3u;
@@ -646,6 +652,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) { //retur
     denoiseBuffer.data[idx].light = infos[0].surface.light;
     denoiseBuffer.data[idx].macroNormal = infos[0].macroNormal;
     denoiseBuffer.data[idx].illumiantionType = infos[0].type;
+    denoiseBuffer.data[idx].roughness = infos[0].surface.R.x;
     diffuseIllumiantionBuffer.data[idx].data_swap = init_SH();
     reflectIllumiantionBuffer.data[idx].data_swap = vec3(0);
     refractIllumiantionBuffer.data[idx].data_swap = vec3(0);
@@ -655,10 +662,10 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) { //retur
 
     vec3 r_rd, r_ro;
     vec3 r_n = normalize(mix(infos[0].n, infos[0].macroNormal, 1 - exp(-0.05*infos[0].distance)));
-    vec3 r_rd_i = reflect(infos[0].rd_i, r_n);
-    float t = infos[0].distance;
+    vec3 r_rd_i = GetSpecularDominantDirection(r_n, infos[0].rd_i, infos[0].surface.R.x);
+    float t = raycast(infos[0].p + infos[0].macroNormal * 0.0001, r_rd_i, r_ro, r_rd, false);
     if (infos[0].surface.R.x <= 0.000125 ) {
-        t = raycast(infos[0].p + infos[0].macroNormal * 0.0001, r_rd_i, r_ro, r_rd, false);
+        
         if (t > -0.5) {
             vec3 reconstructed_pos=infos[0].p + reflect(r_ro-infos[0].p,r_n);
             vec3 reconstructed_normal = reflect(tmp_Payload.material.normal,r_n);
@@ -666,13 +673,18 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) { //retur
             reflectIllumiantionBuffer.data[idx].pos = reconstructed_pos;
         }
         else{
-            reflectIllumiantionBuffer.data[idx].normal = infos[0].distance * r_rd_i;
+            reflectIllumiantionBuffer.data[idx].normal = 5 * r_rd_i;
             reflectIllumiantionBuffer.data[idx].pos = infos[0].p;
         }
     }else{
     //tmp_Payload.material.normal = tmp_Payload.material.roughness < 0.00125 ? faceforward(tmp_Payload.material.normal, tmp_Payload.material.normal, r_rd_i) : reflect(r_rd_i, tmp_Payload.geometryNormal);
-        reflectIllumiantionBuffer.data[idx].normal = t * r_rd_i ;
-        reflectIllumiantionBuffer.data[idx].pos = infos[0].p;
+        if (t > -0.5){
+            reflectIllumiantionBuffer.data[idx].normal = t * r_rd_i ;
+            reflectIllumiantionBuffer.data[idx].pos = infos[0].p;
+        }else{
+            reflectIllumiantionBuffer.data[idx].normal = 5 * r_rd_i ;
+            reflectIllumiantionBuffer.data[idx].pos = infos[0].p;
+        }
     //reflectIllumiantionBuffer.data[idx].distance = t;
     //r_rd_i=refract(infos[0].rd_i,infos[0].n,infos[0].n_i/infos[0].n_o);
     //raycast(infos[0].p-infos[0].n*0.001,r_rd_i,r_rd,r_ro,false);
@@ -734,7 +746,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) { //retur
         break;
         case Reflection:
         if ((!hitSmoothSurface || count != 0) && coord.x % 2 == 0) {
-            illumiantion = clamp(illumiantion, 0, 10 / avgExposure);
+            illumiantion = clamp(illumiantion, 0, 20 / avgExposure);
             reflectIllumiantionBuffer.data[idx].data_swap = illumiantion;
             //reflectIllumiantionBuffer.data[getIdx(coord-uvec2(1,0))].data_swap = illumiantion;
         }

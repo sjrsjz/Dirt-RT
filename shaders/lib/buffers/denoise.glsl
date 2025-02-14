@@ -19,6 +19,7 @@ struct bufferData {
     float reflectWeight;
     float refractWeight;   
     float last_rd_dot_n; 
+    float roughness;
 };
 
 layout(std430, set = 3, binding = 0) buffer DenoiseBuffer {

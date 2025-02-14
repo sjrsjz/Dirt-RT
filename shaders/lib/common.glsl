@@ -228,7 +228,6 @@ vec4 WeightedDiffuseEx(vec3 normal, vec3 pos, float Ex) {
 }
 
 
-
 float GGXpdf(float costheta, float fai, float a) {
     float a2 = a * a;
     float b = 1 + (a2 - 1) * costheta * costheta;

@@ -84,11 +84,11 @@ void main() {
     ivec2 pix = ivec2(gl_FragCoord.xy);
     lowp vec3 centerNormal = texelFetch(colortex3, pix, 0).xyz;
 
-    float axis_A = 1 / max(K(cross(camX_global, camY_global), camX_global, centerNormal), 0.2);
-    float axis_B = 1 / max(K(cross(camX_global, camY_global), camY_global, centerNormal), 0.2);
+    float axis_A = 1 / max(K(cross(camX_global, camY_global), camX_global, centerNormal), 0.25);
+    float axis_B = 1 / max(K(cross(camX_global, camY_global), camY_global, centerNormal), 0.25);
 
-    //axis_A *= axis_A;
-    //axis_B *= axis_B;
+    axis_A *= axis_A;
+    axis_B *= axis_B;
 
     vec4 tmp_ = texelFetch(colortex4, pix, 0);
     vec3 centerPos = tmp_.xyz;
@@ -102,9 +102,9 @@ void main() {
 
     centerSH.CoCg = tex.xy;
     #if STEP == 1
-    mediump float scale = clamp(tex.z * tex.z, 0, 500) / (1 + tex.w) * float(R0 > 2) * pow(R0, 3) * log(1 + avgExposure) * abs(dot(centerNormal, info_.rd));
+    mediump float scale = 0.00025 * clamp(tex.z, 0, 100) / (1 + tex.w) * log(1 + avgExposure) * abs(dot(centerNormal, info_.rd));
     #else
-    mediump float scale = 1 / (0.0125 + 100 * exp(-0.5 * tex.z) + tex.w);
+    mediump float scale = sqrt(R0) / (0.000125 + 10 * exp(-0.3 * tex.z) + tex.w);
     #endif
     S_tex_w = tex.w;
     mediump float D = 0;
@@ -123,18 +123,21 @@ void main() {
     mediump float sum_D = 0;
     #endif
 
-    mediump float pos_scale = pow(R0, 0.25) * POSITION_PARAM * 0.2;
-
+    mediump float pos_scale = pow(R0, 0.25) * POSITION_PARAM * 0.25;
+    #if STEP != 1
     ivec2 rand_offset = ivec2(round(rand(vec2(pix + R0 + tex.w)) * 2 - 1), round(rand(vec2(pix + 10 + R0 + tex.w)) * 2 - 1));
-
+    #endif
     SH tmp;
     for (int i = -B_; i <= B_; i++) {
         for (int j = -B_; j <= B_; j++) {
             if (i == 0 && j == 0) {
                 continue;
             }
+            #if STEP == 1
+            samplePos = pix + R0 * ivec2(i, j);
+            #else
             samplePos = pix + R0 * ivec2(i, j) + rand_offset;
-
+            #endif
             tmp.shY = texelFetch(colortex5, samplePos, 0);
             vec4 CoCgWV = texelFetch(colortex6, samplePos, 0);
             tmp.CoCg = CoCgWV.xy;
@@ -147,16 +150,16 @@ void main() {
             vec3 sampleNormal = texelFetch(colortex3, samplePos, 0).xyz;
 
             #if STEP == 1
-            mediump float k = abs(dot(texelFetch(colortex4, samplePos, 0).xyz - centerPos, centerNormal)) + 0.2;
-            mediump float w1 = exp(-(k - 0.15) * (axis_A * i * i + axis_B * j * j) - k * pos_scale - scale * dot(delta_shY, delta_shY));
+            mediump float k = abs(dot(texelFetch(colortex4, samplePos, 0).xyz - centerPos, centerNormal));
+            mediump float w1 = exp(- k * (axis_A * i * i + axis_B * j * j) - k * pos_scale - scale * dot(delta_shY, delta_shY));
             #else
-            mediump float k = abs(dot(texelFetch(colortex4, samplePos, 0).xyz - centerPos, centerNormal)) + 0.2;
-            mediump float w1 = exp(-(R0) * (k - 0.19) * (axis_A * i * i + axis_B * j * j) - k * pos_scale - scale * dot(delta_shY, delta_shY));
+            mediump float k = abs(dot(texelFetch(colortex4, samplePos, 0).xyz - centerPos, centerNormal));
+            mediump float w1 = exp(- R0 * k * (axis_A * i * i + axis_B * j * j) - k * pos_scale - scale * dot(delta_shY, delta_shY));
             #endif
 
             mediump float w0 = pow(max(dot(centerNormal, sampleNormal), 0), 16)
                     * w1
-                    * float(samplePos == clamp(samplePos, vec2(0), texSize)) * step(-0.5, d);
+                    * float(samplePos == clamp(samplePos, ivec2(0), texSize)) * step(-0.5, d);
             D = updateVariance(avg_SH, D, tmp, w);
             accumulate_SH(avg_SH, tmp, w0);
             w += w0;

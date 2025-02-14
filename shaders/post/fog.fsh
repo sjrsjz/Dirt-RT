@@ -56,5 +56,7 @@ void main() {
         //fragColor.xyz = data.albedo2;
         fragColor.xyz = data.absorption * ((project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2) + tmp3.data_swap) * data.albedo2 + tmp2.data_swap * data.albedo + data.light) + data.emission;
         //fragColor.xyz = tmp2.data_swap * data.albedo;
+        //fragColor.xyz = max(-reflect(normalize(reflectIllumiantionBuffer.data[idx].normal),normalize(diffuseIllumiantionBuffer.data[idx].normal2)),0) * vec3(1);
+        //fragColor.xyz = vec3(1) * length(reflectIllumiantionBuffer.data[idx].normal);
     }
 }
