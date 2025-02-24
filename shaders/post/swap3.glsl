@@ -29,13 +29,16 @@ void main() {
     diffuseIllumiantionData tmp=fetchDiffuse(pix);
     if (any(isnan(tmp.data_swap.shY))) tmp.data_swap.shY = vec4(0);
     if (any(isnan(tmp.data_swap.CoCg))) tmp.data_swap.CoCg = vec2(0);
-    tmp.data = tmp.data_swap;
     tmp.prev_weight=tmp.weight;
     tmp.prev_variance= tmp.variance;
     
+    tmp.data = tmp.data_swap;
+
     tmp.data_swap.shY=texelFetch(colortex5,pix,0);
     tmp.data_swap.CoCg=texelFetch(colortex6,pix,0).xy;
-
+    
+    //tmp.data = mix_SH(M_n,tmp.data_swap,clamp(exp(-10/(1+tmp.prev_variance) * (1+tmp.weight)),0,1));
+    
     //uint idx = getIdx(uvec2(gl_GlobalInvocationID.xy));
     tmp.normal =texelFetch(colortex3,pix,0).xyz;
     tmp.pos = texelFetch(colortex4,pix,0).xyz;

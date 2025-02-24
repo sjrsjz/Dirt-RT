@@ -247,7 +247,7 @@ vec4 sampleGodRay(vec3 b_Sun, vec3 b_Moon, vec3 ro, vec3 rd, float far, vec3 lig
 
 
 vec3 sampleSunlight(vec3 ro, vec3 normal, vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S, vec4 R, vec3 lightDir, bool night, int type /*,int inwater*/ , vec3 marcoNormal, bool inside) {
-    ro += (dot(lightDir, marcoNormal) > 0.15 ? lightDir : marcoNormal) * 0.0001; 
+    ro += (dot(lightDir, marcoNormal) > 0.15 ? lightDir : marcoNormal) * 0.001; 
 
     //return vec3(max(0,dot(lightDir,marcoNormal)),max(0,-dot(lightDir,marcoNormal)),0);
 
@@ -488,7 +488,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) { //retur
                 else
                 {
                     // 基于上一帧的数据，计算新的法线
-                    vec4 Nv = WeightedDiffuseEx(normalize(data0.data_swap.shY.xyz),ro_o,clamp(length_shY/(1e-2 + data0.data_swap.shY.w), 1e-5, 0.5));
+                    vec4 Nv = WeightedDiffuseEx(normalize(data0.data_swap.shY.xyz),ro_o,clamp(length_shY/(1e-2 + data0.data_swap.shY.w), 1e-5, 0.985));
                     rd_o2 = Nv.xyz;
                     if(dot(rd_o2,macroNormal) < 0)
                         rd_o2 = DiffuseNormal(macroNormal, ro_o);
