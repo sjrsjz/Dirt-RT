@@ -43,11 +43,10 @@ layout(location = 0) out mediump vec4 shY;
 layout(location = 1) out mediump vec4 CoCg;
 
 uniform vec2 resolution;
-float updateVariance(SH M_n, float D_n, SH X_nplus1, float w) { // w is the weight of the history average
-    vec2 diff_CoCg = X_nplus1.CoCg - M_n.CoCg;
-    vec4 diff_shY = X_nplus1.shY - M_n.shY;
-    float w1 = 1.0 / (1.0 + w);
-    return w * (D_n * w + (dot(diff_CoCg, diff_CoCg) + dot(diff_shY, diff_shY)) * w1) * w1 * w1;
+float updateVariance(SH M_n, float D_n, SH X_nplus1, float h_w, float w) {
+    vec4 diff_shY = X_nplus1.shY - M_n.shY / h_w;
+    float w1 = 1.0 / (h_w + w);
+    return (D_n * h_w + dot(diff_shY, diff_shY) * w * w1) * w1;
 }
 
 float K(vec3 B, vec3 A, vec3 n) {
@@ -102,9 +101,9 @@ void main() {
 
     centerSH.CoCg = tex.xy;
     #if STEP == 1
-    mediump float scale = 0.0001 * clamp(tex.z, 0, 100) / (1 + tex.w) * log(1 + avgExposure) * abs(dot(centerNormal, info_.rd));
+    mediump float scale = 0.000125 * clamp(tex.z, 0, 100) / (1 + tex.w) * log(1 + avgExposure) * abs(dot(centerNormal, info_.rd));
     #else
-    mediump float scale = 0.25 / (0.000125 + exp(-0.5 * tex.z) + tex.w);
+    mediump float scale = 0.25 / (0.000025 + 1 / (1 + 1000 * tex.z) + tex.w);
     #endif
     S_tex_w = tex.w;
     mediump float D = 0;
@@ -123,7 +122,7 @@ void main() {
     mediump float sum_D = 0;
     #endif
 
-    mediump float pos_scale = pow(R0, 0.25) * POSITION_PARAM * 0.25;
+    mediump float pos_scale = pow(R0, 0.25) * POSITION_PARAM * 0.5;
     //#if STEP != 1
     //ivec2 rand_offset = 0*ivec2(round(rand(vec2(pix + R0 + tex.w)) * 2 - 1), round(rand(vec2(pix + 10 + R0 + tex.w)) * 2 - 1));
     //#endif
@@ -166,7 +165,7 @@ void main() {
             mediump float w0 = pow(max(dot(centerNormal, sampleNormal), 0), 16)
                     * w1
                     * float(samplePos == clamp(samplePos, ivec2(0), texSize)) * step(-0.5, d);
-            D = updateVariance(scaleSH(avg_SH, 1 / w), D, tmp, w);
+            D = updateVariance(avg_SH, D, tmp, w, w0);
             accumulate_SH(avg_SH, tmp, w0);
             w += w0;
 
@@ -182,9 +181,9 @@ void main() {
     //avg_SH = centerSH;
     //w = 1;
     #if STEP == 1
-    tex.w = max((tex.w + sum_D) / (w + 1e-3), D);
+    tex.w = ((tex.w + sum_D) / (w + 1e-3) + D) * 0.5;
     #else
-    tex.w = max(tex.w , D);
+    tex.w = (tex.w + D) * 0.5;
 
     #endif
 

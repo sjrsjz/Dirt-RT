@@ -125,16 +125,17 @@ void MixDiffuse() {
     vec2 prev_screen = prevScreenPos.xy * textureSize(colortex0,0);
     diffuseIllumiantionData data = sampleDiffuse(prev_screen);
 
-    float pos_weight = 0;
-    for(int i=-1;i<=1;i++){
-        for(int j=-1;j<=1;j++){
-            vec2 offset = vec2(i,j);
-            vec3 pos = sampleDiffusePos(prev_screen + offset);
-            float w = svgfPositionWeight(pos, data1.pos, data1.normal,info_distance);
-            //pos_weight += w*w;
-            pos_weight = max(pos_weight, w);
-        }
-    }
+    float pos_weight = svgfPositionWeight(data.pos, data1.pos, data1.normal,info_distance);
+    // for(int i=-0;i<=0;i++){
+    //     for(int j=-0;j<=0;j++){
+    //         vec2 offset = vec2(i,j);
+    //         vec3 pos = sampleDiffusePos(prev_screen + offset);
+    //         float w = svgfPositionWeight(pos, data1.pos, data1.normal,info_distance);
+    //         pos_weight = max(pos_weight, w);
+    //     }
+    // }
+
+
 
     //vec3 move_vector = cameraPosition - previousCameraPosition;
     //float move_weight = exp(- 0.25 * max(-dot(move_vector, data1.normal), 0.0));

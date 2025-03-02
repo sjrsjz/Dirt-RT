@@ -1,4 +1,4 @@
-#define R0 32
-#define STEP 5
+#define R0 64
+#define STEP 6
 
 #include "/post/300.glsl"

@@ -49,7 +49,7 @@ const bool colortex7Clear = true;
 const bool colortex8Clear = true;
 */
 
-const float NORMAL_PARAM = 128.0;
+const float NORMAL_PARAM = 8.0;
 const float POSITION_PARAM = 1.0;
 const float LUMINANCE_PARAM = 4.0;
 
@@ -118,19 +118,29 @@ void main() {
     axis_B *= axis_B;
 
 
-    float blur_factor = (1 - exp(- 0.1 * centerPos.w)) / (1.0 + 0.25 * second_ray_distance);
+    float blur_factor = (1 - exp(- 0.25 * centerPos.w)) / (1.0 + 0.25 * second_ray_distance);
 
     float normal_factor = (1 - exp(- 0.1 * centerPos.w)) * NORMAL_PARAM;
 
-    ivec2 rand_offset = ivec2(round(rand(vec2(pix + R0))*2-1),round(rand(vec2(pix + 10 + R0))*2-1));
     ivec2 samplePos;
     ivec2 texSize = textureSize(colortex3, 0);
+
+    float theta = 2 * PI * rand(vec2(pix + 11 + R0));
+
+    #if STEP != 1
+    mat2 rotM = mat2(cos(theta), -sin(theta), sin(theta), cos(theta)) * R0;
+    #endif
+
     for (int i = -1; i <= 1; i++) {
         for (int j = -1; j <= 1; j++) {
             if (i == 0 && j == 0) {
                 continue;
             }
-            samplePos = pix + ivec2(i, j) * R0 + rand_offset;
+            #if STEP == 1
+            samplePos = pix + ivec2(i, j);
+            #else
+            samplePos = pix + ivec2(rotM * vec2(i, j));
+            #endif
             vec4 c=texelFetch(colortex5, samplePos, 0);
             float rW = GetRoughnessWeight(centerColor.w, c.w);
             vec4 B=texelFetch(colortex3, samplePos, 0);

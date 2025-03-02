@@ -746,7 +746,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) { //retur
         break;
         case Reflection:
         if ((!hitSmoothSurface || count != 0) && coord.x % 2 == 0) {
-            illumiantion = clamp(illumiantion, 0, 20 / avgExposure);
+            illumiantion = clamp(illumiantion, 0, 50 / avgExposure);
             reflectIllumiantionBuffer.data[idx].data_swap = illumiantion;
             //reflectIllumiantionBuffer.data[getIdx(coord-uvec2(1,0))].data_swap = illumiantion;
         }
