@@ -42,7 +42,7 @@ vec3 project_SH_irradiance(SH sh, vec3 N)
     float B = T - sh.CoCg.x * 0.5;
     float R = B + sh.CoCg.x;
 
-    vec3 color = vec3(R, G, B)* (max(dot(sh.shY.xyz, N),0) + (Y - length(sh.shY.xyz))) / (Y+1e-3);
+    vec3 color = normalize(vec3(R, G, B)) * (dot(sh.shY.xyz, N) + Y) * 0.5;
     return max(color, vec3(0.0));
 }
 

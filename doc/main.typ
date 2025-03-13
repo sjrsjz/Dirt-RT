@@ -107,7 +107,7 @@ vec3 project_T_irradiance(T L, vec3 N)
     float B = T - L.CoCg.x * 0.5;
     float R = B + L.CoCg.x;
 
-    vec3 irradiance = vec3(R,G,B) * (max(dot(L.v_I.xyz, N),0) + (Y - length(L.v_I.xyz))) / (Y+1e-3);
+    vec3 irradiance = normalize(vec3(R,G,B)) * (max(dot(L.v_I.xyz, N),0) + Y);
     return max(irradiance, vec3(0.0));
 }
 
