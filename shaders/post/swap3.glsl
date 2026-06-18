@@ -1,6 +1,23 @@
 #version 430 compatibility
-layout(local_size_x = 16,local_size_y = 16) in;
+
+// ===========================================================================
+// Pass swap3: 漫反射缓冲交换 (Diffuse Buffer Swap — Compute)
+// ===========================================================================
+// 管线位置: 在空间滤波 (300.glsl) 之后，将滤波结果交换回主缓冲区
+//
+// 功能:
+//   1. 从 colortex5/6 读取滤波后的 SH 数据 → 写入 data_swap
+//   2. 将 data_swap 复制到 data (完成双缓冲 flip)
+//   3. 保存 prev_weight / prev_variance (为下一帧时域累积做准备)
+//   4. 更新法线与位置 (从 colortex3/4)
+//
+// 这是 Compute Shader 版本 (local_size_x=16)，与 swap2.glsl 的 fragment
+// shader 版本输出到同一缓冲区集合。
+// ===========================================================================
+
+layout(local_size_x = 16, local_size_y = 16) in;
 #define DIFFUSE_BUFFER
+
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
@@ -8,40 +25,41 @@ layout(local_size_x = 16,local_size_y = 16) in;
 #include "/lib/buffers/denoise.glsl"
 #include "/lib/light_color.glsl"
 
-//2,3,4,5,6,7,8,9
+// ---------------------------------------------------------------------------
+// Uniform 输入
+// ---------------------------------------------------------------------------
 
-//2:pos
-uniform sampler2D colortex3;
-uniform sampler2D colortex4;
-uniform sampler2D colortex5;
-uniform sampler2D colortex6;
+uniform sampler2D colortex3;  // 世界空间法线
+uniform sampler2D colortex4;  // 世界空间位置
+uniform sampler2D colortex5;  // 滤波后 SH.shY
+uniform sampler2D colortex6;  // 滤波后 SH.CoCg + 方差 + 权重
+
+uniform vec2 resolution;
 
 /* RENDERTARGETS: 0 */
 
-//layout(location = 0) out vec4 fragColor;
-
-uniform vec2 resolution;
 void main() {
-    // if(gl_GlobalInvocationID.x >= resolution.x/2 || gl_GlobalInvocationID.y >= resolution.y/2) {
-    //     return;
-    // }
     ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
-    diffuseIllumiantionData tmp=fetchDiffuse(pix);
-    if (any(isnan(tmp.data_swap.shY))) tmp.data_swap.shY = vec4(0);
-    if (any(isnan(tmp.data_swap.CoCg))) tmp.data_swap.CoCg = vec2(0);
-    tmp.prev_weight=tmp.weight;
-    tmp.prev_variance= tmp.variance;
-    
+    diffuseIllumiantionData tmp = fetchDiffuse(pix);
+
+    // ---- NaN 保护 --------------------------------------------------------
+    if (any(isnan(tmp.data_swap.shY)))  tmp.data_swap.shY  = vec4(0.0);
+    if (any(isnan(tmp.data_swap.CoCg))) tmp.data_swap.CoCg = vec2(0.0);
+
+    // ---- 保存历史统计信息 (供下一帧时域累积使用) -------------------------
+    tmp.prev_weight   = tmp.weight;
+    tmp.prev_variance = tmp.variance;
+
+    // ---- 双缓冲 flip: 当前帧 → 历史帧 -----------------------------------
     tmp.data = tmp.data_swap;
 
-    tmp.data_swap.shY=texelFetch(colortex5,pix,0);
-    tmp.data_swap.CoCg=texelFetch(colortex6,pix,0).xy;
-    
-    //tmp.data = mix_SH(M_n,tmp.data_swap,clamp(exp(-10/(1+tmp.prev_variance) * (1+tmp.weight)),0,1));
-    
-    //uint idx = getIdx(uvec2(gl_GlobalInvocationID.xy));
-    tmp.normal =texelFetch(colortex3,pix,0).xyz;
-    tmp.pos = texelFetch(colortex4,pix,0).xyz;
-    //tmp.weight=length(tmp.data.shY)*100;
-    WriteDiffuse(tmp,pix);
+    // ---- 从滤波后的 colortex 读取新数据 ----------------------------------
+    tmp.data_swap.shY  = texelFetch(colortex5, pix, 0);
+    tmp.data_swap.CoCg = texelFetch(colortex6, pix, 0).xy;
+
+    // ---- 更新几何数据 ----------------------------------------------------
+    tmp.normal = texelFetch(colortex3, pix, 0).xyz;
+    tmp.pos    = texelFetch(colortex4, pix, 0).xyz;
+
+    WriteDiffuse(tmp, pix);
 }

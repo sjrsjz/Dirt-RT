@@ -25,7 +25,7 @@ uniform vec2 resolution;
 // RADIUS 2 = 5x5  (平衡点，25次采样)
 // RADIUS 3 = 7x7  (极限稳定，49次采样，专治各种黑斑和时域断层)
 #define VAR_FILTER_RADIUS 3 
-#define VARIANCE_SCALE 100.0
+#define VARIANCE_SCALE 250.0
 // ===========================================================================
 
 void main() {

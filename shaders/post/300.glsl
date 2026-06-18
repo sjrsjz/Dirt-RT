@@ -7,18 +7,43 @@
 #include "/lib/buffers/denoise.glsl"
 #include "/lib/light_color.glsl"
 
+// ==========================================================================
+// Pass 300: SVGF 空间滤波器 — 漫反射（SH）降噪
+// ==========================================================================
+
+/*
+const int colortex0Format = RGBA32F;
+const int colortex1Format = RGBA32F;
+const int colortex2Format = RGBA32F;
+const int colortex3Format = RGBA32F;
+const int colortex4Format = RGBA32F;
+const int colortex5Format = RGBA16F;
+const int colortex6Format = RGBA16F;
+const int colortex7Format = RGBA32F;
+const int colortex8Format = RGBA32F;
+
+const bool colortex1Clear = false;
+const bool colortex2Clear = false;
+const bool colortex3Clear = false;
+const bool colortex4Clear = false;
+const bool colortex5Clear = false;
+const bool colortex6Clear = false;
+const bool colortex7Clear = true;
+const bool colortex8Clear = true;
+*/
+
 // ===========================================================================
 // SVGF 空间滤波器 — 漫反射（SH）降噪
 // ===========================================================================
 // 参考：Schied et al., "Spatiotemporal Variance-Guided Filtering", HPG 2017
 //
 // 管线（6 级 à‑trous 迭代）：
-//   composite50  STEP=1  R0=2   → 7×7 核，步长 1px，细节保留
-//   composite52  STEP=2  R0=4   → 3×3 核，步长 4
-//   composite53  STEP=3  R0=8   → 3×3 核，步长 8
-//   composite54  STEP=4  R0=16  → 3×3 核，步长 16
-//   composite55  STEP=5  R0=32  → 3×3 核，步长 32
-//   composite56  STEP=6  R0=64  → 3×3 核，步长 64
+//   composite50  STEP=1  R0=1   → 3×3 核，步长 1
+//   composite52  STEP=2  R0=2   → 3×3 核，步长 2
+//   composite53  STEP=3  R0=4   → 3×3 核，步长 4
+//   composite54  STEP=4  R0=8   → 3×3 核，步长 8
+//   composite55  STEP=5  R0=16  → 3×3 核，步长 16
+//   composite56  STEP=6  R0=32  → 3×3 核，步长 32
 //
 // 自定义光照数据格式 — SH（非球谐，而是“方向 + 环境”矢量能量模型）：
 //   SH.shY  = vec4(dir * Y, Y)   · 方向因子 × 总亮度   + 总亮度标量
@@ -78,11 +103,6 @@ uniform mediump sampler2D colortex6;
 // 输出声明
 // ---------------------------------------------------------------------------
 
-const bool colortex3Clear = false;
-const bool colortex4Clear = false;
-const bool colortex5Clear = false;
-const bool colortex6Clear = false;
-
 /* RENDERTARGETS: 5,6 */
 layout(location = 0) out mediump vec4 out_shY; // → colortex5: 滤波后的 SH.shY
 layout(location = 1) out mediump vec4 out_CoCg; // → colortex6: .xy = 滤波后 CoCg, .zw = (方差, 权重)
@@ -99,7 +119,7 @@ const float NORMAL_POWER = 32.0;
 const float POSITION_PARAM = 1.0;
 
 // SVGF 亮度停止的主灵敏度参数 (phi_l)
-const float SVGF_PHI_L = 1.0;
+const float SVGF_PHI_L = 4.0;
 
 // ---------------------------------------------------------------------------
 // 辅助函数
@@ -210,10 +230,6 @@ void main() {
     for (int i = -KERNAL_R; i <= KERNAL_R; i++) {
         for (int j = -KERNAL_R; j <= KERNAL_R; j++) {
             if (i == 0 && j == 0) continue; // 中心像素已在累加器中
-
-            // 贴图空间权重
-            float w_kernel = hw[abs(i)] * hw[abs(j)];
-
             // à‑trous 采样位置
             #if STEP == 1
             samplePos = pix + ivec2(i, j);
@@ -221,15 +237,19 @@ void main() {
             samplePos = pix + ivec2(round(rotM * vec2(i, j))); // 注意：加了 round 防止截断误差
             #endif
 
-            // 读取邻域 SH 数据
-            sampleSH.shY = texelFetch(colortex5, samplePos, 0);
-            sampleSH.CoCg = texelFetch(colortex6, samplePos, 0).xy;
-
             // ---- 有效性检查 ------------------------------------------------
             float dist = denoiseBuffer.data[getIdx(uvec2(samplePos))].distance;
             if (dist < -0.5) continue; // 天空
             if (samplePos != clamp(samplePos, ivec2(0), texSize)) continue; // 越界
 
+            // 贴图空间权重
+            float w_kernel = hw[abs(i)] * hw[abs(j)];
+
+            // 读取邻域 SH 数据
+            sampleSH.shY = texelFetch(colortex5, samplePos, 0);
+            sampleSH.CoCg = texelFetch(colortex6, samplePos, 0).xy;
+
+            // 邻域法线
             vec3 sampleNormal = texelFetch(colortex3, samplePos, 0).xyz;
 
             // ---- 法线权重 -------------------------------------------------
@@ -261,7 +281,7 @@ void main() {
             float dirDistSq = dirDiffSq / dirTolerance;
 
             // 4. 联合马哈拉诺比斯距离 (多维高斯核)
-            float w_luma = exp(-0.125 * delta2 * (lumaDistSq + dirDistSq));
+            float w_luma = exp(-delta2 * (lumaDistSq + dirDistSq));
 
             // ---- 组合权重 -------------------------------------------------
             float w0 = w_kernel * w_n * w_depth * w_luma;

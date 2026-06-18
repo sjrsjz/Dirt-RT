@@ -1,4 +1,23 @@
 #version 430 compatibility
+
+// ===========================================================================
+// Pass fog: 最终合成 — 雾效、天空、光照组合 (Final Composite)
+// ===========================================================================
+// 这是管线末端的合成 pass，负责将各光照分量合成为最终像素颜色。
+//
+// 输入分量:
+//   - diffuse  SH 辐照度 → project_SH_irradiance() 解码为 RGB × albedo2
+//   - refract  折射颜色 → 直接加到漫反射上
+//   - reflect  反射颜色 → × albedo (金属/镜面度)
+//   - light    直接光照 → 直接加入
+//   - emission 发光     → 直接加入
+//   - absorption 大气透射率 → × 整体颜色
+//
+// 天空:
+//   - distance < -0.5 → 使用 SampleSky() 计算大气散射颜色
+//   - 同时写入 prevDiffuseIllumiantionBuffer (为下一帧时域累积做准备)
+// ===========================================================================
+
 #define DIFFUSE_BUFFER_MIN2
 #define REFLECT_BUFFER_MIN2
 #define REFRACT_BUFFER_MIN2
@@ -15,48 +34,49 @@ in vec2 texCoord;
 layout(location = 0) out vec4 fragColor;
 
 void main() {
-    uint idx = getIdx(uvec2(gl_FragCoord.xy)); //*0.5
+    uint idx = getIdx(uvec2(gl_FragCoord.xy));
     bufferData data = denoiseBuffer.data[idx];
 
+    // =========================================================================
+    // 分支 1: 天空像素 (无几何体命中)
+    // =========================================================================
     if (data.distance < -0.5) {
-        //setSkyVars();
-        //fragColor.xyz = data.absorption * getSkyColor(SunLight_global, MoonLight_global, camPos, data.rd, lightDir_global);
-        fragColor.xyz = data.absorption *SampleSky(data.rd) + data.emission;
-        diffuseIllumiantionBuffer.data[idx].data_swap=init_SH();
+        // 天空颜色 = 大气散射 × 透射率 + 发光项
+        fragColor.xyz = data.absorption * SampleSky(data.rd) + data.emission;
+
+        // 重置漫反射历史 (避免天空像素使用上一帧地面数据)
+        diffuseIllumiantionBuffer.data[idx].data_swap = init_SH();
     }
-    else
-    {
-        ivec2 pix = ivec2(gl_FragCoord.xy); //*0.5
-        diffuseIllumiantionData tmp = fetchDiffuse(pix);
-        //diffuseIllumiantionData tmp = fetchDiffuse(pix/2);    
-        vec3IllumiantionData tmp2 = fetchReflect(pix);
-        vec3IllumiantionData tmp3 = fetchRefract(pix);
+    // =========================================================================
+    // 分支 2: 表面像素 — 组合所有光照分量
+    // =========================================================================
+    else {
+        ivec2 pix = ivec2(gl_FragCoord.xy);
+
+        // 读取各光照类型的数据
+        diffuseIllumiantionData tmp   = fetchDiffuse(pix);
+        vec3IllumiantionData tmp2     = fetchReflect(pix);
+        vec3IllumiantionData tmp3     = fetchRefract(pix);
+
+        // 保存当前漫反射数据到历史缓冲区 (供下一帧 100.glsl 使用)
         prevDiffuseIllumiantionBuffer.data[idx].data_swap = tmp.data_swap;
-        prevDiffuseIllumiantionBuffer.data[idx].weight = max(tmp.weight,0);
-        
-        //fragColor.xyz = (diffuseIllumiantionBuffer.data[idx].normal2);
-        //fragColor.xyz = diffuseIllumiantionBuffer.data[idx].normal;
-        //fragColor.xyz = reflectIllumiantionBuffer.data[idx].normal;
-        
-        //fragColor.xyz = sqrt(tmp.variance)*vec3(1);
-        
-        //fragColor.xyz = (tmp.weight)*vec3(1);
-        //fragColor.xyz = tmp2.weight*vec3(0.5);
-        //fragColor.xyz = vec3(1) * max(0,dot(tmp.data_swap.shY.xyz,diffuseIllumiantionBuffer.data[idx].normal2));
-        
-        //fragColor.xyz=vec3(1)*(project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2)) ;
-        // fragColor.xyz=abs(normalize(tmp.data_swap.shY.xyz)) * vec3(1);
-        //fragColor.xyz=vec3(1)*max(dot(tmp.data_swap.shY.xyz,diffuseIllumiantionBuffer.data[idx].normal2),0);
-        
-        //fragColor.xyz=abs(light_sigma(tmp.data_swap)*vec3(1)) ;
-        //fragColor.xyz = vec3(1)*(tmp.data_swap.shY.w-length(tmp.data_swap.shY.xyz));
-        
-        //fragColor.xyz=vec3(diffuseIllumiantionBuffer.data[idx].weight);//*(50 - exp(-abs(diffuseIllumiantionBuffer.data[idx].weight)*0.1)*47.5);
-        //fragColor.xyz=vec3(1)*reflectIllumiantionBuffer.data[idx].mixWeight;//vec3(abs(project_SH_irradiance(tmp.data,faceforward(tmp.normal2,tmp.normal2,-tmp.normal))));
-        //fragColor.xyz = data.albedo2;
-        fragColor.xyz = data.absorption * ((project_SH_irradiance(tmp.data_swap,diffuseIllumiantionBuffer.data[idx].normal2) + tmp3.data_swap) * data.albedo2 + tmp2.data_swap * data.albedo + data.light) + data.emission;
-        //fragColor.xyz = tmp2.data_swap * data.albedo;
-        //fragColor.xyz = max(-reflect(normalize(reflectIllumiantionBuffer.data[idx].normal),normalize(diffuseIllumiantionBuffer.data[idx].normal2)),0) * vec3(1);
-        //fragColor.xyz = vec3(1) * length(reflectIllumiantionBuffer.data[idx].normal);
+        prevDiffuseIllumiantionBuffer.data[idx].weight    = max(tmp.weight, 0.0);
+
+        // ---- 最终颜色合成 --------------------------------------------------
+        // 公式:
+        //   color = absorption × [
+        //       (diffuse_irradiance + refract_color) × albedo2
+        //     + reflect_color × albedo
+        //     + direct_light
+        //   ] + emission
+        //
+        // albedo2: 漫反射/折射反照率 (非金属分量)
+        // albedo:  镜面反射反照率 (金属/镜面分量)
+        fragColor.xyz = data.absorption
+                      * ((project_SH_irradiance(tmp.data_swap, diffuseIllumiantionBuffer.data[idx].normal2)
+                          + tmp3.data_swap) * data.albedo2
+                         + tmp2.data_swap * data.albedo
+                         + data.light)
+                      + data.emission;
     }
 }
