@@ -118,7 +118,7 @@ void main() {
     axis_B *= axis_B;
 
 
-    float blur_factor = (1 - exp(- 0.25 * centerPos.w)) / (1.0 + 0.25 * second_ray_distance);
+    float blur_factor = (1 - exp(- 0.25 * centerPos.w)) / (3.0 + 0.5 * second_ray_distance);
 
     float normal_factor = (1 - exp(- 0.1 * centerPos.w)) * NORMAL_PARAM;
 

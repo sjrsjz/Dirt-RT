@@ -3,20 +3,12 @@
 #define DIFFUSE_BUFFER_MIN
 #define PREV_DIFFUSE_BUFFER
 
-//layout(local_size_x = 16,local_size_y = 16) in;
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
 #include "/lib/utils.glsl"
 #include "/lib/buffers/denoise.glsl"
 #include "/lib/light_color.glsl"
-
-//2,3,4,5,6,7,8,9
-
-//2:pos
-
-
-
 
 uniform sampler2D colortex0;
 uniform sampler2D depthtex0;
@@ -36,33 +28,16 @@ uniform float far;
 uniform vec2 resolution;
 uniform int worldTime;
 
-/*
-const int colortex0Format = RGBA32F;
-const int colortex1Format = RGBA32F;
-const int colortex2Format = RGBA32F;
-const int colortex7Format = RGBA32F;
-const int colortex8Format = RGBA32F;
-
-const bool colortex0Clear = true;
-const bool colortex1Clear = false;
-const bool colortex2Clear = false;
-
-const bool colortex6Clear = false;
-const bool colortex7Clear = true;
-const bool colortex8Clear = true;
-*/
-
-const float NORMAL_PARAM = 32.0;
-const float POSITION_PARAM = 256.0;
+const float NORMAL_PARAM = 4.0;
+const float POSITION_PARAM = 64.0;
 const float LUMINANCE_PARAM = 4.0;
 
-float svgfNormalWeight(vec3 centerNormal, vec3 normal, float distance) { 
-    return pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM*(0.25+4*exp(-0.25*distance)));
+float svgfNormalWeight(vec3 centerNormal, vec3 normal, float distance) {
+    return pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM * (0.25 + 4 * exp(-0.25 * distance)));
 }
 
 float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float distance) {
-    // Modified to check for distance from the center plane
-    return exp(-(pow(POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)/sqrt(distance)),4)));
+    return exp(-(pow(POSITION_PARAM * abs(dot(pixelPos - centerPos, normal) / sqrt(distance)), 4)));
 }
 
 vec3 reproject(vec3 screenPos) {
@@ -83,8 +58,6 @@ vec3 reproject2(vec3 worldPos) {
     return prevClipPos.xyz / prevClipPos.w * 0.5 + 0.5;
 }
 
-
-
 vec3 prevScreenPos;
 float info_distance;
 uint idx_l;
@@ -96,120 +69,107 @@ in vec2 texCoord;
 
 bool notInRange(vec2 p) {
     return clamp(p, vec2(0), vec2(1)) != p;
-    
 }
 
-diffuseIllumiantionBufferData data1;
+diffuseIllumiantionBufferData current_data;
 diffuseIllumiantionData out_data;
 
-// variance estimation
-float updateVariance(SH M_n, float D_n, SH X_nplus1, float w) { // w is the weight of the history average
-    vec2 diff_CoCg = X_nplus1.CoCg - M_n.CoCg;
-    vec4 diff_shY = X_nplus1.shY - M_n.shY;
-    float w1 = 1.0 / (1.0 + w);
-    return w*(D_n*w + (dot(diff_CoCg,diff_CoCg)+dot(diff_shY,diff_shY))*w1)*w1*w1;
+// ============================================================
+// ★ 无偏加权 Welford 在线方差更新
+// ============================================================
+float updateVariance(float old_mean, float old_var, float new_val, float old_weight, float new_weight) {
+    float total = old_weight + new_weight;
+    float delta = new_val - old_mean;
+    float new_mean = old_mean + delta * new_weight / total;
+    // 加权方差递推 (West 1979)
+    float new_var = (old_weight * old_var + new_weight * delta * (new_val - new_mean)) / total;
+    return max(new_var, 0.0);
 }
 
 float output_weight = 0;
 float output_variance = 0;
 
-float visible_factor(vec3 normal, vec3 local_position, vec3 rd){
-    return 1/(abs(dot(normal,rd)) + 1e-2)  * length(local_position);
+float visible_factor(vec3 normal, vec3 local_position, vec3 rd) {
+    return 1 / (abs(dot(normal, rd)) + 1e-2) * length(local_position);
 }
 
-
+// ============================================================
+// 时域累积逻辑（仅修改方差部分）
+// ============================================================
 void MixDiffuse() {
     if (notInRange(prevScreenPos.xy)) {
+        output_variance = 1.0; 
+        output_weight = 1.0;
+        out_data.data_swap = current_data.data_swap;
         return;
     }
-    vec2 prev_screen = prevScreenPos.xy * textureSize(colortex0,0);
+    vec2 prev_screen = prevScreenPos.xy * textureSize(colortex0, 0);
     diffuseIllumiantionData data = sampleDiffuse(prev_screen);
 
-    float pos_weight = svgfPositionWeight(data.pos, data1.pos, data1.normal,info_distance);
-    // for(int i=-0;i<=0;i++){
-    //     for(int j=-0;j<=0;j++){
-    //         vec2 offset = vec2(i,j);
-    //         vec3 pos = sampleDiffusePos(prev_screen + offset);
-    //         float w = svgfPositionWeight(pos, data1.pos, data1.normal,info_distance);
-    //         pos_weight = max(pos_weight, w);
-    //     }
-    // }
+    float pos_weight = svgfPositionWeight(data.pos, current_data.pos, current_data.normal, info_distance);
+    float normal_weight = pow(max(dot(data.normal, current_data.normal), 0.0), NORMAL_PARAM);
+  
+    float s = float(info_distance > -0.5) * pos_weight * normal_weight;
+    float prevW = data.prev_weight * s;
 
+    if (prevW < 1e-2) {
+        output_variance = max(current_data.data_swap.shY.w * 0.5, 0.5);
+        output_weight = 1.0;
+        out_data.data_swap = current_data.data_swap;
+    } else {
+        float max_history = 1000.0;
+        float old_total = prevW;                     // 上一帧累计的总权重（未加当前帧）
+        float new_total = clamp(prevW + 1.0, 1.0, max_history);
 
+        // 光照混合（使用新总权重）
+        out_data.data_swap = mix_SH(data.data, current_data.data_swap, 1.0 / new_total);
 
-    //vec3 move_vector = cameraPosition - previousCameraPosition;
-    //float move_weight = exp(- 0.25 * max(-dot(move_vector, data1.normal), 0.0));
-    //pos_weight *= move_weight;
+        // 方差更新（无偏 Welford）
+        output_variance = updateVariance(
+            data.data.shY.w,          // 历史亮度均值
+            data.prev_variance,       // 历史方差
+            current_data.data_swap.shY.w,    // 当前亮度
+            old_total,                // 旧总权重（尚未加 1）
+            1.0                       // 当前帧权重
+        );
+        // output_variance = min(output_variance, 100.0);
 
-    float f1 = visible_factor(data1.normal, data1.pos - cameraPosition, curr_rd);
-    float f2 = visible_factor(data.normal, data.pos - previousCameraPosition, curr_rd);
-    pos_weight *= exp(-0.25 * max(f2 - f1, 0));
-
-
-    //pos_weight = sqrt(pos_weight/9);  // 实际上这玩意成了一种几何边缘检测，也许可以用来阻止降噪器在几何边缘失效的问题
-
-    //diffuseIllumiantionData data = sampleDiffuse(prevScreenPos.xy*textureSize(colortex0,0)-0.5);
-    
-
-
-    float s =  float(denoiseBuffer.data[idx].distance > -0.5)*pos_weight;
-                  //* svgfPositionWeight(data.pos, data1.pos, data1.normal,info_distance);
-    float prevW = data.prev_weight;
-    prevW *= s;
-
-    output_variance = min(100, updateVariance(data1.data_swap, data.prev_variance, data.data, prevW));
-    prevW = clamp(prevW + 1,1,max(ACCUMULATION_LENGTH,50*pow(output_variance*avgExposure,-0.125)));
-
-    out_data.data_swap = mix_SH(data.data,data1.data_swap,1/prevW);
-
-    output_weight = prevW;
+        output_weight = new_total;
+    }
 }
+
 /* RENDERTARGETS: 5 */
 layout(location = 0) out vec4 output_data;
 
 layout(rgba32f) uniform image2D extInfoBuffer;
 
 void main() {
-    // if(gl_FragCoord.x > resolution.x/2 || gl_FragCoord.y > resolution.y/2) {
-    //     return;
-    // }
-
-
-    // uvec2 pix = uvec2(gl_FragCoord.xy * 2);
     uvec2 pix = uvec2(gl_FragCoord.xy);
-    
+
     idx = getIdx(pix);
 
     info_distance = denoiseBuffer.data[idx].distance;
     curr_rd = normalize(denoiseBuffer.data[idx].rd);
-    data1 = diffuseIllumiantionBuffer.data[idx];
+    current_data = diffuseIllumiantionBuffer.data[idx];
 
-    //
-    // accumulate_SH(data1.data_swap, diffuseIllumiantionBuffer.data[getIdx(uvec2(gl_FragCoord.xy) * 2 + uvec2(0,1))].data_swap, 1.);
-    // accumulate_SH(data1.data_swap, diffuseIllumiantionBuffer.data[getIdx(uvec2(gl_FragCoord.xy) * 2 + uvec2(1,0))].data_swap, 1.);
-    // accumulate_SH(data1.data_swap, diffuseIllumiantionBuffer.data[getIdx(uvec2(gl_FragCoord.xy) * 2 + uvec2(1,1))].data_swap, 1.);
-    // data1.data_swap = scaleSH(data1.data_swap, 1.0/4.0);
-
-    out_data.data_swap = data1.data_swap;
+    out_data.data_swap = current_data.data_swap;
     out_data.data = init_SH();
-    out_data.normal = data1.normal;
-    out_data.normal2 = data1.normal2;
-    out_data.pos = data1.pos;
+    out_data.normal = current_data.normal;
+    out_data.normal2 = current_data.normal2;
+    out_data.pos = current_data.pos;
     output_weight = 1;
     output_variance = 0;
     if (info_distance < -0.5) {
-        WriteDiffuse(out_data,ivec2(gl_FragCoord.xy));
-        imageStore(extInfoBuffer,ivec2(gl_FragCoord.xy),vec4(output_weight,output_variance,0,0));
+        WriteDiffuse(out_data, ivec2(gl_FragCoord.xy));
+        imageStore(extInfoBuffer, ivec2(gl_FragCoord.xy), vec4(output_weight, output_variance, 0, 0));
         return;
     }
-    prevScreenPos = reproject2(data1.pos);
-    //prevScreenPos = reproject2(data1.pos) * vec3(0.5,0.5,1);
-    
-    idx_l=getIdx(uvec2(prevScreenPos.xy*textureSize(colortex0,0)+0.5));
+    prevScreenPos = reproject2(current_data.pos);
+
+    idx_l = getIdx(uvec2(prevScreenPos.xy * textureSize(colortex0, 0) + 0.5));
     MixDiffuse();
 
-    imageStore(extInfoBuffer,ivec2(gl_FragCoord.xy),vec4(output_weight,output_variance,0,0));
+    imageStore(extInfoBuffer, ivec2(gl_FragCoord.xy), vec4(output_weight, output_variance, 0, 0));
 
-    WriteDiffuse(out_data,ivec2(gl_FragCoord.xy));
-
+    WriteDiffuse(out_data, ivec2(gl_FragCoord.xy));
 }

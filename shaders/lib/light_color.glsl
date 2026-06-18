@@ -69,8 +69,8 @@ vec3 background_0(float pos_y, in vec3 n, in vec3 lightDir) {
     const float P = 30000.; //大气层厚度
     const float R = 6370000*1.25; //地球半径
     
-    const vec3 Sun = 100.*vec3(10,10,10); //太阳光颜色
-    const vec3 Moon = Sun * 0.0001; //月光颜色 (较暗的蓝白色)
+    const vec3 Sun = 10.*vec3(10,10,10); //太阳光颜色
+    const vec3 Moon = Sun * 0.00001; //月光颜色 (较暗的蓝白色)
     
     mediump vec3 b_g0_2 = b_g0 * b_g0;
     
@@ -101,12 +101,12 @@ vec3 background_0(float pos_y, in vec3 n, in vec3 lightDir) {
     // 太阳光贡献
     vec3 c_sun = Sun * g_sun;
     c_sun *= abs((exp(-t*n_distance)-exp(-t*s_distance))/(n.y-lightDir.y)) * max(dot(lightDir,sun_normal),0.);
-    c_sun += 10*exp(-t*n_distance)*Sun*smoothstep(0.999,0.9995,dot(n0,lightDir));
+    c_sun += 100.0 * exp(-t*n_distance)*Sun*smoothstep(0.999,0.9995,dot(n0,lightDir));
     
     // 月光贡献
     vec3 c_moon = Moon * g_moon;
     c_moon *= abs((exp(-t*n_distance)-exp(-t*m_distance))/(n.y-moonDir.y)) * max(dot(moonDir,moon_normal),0.);
-    c_moon += 10*exp(-t*n_distance)*Moon*smoothstep(0.999,0.9995,dot(n0,moonDir));
+    c_moon += 100.0 * exp(-t*n_distance)*Moon*smoothstep(0.999,0.9995,dot(n0,moonDir));
     
     return clamp(c_sun + c_moon, 0., 10000.);
 }

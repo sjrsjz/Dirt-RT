@@ -154,7 +154,7 @@ float GGX_Lamda(float VoN, float a) {
 float GGX_G2(float VoN, float LoN, float a) {
     float L1 = GGX_Lamda(VoN, a);
     float L2 = GGX_Lamda(LoN, a);
-    return clamp((1 + L1) / (1 + L2 + L1), 0, 1);
+    return clamp((1 + L1) / (1.001 + L2 + L1), 0, 1);
 }
 vec3 GGXNormal(vec3 normal, float roughness, vec3 pos) {
     vec3 randN0;
@@ -231,7 +231,7 @@ vec4 WeightedDiffuseEx(vec3 normal, vec3 pos, float Ex) {
 float GGXpdf(float costheta, float fai, float a) {
     float a2 = a * a;
     float b = 1 + (a2 - 1) * costheta * costheta;
-    return a2 * costheta / (PI * b * b);
+    return a2 * costheta / (1e-2 + PI * b * b);
 }
 
 float mixp(float F, float S) {

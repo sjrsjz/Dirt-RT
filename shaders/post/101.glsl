@@ -2,7 +2,6 @@
 
 #define REFLECT_BUFFER_MIN
 
-
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
@@ -17,7 +16,6 @@
 in vec2 texCoord;
 
 uniform sampler2D colortex0;
-
 
 uniform mat4 gbufferProjectionInverse;
 uniform mat4 gbufferModelViewInverse;
@@ -56,16 +54,16 @@ const float LUMINANCE_PARAM = 4.0;
 
 float svgfNormalWeight(vec3 centerNormal, vec3 normal, float d) {
     float f = (1e3 + length(centerNormal)) / (1e3 + length(normal));
-    f = max(f, 1/f) - 1;
-    float A=exp(- 250 * abs(f));
+    f = max(f, 1 / f) - 1;
+    float A = exp(-250 * abs(f));
     //float B=exp(- (1 - dot(normalize(centerNormal),normalize(normal))));
-    return min(1,A*clamp(pow(max(dot(normalize(centerNormal),normalize(normal)), 0.0), NORMAL_PARAM),0,1));
-//    clamp(exp(-5*length(centerNormal-normal)),0.,1.);
+    return min(1, A * clamp(pow(max(dot(normalize(centerNormal), normalize(normal)), 0.0), NORMAL_PARAM), 0, 1));
+    //    clamp(exp(-5*length(centerNormal-normal)),0.,1.);
 }
 
 float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float distance) {
     // Modified to check for distance from the center plane
-    return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)*(10/(1+10*distance))));
+    return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal) * (10 / (1 + 10 * distance))));
 }
 
 vec3 reproject(vec3 screenPos) {
@@ -86,7 +84,6 @@ vec3 reproject2(vec3 worldPos) {
     return prevClipPos.xyz / prevClipPos.w * 0.5 + 0.5;
 }
 
-
 /* RENDERTARGETS: 0 */
 
 layout(location = 0) out vec4 fragColor;
@@ -99,7 +96,6 @@ uint idx;
 
 bool notInRange(vec2 p) {
     return clamp(p, vec2(0), vec2(1)) != p;
-    
 }
 
 /*void MixSample() {
@@ -110,50 +106,55 @@ bool notInRange(vec2 p) {
         return;
     }
     denoiseBuffer.data[idx].lastSample=denoiseBuffer.data[getIdx(uvec2(prevScreenPos.xy * texSize))].currSample;
+/*void MixSample() {
+    denoiseBuffer.data[idx].lastSample=denoiseBuffer.data[idx].currSample;
+    return;
+    if (notInRange(prevScreenPos.xy)) {
+        denoiseBuffer.data[idx].lastSample = vec4(0);
+        return;
+    }
+    denoiseBuffer.data[idx].lastSample=denoiseBuffer.data[getIdx(uvec2(prevScreenPos.xy * texSize))].currSample;
 }*/
 
-
 vec3IllumiantionData data2;
-
 
 void MixReflect() {
     if (notInRange(prevScreenPos.xy)) {
         data2.weight = 1;
         return;
     }
-    
-    vec3IllumiantionData data = sampleReflect(prevScreenPos.xy*textureSize(colortex0,0));
 
-    float s = float(denoiseBuffer.data[idx].distance > -0.5) * svgfNormalWeight(data.normal, data2.normal,info_distance);
-             //* svgfPositionWeight(data.pos, data2.pos, data2.normal,info_distance);
+    vec3IllumiantionData data = sampleReflect(prevScreenPos.xy * textureSize(colortex0, 0));
+
+    float s = float(denoiseBuffer.data[idx].distance > -0.5) * svgfNormalWeight(data.normal, data2.normal, info_distance);
+    //* svgfPositionWeight(data.pos, data2.pos, data2.normal,info_distance);
     //s = pow((min(1, s + 0.75) - 0.75)/0.25,0.125);
-    s = pow(s,0.05);
+    s = pow(s, 0.05);
     float prevW = data.prev_weight;
-    prevW = max(1, min(prevW * s + 1, 10*ACCUMULATION_LENGTH));
+    prevW = max(1, min(prevW * s + 1, 10 * ACCUMULATION_LENGTH));
 
-    data2.data_swap = data.data+(data2.data_swap-data.data)/prevW;
+    data2.data_swap = data.data + (data2.data_swap - data.data) / prevW;
     data2.weight = prevW;
 }
 
 void main() {
-   //严重消耗性能，与200.glsl一同占据用时的1/4~1/3
-    
+    //严重消耗性能，与200.glsl一同占据用时的1/4~1/3
+
     idx = getIdx(uvec2(gl_FragCoord.xy));
 
     info_distance = denoiseBuffer.data[idx].distance;
-    data2=reflectIllumiantionBuffer.data[idx];
+    data2 = reflectIllumiantionBuffer.data[idx];
     if (info_distance < -0.5) {
-
         data2.weight = 1;
         data2.mixWeight = 0;
-        WriteReflect(data2,ivec2(gl_FragCoord.xy));
+        WriteReflect(data2, ivec2(gl_FragCoord.xy));
 
         return;
     }
     prevScreenPos = reproject2(data2.pos);
-    idx_l=getIdx(uvec2(prevScreenPos.xy*textureSize(colortex0,0)+0.5));
+    idx_l = getIdx(uvec2(prevScreenPos.xy * textureSize(colortex0, 0) + 0.5));
 
     MixReflect();
-   // data2.weight=10;
-    WriteReflect(data2,ivec2(gl_FragCoord.xy));
+    // data2.weight=10;
+    WriteReflect(data2, ivec2(gl_FragCoord.xy));
 }

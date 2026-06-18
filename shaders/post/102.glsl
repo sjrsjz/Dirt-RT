@@ -32,7 +32,20 @@ uniform float far;
 uniform vec2 resolution;
 uniform int worldTime;
 
+/*
+const int colortex0Format = RGBA32F;
+const int colortex1Format = RGBA32F;
+const int colortex2Format = RGBA32F;
+const int colortex7Format = RGBA32F;
+const int colortex8Format = RGBA32F;
 
+const bool colortex0Clear = true;
+const bool colortex1Clear = false;
+const bool colortex2Clear = false;
+
+const bool colortex6Clear = false;
+const bool colortex7Clear = true;
+const bool colortex8Clear = true;
 /*
 const int colortex0Format = RGBA32F;
 const int colortex1Format = RGBA32F;
@@ -54,7 +67,8 @@ const float POSITION_PARAM = 64.0;
 const float LUMINANCE_PARAM = 4.0;
 
 float svgfNormalWeight(vec3 centerNormal, vec3 normal) {
-    return clamp(exp(-5*length(centerNormal-normal)),0.,1.);;//pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM);
+    return clamp(exp(-5 * length(centerNormal - normal)), 0., 1.);
+    ; //pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM);
 }
 
 float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float distance) {
@@ -102,14 +116,6 @@ bool notInRange(vec2 p) {
         return;
     }
     denoiseBuffer.data[idx].lastSample=denoiseBuffer.data[getIdx(uvec2(prevScreenPos.xy * texSize))].currSample;
-/*void MixSample() {
-    denoiseBuffer.data[idx].lastSample=denoiseBuffer.data[idx].currSample;
-    return;
-    if (notInRange(prevScreenPos.xy)) {
-        denoiseBuffer.data[idx].lastSample = vec4(0);
-        return;
-    }
-    denoiseBuffer.data[idx].lastSample=denoiseBuffer.data[getIdx(uvec2(prevScreenPos.xy * texSize))].currSample;
 }*/
 
 vec3IllumiantionData data3;
@@ -122,7 +128,7 @@ void MixRefract() {
 
     vec3IllumiantionData data = sampleRefract(prevScreenPos.xy * textureSize(colortex0, 0));
 
-    float s = exp(-0.25*abs(denoiseBuffer.data[idx_l].refractWeight-data.mixWeight))*float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.normal, data3.normal) * svgfPositionWeight(data.pos, data3.pos, data3.normal, info_distance);
+    float s = exp(-0.25 * abs(denoiseBuffer.data[idx_l].refractWeight - data.mixWeight)) * float(denoiseBuffer.data[idx_l].distance > -0.5) * svgfNormalWeight(data.normal, data3.normal) * svgfPositionWeight(data.pos, data3.pos, data3.normal, info_distance);
     //s = (min(1, s + 0.25) - 0.25) / 0.75;
     float prevW = data.weight;
     prevW = max(1, min(prevW * s + 1, ACCUMULATION_LENGTH));

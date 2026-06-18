@@ -1,3 +1,3 @@
-#define R0 2
+#define R0 1
 #define STEP 1
 #include "/post/300.glsl"
