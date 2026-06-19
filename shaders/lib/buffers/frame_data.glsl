@@ -2,9 +2,7 @@
 #define FRAME_DATA_GLSL
 #include "/lib/constants.glsl"
 
-
-
-layout(std140,set=3, binding = 1) buffer frameData {
+layout(std140, set = 3, binding = 1) buffer frameData {
     float avgExposure;
     float div_avgExposure;
     vec3 SunLight_global;
@@ -22,30 +20,16 @@ layout(std140,set=3, binding = 1) buffer frameData {
     int world_type_global;
     uvec2 resolution_global;
 
-    vec2 HDR_AB_global;
-
     mat4 gbufferPreviousProjection_global;
     mat4 gbufferPreviousModelView_global;
     vec3 previousCameraPosition_global;
 };
 
-/*struct gBufferData{
-    vec4 pos;
-    vec4 normal;
-    vec4 color;
-    vec4 coord;
-    vec2 depth;
-};
-
-layout(std430,set=3, binding = 2) buffer GBuffer{
-    gBufferData data[];
-}gBuffer;
-*/
-mat3x4 mixAB(mat3x4 A,mat3x4 B,float x){
-    return A+(B-A)*x;
+mat3x4 mixAB(mat3x4 A, mat3x4 B, float x) {
+    return A + (B - A) * x;
 }
-float mixAB(float A,float B,float x){
-    return A+(B-A)*x;
+float mixAB(float A, float B, float x) {
+    return A + (B - A) * x;
 }
 
 #endif // FRAME_DATA_GLSL

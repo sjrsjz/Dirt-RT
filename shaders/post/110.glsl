@@ -18,9 +18,8 @@
 #define DIFFUSE_BUFFER_MIN
 
 #include "/lib/buffers/frame_data.glsl"
-#include "/lib/utils.glsl"
 #include "/lib/buffers/denoise.glsl"
-#include "/lib/light_color.glsl"
+#include "/lib/sky_color.glsl"
 
 /* RENDERTARGETS: 2 */
 layout(location = 0) out vec4 Emission;

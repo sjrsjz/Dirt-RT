@@ -19,7 +19,6 @@
 
 #include "/lib/common.glsl"
 #include "/lib/tonemap.glsl"
-#include "/lib/utils.glsl"
 
 in vec2 texCoord;
 

@@ -1,11 +1,10 @@
 #version 430 compatibility
 #define DIFFUSE_BUFFER_MIN2
 #include "/lib/constants.glsl"
+#include "/lib/common.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
-#include "/lib/utils.glsl"
 #include "/lib/buffers/denoise.glsl"
-#include "/lib/light_color.glsl"
 
 // ==========================================================================
 // Pass 300: SVGF 空间滤波器 — 漫反射（SH）降噪
@@ -119,7 +118,7 @@ const float NORMAL_POWER = 32.0;
 const float POSITION_PARAM = 1.0;
 
 // SVGF 亮度停止的主灵敏度参数 (phi_l)
-const float SVGF_PHI_L = 4.0;
+const float SVGF_PHI_L = 16.0;
 
 // ---------------------------------------------------------------------------
 // 辅助函数
@@ -176,7 +175,7 @@ void main() {
     // 像素的世界空间足迹，用于距离无关的深度边缘停止
     // footprint ≈ distance / resolution.y  远处像素足迹大，归一化后深度敏感度保持一致
     float dist_to_cam = max(length(centerPos - camPos), 0.01);
-    float pixel_footprint = POSITION_PARAM * max(dist_to_cam / float(resolution_global.y), 0.0001);
+    float inv_pixel_footprint = 1 / (POSITION_PARAM * max(dist_to_cam / float(resolution_global.y), 0.0001));
 
     // 中心 SH 数据
     SH centerSH;
@@ -204,7 +203,10 @@ void main() {
 
     // 时域蒙特卡洛方差（已预平滑）
     float var_MC = max(tex.z, 0.0);
-    float mcVariance = SVGF_PHI_L * SVGF_PHI_L * var_MC + 1e-2; // 加了小偏移避免除零
+    float mcVariance = SVGF_PHI_L * var_MC + 1e-2; // 加了小偏移避免除零
+    float inv_mcVariance = 1.0 / mcVariance;
+    
+    float base_dirTolerance = sigma_sq_center + mcVariance + 0.125;
 
     // ---- 初始化累积器 ----------------------------------------------------
     float spatialVar = 0.0; // 空间方差 (Welford 算法)
@@ -214,7 +216,7 @@ void main() {
     // ---- à‑trous 核半径定义 -----------------------------------------------
     #define KERNAL_R 1          // 3×3 核半径，步长由 R0 定义
 
-    #if STEP != 1
+    #if STEP > 1 && STEP <= 2
     // ---- 抖动旋转 ---------------------------------------------------------
     float theta = 2.0 * PI * rand(vec2(pix + 10 + R0 + tex.z));
     mat2 rotM = mat2(cos(theta), -sin(theta), sin(theta), cos(theta)) * R0;
@@ -231,10 +233,10 @@ void main() {
         for (int j = -KERNAL_R; j <= KERNAL_R; j++) {
             if (i == 0 && j == 0) continue; // 中心像素已在累加器中
             // à‑trous 采样位置
-            #if STEP == 1
-            samplePos = pix + ivec2(i, j);
-            #else
+            #if STEP > 1 && STEP <= 2
             samplePos = pix + ivec2(round(rotM * vec2(i, j))); // 注意：加了 round 防止截断误差
+            #else
+            samplePos = pix + R0 * ivec2(i, j);
             #endif
 
             // ---- 有效性检查 ------------------------------------------------
@@ -257,7 +259,7 @@ void main() {
 
             // ---- 深度权重 -------------------------------------------------
             // 采样点到中心平面的垂直距离，归一化到屏幕空间
-            vec3 delta = (texelFetch(colortex4, samplePos, 0).xyz - centerPos) / pixel_footprint;
+            vec3 delta = (texelFetch(colortex4, samplePos, 0).xyz - centerPos) * inv_pixel_footprint;
             float k = abs(dot(delta, centerNormal)) ;
             float delta2 = dot(delta, delta);
             // 深度项 = k × 各向异性拉伸（i²/j² 加权）
@@ -272,19 +274,19 @@ void main() {
 
             // 2. 总强度（标量亮度）的统计距离
             float lumaDiff = centerSH.shY.w - sampleSH.shY.w;
-            float lumaDistSq = (lumaDiff * lumaDiff) / mcVariance;
+            float lumaDistSq = (lumaDiff * lumaDiff) * inv_mcVariance;
 
             // 3. 方向矢量的统计距离
             vec3 dirDiff = centerSH.shY.xyz - sampleSH.shY.xyz;
             float dirDiffSq = dot(dirDiff, dirDiff);
-            float dirTolerance = sigma_sq_center + sigma_sq_sample + mcVariance;
+            float dirTolerance = base_dirTolerance + sigma_sq_sample;
             float dirDistSq = dirDiffSq / dirTolerance;
 
-            // 4. 联合马哈拉诺比斯距离 (多维高斯核)
-            float w_luma = exp(-delta2 * (lumaDistSq + dirDistSq));
+            // 4. 联合马哈拉诺比斯距离
+            float inv_w_luma = 1 + delta2 * (lumaDistSq + dirDistSq);
 
             // ---- 组合权重 -------------------------------------------------
-            float w0 = w_kernel * w_n * w_depth * w_luma;
+            float w0 = w_kernel * w_n * w_depth / inv_w_luma;
 
             // ---- 累积加权样本 ---------------------------------------------
             spatialVar = updateVariance(accumulatedSH, spatialVar, sampleSH, sumWeight, w0);
@@ -293,8 +295,8 @@ void main() {
         }
     }
 
-    // ---- 时空方差混合 ------------------------------------------------
-    tex.z = (tex.z + spatialVar) * (0.125 +  5 / (1 + tex.w));
+    // // ---- 时空方差混合 ------------------------------------------------
+    tex.z = tex.z * 0.875 + spatialVar * 0.125;
 
     // ---- 归一化并输出 ----------------------------------------------------
     accumulatedSH = scaleSH(accumulatedSH, 1.0 / sumWeight); // 加权和 → 加权平均

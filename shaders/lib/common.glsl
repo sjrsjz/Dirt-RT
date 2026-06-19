@@ -7,42 +7,13 @@ uniform sampler2D NoiseTexture;
 #endif
 
 uint iFrame = 0;
-//const float PI=3.14159265358;
-struct object {
-    float d;
-    float d2;
-    int id;
-    int i_id;
-    int s;
-};
+
 struct material {
     vec3 Cs;
     vec3 Cd;
     vec2 S;
     vec4 R;
     vec3 light;
-};
-struct info {
-    vec3 rd_i;
-    vec3 rd_o;
-    vec3 n;
-    vec3 microNormal;
-    vec3 macroNormal;
-    vec3 p;
-    material surface;
-    float n_i;
-    float n_o;
-    float distance;
-    float sampleDistance;
-    vec3 color;
-    vec3 color2;
-    vec3 color3;
-    vec3 shade;
-    vec3 absorption;
-    vec3 emission;
-    float sampleRoughness;
-    int type;
-    bool inside;
 };
 
 //----------------------------------------------------------------------------------------
@@ -54,7 +25,6 @@ float hash11(float p)
     p *= p + p;
     return fract(p);
 }
-
 
 //----------------------------------------------------------------------------------------
 //  1 out, 3 in...
@@ -69,7 +39,6 @@ float hash13(vec3 p3)
 vec2 rot(vec2 a, float theata) {
     return a.xx * vec2(cos(theata), sin(theata)) + a.yy * vec2(-sin(theata), cos(theata));
 }
-
 
 float hash(float n)
 {
@@ -100,6 +69,7 @@ void XYZ(vec3 n, out vec3 X, out vec3 Y, out vec3 Z) {
     X = abs(n.y) == 1 ? vec3(1, 0, 0) : normalize(X);
     Z = cross(n, X);
 }
+
 float rand_i = 0.;
 float rand(vec3 p3)
 {
@@ -156,6 +126,7 @@ float GGX_G2(float VoN, float LoN, float a) {
     float L2 = GGX_Lamda(LoN, a);
     return clamp((1 + L1) / (1.001 + L2 + L1), 0, 1);
 }
+
 vec3 GGXNormal(vec3 normal, float roughness, vec3 pos) {
     vec3 randN0;
     randN0.y = -length(normal.xz);
@@ -170,6 +141,7 @@ vec3 GGXNormal(vec3 normal, float roughness, vec3 pos) {
 
     return cosbeta * normal + sqrt(1 - cosbeta * cosbeta) * (cos(alpha) * randN0 + sin(alpha) * randN1);
 }
+
 vec3 DiffuseNormal(vec3 normal, vec3 pos) {
     vec3 randN0;
     randN0.y = -length(normal.xz);
@@ -199,16 +171,16 @@ vec4 WeightedDiffuse(vec3 normal, vec3 pos, float power) {
     // 生成随机方向
     float alpha = rand(pos) * 2 * PI;
     float rnd = rand(pos);
-    float tmp = 1+ log(1-rnd+rnd*exp(-2*power))/power;
+    float tmp = 1 + log(1 - rnd + rnd * exp(-2 * power)) / power;
     vec3 n = tmp * normal + sqrt(1 - tmp * tmp) * (cos(alpha) * randN0 + sin(alpha) * randN1);
 
     // 计算权重
-    float div_pdf = exp(- power *tmp) * PI*(exp(power) - 1)/power;
+    float div_pdf = exp(-power * tmp) * PI * (exp(power) - 1) / power;
     return vec4(n, div_pdf);
 }
 
 vec4 WeightedDiffuseEx(vec3 normal, vec3 pos, float Ex) {
-    float power = Ex * (3 - Ex*Ex)/(1 - Ex*Ex);
+    float power = Ex * (3 - Ex * Ex) / (1 - Ex * Ex);
     // 返回采样方向和权重
     vec3 randN0;
     randN0.y = -length(normal.xz);
@@ -220,13 +192,12 @@ vec4 WeightedDiffuseEx(vec3 normal, vec3 pos, float Ex) {
     // 生成随机方向
     float alpha = rand(pos + normal) * 2 * PI;
     float rnd = rand(pos + normal);
-    float tmp = 1+ log(1-rnd+rnd*exp(-2*power))/power;
+    float tmp = 1 + log(1 - rnd + rnd * exp(-2 * power)) / power;
     vec3 n = tmp * normal + sqrt(1 - tmp * tmp) * (cos(alpha) * randN0 + sin(alpha) * randN1);
     // 计算权重
-    float div_pdf = exp(- power *tmp) * PI*(exp(power) - 1)/power;
+    float div_pdf = exp(-power * tmp) * PI * (exp(power) - 1) / power;
     return vec4(n, div_pdf);
 }
-
 
 float GGXpdf(float costheta, float fai, float a) {
     float a2 = a * a;
@@ -276,36 +247,33 @@ vec4 noised(in vec3 x)
         du * (vec3(k1, k2, k3) + u.yzx * vec3(k4, k5, k6) + u.zxy * vec3(k6, k4, k5) + k7 * u.yzx * u.zxy));
 }
 
-
 #ifdef USE_NOISE_TEXTURE
 float sample3Dnoise(in vec3 v) {
     vec3 p = mod(floor(v), 256.0); // Add this line to make the noise repeat every 256 units
     vec3 f = fract(v);
-    f = f*f*(3.-2.*f);
-    
-    vec2 uv = (p.xy+vec2(37.,17.)*p.z) + f.xy;
-    vec2 rg = textureLod( NoiseTexture, fract((uv+.5)/256.), 0.).yx;
+    f = f * f * (3. - 2. * f);
+
+    vec2 uv = (p.xy + vec2(37., 17.) * p.z) + f.xy;
+    vec2 rg = textureLod(NoiseTexture, fract((uv + .5) / 256.), 0.).yx;
     return mix(rg.x, rg.y, f.z);
 }
 #endif
 float valueNoise(vec3 position) {
-#ifndef USE_NOISE_TEXTURE
+    #ifndef USE_NOISE_TEXTURE
     vec3 p = floor(position);
     vec3 f = fract(position);
     vec3 u = f * f * (3.0 - 2.0 * f);
 
-    float n = p.x + p.y*157.0 + 113.0*p.z;
-    return mix(mix(mix( hash11(n+  0.0), hash11(n+  1.0),f.x),
-                   mix( hash11(n+157.0), hash11(n+158.0),f.x),f.y),
-               mix(mix( hash11(n+113.0), hash11(n+114.0),f.x),
-                   mix( hash11(n+270.0), hash11(n+271.0),f.x),f.y),f.z);
-#else
+    float n = p.x + p.y * 157.0 + 113.0 * p.z;
+    return mix(mix(mix(hash11(n + 0.0), hash11(n + 1.0), f.x),
+            mix(hash11(n + 157.0), hash11(n + 158.0), f.x), f.y),
+        mix(mix(hash11(n + 113.0), hash11(n + 114.0), f.x),
+            mix(hash11(n + 270.0), hash11(n + 271.0), f.x), f.y), f.z);
+    #else
     // 对二维噪声纹理进行三维采样
     return sample3Dnoise(position);
-#endif
+    #endif
 }
-
-
 
 vec4 fbm3D(in vec3 x, int n)
 {

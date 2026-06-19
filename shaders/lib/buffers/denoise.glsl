@@ -1,6 +1,4 @@
 
-#include "/lib/constants.glsl"
-#include "/lib/common.glsl"
 #include "/lib/buffers/frame_data.glsl"
 uint getIdx(uvec2 xy) {
     //return xy.y * 1024u + clamp(xy.x, 0, 1023u);

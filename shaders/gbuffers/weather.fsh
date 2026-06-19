@@ -1,5 +1,5 @@
 #version 430
-#include "/lib/light_color.glsl"
+#include "/lib/sky_color.glsl"
 #include "/lib/buffers/frame_data.glsl"
 uniform sampler2D gtexture;
 uniform mat4 gbufferModelViewInverse;

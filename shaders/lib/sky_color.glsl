@@ -69,7 +69,7 @@ vec3 background_0(float pos_y, in vec3 n, in vec3 lightDir) {
     const float P = 30000.; //大气层厚度
     const float R = 6370000*1.25; //地球半径
     
-    const vec3 Sun = 10.*vec3(10,10,10); //太阳光颜色
+    const vec3 Sun = 100.*vec3(10,10,10); //太阳光颜色
     const vec3 Moon = Sun * 0.00001; //月光颜色 (较暗的蓝白色)
     
     mediump vec3 b_g0_2 = b_g0 * b_g0;

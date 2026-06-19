@@ -9,7 +9,6 @@
 
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
-#include "/lib/utils.glsl"
 #include "/lib/constants.glsl"
 
 in vec2 texCoord;

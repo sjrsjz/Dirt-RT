@@ -3,9 +3,8 @@
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
-#include "/lib/utils.glsl"
 #include "/lib/buffers/denoise.glsl"
-#include "/lib/light_color.glsl"
+#include "/lib/sky_color.glsl"
 
 uniform sampler2D colortex0;
 
@@ -24,8 +23,8 @@ uniform vec2 resolution;
 // RADIUS 1 = 3x3  (性能优，9次采样)
 // RADIUS 2 = 5x5  (平衡点，25次采样)
 // RADIUS 3 = 7x7  (极限稳定，49次采样，专治各种黑斑和时域断层)
-#define VAR_FILTER_RADIUS 3 
-#define VARIANCE_SCALE 250.0
+#define VAR_FILTER_RADIUS 1 
+#define VARIANCE_SCALE 10.0
 // ===========================================================================
 
 void main() {
@@ -109,7 +108,7 @@ void main() {
 
     // 写入经过预平滑方差后的输出（无萤火虫过滤）
     shY  = outSH.shY;
-    CoCg = vec4(outSH.CoCg, final_variance * VARIANCE_SCALE + 10000.0 * exp(- min(centerData.weight, 10.0)), centerData.weight);
+    CoCg = vec4(outSH.CoCg, final_variance * VARIANCE_SCALE + 2000.0 * exp(- min(centerData.weight, 10.0)), centerData.weight);
 
     // NAN 保护
     if (any(isnan(shY)))  shY  = vec4(0);

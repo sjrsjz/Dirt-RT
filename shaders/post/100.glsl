@@ -23,10 +23,7 @@
 
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
-#include "/lib/tonemap.glsl"
-#include "/lib/utils.glsl"
 #include "/lib/buffers/denoise.glsl"
-#include "/lib/light_color.glsl"
 
 // ---------------------------------------------------------------------------
 // Uniform 输入
@@ -55,7 +52,7 @@ uniform int worldTime;
 // ---------------------------------------------------------------------------
 
 // 法线相似度权重指数 — 值越大，法线差异导致的拒绝越严格
-const float NORMAL_PARAM = 4.0;
+const float NORMAL_PARAM = 8.0;
 
 // 位置/深度差异的敏感度 — 控制对几何不连续性的响应
 const float POSITION_PARAM = 64.0;
@@ -121,26 +118,41 @@ bool notInRange(vec2 p) {
 diffuseIllumiantionBufferData current_data;  // 当前帧数据 (来自光线追踪)
 diffuseIllumiantionData out_data;            // 输出数据
 
-// ===========================================================================
-// 无偏加权 Welford 在线方差更新 (West 1979)
-// ===========================================================================
-// 与原始 SVGF 的矩估计不同，这里使用单通道标量 (亮度 Y) 的加权方差
-//
+// // ===========================================================================
+// // 无偏加权 Welford 在线方差更新 (West 1979)
+// // ===========================================================================
+// // 与原始 SVGF 的矩估计不同，这里使用单通道标量 (亮度 Y) 的加权方差
+// //
+// // 参数:
+// //   old_mean    : 历史加权均值 (亮度)
+// //   old_var     : 历史加权方差
+// //   new_val     : 当前帧亮度值
+// //   old_weight  : 历史累积权重
+// //   new_weight  : 当前帧权重 (通常 = 1.0)
+// //
+// // 返回: 更新后的方差
+// float updateVariance(float old_mean, float old_var, float new_val,
+//                      float old_weight, float new_weight) {
+//     float total = old_weight + new_weight;
+//     float delta = new_val - old_mean;
+//     float new_mean = old_mean + delta * new_weight / total;
+//     float new_var = (old_weight * old_var + new_weight * delta * (new_val - new_mean)) / total;
+//     return max(new_var, 0.0);
+// }
+
+
+// Welford 在线方差更新 — 单遍扫描计算邻域 SH 的加权方差
 // 参数:
-//   old_mean    : 历史加权均值 (亮度)
-//   old_var     : 历史加权方差
-//   new_val     : 当前帧亮度值
-//   old_weight  : 历史累积权重
-//   new_weight  : 当前帧权重 (通常 = 1.0)
-//
-// 返回: 更新后的方差
-float updateVariance(float old_mean, float old_var, float new_val,
-                     float old_weight, float new_weight) {
-    float total = old_weight + new_weight;
-    float delta = new_val - old_mean;
-    float new_mean = old_mean + delta * new_weight / total;
-    float new_var = (old_weight * old_var + new_weight * delta * (new_val - new_mean)) / total;
-    return max(new_var, 0.0);
+//   M_n     : 当前加权和 (avg_SH)
+//   D_n     : 当前方差
+//   X       : 新样本
+//   h_w     : 历史权重总和
+//   w       : 新样本的权重
+// 返回:      更新后的方差 D_{n+1}
+float updateVariance(vec4 M_n, float D_n, vec4 X, float h_w, float w) {
+    vec4 diff = X - M_n / h_w; // 新样本与当前均值的差
+    float t = 1.0 / (h_w + w);
+    return (D_n * h_w + dot(diff, diff) * w * t) * t;
 }
 
 float output_weight = 0.0;
@@ -192,9 +204,9 @@ void MixDiffuse() {
 
         // 方差更新: 基于亮度通道的 Welford 递推
         output_variance = updateVariance(
-            data.data.shY.w,          // 历史亮度均值
+            data.data.shY,          // 历史亮度均值
             data.prev_variance,       // 历史方差
-            current_data.data_swap.shY.w, // 当前亮度
+            current_data.data_swap.shY, // 当前亮度样本
             old_total,                // 旧总权重
             1.0                        // 当前帧权重 (=1)
         );

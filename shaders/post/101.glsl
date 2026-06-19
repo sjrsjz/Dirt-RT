@@ -19,9 +19,8 @@
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
-#include "/lib/utils.glsl"
 #include "/lib/buffers/denoise.glsl"
-#include "/lib/light_color.glsl"
+#include "/lib/sky_color.glsl"
 
 // ---------------------------------------------------------------------------
 // Uniform 输入

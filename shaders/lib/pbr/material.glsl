@@ -29,20 +29,20 @@ struct Material {
     //vec2 block_texture;
 };
 
-float adhesion(vec3 n,vec3 w,vec3 g,float a){
+float adhesion(vec3 n, vec3 w, vec3 g, float a) {
     //w:wind direction
     //g:gravity direction
     //n:surface normal
     //a:roughness
-    float tanA=sqrt(max(pow(abs(dot(n,w)),-2)-1,0));
-    float tanB=sqrt(max(pow(abs(dot(n,g)),-2)-1,0));
-    float a2=a*a;
-    float t=sqrt(tanB*tanB+a2);
-    return (float(dot(n,g)<0)*2*a2/
-        ((1+sqrt(1+a2*tanA*tanA))*(tanB+t)*t));
+    float tanA = sqrt(max(pow(abs(dot(n, w)), -2) - 1, 0));
+    float tanB = sqrt(max(pow(abs(dot(n, g)), -2) - 1, 0));
+    float a2 = a * a;
+    float t = sqrt(tanB * tanB + a2);
+    return (float(dot(n, g) < 0) * 2 * a2 /
+        ((1 + sqrt(1 + a2 * tanA * tanA)) * (tanB + t) * t));
 }
 
-Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn, float wetStrength, float wetness ,float skylight ,vec3 macroNormal) {
+Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn, float wetStrength, float wetness, float skylight, vec3 macroNormal) {
     Material material;
 
     // Translucency
@@ -79,17 +79,17 @@ Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn, float we
 
     #else
     //int porosity = int(specular.b * 255.0);
-    float adhesion_ = clamp(adhesion(macroNormal,vec3(0,-1,0),vec3(0,-1,0),material.roughness)+0.25,0,1);
-    float mix0 = min(wetStrength*adhesion_*min(skylight/255,1) + wetness*0.15,1); //* porosity/64.0*float(porosity<=64);
+    float adhesion_ = clamp(adhesion(macroNormal, vec3(0, -1, 0), vec3(0, -1, 0), material.roughness) + 0.25, 0, 1);
+    float mix0 = min(wetStrength * adhesion_ * min(skylight / 255, 1) + wetness * 0.15, 1); //* porosity/64.0*float(porosity<=64);
     mix0 *= maxWetness;
-    material.roughness = max(1 - mix0 * 1.5,0) * material.roughness;
-    material.normal=normalize(mix(material.normal,macroNormal,mix0));
+    material.roughness = max(1 - mix0 * 1.5, 0) * material.roughness;
+    material.normal = normalize(mix(material.normal, macroNormal, mix0));
     mix0 *= 0.25;
     if (f0Channel < 230) {
         material.F0 = sqrt(f0Channel * albedo.rgb / 229.0);
         material.F0 = mix(material.F0, vec3(1), mix0);
         material.metallic = 0;
-        material.albedo = albedo.rgb;//* (1 - material.F0);
+        material.albedo = albedo.rgb; //* (1 - material.F0);
     } else if (f0Channel < 238) {
         material.F0 = HCM_METALS[f0Channel - 230];
         material.F0 = mix(material.F0, vec3(1), mix0);
@@ -101,7 +101,7 @@ Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn, float we
         material.metallic = 0;
         material.albedo = vec3(0);
     }
-    material.subsurface_scattering = 0.25;//specular.b;
+    material.subsurface_scattering = 0.25; //specular.b;
     #endif
 
     // Emission

@@ -126,14 +126,12 @@ void main() {
         dTime_global*=0.5;
         if (frameCounter <= 1) {
             avgExposure = exposure;
-            HDR_AB_global = vec2(0, avgExposure);
         } else {
             avgExposure = exp(mix(
                         log(avgExposure),
                         log(exposure),
                         1 - exp(-dTime_global)
                     ));
-            HDR_AB_global = mix(HDR_AB_global, vec2(A,B), 1 - exp(-dTime_global));
         }
         div_avgExposure = 1 / avgExposure;
 
