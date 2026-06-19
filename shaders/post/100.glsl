@@ -52,10 +52,10 @@ uniform int worldTime;
 // ---------------------------------------------------------------------------
 
 // 法线相似度权重指数 — 值越大，法线差异导致的拒绝越严格
-const float NORMAL_PARAM = 8.0;
+#define NORMAL_PARAM TEMPORAL_NORMAL_PARAM
 
 // 位置/深度差异的敏感度 — 控制对几何不连续性的响应
-const float POSITION_PARAM = 64.0;
+#define POSITION_PARAM TEMPORAL_POSITION_PARAM
 
 // 亮度相关参数 (本 pass 中未直接使用，保留供后续调参)
 const float LUMINANCE_PARAM = 4.0;

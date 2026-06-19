@@ -23,8 +23,7 @@ uniform vec2 resolution;
 // RADIUS 1 = 3x3  (性能优，9次采样)
 // RADIUS 2 = 5x5  (平衡点，25次采样)
 // RADIUS 3 = 7x7  (极限稳定，49次采样，专治各种黑斑和时域断层)
-#define VAR_FILTER_RADIUS 1 
-#define VARIANCE_SCALE 10.0
+// (VAR_FILTER_RADIUS / VARIANCE_SCALE 引用 settings.glsl 定义)
 // ===========================================================================
 
 void main() {

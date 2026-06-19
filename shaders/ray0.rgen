@@ -508,10 +508,9 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
                 float p_hat_self = evaluatePHat(r.samplePoint, first_p, first_n, first_albedo2);
                 updateReservoir(spatialR, r.samplePoint, p_hat_self, p_hat_self * r.W * r.M, getRnd());
 
-                int spatial_samples = 3;
                 float spatial_M_sum = r.M;
-                for (int i = 0; i < spatial_samples; i++) {
-                    vec2 offset = (vec2(getRnd(), getRnd()) * 2.0 - 1.0) * 4.0;
+                for (int i = 0; i < RESTIR_SPATIAL_SAMPLES; i++) {
+                    vec2 offset = (vec2(getRnd(), getRnd()) * 2.0 - 1.0) * float(RESTIR_SPATIAL_RADIUS);
                     vec2 neighbor_uv = (round(vec2(coord)) + offset) / resolution_global;
 
                     if (all(greaterThanEqual(neighbor_uv, vec2(0.0))) && all(lessThanEqual(neighbor_uv, vec2(1.0)))) {
@@ -529,7 +528,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
                     }
                 }
 
-                const float M_cap = 10.0; // 最大样本数量上限，防止极端情况过度放大权重
+                const float M_cap = RESTIR_M_CAP; // 最大样本数量上限，防止极端情况过度放大权重
 
                 float old_M = spatial_M_sum;
                 float scale = M_cap / max(old_M, 1e-10); // 防除零

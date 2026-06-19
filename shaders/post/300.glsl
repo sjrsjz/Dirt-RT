@@ -111,14 +111,14 @@ layout(location = 1) out mediump vec4 out_CoCg; // → colortex6: .xy = 滤波�
 // ---------------------------------------------------------------------------
 
 // 法线边缘停止力度 (值越大，法线边界越锐利)
-const float NORMAL_POWER = 32.0;
+#define NORMAL_POWER SVGF_NORMAL_POWER
 
 // 深度边缘停止灵敏度系数（已归一化到"像素等效"单位）
 // 实际深度项会被 pixel_footprint 归一化，因此 k≈1 代表约 1px 的深度差
-const float POSITION_PARAM = 1.0;
+#define POSITION_PARAM SVGF_POSITION_PARAM
 
 // SVGF 亮度停止的主灵敏度参数 (phi_l)
-const float SVGF_PHI_L = 16.0;
+// (SVGF_PHI_L 直接引用 settings.glsl 定义)
 
 // ---------------------------------------------------------------------------
 // 辅助函数

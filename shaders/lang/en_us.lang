@@ -2,6 +2,24 @@ option.useReSTIR = Use ReSTIR
 value.useReSTIR.1 = On
 value.useReSTIR.0 = Off
 
+# Denoiser — Temporal accumulation
+option.TEMPORAL_NORMAL_PARAM = Temporal normal strictness
+option.TEMPORAL_POSITION_PARAM = Temporal position sensitivity
+
+# Denoiser — Variance pre-filter
+option.VAR_FILTER_RADIUS = Variance filter radius
+option.VARIANCE_SCALE = Variance scale
+
+# Denoiser — SVGF spatial filter
+option.SVGF_NORMAL_POWER = SVGF normal power
+option.SVGF_PHI_L = SVGF luminance stop
+option.SVGF_POSITION_PARAM = SVGF depth sensitivity
+
+# ReSTIR
+option.RESTIR_SPATIAL_SAMPLES = ReSTIR spatial samples
+option.RESTIR_SPATIAL_RADIUS = ReSTIR spatial radius
+option.RESTIR_M_CAP = ReSTIR M-cap
+
 option.RAY_BOUNCES = Bounce count
 option.Refractive_Index = Refractive index
 option.ACCUMULATION_LENGTH = Accumulation length
