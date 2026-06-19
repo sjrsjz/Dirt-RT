@@ -77,5 +77,8 @@ void main() {
                          + tmp2.data_swap * data.albedo
                          + data.light)
                       + data.emission;
+
+        // // 调试输出: 直接输出各分量的线性组合，验证时域累积效果
+        // fragColor.xyz = project_SH_irradiance(tmp.data_swap, diffuseIllumiantionBuffer.data[idx].normal);
     }
 }

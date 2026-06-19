@@ -2,10 +2,6 @@
 #define COMMON_GLSL
 #include "/lib/constants.glsl"
 
-#ifdef USE_NOISE_TEXTURE
-uniform sampler2D NoiseTexture;
-#endif
-
 uint iFrame = 0;
 
 struct material {
@@ -247,19 +243,7 @@ vec4 noised(in vec3 x)
         du * (vec3(k1, k2, k3) + u.yzx * vec3(k4, k5, k6) + u.zxy * vec3(k6, k4, k5) + k7 * u.yzx * u.zxy));
 }
 
-#ifdef USE_NOISE_TEXTURE
-float sample3Dnoise(in vec3 v) {
-    vec3 p = mod(floor(v), 256.0); // Add this line to make the noise repeat every 256 units
-    vec3 f = fract(v);
-    f = f * f * (3. - 2. * f);
-
-    vec2 uv = (p.xy + vec2(37., 17.) * p.z) + f.xy;
-    vec2 rg = textureLod(NoiseTexture, fract((uv + .5) / 256.), 0.).yx;
-    return mix(rg.x, rg.y, f.z);
-}
-#endif
 float valueNoise(vec3 position) {
-    #ifndef USE_NOISE_TEXTURE
     vec3 p = floor(position);
     vec3 f = fract(position);
     vec3 u = f * f * (3.0 - 2.0 * f);
@@ -269,10 +253,6 @@ float valueNoise(vec3 position) {
             mix(hash11(n + 157.0), hash11(n + 158.0), f.x), f.y),
         mix(mix(hash11(n + 113.0), hash11(n + 114.0), f.x),
             mix(hash11(n + 270.0), hash11(n + 271.0), f.x), f.y), f.z);
-    #else
-    // 对二维噪声纹理进行三维采样
-    return sample3Dnoise(position);
-    #endif
 }
 
 vec4 fbm3D(in vec3 x, int n)

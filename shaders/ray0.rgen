@@ -36,7 +36,6 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir);
 
 #include "/lib/common.glsl"
 
-
 bool isDarkened = false;
 vec3 SunLight = vec3(0);
 vec3 MoonLight = vec3(0);
@@ -52,12 +51,6 @@ void main() {
     vec2 half_p = p * 2;
 
     world_type_global = int(cam.world_type);
-
-    #if SRR == 0
-    #else
-    if (p.x > 0.5 || p.y > 0.5) return;
-    p *= 2;
-    #endif
 
     vec3 origin = cam.viewInverse[3].xyz;
     vec3 target = mix(mix(cam.corners[0], cam.corners[2], p.y), mix(cam.corners[1], cam.corners[3], p.y), p.x);
@@ -124,11 +117,17 @@ float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse
 }
 
 material newMaterial(vec3 Cs, vec3 Cd, vec2 S, vec4 R, vec3 light) {
-    material a; a.Cs = Cs; a.Cd = Cd; a.S = S; a.R = R; a.light = light; return a;
+    material a;
+    a.Cs = Cs;
+    a.Cd = Cd;
+    a.S = S;
+    a.R = R;
+    a.light = light;
+    return a;
 }
 
 material Material_(vec3 pos, vec3 nor) {
-    vec3 albedo = tmp_Payload.material.albedo * (1 - tmp_Payload.material.ambientOcclusion); 
+    vec3 albedo = tmp_Payload.material.albedo * (1 - tmp_Payload.material.ambientOcclusion);
     bool water = tmp_Payload.material.block_id.x == 1000;
     float trans = float(!water && 0.9 < tmp_Payload.material.translucent && tmp_Payload.material.block_id.x != 1001);
     trans = tmp_Payload.material.block_id.x == 1002 ? 0.25 : trans;
@@ -189,20 +188,20 @@ vec3 sampleSunlight(vec3 ro, vec3 normal, vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S, v
 
     vec3 X, Y, Z;
     XYZ(lightDir, X, Y, Z);
-    float r1 = rand(ro);
-    float alpha = rand(ro + lightDir) * 2 * PI;
+    float r1 = getRnd();
+    float alpha = getRnd() * 2 * PI;
     float cosbeta = 1.0 - r1 * (1.0 - cosD_S);
     vec3 sampleDir = cosbeta * Y + sqrt(1.0 - cosbeta * cosbeta) * (cos(alpha) * X + sin(alpha) * Z);
 
     vec3 ro_o, rd_o;
     float t = raycast(ro, -sampleDir, ro_o, rd_o, !inside, i16vec2(1001, 0));
     if (t > -0.5) return vec3(0.0);
-    
+
     vec3 sunlight = SampleSky(-sampleDir).xyz * tmp_Payload.shadowTransmission * (1.0 - cosD_S) * PI;
 
     float IoN = abs(dot(rd_i, normal));
     float OoN = dot(sampleDir, normal);
-    
+
     vec3 sampleColor = vec3(0.0);
 
     if (type == Diffussion) {
@@ -224,6 +223,42 @@ vec3 GetSpecularDominantDirection(vec3 N, vec3 V, float R) {
     return normalize(mix(N, R0, f));
 }
 
+float evaluatePHat(GI_Sample s, vec3 centerPos, vec3 centerNormal, vec3 Cd) {
+    float lum = dot(s.radiance, vec3(0.2126, 0.7152, 0.0722));
+    float albedo_lum = dot(Cd, vec3(0.2126, 0.7152, 0.0722));
+    if (lum < 1e-5) return 0.0;
+
+    float G;
+    if (s.is_sky > 0.5) {
+        // 【立体角测度】天空：方向恒定为 wi，距离无穷远，不计算 cos_s 也不除以 dist2
+        float cos_v = clamp(dot(centerNormal, s.wi), 0.0, 1.0);
+        G = cos_v;
+    } else {
+        // 【面积测度】局部方块：严格的表面间换算
+        vec3 L_to_sample = s.pos - centerPos;
+        float dist2 = max(dot(L_to_sample, L_to_sample), 0.001); // 避免极其贴近时除以0
+        vec3 L_dir = L_to_sample / sqrt(dist2);
+
+        float cos_v = clamp(dot(centerNormal, L_dir), 0.0, 1.0);
+        float cos_s = clamp(dot(s.normal, -L_dir), 0.0, 1.0);
+        G = (cos_v * cos_s) / dist2;
+    }
+
+    return albedo_lum * lum * G;
+}
+
+// --- 安全的可见性验证 (双向法线偏移，彻底解决贴地自交) ---
+bool traceShadowSafe(vec3 p1, vec3 n1, vec3 p2, vec3 n2) {
+    vec3 ro = p1 + n1 * 0.05;
+    vec3 target = p2 + n2 * 0.05;
+    vec3 dir = target - ro;
+    float dist = length(dir);
+    if (dist < 0.1) return true;
+    vec3 rd = dir / dist;
+    vec3 ro_o, rd_o;
+    float t = raycast(ro, rd, ro_o, rd_o, false);
+    return (t < -0.5 || t > dist - 0.15);
+}
 
 // -----------------------------------------------------------------------------------
 // 核心：前向路径追踪 (Forward Path Tracing)
@@ -234,10 +269,10 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
 
     bool original_inverse_0 = isEyeInWater != 0; // 锁死原始介质状态，用于 God Ray 采样
     bool inverse_0 = original_inverse_0;
-    
+
     vec3 ro_i = ro;
     vec3 rd_i = rd;
-    
+
     // PT 核心状态
     vec3 throughput = vec3(1.0);
     vec3 L_indirect = vec3(0.0);
@@ -271,7 +306,11 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
         // --- 1. 未命中 (天空/背景) ---
         if (t < -0.5) {
             vec3 sky = SampleSky(rd_i).xyz;
-            if (depth == 0) { hit_sky_first = true; first_t = -1.0; first_absorption = original_inverse_0 ? vec3(0) : vec3(1); }
+            if (depth == 0) {
+                hit_sky_first = true;
+                first_t = -1.0;
+                first_absorption = original_inverse_0 ? vec3(0) : vec3(1);
+            }
             L_indirect += throughput * sky * current_absorption;
             break;
         }
@@ -297,22 +336,25 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
         // --- 3. 介质吸收与发光 ---
         vec3 segment_absorption = exp(-(inverse_0 ? t * fogA.yzw : max(b_Q * (b_P.x - ro_i.y) * t - 0.5 * b_Q * t * t * rd_i.y, 0.0)));
         current_absorption *= segment_absorption;
-        
+
         vec3 segment_emission = (1.0 - segment_absorption) / (fogA.yzw + 1e-5) * emissionA;
-        
-        // 核心：第一跳表面自发光 (depth == 0) 写入 denoiseBuffer.light 由后续 Pass 叠加，此处只在后续反弹跳数中累加
+
+        // =======================================================================
+        // ★ 物理无偏修正：在第 1 步漫反射反弹时忽略自发光（因已被 ReSTIR 解析计算）
+        // 在第 2 步及后续弹跳（depth >= 2）时，正常保留自发光，确保多跳能量不流失
+        // =======================================================================
         vec3 local_emission = (depth > 0) ? (surface.light + segment_emission) : segment_emission;
         L_indirect += throughput * local_emission;
 
         // --- 4. 物理 BSDF 采样与路径概率分配 ---
         float F = clamp(fresnel(-rd_i, microNormal, rs), 0.0, 1.0);
         vec4 rC = rColor(surface.Cs, dot(rd_i, microNormal));
-        
+
         float P_spec = rC.w * surface.S.x;
         float P_refr = (1.0 - P_spec) * surface.S.y;
         float P_diff = 1.0 - P_spec - P_refr;
 
-        float rnd_lobe = rand(ro_o * 2.0 + depth);
+        float rnd_lobe = getRnd();
         int current_type = -1;
         vec3 next_rd;
         vec3 bsdf_weight = vec3(0.0);
@@ -329,7 +371,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
         } else if (rnd_lobe < P_spec + P_refr) {
             // [折射 Lobe]
             current_type = Refraction;
-            bool total_internal = (rand(ro_o * 3.0) < 1.0 - F);
+            bool total_internal = (getRnd() < 1.0 - F);
             if (total_internal) {
                 vec3 refract_dir = refract(rd_i, microNormal, rs);
                 if (refract_dir != vec3(0.0)) {
@@ -348,13 +390,13 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
             // [漫反射 Lobe + 屏幕空间路径引导]
             current_type = Diffussion;
             float w = 1.0;
-            
+
             if (depth == 0) {
                 vec2 prev_coord = reproject(ro_o).xy;
                 diffuseIllumiantionBufferDataW data0 = samplePrevDiffuse(prev_coord * resolution_global);
                 float length_shY = length(data0.data_swap.shY.xyz);
-                
-                if (data0.data_swap.shY.w * rand(ro_o*4.0) < data0.data_swap.shY.w - length_shY || length_shY < 1e-6 || prev_coord.x < 0.0 || prev_coord.x > 1.0 || prev_coord.y < 0.0 || prev_coord.y > 1.0) {
+
+                if (data0.data_swap.shY.w * getRnd() < data0.data_swap.shY.w - length_shY || length_shY < 1e-6 || prev_coord.x < 0.0 || prev_coord.x > 1.0 || prev_coord.y < 0.0 || prev_coord.y > 1.0) {
                     next_rd = DiffuseNormal(macroNormal, ro_o);
                 } else {
                     vec4 Nv = WeightedDiffuseEx(normalize(data0.data_swap.shY.xyz), ro_o, clamp(length_shY / (1e-2 + data0.data_swap.shY.w), 1e-5, 0.975));
@@ -365,7 +407,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
             } else {
                 next_rd = DiffuseNormal(macroNormal, ro_o);
             }
-            
+
             bsdf_weight = surface.Cd * (1.0 - rC.rgb * surface.S.x) / (max(P_diff, 0.125) + 1e-3) * w;
         }
 
@@ -393,19 +435,169 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
             first_micro_n = microNormal;
             first_emission_val = segment_emission;
             first_light_surf = surface.light;
-            
+
             float p1 = P_spec + (1.0 - P_spec) * F * surface.S.y;
             mixWeight = vec2(p1, (1.0 - p1) * (1.0 - min(F, 1.0)) * surface.S.y);
             hitSmoothSurface = (surface.R.x < 0.00125);
+
+            #if useReSTIR
+            // =======================================================================
+            // ReSTIR 时空重用（无遮挡快速筛洗 + 延迟可见性 + 严格测度匹配版）
+            // =======================================================================
+            if (current_type == Diffussion) {
+                Reservoir r = Reservoir(GI_Sample(vec3(0), vec3(0), vec3(0), vec3(0), 0.0), 0.0, 0.0, 0.0);
+
+                // 1. 初始盲追采样 (余弦半球分布)
+                vec3 next_rd = DiffuseNormal(first_macro_n, first_p);
+                vec3 ro_1, rd_1;
+                float t_1 = raycast(first_p + first_macro_n * 0.001, next_rd, ro_1, rd_1, !inverse_0);
+
+                GI_Sample candidate;
+                candidate.wi = next_rd;
+                vec3 sample_rad = vec3(0.0);
+
+                if (t_1 > -0.5) {
+                    candidate.pos = ro_1;
+                    candidate.normal = faceforward(tmp_Payload.material.normal, tmp_Payload.material.normal, next_rd);
+                    candidate.is_sky = 0.0;
+                    material surf_1 = Material_(ro_1, candidate.normal);
+                    sample_rad += surf_1.light;
+                    if (dot(candidate.normal, lightDir) < 0.0 && !isDarkened) {
+                        sample_rad += sampleSunlight(ro_1, candidate.normal, surf_1.Cs, surf_1.Cd, next_rd, surf_1.S, surf_1.R, lightDir, lightDir.y > 0.0, Diffussion, candidate.normal, inverse_0);
+                    }
+                } else {
+                    candidate.pos = first_p + next_rd * 10000.0;
+                    candidate.normal = -next_rd;
+                    candidate.is_sky = 1.0;
+                    sample_rad += SampleSky(next_rd).xyz;
+                }
+
+                candidate.radiance = sample_rad;
+
+                float p_hat_init = evaluatePHat(candidate, first_p, first_n, first_albedo2);
+
+                // 计算余弦采样的面积测度 PDF
+                float cos_init = clamp(dot(first_macro_n, next_rd), 0.0, 1.0);
+                float cos_s_init = clamp(dot(candidate.normal, -next_rd), 0.0, 1.0);
+                float dist2_init = max(dot(candidate.pos - first_p, candidate.pos - first_p), 0.001);
+                float G_init = (cos_init * cos_s_init) / dist2_init;
+                float p_area = (candidate.is_sky > 0.5) ? max(cos_init / PI, 1e-7) : max(G_init / PI, 1e-7);
+
+                updateReservoir(r, candidate, p_hat_init, p_hat_init / p_area, getRnd());
+                r.M = 1.0;
+
+                // 2. 时域重用
+                vec2 prev_uv = reproject(first_p).xy;
+                if (all(greaterThanEqual(prev_uv, vec2(0.0))) && all(lessThanEqual(prev_uv, vec2(1.0)))) {
+                    Reservoir r_prev = samplePrevReservoirStochastic(prev_uv, resolution_global, getRnd());
+                    if (r_prev.M > 0.0) {
+                        float p_hat_temporal = evaluatePHat(r_prev.samplePoint, first_p, first_n, first_albedo2);
+                        if (p_hat_temporal > 0.0) {
+                            float temp_weight = p_hat_temporal * r_prev.W * r_prev.M;
+                            updateReservoir(r, r_prev.samplePoint, p_hat_temporal, temp_weight, getRnd());
+                            r.M += r_prev.M;
+                        }
+                    }
+                }
+
+                float p_hat_temp_final = evaluatePHat(r.samplePoint, first_p, first_n, first_albedo2);
+                r.W = r.w_sum / max(r.M * p_hat_temp_final, 1e-5);
+
+                // 3. 空域重用
+                Reservoir spatialR = Reservoir(GI_Sample(vec3(0), vec3(0), vec3(0), vec3(0), 0.0), 0.0, 0.0, 0.0);
+                float p_hat_self = evaluatePHat(r.samplePoint, first_p, first_n, first_albedo2);
+                updateReservoir(spatialR, r.samplePoint, p_hat_self, p_hat_self * r.W * r.M, getRnd());
+
+                int spatial_samples = 3;
+                float spatial_M_sum = r.M;
+                for (int i = 0; i < spatial_samples; i++) {
+                    vec2 offset = (vec2(getRnd(), getRnd()) * 2.0 - 1.0) * 4.0;
+                    vec2 neighbor_uv = (round(vec2(coord)) + offset) / resolution_global;
+
+                    if (all(greaterThanEqual(neighbor_uv, vec2(0.0))) && all(lessThanEqual(neighbor_uv, vec2(1.0)))) {
+                        uint nIdx = getIdx(uvec2(neighbor_uv * resolution_global));
+                        Reservoir r_n = prevReservoirs.data[nIdx];
+
+                        if (r_n.M > 0.0) {
+                            float p_hat_n = evaluatePHat(r_n.samplePoint, first_p, first_n, first_albedo2);
+                            if (p_hat_n > 0.0) {
+                                float weight_n = p_hat_n * r_n.W * r_n.M;
+                                updateReservoir(spatialR, r_n.samplePoint, p_hat_n, weight_n, getRnd());
+                            }
+                            spatial_M_sum += r_n.M;
+                        }
+                    }
+                }
+
+                const float M_cap = 10.0; // 最大样本数量上限，防止极端情况过度放大权重
+
+                float old_M = spatial_M_sum;
+                float scale = M_cap / max(old_M, 1e-10); // 防除零
+                float cond = step(M_cap, old_M); // old_M ≥ M_cap 时 cond = 1
+                spatialR.w_sum = mix(spatialR.w_sum, spatialR.w_sum * scale, cond);
+                spatial_M_sum = min(old_M, M_cap);
+
+                spatialR.M = spatial_M_sum;
+                float p_hat_final = evaluatePHat(spatialR.samplePoint, first_p, first_n, first_albedo2);
+                spatialR.W = spatialR.w_sum / max(spatialR.M * p_hat_final, 1e-5);
+
+                curReservoirs.data[idx] = spatialR;
+
+                // 4. 延迟可见性
+                bool is_visible = true;
+                if (p_hat_final > 0.0 && spatialR.samplePoint.is_sky < 0.5) {
+                    is_visible = traceShadowSafe(first_p, first_macro_n, spatialR.samplePoint.pos, spatialR.samplePoint.normal);
+                }
+
+                // 5. 直接重建
+                if (p_hat_final > 0.0 && is_visible) {
+                    float G_final;
+                    vec3 L_dir_final;
+                    if (spatialR.samplePoint.is_sky > 0.5) {
+                        L_dir_final = spatialR.samplePoint.wi;
+                        G_final = clamp(dot(first_n, L_dir_final), 0.0, 1.0);
+                    } else {
+                        vec3 L_to_sample = spatialR.samplePoint.pos - first_p;
+                        float dist2 = max(dot(L_to_sample, L_to_sample), 0.00001);
+                        L_dir_final = L_to_sample / sqrt(dist2);
+                        float cos_v = clamp(dot(first_n, L_dir_final), 0.0, 1.0);
+                        float cos_s = clamp(dot(spatialR.samplePoint.normal, -L_dir_final), 0.0, 1.0);
+                        G_final = (cos_v * cos_s) / dist2;
+                    }
+
+                    L_indirect = spatialR.samplePoint.radiance * G_final * spatialR.W * (first_albedo2 / PI);
+                    first_rd_o = spatialR.samplePoint.wi;
+                } else {
+                    L_indirect = vec3(0.0);
+                }
+
+                // 多跳光线路径引导
+                float w = 1.0;
+                vec2 prev_coord = reproject(first_p).xy;
+                diffuseIllumiantionBufferDataW data0 = samplePrevDiffuse(prev_coord * resolution_global);
+                float length_shY = length(data0.data_swap.shY.xyz);
+
+                if (data0.data_swap.shY.w * getRnd() < data0.data_swap.shY.w - length_shY || length_shY < 1e-6 || prev_coord.x < 0.0 || prev_coord.x > 1.0 || prev_coord.y < 0.0 || prev_coord.y > 1.0) {
+                    next_rd = DiffuseNormal(first_macro_n, first_p);
+                } else {
+                    vec4 Nv = WeightedDiffuseEx(normalize(data0.data_swap.shY.xyz), first_p, clamp(length_shY / (1e-2 + data0.data_swap.shY.w), 1e-5, 0.975));
+                    next_rd = Nv.xyz;
+                    if (dot(next_rd, first_macro_n) < 0.0) next_rd = DiffuseNormal(first_macro_n, first_p);
+                    else w = max(0.0, dot(next_rd, first_macro_n)) * Nv.w;
+                }
+
+                bsdf_weight = surface.Cd * (1.0 - rC.rgb * surface.S.x) / (max(P_diff, 0.125) + 1e-3) * w;
+            }
+            #endif
         }
 
         // 更新吞吐量
-        throughput *= bsdf_weight; 
-        
+        throughput *= bsdf_weight;
+
         // --- 7. Russian Roulette (轮盘赌终止) ---
         if (depth >= 2) {
             float p_survive = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05, 0.95);
-            if (rand(ro_o * 5.0) > p_survive) break;
+            if (getRnd() > p_survive) break;
             throughput /= p_survive;
         }
 
@@ -447,7 +639,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
     vec3 r_n = normalize(mix(first_n, first_macro_n, 1.0 - exp(-0.05 * first_t)));
     vec3 r_rd_i = GetSpecularDominantDirection(r_n, first_rd_i, first_roughness);
     float t_refl = raycast(first_p + first_macro_n * 0.0001, r_rd_i, r_ro, r_rd, false);
-    
+
     if (first_roughness <= 0.000125) {
         if (t_refl > -0.5) {
             vec3 reconstructed_pos = first_p + reflect(r_ro - first_p, r_n);
@@ -489,30 +681,31 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
     // 分配光照到对应的降噪 Buffer
     switch (first_type) {
         case 0:
-            reflectIllumiantionBuffer.data[idx].data_swap = total_illumination;
-            break;
+        reflectIllumiantionBuffer.data[idx].data_swap = total_illumination;
+        break;
         case Diffussion:
-            L_indirect = clamp(L_indirect, 0.0, 250.0 / avgExposure);
-            
-            // 间接光：使用选定的漫反射方向 (first_rd_o) 编码 SH
-            SH indSH = irradiance_to_SH(L_indirect, first_rd_o);
-            // 直接光：使用纯物理解耦的太阳方向 (-lightDir) 编码 SH
-            SH dirSH = irradiance_to_SH(L_direct_0 / (first_albedo2 + 1e-3), -lightDir);
-            
-            indSH.CoCg += dirSH.CoCg;
-            indSH.shY += dirSH.shY;
-            diffuseIllumiantionBuffer.data[idx].data_swap = indSH;
-            break;
+        L_indirect = clamp(L_indirect, 0.0, 250.0 / avgExposure);
+
+        // 间接光：使用解耦后的辐照度与 stochastically-guided 的方向编码 SH
+        SH indSH = irradiance_to_SH(L_indirect, first_rd_o);
+
+        // 直接光：保持原样（已解耦 albedo）
+        SH dirSH = irradiance_to_SH(L_direct_0 / (first_albedo2 + 1e-3), -lightDir);
+
+        indSH.CoCg += dirSH.CoCg;
+        indSH.shY += dirSH.shY;
+        diffuseIllumiantionBuffer.data[idx].data_swap = indSH;
+        break;
         case Reflection:
-            if ((!hitSmoothSurface || depth != 0) && coord.x % 2 == 0) {
-                total_illumination = clamp(total_illumination, 0.0, 100.0 / avgExposure);
-                reflectIllumiantionBuffer.data[idx].data_swap = total_illumination;
-                //reflectIllumiantionBuffer.data[getIdx(coord-uvec2(1,0))].data_swap = total_illumination;
-            }
-            break;
+        if ((!hitSmoothSurface || depth != 0) && coord.x % 2 == 0) {
+            total_illumination = clamp(total_illumination, 0.0, 100.0 / avgExposure);
+            reflectIllumiantionBuffer.data[idx].data_swap = total_illumination;
+            //reflectIllumiantionBuffer.data[getIdx(coord-uvec2(1,0))].data_swap = total_illumination;
+        }
+        break;
         case Refraction:
-            refractIllumiantionBuffer.data[idx].data_swap = total_illumination;
-            break;
+        refractIllumiantionBuffer.data[idx].data_swap = total_illumination;
+        break;
     }
 
     // 体积光 (God Rays)

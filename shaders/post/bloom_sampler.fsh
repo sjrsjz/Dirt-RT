@@ -31,11 +31,6 @@ float kernel(float x) {
 }
 
 void main() {
-    // SRR (超分辨率渲染) 模式: 仅处理左上 1/2 区域
-#ifdef SRR_
-    if (texCoord.x > 0.5 || texCoord.y > 0.5) return;
-#endif
-
     const int sampleN = 32;      // 环形采样数
     vec3 sumX = vec3(0.0);
 

@@ -1,6 +1,6 @@
-option.SRR = Super-resolution Reconstruction
-value.SRR.1 = OFF
-value.SRR.0 = ON
+option.useReSTIR = Use ReSTIR
+value.useReSTIR.1 = On
+value.useReSTIR.0 = Off
 
 option.RAY_BOUNCES = Bounce count
 option.Refractive_Index = Refractive index

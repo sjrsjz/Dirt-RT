@@ -67,11 +67,7 @@ void main() {
         
 
         for (int i = 0; i < samples.length(); i++) {
-            #ifdef SRR
-            float luminance = luminance(texture(colortex0, samples[i].position * 0.5).rgb);
-            #else
             float luminance = luminance(texture(colortex0, samples[i].position).rgb);
-            #endif
             X_n[i] = luminance;
             luminanceSum +=  luminance * samples[i].weight;
             sum_X_n += X_n[i];

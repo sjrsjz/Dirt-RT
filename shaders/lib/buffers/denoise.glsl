@@ -200,6 +200,78 @@ void accumulate_SH(inout SH accum, SH b, float scale)
     accum.CoCg += b.CoCg * scale;
 }
 
+// ===========================================================================
+// ReSTIR GI 路径样本与储层结构体
+// ===========================================================================
+struct GI_Sample {
+    vec3 pos;       // 盲追撞击点的坐标
+    vec3 normal;    // 盲追撞击点的法线
+    vec3 radiance;  // 撞击点发出的辐射度 (自发光 + 直射光)
+    vec3 wi; 
+    float is_sky; 
+};
+
+struct Reservoir {
+    GI_Sample samplePoint;
+    float w_sum;
+    float M;
+    float W;
+};
+
+// 绑定 10：当前帧写入，绑定 11：上一帧读取
+layout(std430, set = 3, binding = 7) buffer CurReservoirBuffer {
+    Reservoir data[];
+} curReservoirs;
+
+layout(std430, set = 3, binding = 8) buffer PrevReservoirBuffer {
+    Reservoir data[];
+} prevReservoirs;
+
+// 储层更新原语
+bool updateReservoir(inout Reservoir r, GI_Sample candidate, float p_hat, float weight, float randomValue) {
+    r.w_sum += weight;
+    r.M += 1.0;
+    if (randomValue * r.w_sum < weight) {
+        r.samplePoint = candidate;
+        return true; 
+    }
+    return false;
+}
+
+// 随机双线性重投影采样函数
+Reservoir samplePrevReservoirStochastic(vec2 uv, vec2 res, float random_val) {
+    // 将 0~1 的连续 UV 映射到像素浮点网格（像素中心在 integer + 0.5）
+    vec2 continuous_px = uv * res + 0.5;
+    ivec2 base = ivec2(floor(continuous_px));
+    vec2 f = fract(continuous_px);
+
+    // 计算标准双线性插值的 4 个角权重
+    float w00 = (1.0 - f.x) * (1.0 - f.y);
+    float w10 = f.x * (1.0 - f.y);
+    float w01 = (1.0 - f.x) * f.y;
+
+    // 按双线性权重作为概率，随机抽取 4 个角中的 1 个
+    ivec2 offset;
+    if (random_val < w00) {
+        offset = ivec2(0, 0);
+    } else if (random_val < w00 + w10) {
+        offset = ivec2(1, 0);
+    } else if (random_val < w00 + w10 + w01) {
+        offset = ivec2(0, 1);
+    } else {
+        offset = ivec2(1, 1);
+    }
+
+    ivec2 fetch_coord = base + offset;
+
+    // 边界安全钳制
+    ivec2 max_coord = ivec2(res) - ivec2(1);
+    fetch_coord = clamp(fetch_coord, ivec2(0), max_coord);
+
+    uint nIdx = uint(fetch_coord.y) * uint(res.x) + uint(fetch_coord.x);
+    return prevReservoirs.data[nIdx];
+}
+
 struct diffuseIllumiantionData {
     SH data;
     SH data_swap;

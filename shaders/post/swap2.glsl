@@ -108,7 +108,7 @@ void main() {
 
     // 写入经过预平滑方差后的输出（无萤火虫过滤）
     shY  = outSH.shY;
-    CoCg = vec4(outSH.CoCg, final_variance * VARIANCE_SCALE + 2000.0 * exp(- min(centerData.weight, 10.0)), centerData.weight);
+    CoCg = vec4(outSH.CoCg, final_variance * VARIANCE_SCALE + 5000.0 * exp(- min(centerData.weight, 10.0)), centerData.weight);
 
     // NAN 保护
     if (any(isnan(shY)))  shY  = vec4(0);

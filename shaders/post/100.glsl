@@ -227,6 +227,9 @@ void main() {
     uvec2 pix = uvec2(gl_FragCoord.xy);
     idx = getIdx(pix);
 
+    // 将当前帧的 reservoir 数据复制到 prevReservoirs，供下一帧重投影使用
+    prevReservoirs.data[idx] = curReservoirs.data[idx];
+
     // ---- 读取当前像素的几何与光照数据 ------------------------------------
     info_distance = denoiseBuffer.data[idx].distance;
     current_data = diffuseIllumiantionBuffer.data[idx];
