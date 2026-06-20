@@ -694,11 +694,8 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
         diffuseIllumiantionBuffer.data[idx].data_swap = indSH;
         break;
         case Reflection:
-        if ((!hitSmoothSurface || depth != 0) && coord.x % 2 == 0) {
-            total_illumination = clamp(total_illumination, 0.0, 100.0 / avgExposure);
-            reflectIllumiantionBuffer.data[idx].data_swap = total_illumination;
-            //reflectIllumiantionBuffer.data[getIdx(coord-uvec2(1,0))].data_swap = total_illumination;
-        }
+        total_illumination = clamp(total_illumination, 0.0, 1000.0 / avgExposure);
+        reflectIllumiantionBuffer.data[idx].data_swap = total_illumination;
         break;
         case Refraction:
         refractIllumiantionBuffer.data[idx].data_swap = total_illumination;

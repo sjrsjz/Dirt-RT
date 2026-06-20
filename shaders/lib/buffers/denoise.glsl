@@ -283,11 +283,25 @@ PackedLightSample packLightSample(vec3 pos, vec3 normal, SH sh, float weight, fl
     return sample_data;
 }
 
+PackedLightSample packSpecularSample(vec3 pos, vec3 normal, vec3 radiance, float weight, float roughness) {
+    PackedLightSample sample_data;
+    sample_data.data0 = vec4(pos, encodeNormal(normal));
+    sample_data.data1 = vec4(radiance, pack2Half(weight, roughness));
+    return sample_data;
+}
+
 void unpackLightSample(PackedLightSample sample_data, out vec3 pos, out vec3 normal, out SH sh, out float weight, out float variance) {
     pos = sample_data.data0.xyz;
     normal = decodeNormal(sample_data.data0.w);
     sh = unpackSH(sample_data.data1.x, sample_data.data1.y, sample_data.data1.z);
     unpack2Half(sample_data.data1.w, weight, variance);
+}
+
+void unpackSpecularSample(PackedLightSample sample_data, out vec3 pos, out vec3 normal, out vec3 radiance, out float weight, out float roughness) {
+    pos = sample_data.data0.xyz;
+    normal = decodeNormal(sample_data.data0.w);
+    radiance = sample_data.data1.xyz;
+    unpack2Half(sample_data.data1.w, weight, roughness);
 }
 
 // ===========================================================================

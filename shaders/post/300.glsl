@@ -29,63 +29,6 @@ const bool colortex5Clear = false;
 const bool colortex6Clear = false;
 const bool colortex7Clear = true;
 const bool colortex8Clear = true;
-/*
-const int colortex0Format = RGBA32F;
-const int colortex1Format = RGBA32F;
-const int colortex2Format = RGBA32F;
-const int colortex3Format = RGBA32F;
-const int colortex4Format = RGBA32F;
-const int colortex5Format = RGBA16F;
-const int colortex6Format = RGBA16F;
-const int colortex7Format = RGBA32F;
-const int colortex8Format = RGBA32F;
-
-const bool colortex1Clear = false;
-const bool colortex2Clear = false;
-const bool colortex3Clear = false;
-const bool colortex4Clear = false;
-const bool colortex5Clear = false;
-const bool colortex6Clear = false;
-const bool colortex7Clear = true;
-const bool colortex8Clear = true;
-/*
-const int colortex0Format = RGBA32F;
-const int colortex1Format = RGBA32F;
-const int colortex2Format = RGBA32F;
-const int colortex3Format = RGBA32F;
-const int colortex4Format = RGBA32F;
-const int colortex5Format = RGBA16F;
-const int colortex6Format = RGBA16F;
-const int colortex7Format = RGBA32F;
-const int colortex8Format = RGBA32F;
-
-const bool colortex1Clear = false;
-const bool colortex2Clear = false;
-const bool colortex3Clear = false;
-const bool colortex4Clear = false;
-const bool colortex5Clear = false;
-const bool colortex6Clear = false;
-const bool colortex7Clear = true;
-const bool colortex8Clear = true;
-/*
-const int colortex0Format = RGBA32F;
-const int colortex1Format = RGBA32F;
-const int colortex2Format = RGBA32F;
-const int colortex3Format = RGBA32F;
-const int colortex4Format = RGBA32F;
-const int colortex5Format = RGBA16F;
-const int colortex6Format = RGBA16F;
-const int colortex7Format = RGBA32F;
-const int colortex8Format = RGBA32F;
-
-const bool colortex1Clear = false;
-const bool colortex2Clear = false;
-const bool colortex3Clear = false;
-const bool colortex4Clear = false;
-const bool colortex5Clear = false;
-const bool colortex6Clear = false;
-const bool colortex7Clear = true;
-const bool colortex8Clear = true;
 */
 
 // ===========================================================================
@@ -216,15 +159,6 @@ void main() {
     float dist_to_cam = max(length(center_pos - camPos), 0.01);
     float inv_pixel_footprint = 1 / (POSITION_PARAM * max(dist_to_cam / float(resolution_global.y), 0.0001));
 
-    // ---- 各向异性轴计算 ---------------------------------------------------
-    vec3 viewDir = cross(camX_global, camY_global); // 视线方向
-    float rawAxisA = computeAnisotropicAxisScale(viewDir, camX_global, center_normal);
-    float rawAxisB = computeAnisotropicAxisScale(viewDir, camY_global, center_normal);
-    // 钳制最小值并平方，使其与 i²/j² 项匹配
-    float axis_A = 1.0 / max(rawAxisA, 0.5);
-    float axis_B = 1.0 / max(rawAxisB, 0.5);
-    axis_A *= axis_A;
-    axis_B *= axis_B;
 
     // ---- 中心点光照散度方差（light_sigma）----------------------------------
     // light_sigma = Y² - |v|²  是模型内在的角分布度量
@@ -247,10 +181,22 @@ void main() {
     // ---- à‑trous 核半径定义 -----------------------------------------------
     #define KERNAL_R 1          // 3×3 核半径，步长由 R0 定义
 
-    #if STEP > 1 && STEP <= 3
+    #if STEP <= 3
     // ---- 抖动旋转 ---------------------------------------------------------
     float theta = 2.0 * PI * rand(vec2(pix + 10 + R0 + center_variance));
     mat2 rotM = mat2(cos(theta), -sin(theta), sin(theta), cos(theta)) * R0;
+    const float axis_A = 1.0;
+    const float axis_B = 1.0;
+    #else
+    // ---- 各向异性轴计算 ---------------------------------------------------
+    vec3 viewDir = cross(camX_global, camY_global); // 视线方向
+    float rawAxisA = computeAnisotropicAxisScale(viewDir, camX_global, center_normal);
+    float rawAxisB = computeAnisotropicAxisScale(viewDir, camY_global, center_normal);
+    // 钳制最小值并平方，使其与 i²/j² 项匹配
+    float axis_A = 1.0 / max(rawAxisA, 0.5);
+    float axis_B = 1.0 / max(rawAxisB, 0.5);
+    axis_A *= axis_A;
+    axis_B *= axis_B;
     #endif
 
     // B‑样条权重核（中心 1.0, 十字 0.66667, 对角 0.166667）
@@ -265,7 +211,7 @@ void main() {
         for (int j = -KERNAL_R; j <= KERNAL_R; j++) {
             if (i == 0 && j == 0) continue; // 中心像素已在累加器中
             // à‑trous 采样位置
-            #if STEP > 1 && STEP <= 3
+            #if STEP <= 3
             sample_coord = pix + ivec2(round(rotM * vec2(i, j))); // 注意：加了 round 防止截断误差
             #else
             sample_coord = pix + R0 * ivec2(i, j);
