@@ -8,12 +8,10 @@
 
 uniform sampler2D colortex0;
 
-/* RENDERTARGETS: 3,4,5,6 */
+/* RENDERTARGETS: 3,4 */
 
-layout(location = 0) out vec4 diffuseNormal;
-layout(location = 1) out vec4 diffusePos;
-layout(location = 2) out vec4 shY;
-layout(location = 3) out vec4 CoCg;
+layout(location = 0) out vec4 geometry;
+layout(location = 1) out vec4 light_sample;
 
 uniform vec2 resolution;
 
@@ -96,20 +94,13 @@ void main() {
     SH outSH;
     outSH.shY  = centerData.data_swap.shY;
     outSH.CoCg = centerData.data_swap.CoCg;
+    if (any(isnan(outSH.shY)))  outSH.shY  = vec4(0);
+    if (any(isnan(outSH.CoCg))) outSH.CoCg = vec2(0);
 
-    // 写入目标 Buffers
-    diffuseNormal.xyz = centerNormal;
-    if (centerData.weight <= 1.0 + 1e-3) {
-        diffusePos = vec4(centerPos, 0);
-    } else {
-        diffusePos = vec4(centerPos, 0);
-    }
+    float final_weight = centerData.weight;
+    float final_variance_scaled = final_variance * VARIANCE_SCALE;
 
-    // 写入经过预平滑方差后的输出（无萤火虫过滤）
-    shY  = outSH.shY;
-    CoCg = vec4(outSH.CoCg, final_variance * VARIANCE_SCALE + 5000.0 * exp(- min(centerData.weight, 10.0)), centerData.weight);
-
-    // NAN 保护
-    if (any(isnan(shY)))  shY  = vec4(0);
-    if (any(isnan(CoCg))) CoCg = vec4(0);
+    PackedLightSample outSample = packLightSample(centerPos, centerNormal, outSH, final_weight, final_variance_scaled);
+    geometry = outSample.data0;
+    light_sample = outSample.data1;
 }

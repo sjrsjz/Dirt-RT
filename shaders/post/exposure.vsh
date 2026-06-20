@@ -17,6 +17,9 @@ uniform float viewWidth;
 uniform float viewHeight;
 out vec2 texCoord;
 
+uniform mat4 gbufferProjection;
+uniform mat4 gbufferModelView;
+uniform vec3 cameraPosition;
 uniform mat4 gbufferPreviousProjection;
 uniform mat4 gbufferPreviousModelView;
 uniform vec3 previousCameraPosition;
@@ -51,34 +54,10 @@ void main() {
         wetStrength_global = wetStrength_global * mix0 + rainStrength * (1 - mix0);
         wetness_global = wetness_global * mix0 + wetness * (1 - mix0);
         resolution_global = uvec2(viewWidth, viewHeight);
-        /*
-                #if defined(HELL)
-                world_type_global=World_HELL;
-                #elif defined(THE_END)
-                world_type_global=World_THE_END;
-                #else
-                world_type_global=World_OVERWORLD;
-                #endif
-        /*
-        #if defined(HELL)
-        world_type_global=World_HELL;
-        #elif defined(THE_END)
-        world_type_global=World_THE_END;
-        #else
-        world_type_global=World_OVERWORLD;
-        #endif
-*/
         float luminanceSum = 0.0;
         vec3 sumX = vec3(0);
         vec3 sumX2 = vec3(0);
         vec3 sampleC[samples.length()];
-
-
-        /*float sum_X_n = 0.0;
-        float sum_X_n2 = 0.0;
-        float sum_X_n3 = 0.0;
-        float sum_X_n4 = 0.0;
-        */
 
         float sum_X = 0.0;
         float sum_X2 = 0.0;
@@ -105,10 +84,6 @@ void main() {
             w3 += weight;
             sumX2 += sampleC[i] * weight;
             float X_n = luminance(sampleC[i]);
-            /*sum_X_n += X_n;
-            sum_X_n2 += X_n * X_n;
-            sum_X_n3 += X_n * X_n * X_n;
-            sum_X_n4 += X_n * X_n * X_n * X_n;*/
             sum_X += X_n;
             sum_X2 += X_n * X_n;
             sum_div += X_n /(C + X_n);
@@ -121,7 +96,7 @@ void main() {
         B=max(B, 0.0);
         A=max(A, 0.0);
         luminanceSum = luminance(sumX2 / (w3 + 0.00001));
-        //luminanceSum = pow(luminanceSum, 0.75*exp(-luminanceSum*0.1)+0.25);
+
         float exposure = clamp(calculateExposure(luminanceSum), 0.00025, 25.0);
         dTime_global*=0.5;
         if (frameCounter <= 1) {
@@ -137,9 +112,9 @@ void main() {
 
 
 
-        gbufferPreviousModelView_global = gbufferPreviousModelView;
-        gbufferPreviousProjection_global = gbufferPreviousProjection;
-        previousCameraPosition_global = previousCameraPosition;
+        gbufferPreviousModelView_global = gbufferModelView;
+        gbufferPreviousProjection_global = gbufferProjection;
+        previousCameraPosition_global = cameraPosition;
     }
 
     gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;

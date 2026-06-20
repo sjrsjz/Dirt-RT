@@ -66,13 +66,12 @@ const float LUMINANCE_PARAM = 4.0;
 
 // 法线权重: 基于法线夹角余弦，距离越远容忍度越低 (近处严格，远处宽松)
 float svgfNormalWeight(vec3 centerNormal, vec3 normal, float distance) {
-    return pow(max(dot(centerNormal, normal), 0.0),
-               NORMAL_PARAM * (0.25 + 4.0 * exp(-0.25 * distance)));
+    return pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM);
 }
 
 // 位置权重: 检查采样点偏离中心平面的程度，按距离归一化
 float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float distance) {
-    return exp(-pow(POSITION_PARAM * abs(dot(pixelPos - centerPos, normal) / sqrt(distance)), 4.0));
+    return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)));
 }
 
 // ---------------------------------------------------------------------------
@@ -103,11 +102,11 @@ vec3 reproject2(vec3 worldPos) {
 // 全局变量 (用于在不同函数间传递状态)
 // ---------------------------------------------------------------------------
 
-vec3 prevScreenPos;          // 重投影后的上一帧屏幕坐标
-float info_distance;         // 当前像素的光线追踪距离
-uint idx_l;                  // 重投影像素的去噪缓冲区索引
-vec2 texSize;                // 纹理尺寸
-uint idx;                    // 当前像素的去噪缓冲区索引
+vec3 prevScreenPos; // 重投影后的上一帧屏幕坐标
+float info_distance; // 当前像素的光线追踪距离
+uint idx_l; // 重投影像素的去噪缓冲区索引
+vec2 texSize; // 纹理尺寸
+uint idx; // 当前像素的去噪缓冲区索引
 
 in vec2 texCoord;
 
@@ -115,8 +114,8 @@ bool notInRange(vec2 p) {
     return clamp(p, vec2(0), vec2(1)) != p;
 }
 
-diffuseIllumiantionBufferData current_data;  // 当前帧数据 (来自光线追踪)
-diffuseIllumiantionData out_data;            // 输出数据
+diffuseIllumiantionBufferData current_data; // 当前帧数据 (来自光线追踪)
+diffuseIllumiantionData out_data; // 输出数据
 
 // // ===========================================================================
 // // 无偏加权 Welford 在线方差更新 (West 1979)
@@ -139,7 +138,6 @@ diffuseIllumiantionData out_data;            // 输出数据
 //     float new_var = (old_weight * old_var + new_weight * delta * (new_val - new_mean)) / total;
 //     return max(new_var, 0.0);
 // }
-
 
 // Welford 在线方差更新 — 单遍扫描计算邻域 SH 的加权方差
 // 参数:
@@ -177,14 +175,14 @@ void MixDiffuse() {
 
     // 计算重投影置信度: 位置一致性 × 法线一致性 × 几何有效性
     float pos_weight = svgfPositionWeight(data.pos, current_data.pos,
-                                          current_data.normal, info_distance);
+            current_data.normal, info_distance);
     float normal_weight = pow(max(dot(data.normal, current_data.normal), 0.0),
-                              NORMAL_PARAM);
+            NORMAL_PARAM);
 
     float s = float(info_distance > -0.5) * pos_weight * normal_weight;
 
     // 历史权重受重投影置信度调制
-    float prevW = data.prev_weight * s;
+    float prevW = data.prev_weight * pow(s, 0.125);
 
     // ---- 情况 2a: 历史数据不足 — 直接使用当前帧 ----------------------------
     if (prevW < 1e-2) {
@@ -200,16 +198,16 @@ void MixDiffuse() {
 
         // 光照混合: 新帧权重 = 1/new_total, 历史 = old_total/new_total
         out_data.data_swap = mix_SH(data.data, current_data.data_swap,
-                                    1.0 / new_total);
+                1.0 / new_total);
 
         // 方差更新: 基于亮度通道的 Welford 递推
         output_variance = updateVariance(
-            data.data.shY,          // 历史亮度均值
-            data.prev_variance,       // 历史方差
-            current_data.data_swap.shY, // 当前亮度样本
-            old_total,                // 旧总权重
-            1.0                        // 当前帧权重 (=1)
-        );
+                data.data.shY, // 历史亮度均值
+                data.prev_variance, // 历史方差
+                current_data.data_swap.shY, // 当前亮度样本
+                old_total, // 旧总权重
+                1.0 // 当前帧权重 (=1)
+            );
 
         output_weight = new_total;
     }
@@ -247,7 +245,7 @@ void main() {
     if (info_distance < -0.5) {
         WriteDiffuse(out_data, ivec2(gl_FragCoord.xy));
         imageStore(extInfoBuffer, ivec2(gl_FragCoord.xy),
-                   vec4(output_weight, output_variance, 0.0, 0.0));
+            vec4(output_weight, output_variance, 0.0, 0.0));
         return;
     }
 
@@ -260,7 +258,7 @@ void main() {
 
     // 将 (weight, variance) 存入外部缓冲区，供 110.glsl 读取
     imageStore(extInfoBuffer, ivec2(gl_FragCoord.xy),
-               vec4(output_weight, output_variance, 0.0, 0.0));
+        vec4(output_weight, output_variance, 0.0, 0.0));
 
     // 写出更新后的 diffuse 数据
     WriteDiffuse(out_data, ivec2(gl_FragCoord.xy));

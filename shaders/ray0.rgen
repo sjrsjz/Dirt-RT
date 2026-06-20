@@ -399,7 +399,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
                 if (data0.data_swap.shY.w * getRnd() < data0.data_swap.shY.w - length_shY || length_shY < 1e-6 || prev_coord.x < 0.0 || prev_coord.x > 1.0 || prev_coord.y < 0.0 || prev_coord.y > 1.0) {
                     next_rd = DiffuseNormal(macroNormal, ro_o);
                 } else {
-                    vec4 Nv = WeightedDiffuseEx(normalize(data0.data_swap.shY.xyz), ro_o, clamp(length_shY / (1e-2 + data0.data_swap.shY.w), 1e-5, 0.975));
+                    vec4 Nv = WeightedDiffuseEx(normalize(data0.data_swap.shY.xyz), ro_o, clamp(length_shY / (1e-2 + data0.data_swap.shY.w), 1e-5, 0.999));
                     next_rd = Nv.xyz;
                     if (dot(next_rd, macroNormal) < 0.0) next_rd = DiffuseNormal(macroNormal, ro_o);
                     else w = max(0.0, dot(next_rd, macroNormal)) * Nv.w;
@@ -446,6 +446,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
             // =======================================================================
             if (current_type == Diffussion) {
                 Reservoir r = Reservoir(GI_Sample(vec3(0), vec3(0), vec3(0), vec3(0), 0.0), 0.0, 0.0, 0.0);
+                vec2 prev_coord = reproject(first_p).xy;
 
                 // 1. 初始盲追采样 (余弦半球分布)
                 vec3 next_rd = DiffuseNormal(first_macro_n, first_p);
@@ -462,9 +463,9 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
                     candidate.is_sky = 0.0;
                     material surf_1 = Material_(ro_1, candidate.normal);
                     sample_rad += surf_1.light;
-                    if (dot(candidate.normal, lightDir) < 0.0 && !isDarkened) {
-                        sample_rad += sampleSunlight(ro_1, candidate.normal, surf_1.Cs, surf_1.Cd, next_rd, surf_1.S, surf_1.R, lightDir, lightDir.y > 0.0, Diffussion, candidate.normal, inverse_0);
-                    }
+                    // if (dot(candidate.normal, lightDir) < 0.0 && !isDarkened) {
+                    //     sample_rad += sampleSunlight(ro_1, candidate.normal, surf_1.Cs, surf_1.Cd, next_rd, surf_1.S, surf_1.R, lightDir, lightDir.y > 0.0, Diffussion, candidate.normal, inverse_0);
+                    // }
                 } else {
                     candidate.pos = first_p + next_rd * 10000.0;
                     candidate.normal = -next_rd;
@@ -487,9 +488,8 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
                 r.M = 1.0;
 
                 // 2. 时域重用
-                vec2 prev_uv = reproject(first_p).xy;
-                if (all(greaterThanEqual(prev_uv, vec2(0.0))) && all(lessThanEqual(prev_uv, vec2(1.0)))) {
-                    Reservoir r_prev = samplePrevReservoirStochastic(prev_uv, resolution_global, getRnd());
+                if (all(greaterThanEqual(prev_coord, vec2(0.0))) && all(lessThanEqual(prev_coord, vec2(1.0)))) {
+                    Reservoir r_prev = samplePrevReservoirStochastic(prev_coord, resolution_global, getRnd());
                     if (r_prev.M > 0.0) {
                         float p_hat_temporal = evaluatePHat(r_prev.samplePoint, first_p, first_n, first_albedo2);
                         if (p_hat_temporal > 0.0) {
@@ -509,13 +509,12 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
                 updateReservoir(spatialR, r.samplePoint, p_hat_self, p_hat_self * r.W * r.M, getRnd());
 
                 float spatial_M_sum = r.M;
-                for (int i = 0; i < RESTIR_SPATIAL_SAMPLES; i++) {
+                for (int i = 0; i < 0; i++) {
                     vec2 offset = (vec2(getRnd(), getRnd()) * 2.0 - 1.0) * float(RESTIR_SPATIAL_RADIUS);
-                    vec2 neighbor_uv = (round(vec2(coord)) + offset) / resolution_global;
+                    vec2 neighbor_uv = (vec2(prev_coord * resolution_global) + offset) / resolution_global;
 
                     if (all(greaterThanEqual(neighbor_uv, vec2(0.0))) && all(lessThanEqual(neighbor_uv, vec2(1.0)))) {
-                        uint nIdx = getIdx(uvec2(neighbor_uv * resolution_global));
-                        Reservoir r_n = prevReservoirs.data[nIdx];
+                        Reservoir r_n = samplePrevReservoirStochastic(neighbor_uv, resolution_global, getRnd());
 
                         if (r_n.M > 0.0) {
                             float p_hat_n = evaluatePHat(r_n.samplePoint, first_p, first_n, first_albedo2);
@@ -540,7 +539,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
                 float p_hat_final = evaluatePHat(spatialR.samplePoint, first_p, first_n, first_albedo2);
                 spatialR.W = spatialR.w_sum / max(spatialR.M * p_hat_final, 1e-5);
 
-                curReservoirs.data[idx] = spatialR;
+                curReservoirs.data[idx] = packReservoir(spatialR);
 
                 // 4. 延迟可见性
                 bool is_visible = true;
@@ -572,14 +571,13 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
 
                 // 多跳光线路径引导
                 float w = 1.0;
-                vec2 prev_coord = reproject(first_p).xy;
                 diffuseIllumiantionBufferDataW data0 = samplePrevDiffuse(prev_coord * resolution_global);
                 float length_shY = length(data0.data_swap.shY.xyz);
 
                 if (data0.data_swap.shY.w * getRnd() < data0.data_swap.shY.w - length_shY || length_shY < 1e-6 || prev_coord.x < 0.0 || prev_coord.x > 1.0 || prev_coord.y < 0.0 || prev_coord.y > 1.0) {
                     next_rd = DiffuseNormal(first_macro_n, first_p);
                 } else {
-                    vec4 Nv = WeightedDiffuseEx(normalize(data0.data_swap.shY.xyz), first_p, clamp(length_shY / (1e-2 + data0.data_swap.shY.w), 1e-5, 0.975));
+                    vec4 Nv = WeightedDiffuseEx(normalize(data0.data_swap.shY.xyz), first_p, clamp(length_shY / (1e-2 + data0.data_swap.shY.w), 1e-5, 0.999));
                     next_rd = Nv.xyz;
                     if (dot(next_rd, first_macro_n) < 0.0) next_rd = DiffuseNormal(first_macro_n, first_p);
                     else w = max(0.0, dot(next_rd, first_macro_n)) * Nv.w;

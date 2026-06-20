@@ -24,14 +24,66 @@ layout(std430, set = 3, binding = 0) buffer DenoiseBuffer {
     bufferData data[];
 } denoiseBuffer;
 
+// 辅助函数：安全的非零符号函数
+float sign_not_zero(float v) {
+    return (v >= 0.0 ? 1.0 : -1.0);
+}
+
+vec2 sign_not_zero(vec2 v) {
+    return vec2(sign_not_zero(v.x), sign_not_zero(v.y));
+}
+
+// 打包两个 half 为单个 float
+float pack2Half(float a, float b) {
+    return uintBitsToFloat(packHalf2x16(vec2(a, b)));
+}
+
+// 解包
+void unpack2Half(float packed_, out float a, out float b) {
+    vec2 v = unpackHalf2x16(floatBitsToUint(packed_));
+    a = v.x;
+    b = v.y;
+}
+
+// 编码：vec3 -> float
+float encodeNormal(vec3 n) {
+    // 确保输入是单位向量（非零）
+    n = normalize(n);
+    // 八面体映射  (Cigolle, 2014 等标准形式)
+    vec2 p = n.xy / (abs(n.x) + abs(n.y) + abs(n.z));
+    if (n.z < 0.0) {
+        p = (1.0 - abs(p.yx)) * sign_not_zero(p);
+    }
+    // 映射到 [0, 1] 范围以备打包
+    p = p * 0.5 + 0.5;
+    // 打包为 32 位 uint，再按位解释为 float
+    // packed 是保留关键字，因此使用 packed_ 作为变量名
+    uint packed_ = packUnorm2x16(p);
+    return uintBitsToFloat(packed_);
+}
+
+// 解码：float -> vec3
+vec3 decodeNormal(float f) {
+    uint packed_ = floatBitsToUint(f);
+    vec2 p = unpackUnorm2x16(packed_);
+    // 从 [0,1] 映射回 [-1,1]
+    p = p * 2.0 - 1.0;
+    // 逆八面体映射
+    vec3 n = vec3(p.x, p.y, 1.0 - abs(p.x) - abs(p.y));
+    if (n.z < 0.0) {
+        n.xy = (1.0 - abs(n.yx)) * sign_not_zero(n.xy);
+    }
+    return normalize(n);
+}
+
 // ===========================================================================
 // Unnormalized True-Physical YCoCg & SG Irradiance Integration (NaN-Safe)
 // ===========================================================================
 #define M_PI 3.14159265358979323846
 
 struct SH {
-    mediump vec4 shY;   // (dir * Y, Y)
-    mediump vec2 CoCg;  // (Co, Cg)
+    mediump vec4 shY; // (avg dir * Y, avg Y)
+    mediump vec2 CoCg; // (Co, Cg)
 };
 
 struct SGLobe {
@@ -72,10 +124,10 @@ SGLobe SGProduct(vec3 axis1, float sharpness1, vec3 axis2, float sharpness2) {
     vec3 axis = axis1 * sharpness1 + axis2 * sharpness2;
     float sharpness = length(axis);
     float cosine = clamp(dot(axis1, axis2), -1.0, 1.0);
-    
+
     float sharpnessMin = min(sharpness1, sharpness2);
     float sharpnessRatio = sharpnessMin / max(sharpness1, sharpness2);
-    
+
     // 安全开方保护：使用 max(..., 0.0) 强行杜绝浮点抖动产生的极小负数开方
     float sqrt_term = sqrt(max(2.0 * sharpnessRatio * cosine + sharpnessRatio * sharpnessRatio + 1.0, 0.0));
     float logAmplitude = 2.0 * sharpnessMin * (cosine - 1.0) / (1.0 + sharpnessRatio + sqrt_term);
@@ -89,9 +141,9 @@ SGLobe SGProduct(vec3 axis1, float sharpness1, vec3 axis2, float sharpness2) {
 
 float HSGIntegral(float cosine, float sharpness) {
     float steepness = sharpness * sqrt(
-        (0.5 * sharpness + 0.65173288269070562) / 
-        ((sharpness + 1.3418280033141288) * sharpness + 7.2216687798956709)
-    );
+                (0.5 * sharpness + 0.65173288269070562) /
+                    ((sharpness + 1.3418280033141288) * sharpness + 7.2216687798956709)
+            );
 
     float s = 0.5 + 0.5 * (precise_erf(steepness * clamp(cosine, -1.0, 1.0)) / precise_erf(max(steepness, 1e-5)));
 
@@ -107,11 +159,11 @@ SH irradiance_to_SH(vec3 color, vec3 dir)
     SH result;
 
     float Y = dot(color, vec3(0.2126, 0.7152, 0.0722));
-    
+
     float Co = 0.5 * color.r - 0.5 * color.b;
     float Cg = -0.25 * color.r + 0.5 * color.g - 0.25 * color.b;
 
-    result.CoCg = vec2(Co, Cg); 
+    result.CoCg = vec2(Co, Cg);
     result.shY = vec4(dir * Y, Y);
 
     return result;
@@ -120,23 +172,23 @@ SH irradiance_to_SH(vec3 color, vec3 dir)
 vec3 project_SH_irradiance(SH sh, vec3 N)
 {
     float Y_base = max(sh.shY.w, 0.0001);
-    
+
     float Co = sh.CoCg.x;
     float Cg = sh.CoCg.y;
 
     float B = Y_base - 1.1404 * Co - 1.4304 * Cg;
     float R = B + 2.0 * Co;
     float G = Y_base - 0.1404 * Co + 0.5696 * Cg;
-    
+
     vec3 base_color = max(vec3(R, G, B), vec3(0.0));
 
     // 从一阶方向矩估计 SG 物理参数
     float len_v = length(sh.shY.xyz);
     vec3 mu = sh.shY.xyz / max(len_v, 1e-5);
-    
+
     float R_ratio = clamp(len_v / Y_base, 0.0, 0.999);
     float lambda = (R_ratio * (3.0 - R_ratio * R_ratio)) / max(1.0 - R_ratio * R_ratio, 1e-5);
-    
+
     // 采用数学防崩溃函数计算振幅，确保 lambda -> 0 时数值依然绝对稳定
     float amplitude_factor = safe_lambda_over_one_minus_exp_two_lambda(lambda);
     float amplitude = Y_base * amplitude_factor / (2.0 * M_PI);
@@ -158,14 +210,14 @@ vec3 project_SH_irradiance(SH sh, vec3 N)
 
     // 求解双 SG 乘积积分
     SGLobe prodLobe = SGProduct(lightLobe.axis, lightLobe.sharpness, cosineLobe.axis, cosineLobe.sharpness);
-    
+
     float p = HSGIntegral(dot(prodLobe.axis, N), prodLobe.sharpness) * exp(LAMBDA_C + prodLobe.logAmplitude);
     float q = HSGIntegral(dot(lightLobe.axis, N), lightLobe.sharpness);
-    
+
     float attenuation = exp(lightLobe.logAmplitude) * max(ALPHA_C * p - ALPHA_C * q, 0.0);
     attenuation = clamp(attenuation / max(Y_base, 1e-5), 0.0, 1.0);
 
-    return max(base_color * attenuation, vec3(0)); 
+    return max(base_color * attenuation, vec3(0));
 }
 
 // ---------------------------------------------------------------------------
@@ -200,15 +252,53 @@ void accumulate_SH(inout SH accum, SH b, float scale)
     accum.CoCg += b.CoCg * scale;
 }
 
+// 将 SH 压缩为 3 个 float
+vec3 packSH(SH sh) {
+    // 注意：shY 和 CoCg 可能超出 half 范围（但通常不会），必要时 clamp
+    float s0 = uintBitsToFloat(packHalf2x16(vec2(sh.shY.x, sh.shY.y)));
+    float s1 = uintBitsToFloat(packHalf2x16(vec2(sh.shY.z, sh.shY.w)));
+    float s2 = uintBitsToFloat(packHalf2x16(vec2(sh.CoCg.x, sh.CoCg.y)));
+    return vec3(s0, s1, s2);
+}
+
+SH unpackSH(float s0, float s1, float s2) {
+    SH sh;
+    vec2 v0 = unpackHalf2x16(floatBitsToUint(s0));
+    vec2 v1 = unpackHalf2x16(floatBitsToUint(s1));
+    vec2 v2 = unpackHalf2x16(floatBitsToUint(s2));
+    sh.shY = vec4(v0.x, v0.y, v1.x, v1.y);
+    sh.CoCg = v2;
+    return sh;
+}
+
+struct PackedLightSample {
+    vec4 data0; // (pos.xyz, encoded_normal)
+    vec4 data1; // (encoded_shY.xy, encoded_shY.zw, encoded_CoCg.xy)
+};
+
+PackedLightSample packLightSample(vec3 pos, vec3 normal, SH sh, float weight, float variance) {
+    PackedLightSample sample_data;
+    sample_data.data0 = vec4(pos, encodeNormal(normal));
+    sample_data.data1 = vec4(packSH(sh), pack2Half(weight, variance));
+    return sample_data;
+}
+
+void unpackLightSample(PackedLightSample sample_data, out vec3 pos, out vec3 normal, out SH sh, out float weight, out float variance) {
+    pos = sample_data.data0.xyz;
+    normal = decodeNormal(sample_data.data0.w);
+    sh = unpackSH(sample_data.data1.x, sample_data.data1.y, sample_data.data1.z);
+    unpack2Half(sample_data.data1.w, weight, variance);
+}
+
 // ===========================================================================
 // ReSTIR GI 路径样本与储层结构体
 // ===========================================================================
 struct GI_Sample {
-    vec3 pos;       // 盲追撞击点的坐标
-    vec3 normal;    // 盲追撞击点的法线
-    vec3 radiance;  // 撞击点发出的辐射度 (自发光 + 直射光)
-    vec3 wi; 
-    float is_sky; 
+    vec3 pos; // 盲追撞击点的坐标
+    vec3 normal; // 盲追撞击点的法线
+    vec3 radiance; // 撞击点发出的辐射度 (自发光 + 直射光)
+    vec3 wi;
+    float is_sky;
 };
 
 struct Reservoir {
@@ -218,13 +308,39 @@ struct Reservoir {
     float W;
 };
 
+struct PackedReservoir {
+    vec4 s0;
+    vec4 s1;
+    vec4 s2;
+};
+
+PackedReservoir packReservoir(Reservoir r) {
+    vec4 s0 = vec4(r.samplePoint.pos, encodeNormal(r.samplePoint.normal));
+    vec4 s1 = vec4(r.samplePoint.radiance, encodeNormal(r.samplePoint.wi));
+    vec4 s2 = vec4(r.samplePoint.is_sky, r.w_sum, r.M, r.W);
+    return PackedReservoir(s0, s1, s2);
+}
+
+Reservoir unpackReservoir(PackedReservoir p) {
+    Reservoir r;
+    r.samplePoint.pos = p.s0.xyz;
+    r.samplePoint.normal = decodeNormal(p.s0.w);
+    r.samplePoint.radiance = p.s1.xyz;
+    r.samplePoint.wi = decodeNormal(p.s1.w);
+    r.samplePoint.is_sky = p.s2.x;
+    r.w_sum = p.s2.y;
+    r.M = p.s2.z;
+    r.W = p.s2.w;
+    return r;
+}
+
 // 绑定 10：当前帧写入，绑定 11：上一帧读取
 layout(std430, set = 3, binding = 7) buffer CurReservoirBuffer {
-    Reservoir data[];
+    PackedReservoir data[];
 } curReservoirs;
 
 layout(std430, set = 3, binding = 8) buffer PrevReservoirBuffer {
-    Reservoir data[];
+    PackedReservoir data[];
 } prevReservoirs;
 
 // 储层更新原语
@@ -233,7 +349,7 @@ bool updateReservoir(inout Reservoir r, GI_Sample candidate, float p_hat, float 
     r.M += 1.0;
     if (randomValue * r.w_sum < weight) {
         r.samplePoint = candidate;
-        return true; 
+        return true;
     }
     return false;
 }
@@ -241,7 +357,7 @@ bool updateReservoir(inout Reservoir r, GI_Sample candidate, float p_hat, float 
 // 随机双线性重投影采样函数
 Reservoir samplePrevReservoirStochastic(vec2 uv, vec2 res, float random_val) {
     // 将 0~1 的连续 UV 映射到像素浮点网格（像素中心在 integer + 0.5）
-    vec2 continuous_px = uv * res + 0.5;
+    vec2 continuous_px = uv * res;
     ivec2 base = ivec2(floor(continuous_px));
     vec2 f = fract(continuous_px);
 
@@ -264,12 +380,8 @@ Reservoir samplePrevReservoirStochastic(vec2 uv, vec2 res, float random_val) {
 
     ivec2 fetch_coord = base + offset;
 
-    // 边界安全钳制
-    ivec2 max_coord = ivec2(res) - ivec2(1);
-    fetch_coord = clamp(fetch_coord, ivec2(0), max_coord);
-
-    uint nIdx = uint(fetch_coord.y) * uint(res.x) + uint(fetch_coord.x);
-    return prevReservoirs.data[nIdx];
+    uint nIdx = getIdx(uvec2(fetch_coord));
+    return unpackReservoir(prevReservoirs.data[nIdx]);
 }
 
 struct diffuseIllumiantionData {
@@ -371,23 +483,6 @@ layout(rg32f) uniform image2D diffuseIllumiantionData_CoCg;
 layout(rgba32f) uniform image2D diffuseIllumiantionData_lnormal;
 layout(rgba32f) uniform image2D diffuseIllumiantionData_lpos;
 #endif
-
-/*diffuseIllumiantionData sampleDiffuse(vec2 p) {
-    diffuseIllumiantionData tmp;
-
-    vec4 tmp4 = texture(diffuseIllumiantionData_CoCg_swap_Sampler, p);
-    tmp.data_swap.CoCg = tmp4.xy;
-    tmp.data_swap.shY = texture(diffuseIllumiantionData_shY_swap_Sampler, p);
-    #ifndef DIFFUSE_BUFFER_MIN
-    tmp4 = texture(diffuseIllumiantionData_CoCg_Sampler, p);
-    tmp.data.CoCg = tmp4.xy;
-    tmp.data.shY = texture(diffuseIllumiantionData_shY_Sampler, p);
-    tmp.weight = tmp4.z;
-    tmp.normal = texture(diffuseIllumiantionData_lnormal_Sampler, p).xyz;
-    tmp.pos = texture(diffuseIllumiantionData_lpos_Sampler, p).xyz;
-    #endif
-    return tmp;
-}*/
 
 diffuseIllumiantionData fetchDiffuse(ivec2 p) {
     diffuseIllumiantionData tmp;

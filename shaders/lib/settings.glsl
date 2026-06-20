@@ -11,12 +11,12 @@
 #define useReSTIR 1 // Whether to use ReSTIR GI [0 1]
 
 // Denoiser — Temporal accumulation (100.glsl)
-#define TEMPORAL_NORMAL_PARAM 8.0 // Normal similarity power for history rejection. Higher = stricter on curved surfaces, less ghosting. [0.5 1 2 4 8 16 32 64]
+#define TEMPORAL_NORMAL_PARAM 4.0 // Normal similarity power for history rejection. Higher = stricter on curved surfaces, less ghosting. [0.5 1 2 4 8 16 32 64]
 #define TEMPORAL_POSITION_PARAM 64.0 // Position/depth sensitivity for history rejection. Higher = less ghosting but more noise on disocclusion. [1 2 4 8 16 32 64 128 256]
 
 // Denoiser — Variance pre-filter (swap2.glsl)
 #define VAR_FILTER_RADIUS 1 // Variance pre-filter radius: 1=3×3, 2=5×5, 3=7×7. Larger = more stable variance but slower. [1 2 3]
-#define VARIANCE_SCALE 10.0 // Global variance scale applied before SVGF. Higher = more aggressive denoising. [0.5 1 2 4 6 8 10 15 20 30]
+#define VARIANCE_SCALE 1.0 // Global variance scale applied before SVGF. Higher = more aggressive denoising. [0.125 0.25 0.5 1 2 4 6 8 10 15 20 30]
 
 // Denoiser — SVGF spatial filter (300.glsl)
 #define SVGF_NORMAL_POWER 32.0 // Normal edge-stopping power in à-trous filter. Higher = sharper normal edges. [1 2 4 8 16 32 64 128]

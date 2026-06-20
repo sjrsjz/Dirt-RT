@@ -28,10 +28,16 @@ layout(local_size_x = 16, local_size_y = 16) in;
 // Uniform 输入
 // ---------------------------------------------------------------------------
 
-uniform sampler2D colortex3;  // 世界空间法线
-uniform sampler2D colortex4;  // 世界空间位置
-uniform sampler2D colortex5;  // 滤波后 SH.shY
-uniform sampler2D colortex6;  // 滤波后 SH.CoCg + 方差 + 权重
+uniform sampler2D colortex3;  // 几何信息
+uniform sampler2D colortex4;  // 光照信息
+
+void unpackLightSample(ivec2 coord, out vec3 pos, out vec3 normal, out SH sh) {
+    vec4 sample_data0 = texelFetch(colortex3, coord, 0); // 几何信息
+    vec4 sample_data1 = texelFetch(colortex4, coord, 0); // 光照样本信息
+    pos = sample_data0.xyz;
+    normal = decodeNormal(sample_data0.w);
+    sh = unpackSH(sample_data1.x, sample_data1.y, sample_data1.z);
+}
 
 uniform vec2 resolution;
 
@@ -53,12 +59,6 @@ void main() {
     tmp.data = tmp.data_swap;
 
     // ---- 从滤波后的 colortex 读取新数据 ----------------------------------
-    tmp.data_swap.shY  = texelFetch(colortex5, pix, 0);
-    tmp.data_swap.CoCg = texelFetch(colortex6, pix, 0).xy;
-
-    // ---- 更新几何数据 ----------------------------------------------------
-    tmp.normal = texelFetch(colortex3, pix, 0).xyz;
-    tmp.pos    = texelFetch(colortex4, pix, 0).xyz;
-
+    unpackLightSample(pix, tmp.pos, tmp.normal, tmp.data_swap);
     WriteDiffuse(tmp, pix);
 }
