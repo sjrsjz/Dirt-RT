@@ -509,7 +509,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
                 updateReservoir(spatialR, r.samplePoint, p_hat_self, p_hat_self * r.W * r.M, getRnd());
 
                 float spatial_M_sum = r.M;
-                for (int i = 0; i < 0; i++) {
+                for (int i = 0; i < RESTIR_SPATIAL_SAMPLES; i++) {
                     vec2 offset = (vec2(getRnd(), getRnd()) * 2.0 - 1.0) * float(RESTIR_SPATIAL_RADIUS);
                     vec2 neighbor_uv = (vec2(prev_coord * resolution_global) + offset) / resolution_global;
 
