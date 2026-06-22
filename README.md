@@ -4,7 +4,9 @@ A simple path tracing shader for vulkanite mod,which uses Nvidia GPU's RT cores 
 
 **WARNING:Make sure that your resourcepack fit your game version. Otherwise, you will get a black world!!!**
 
-**The pack needs this version of Vulkanite:https://github.com/sjrsjz/vulkanite-modified**
+**The pack needs this version of Vulkanite:https://github.com/sjrsjz/vulkanite-modified**, you may build the latest version by yourself.
+
+**Technical documentation:** [ZH](doc/tech.pdf) | [EN](doc/tech_en.pdf)
 
 ![2024-01-03_20 09 18](https://github.com/sjrsjz/Dirt-RT/assets/139971734/51bb9293-709a-42c6-95ee-66df4d64ebb6)
 
