@@ -399,7 +399,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
                 if (data0.data_swap.shY.w * getRnd() < data0.data_swap.shY.w - length_shY || length_shY < 1e-6 || prev_coord.x < 0.0 || prev_coord.x > 1.0 || prev_coord.y < 0.0 || prev_coord.y > 1.0) {
                     next_rd = DiffuseNormal(macroNormal, ro_o);
                 } else {
-                    vec4 Nv = WeightedDiffuseEx(normalize(data0.data_swap.shY.xyz), ro_o, clamp(length_shY / (1e-2 + data0.data_swap.shY.w), 1e-5, 0.999));
+                    vec4 Nv = WeightedDiffuseEx(normalize(data0.data_swap.shY.xyz), ro_o, clamp(length_shY / (1e-2 + data0.data_swap.shY.w), 1e-5, 0.975));
                     next_rd = Nv.xyz;
                     if (dot(next_rd, macroNormal) < 0.0) next_rd = DiffuseNormal(macroNormal, ro_o);
                     else w = max(0.0, dot(next_rd, macroNormal)) * Nv.w;
@@ -577,7 +577,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
                 if (data0.data_swap.shY.w * getRnd() < data0.data_swap.shY.w - length_shY || length_shY < 1e-6 || prev_coord.x < 0.0 || prev_coord.x > 1.0 || prev_coord.y < 0.0 || prev_coord.y > 1.0) {
                     next_rd = DiffuseNormal(first_macro_n, first_p);
                 } else {
-                    vec4 Nv = WeightedDiffuseEx(normalize(data0.data_swap.shY.xyz), first_p, clamp(length_shY / (1e-2 + data0.data_swap.shY.w), 1e-5, 0.999));
+                    vec4 Nv = WeightedDiffuseEx(normalize(data0.data_swap.shY.xyz), first_p, clamp(length_shY / (1e-2 + data0.data_swap.shY.w), 1e-5, 0.975));
                     next_rd = Nv.xyz;
                     if (dot(next_rd, first_macro_n) < 0.0) next_rd = DiffuseNormal(first_macro_n, first_p);
                     else w = max(0.0, dot(next_rd, first_macro_n)) * Nv.w;

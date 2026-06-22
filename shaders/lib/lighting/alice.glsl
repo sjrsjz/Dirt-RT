@@ -147,6 +147,23 @@ float alice_weighted_jeffreys_divergence(vec4 sample1, vec4 sample2) {
 }
 
 // ------------------------------------------------------------
+// 调和累积加权的杰弗里斯散度 (Harmonically Weighted Jeffreys Divergence)
+// D_WJ(L1, L2) = W_eff · D_J(L1, L2)
+//   其中 W_eff = (N1 · N2) / (N1 + N2) 为有效时域累积的调和均值
+//
+// N1, N2: 各样本的时域有效累积帧数 (≈ temporal weight)
+// 行为:
+//   - 低 SPP 阶段 (N1, N2 均小): W_eff 小 → 散度被压降 → 软包容，快速融合
+//   - 高 SPP 阶段 (N1, N2 均大): W_eff 大 → 散度被放大 → 严苛拒绝，防残影
+//   - 混合 SPP (一大一小):      W_eff ≈ min(N1,N2) → 信任高置信度侧
+// ------------------------------------------------------------
+float alice_weighted_jeffreys_with_N(vec4 sample1, vec4 sample2, vec4 dual1, vec4 dual2, float N1, float N2) {
+    float D_J = alice_weighted_jeffreys_fast(sample1, sample2, dual1, dual2);
+    float W_eff = (N1 * N2) / max(N1 + N2, 1e-10);
+    return W_eff * D_J;
+}
+
+// ------------------------------------------------------------
 // 漫反射辐照度重建 (核心)
 // 基于三维最大熵分布的半球余弦投影解析逼近
 // ------------------------------------------------------------

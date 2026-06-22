@@ -1,5 +1,6 @@
 
 #include "/lib/buffers/frame_data.glsl"
+#include "/lib/lighting/alice.glsl"
 uint getIdx(uvec2 xy) {
     //return xy.y * 1024u + clamp(xy.x, 0, 1023u);
     return xy.y * resolution_global.x + clamp(xy.x, 0, resolution_global.x - 1);
@@ -77,78 +78,17 @@ vec3 decodeNormal(float f) {
 }
 
 // ===========================================================================
-// Unnormalized True-Physical YCoCg & SG Irradiance Integration (NaN-Safe)
+// ALICE 光照编码与辐照度重建 (NaCg-Safe, O(1) 闭型逼近)
 // ===========================================================================
-#define M_PI 3.14159265358979323846
+// SH.shY = vec4(v, ω) — 即 ALICE 线性嵌入表示，与 alice_encode 输出兼容
+// SH.CoCg = vec2(Co, Cg) — 色度 (YCoCg 空间)
+//
+// 辐照度解码使用 ALICE 最大熵半球余弦投影解析逼近，全域误差 < 0.4%
 
 struct SH {
-    mediump vec4 shY; // (avg dir * Y, avg Y)
+    mediump vec4 shY; // ALICE 嵌入: xyz = 方向向量 v, w = 总能量 ω = |v| + I
     mediump vec2 CoCg; // (Co, Cg)
 };
-
-struct SGLobe {
-    vec3 axis;
-    float sharpness;
-    float logAmplitude;
-};
-
-// ---------------------------------------------------------------------------
-// 辅助数学原语
-// ---------------------------------------------------------------------------
-
-float precise_erf(float x) {
-    float sign_x = sign(x);
-    float t = 1.0 / (1.0 + 0.3275911 * abs(x));
-    float y = 1.0 - (((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t) * exp(-x * x);
-    return sign_x * y;
-}
-
-float expm1_over_x(float x) {
-    if (abs(x) < 1e-5) {
-        return 1.0 + 0.5 * x;
-    }
-    return (exp(x) - 1.0) / x;
-}
-
-// 避开 0/0 无定义，并使用一阶泰勒展开平滑逼近低频极限 (确保绝对不溢出)
-float safe_lambda_over_one_minus_exp_two_lambda(float lambda) {
-    if (lambda < 1e-4) {
-        // 当 lambda 趋于 0 时的极高精度泰勒级数展开
-        return 0.5 * (1.0 + lambda + (1.0 / 3.0) * lambda * lambda);
-    }
-    return lambda / (1.0 - exp(-2.0 * lambda));
-}
-
-// 数值稳定的双 SG 乘积计算 (已修复浮点抖动导致的负数开方 NaN)
-SGLobe SGProduct(vec3 axis1, float sharpness1, vec3 axis2, float sharpness2) {
-    vec3 axis = axis1 * sharpness1 + axis2 * sharpness2;
-    float sharpness = length(axis);
-    float cosine = clamp(dot(axis1, axis2), -1.0, 1.0);
-
-    float sharpnessMin = min(sharpness1, sharpness2);
-    float sharpnessRatio = sharpnessMin / max(sharpness1, sharpness2);
-
-    // 安全开方保护：使用 max(..., 0.0) 强行杜绝浮点抖动产生的极小负数开方
-    float sqrt_term = sqrt(max(2.0 * sharpnessRatio * cosine + sharpnessRatio * sharpnessRatio + 1.0, 0.0));
-    float logAmplitude = 2.0 * sharpnessMin * (cosine - 1.0) / (1.0 + sharpnessRatio + sqrt_term);
-
-    SGLobe result;
-    result.axis = axis / max(sharpness, 1e-6);
-    result.sharpness = sharpness;
-    result.logAmplitude = logAmplitude;
-    return result;
-}
-
-float HSGIntegral(float cosine, float sharpness) {
-    float steepness = sharpness * sqrt(
-                (0.5 * sharpness + 0.65173288269070562) /
-                    ((sharpness + 1.3418280033141288) * sharpness + 7.2216687798956709)
-            );
-
-    float s = 0.5 + 0.5 * (precise_erf(steepness * clamp(cosine, -1.0, 1.0)) / precise_erf(max(steepness, 1e-5)));
-
-    return 2.0 * M_PI * mix(exp(-sharpness), 1.0, s) * expm1_over_x(-sharpness);
-}
 
 // ---------------------------------------------------------------------------
 // 编解码与投影核心接口
@@ -164,60 +104,50 @@ SH irradiance_to_SH(vec3 color, vec3 dir)
     float Cg = -0.25 * color.r + 0.5 * color.g - 0.25 * color.b;
 
     result.CoCg = vec2(Co, Cg);
+    // ALICE 编码: v = dir*Y, ω = |v| + 0 = Y (单样本 I=0)
     result.shY = vec4(dir * Y, Y);
 
     return result;
 }
 
+// ALICE 辐照度投影 (替代原 SG 模型)
+// sh.shY 即为 ALICE 编码 vec4(v, ω)
+// 返回余弦加权漫反射辐照度 RGB
 vec3 project_SH_irradiance(SH sh, vec3 N)
 {
-    float Y_base = max(sh.shY.w, 0.0001);
+    // 1. 使用 ALICE 最大熵分布计算半球余弦投影辐照度 (标量)
+    float irradiance = alice_irradiance(sh.shY, N);
 
+    // 2. YCoCg → RGB (辐照度作为重建亮度，色度保持线性不变)
     float Co = sh.CoCg.x;
     float Cg = sh.CoCg.y;
 
-    float B = Y_base - 1.1404 * Co - 1.4304 * Cg;
+    float B = irradiance - 1.1404 * Co - 1.4304 * Cg;
     float R = B + 2.0 * Co;
-    float G = Y_base - 0.1404 * Co + 0.5696 * Cg;
+    float G = irradiance - 0.1404 * Co + 0.5696 * Cg;
 
-    vec3 base_color = max(vec3(R, G, B), vec3(0.0));
+    return max(vec3(R, G, B), vec3(0.0));
+}
 
-    // 从一阶方向矩估计 SG 物理参数
-    float len_v = length(sh.shY.xyz);
-    vec3 mu = sh.shY.xyz / max(len_v, 1e-5);
+// ---------------------------------------------------------------------------
+// colortex5 双对偶向量 (θ, β) 打包/解包 — 用于 Jeffreys 散度计算
+// ---------------------------------------------------------------------------
+// colortex5 格式: RGBA32F — 直接存储 vec4(theta.xyz, beta)
+//   θ = 自然参数空间方向分量 (3D 向量)
+//   β = 自然参数空间能量分量 (标量)
 
-    float R_ratio = clamp(len_v / Y_base, 0.0, 0.999);
-    float lambda = (R_ratio * (3.0 - R_ratio * R_ratio)) / max(1.0 - R_ratio * R_ratio, 1e-5);
+vec4 packDualVector(vec3 dual_theta, float dual_beta) {
+    return vec4(dual_theta, dual_beta);
+}
 
-    // 采用数学防崩溃函数计算振幅，确保 lambda -> 0 时数值依然绝对稳定
-    float amplitude_factor = safe_lambda_over_one_minus_exp_two_lambda(lambda);
-    float amplitude = Y_base * amplitude_factor / (2.0 * M_PI);
+vec4 packDualVectorFromEncoded(vec4 aliceEncoded) {
+    vec4 tb = alice_theta_beta(aliceEncoded);
+    return tb; // vec4(theta.xyz, beta)
+}
 
-    // 构造入射光 SG
-    SGLobe lightLobe;
-    lightLobe.axis = mu;
-    lightLobe.sharpness = lambda;
-    lightLobe.logAmplitude = log(max(amplitude, 1e-6)); // 额外加一层 log 安全保护
-
-    // 构造余弦波瓣 SG
-    const float LAMBDA_C = 0.0008456087;
-    const float ALPHA_C = LAMBDA_C / (2.0 * exp(LAMBDA_C) - 2.0 - 2.0 * LAMBDA_C);
-
-    SGLobe cosineLobe;
-    cosineLobe.axis = N;
-    cosineLobe.sharpness = LAMBDA_C;
-    cosineLobe.logAmplitude = 0.0;
-
-    // 求解双 SG 乘积积分
-    SGLobe prodLobe = SGProduct(lightLobe.axis, lightLobe.sharpness, cosineLobe.axis, cosineLobe.sharpness);
-
-    float p = HSGIntegral(dot(prodLobe.axis, N), prodLobe.sharpness) * exp(LAMBDA_C + prodLobe.logAmplitude);
-    float q = HSGIntegral(dot(lightLobe.axis, N), lightLobe.sharpness);
-
-    float attenuation = exp(lightLobe.logAmplitude) * max(ALPHA_C * p - ALPHA_C * q, 0.0);
-    attenuation = clamp(attenuation / max(Y_base, 1e-5), 0.0, 1.0);
-
-    return max(base_color * attenuation, vec3(0));
+void unpackDualVector(vec4 packed_, out vec3 dual_theta, out float dual_beta) {
+    dual_theta = packed_.xyz;
+    dual_beta = packed_.w;
 }
 
 // ---------------------------------------------------------------------------
@@ -276,10 +206,10 @@ struct PackedLightSample {
     vec4 data1; // (encoded_shY.xy, encoded_shY.zw, encoded_CoCg.xy)
 };
 
-PackedLightSample packLightSample(vec3 pos, vec3 normal, SH sh, float weight, float variance) {
+PackedLightSample packLightSample(vec3 pos, vec3 normal, SH sh, float weight) {
     PackedLightSample sample_data;
     sample_data.data0 = vec4(pos, encodeNormal(normal));
-    sample_data.data1 = vec4(packSH(sh), pack2Half(weight, variance));
+    sample_data.data1 = vec4(packSH(sh), weight);
     return sample_data;
 }
 
@@ -290,11 +220,11 @@ PackedLightSample packSpecularSample(vec3 pos, vec3 normal, vec3 radiance, float
     return sample_data;
 }
 
-void unpackLightSample(PackedLightSample sample_data, out vec3 pos, out vec3 normal, out SH sh, out float weight, out float variance) {
+void unpackLightSample(PackedLightSample sample_data, out vec3 pos, out vec3 normal, out SH sh, out float weight) {
     pos = sample_data.data0.xyz;
     normal = decodeNormal(sample_data.data0.w);
     sh = unpackSH(sample_data.data1.x, sample_data.data1.y, sample_data.data1.z);
-    unpack2Half(sample_data.data1.w, weight, variance);
+    weight = sample_data.data1.w;
 }
 
 void unpackSpecularSample(PackedLightSample sample_data, out vec3 pos, out vec3 normal, out vec3 radiance, out float weight, out float roughness) {
