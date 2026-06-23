@@ -135,7 +135,7 @@ material Material_(vec3 pos, vec3 nor) {
     roughness = tmp_Payload.material.block_id.x == 1002 ? 0 : roughness;
     albedo = water ? vec3(1) : albedo;
     tmp_Payload.material.emission = tmp_Payload.material.block_id.x == 1002 ? albedo * (1 - trans) : tmp_Payload.material.emission;
-    tmp_Payload.material.emission *= 100;
+    tmp_Payload.material.emission *= 25;
     return newMaterial(clamp(tmp_Payload.material.F0, 0, 1), albedo, vec2((1 - tmp_Payload.material.metallic) * trans, 1 - trans), vec4(roughness > 0.01 ? max(roughness, 0.0125) : 0, trans, water, tmp_Payload.material.subsurface_scattering), tmp_Payload.material.emission);
 }
 

@@ -112,8 +112,8 @@ void MixReflect() {
     float roughness = denoiseBuffer.data[idx].roughness;
     float alpha = roughness * roughness; // GGX α
     float cosTheta = abs(dot(normalize(data.normal), normalize(data2.normal))); // H_prev · H_curr
-    float tanThetaSq = max((0.999 - cosTheta * cosTheta) / (cosTheta * cosTheta), 0.0);
-    float ggxWeight = exp(-tanThetaSq / (alpha * alpha)); // GGX 分布形状
+    float tanThetaSq = max((0.99995 - cosTheta * cosTheta) / (1e-5 + cosTheta * cosTheta), 0.0);
+    float ggxWeight = exp(-0.0001 * tanThetaSq / (alpha * alpha)); // GGX 分布形状
 
     // 可选位置权重（几何法线平面距离）
     vec3 geoNormal = diffuseIllumiantionBuffer.data[idx].normal2;
@@ -122,8 +122,6 @@ void MixReflect() {
     // 综合置信度
     float s = float(denoiseBuffer.data[idx].distance > -0.5)
             * ggxWeight * posWeight;
-
-    s = sqrt(s);
 
     float prevW = data.prev_weight;
     prevW = min(prevW * s + 1.0, 3 * ACCUMULATION_LENGTH);

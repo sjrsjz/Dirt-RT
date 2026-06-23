@@ -61,6 +61,7 @@ vec4 alice_accumulate(vec4 accum, vec4 new_sample, float sample_weight) {
     return accum + new_sample * sample_weight;
 }
 
+
 // ------------------------------------------------------------
 // 最大熵统计特征提取
 // ------------------------------------------------------------
@@ -71,10 +72,44 @@ vec4 alice_accumulate(vec4 accum, vec4 new_sample, float sample_weight) {
 float alice_kappa(float len_v, float omega) {
     // 防止退化: omega 极小或 rho >= 1
     if (omega < 1e-8) return 0.0;
-    float rho = min(len_v / omega, 0.999999); // 留出微小非奇异空间
+    float rho = min(len_v / omega, 0.98); // 留出微小非奇异空间
     // ρ = |v|/ω
-    float sqrt_term = sqrt(max(0.0, 16.0 - 12.0 * rho * rho));
-    return (6.0 * rho) / (4.0 + sqrt_term);
+    float sqrt_term = sqrt(max(0.0, 4.0 - 3.0 * rho * rho));
+    return (3.0 * rho) / (2.0 + sqrt_term);
+}
+
+
+// ------------------------------------------------------------
+// 标量方差
+// ------------------------------------------------------------
+float alice_variance(vec4 encoded) {
+    float v2 = dot(encoded.xyz, encoded.xyz);
+    float omega2 = encoded.w * encoded.w;
+    float variance = (2.0 * omega2 + encoded.w * sqrt(4.0 * omega2 - 3.0 * v2)) / 3.0 - 0.5 * v2;
+    return max(0.0, variance);
+}
+
+// ------------------------------------------------------------
+// 径向能量不确定度方差
+// ------------------------------------------------------------
+float alice_radial_variance(vec4 encoded) {
+    float kappa = alice_kappa(length(encoded.xyz), encoded.w);
+    float kappa_sq = kappa * kappa;
+    float omega2 = encoded.w * encoded.w;
+    float kappa2_3 = kappa_sq + 3.0;
+    kappa2_3 *= kappa2_3;
+    float radial_variance = omega2 / kappa2_3 * (3.0 + 6.0 * kappa_sq - kappa_sq * kappa_sq);
+    return max(0.0, radial_variance);
+}
+
+// 估计方差 (用于时域累积)
+float alice_estimator_variance(vec4 encoded, float N) {
+    return alice_variance(encoded) / max(N, 1e-6);
+}
+
+// 径向估计方差 (用于时域累积)
+float alice_radial_estimator_variance(vec4 encoded, float N) {
+    return alice_radial_variance(encoded) / max(N, 1e-6);
 }
 
 // 计算最大熵分布的自然参数 (θ, β) 用于散度计算
@@ -110,7 +145,7 @@ vec4 alice_theta_beta(vec4 encoded) {
 // ------------------------------------------------------------
 float alice_weighted_jeffreys_fast(vec4 sample1, vec4 sample2, vec4 alice_theta_beta1, vec4 alice_theta_beta2) {
     // 捕捉退化情况: 任一总能量为零
-    if (sample1.w < 1e-10 || sample2.w < 1e-10) {
+    if (sample1.w < 1e-20 || sample2.w < 1e-20) {
         // 若一方无能量，散度趋于无穷，返回极大值以拒绝
         return 1e10;
     }
@@ -159,8 +194,33 @@ float alice_weighted_jeffreys_divergence(vec4 sample1, vec4 sample2) {
 // ------------------------------------------------------------
 float alice_weighted_jeffreys_with_N(vec4 sample1, vec4 sample2, vec4 dual1, vec4 dual2, float N1, float N2) {
     float D_J = alice_weighted_jeffreys_fast(sample1, sample2, dual1, dual2);
-    float W_eff = (N1 * N2) / max(N1 + N2, 1e-10);
+    float W_eff = (N1 * N2) / max(N1 + N2, 1e-20);
     return W_eff * D_J;
+}
+
+// ------------------------------------------------------------
+// ALICE 近似圆锥测地线距离 (Fast Riemannian Cone Geodesic)
+// 在同向对齐极限下，该测地距离严格塌缩为 |sample1.w - sample2.w| * sqrt(2 W_eff)
+// ------------------------------------------------------------
+float alice_distance_fast(vec4 sample1, vec4 sample2, vec4 dual1, vec4 dual2, float N1, float N2) {
+    float D_J = alice_weighted_jeffreys_fast(sample1, sample2, dual1, dual2);
+
+    // 调和有效样本数 (Wald Effective Sample Size)
+    float W_eff = (N1 * N2) / max(N1 + N2, 1e-20);
+
+    // 经黎曼锥度规映射，将无量纲散度拉回绝对辐射度尺度
+    return sqrt(W_eff * D_J * sample1.w * sample2.w * (2.0 / 3.0));
+}
+
+float alice_normalized_distance_fast(vec4 sample1, vec4 sample2, vec4 dual1, vec4 dual2, float N1, float N2) {
+    float D_J = alice_weighted_jeffreys_fast(sample1, sample2, dual1, dual2);
+
+    // 调和有效样本数 (Wald Effective Sample Size)
+    float W_eff = (N1 * N2) / max(N1 + N2, 1e-20);
+
+    float v1 = alice_estimator_variance(sample1, N1);
+    float v2 = alice_estimator_variance(sample2, N2);
+    return sqrt(W_eff * D_J * sample1.w * sample2.w * (2.0 / 3.0) / max(v1 + v2, 1e-6));
 }
 
 // ------------------------------------------------------------

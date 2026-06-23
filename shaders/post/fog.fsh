@@ -26,6 +26,7 @@
 #include "/lib/tonemap.glsl"
 #include "/lib/buffers/denoise.glsl"
 #include "/lib/sky_color.glsl"
+#include "/lib/lighting/alice.glsl"
 
 in vec2 texCoord;
 
@@ -80,5 +81,6 @@ void main() {
         // // 调试输出: 直接输出各分量的线性组合，验证时域累积效果
         // fragColor.xyz = project_SH_irradiance(tmp.data_swap, diffuseIllumiantionBuffer.data[idx].normal);
         // fragColor.xyz = normalize(abs(tmp.data_swap.shY.xyz));
+        // fragColor.xyz = vec3(alice_estimator_variance(tmp.data_swap.shY, tmp.weight));
     }
 }

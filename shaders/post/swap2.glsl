@@ -8,11 +8,10 @@
 
 uniform sampler2D colortex0;
 
-/* RENDERTARGETS: 3,4,5 */
+/* RENDERTARGETS: 3,4 */
 
 layout(location = 0) out vec4 geometry;
 layout(location = 1) out vec4 light_sample;
-layout(location = 2) out vec4 dual_vector;  // colortex5: (θ, β) 双对偶向量
 
 uniform vec2 resolution;
 
@@ -37,12 +36,4 @@ void main() {
     PackedLightSample outSample = packLightSample(centerPos, centerNormal, outSH, final_weight);
     geometry = outSample.data0;
     light_sample = outSample.data1;
-
-    // 计算并输出双对偶向量 (θ, β) → colortex5，供 300.glsl Jeffreys 散度使用
-    if (outSH.shY.w < 1e-10) {
-        // 零能量退化 → 对偶向量为 0 (将在 300.glsl 中被散度保护拒绝)
-        dual_vector = vec4(0.0, 0.0, 0.0, 0.0);
-    } else {
-        dual_vector = packDualVectorFromEncoded(outSH.shY);
-    }
 }

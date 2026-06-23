@@ -182,7 +182,7 @@ void MixDiffuse() {
     float s = float(info_distance > -0.5) * pos_weight * normal_weight;
 
     // 历史权重受重投影置信度调制
-    float prevW = data.prev_weight * pow(s, 0.125);
+    float prevW = data.prev_weight * s;
 
     // ---- 情况 2a: 历史数据不足 — 直接使用当前帧 ----------------------------
     if (prevW < 1e-2) {
