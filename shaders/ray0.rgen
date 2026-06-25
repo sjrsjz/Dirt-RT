@@ -683,10 +683,10 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
         case Diffussion:
         L_indirect = clamp(L_indirect, 0.0, 250.0 / avgExposure);
 
-        // 间接光：使用解耦后的辐照度与 stochastically-guided 的方向编码 SH
-        SH indSH = irradiance_to_SH(L_indirect, first_rd_o);
+        // 间接光
+        SH indSH = irradiance_to_SH(L_indirect / (first_albedo2 + 1e-3), first_rd_o);
 
-        // 直接光：保持原样（已解耦 albedo）
+        // 直接光
         SH dirSH = irradiance_to_SH(L_direct_0 / (first_albedo2 + 1e-3), -lightDir);
 
         indSH.CoCg += dirSH.CoCg;

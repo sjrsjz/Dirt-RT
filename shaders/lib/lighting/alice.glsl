@@ -85,7 +85,7 @@ float alice_kappa(float len_v, float omega) {
 float alice_variance(vec4 encoded) {
     float v2 = dot(encoded.xyz, encoded.xyz);
     float omega2 = encoded.w * encoded.w;
-    float variance = (2.0 * omega2 + encoded.w * sqrt(4.0 * omega2 - 3.0 * v2)) / 3.0 - 0.5 * v2;
+    float variance = (2.0 * omega2 + encoded.w * sqrt(max(4.0 * omega2 - 3.0 * v2, 0.0))) / 3.0 - 0.5 * v2;
     return max(0.0, variance);
 }
 

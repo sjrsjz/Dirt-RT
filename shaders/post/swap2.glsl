@@ -15,6 +15,13 @@ layout(location = 1) out vec4 light_sample;
 
 uniform vec2 resolution;
 
+PackedLightSample packLightSample(vec3 pos, vec3 normal, SH sh, float weight, float variance) {
+    PackedLightSample sample_data;
+    sample_data.data0 = vec4(pos, encodeNormal(normal));
+    sample_data.data1 = vec4(packSH(sh), pack2Half(weight, variance));
+    return sample_data;
+}
+
 void main() {
     ivec2 pix = ivec2(gl_FragCoord.xy);
     uint idx = getIdx(uvec2(pix));
@@ -31,9 +38,10 @@ void main() {
     if (any(isnan(outSH.shY)))  outSH.shY  = vec4(0);
     if (any(isnan(outSH.CoCg))) outSH.CoCg = vec2(0);
 
-    float final_weight = centerData.weight;
+    float variance = alice_estimator_variance(outSH.shY, centerData.weight);
+    variance = max(variance, outSH.shY.w * outSH.shY.w * 0.00005); // 根据光子能量约束方差最小值
 
-    PackedLightSample outSample = packLightSample(centerPos, centerNormal, outSH, final_weight);
+    PackedLightSample outSample = packLightSample(centerPos, centerNormal, outSH, centerData.weight, variance);
     geometry = outSample.data0;
     light_sample = outSample.data1;
 }

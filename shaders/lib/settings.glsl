@@ -21,7 +21,7 @@
 // Denoiser — SVGF spatial filter (300.glsl)
 #define SVGF_NORMAL_POWER 32.0 // Normal edge-stopping power in à-trous filter. Higher = sharper normal edges. [1 2 4 8 16 32 64 128]
 #define SVGF_PHI_L 0.0325 // Luminance edge-stopping sensitivity (phi_l). Higher = preserves more texture detail. [0.005 0.01 0.02 0.03 0.04 0.05 0.06 0.07 0.08 0.09 0.1 0.125 0.15 0.175 0.2 0.25 0.3 0.4]
-#define SVGF_POSITION_PARAM 0.25 // Depth edge-stopping sensitivity. Higher = sharper depth edges. [0.075 0.125 0.25 0.5 1 2 4 8]
+#define SVGF_POSITION_PARAM 0.0025 // Depth edge-stopping sensitivity. Higher = sharper depth edges. [0.00075 0.00125 0.0025 0.005 0.01 0.02 0.04 0.08]
 
 // ReSTIR — Reservoir spatiotemporal resampling (ray0.rgen)
 #define RESTIR_SPATIAL_SAMPLES 3 // Number of neighbor pixels for spatial reuse. Higher = better convergence but slower. [1 2 3 4 5 6]

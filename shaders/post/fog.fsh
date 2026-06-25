@@ -82,5 +82,6 @@ void main() {
         // fragColor.xyz = project_SH_irradiance(tmp.data_swap, diffuseIllumiantionBuffer.data[idx].normal);
         // fragColor.xyz = normalize(abs(tmp.data_swap.shY.xyz));
         // fragColor.xyz = vec3(alice_estimator_variance(tmp.data_swap.shY, tmp.weight));
+        // fragColor.xyz = vec3(tmp.weight);
     }
 }
