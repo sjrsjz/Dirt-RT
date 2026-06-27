@@ -30,13 +30,16 @@ layout(local_size_x = 16, local_size_y = 16) in;
 
 uniform sampler2D colortex3;  // 几何信息
 uniform sampler2D colortex4;  // 光照信息
+uniform sampler2D colortex5;  // 滤波后的 SH 数据 (Y)
 
-void unpackLightSample(ivec2 coord, out vec3 pos, out vec3 normal, out SH sh) {
+void unpackLightSample(ivec2 coord, out vec3 pos, out vec3 normal, out SH sh, out SH blur_sh) {
     vec4 sample_data0 = texelFetch(colortex3, coord, 0); // 几何信息
     vec4 sample_data1 = texelFetch(colortex4, coord, 0); // 光照样本信息
+    vec4 sample_data2 = texelFetch(colortex5, coord, 0); // 滤波后的 SH 数据 (Y)
     pos = sample_data0.xyz;
     normal = decodeNormal(sample_data0.w);
     sh = unpackSH(sample_data1.x, sample_data1.y, sample_data1.z);
+    blur_sh = unpackSH(sample_data2.x, sample_data2.y, sample_data2.z);
 }
 
 uniform vec2 resolution;
@@ -55,10 +58,14 @@ void main() {
     tmp.prev_weight   = tmp.weight;
     tmp.prev_variance = tmp.variance;
 
-    // ---- 双缓冲 flip: 当前帧 → 历史帧 -----------------------------------
+    // // ---- 双缓冲 flip: 当前帧 → 历史帧 -----------------------------------
     tmp.data = tmp.data_swap;
-
+    SH blur_sh;
     // ---- 从滤波后的 colortex 读取新数据 ----------------------------------
-    unpackLightSample(pix, tmp.pos, tmp.normal, tmp.data_swap);
+    unpackLightSample(pix, tmp.pos, tmp.normal, tmp.data_swap, blur_sh);
+
+    // 在低权重的时候传播滤波结果
+    // 这受到 NRD 的启发，实际上移除后对降噪质量不产生明显影响
+    tmp.data = mix_SH(tmp.data, blur_sh, 1.0 / max(tmp.weight, 1.0));
     WriteDiffuse(tmp, pix);
 }

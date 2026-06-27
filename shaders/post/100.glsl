@@ -67,7 +67,6 @@ uniform int worldTime;
 #endif
 
 // 重投影置信度幂。
-// 你原代码使用 pow(s, 0.25)，这里保留。
 #ifndef TEMPORAL_CONFIDENCE_POWER
 #define TEMPORAL_CONFIDENCE_POWER 0.25
 #endif

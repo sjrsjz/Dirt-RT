@@ -62,8 +62,9 @@ uniform sampler2D colortex4;
 // 输出声明
 // ---------------------------------------------------------------------------
 
-/* RENDERTARGETS: 4 */
+/* RENDERTARGETS: 4,5 */
 layout(location = 0) out mediump vec4 out_light_sample; // 压缩光照样本输出（ALICE + 方差 + 权重）
+layout(location = 1) out mediump vec4 out_light_sample_blurred; // 压缩光照样本输出（ALICE + 方差 + 权重）
 
 // ---------------------------------------------------------------------------
 // 可调参数
@@ -76,13 +77,13 @@ layout(location = 0) out mediump vec4 out_light_sample; // 压缩光照样本输
 // 辅助函数
 // ---------------------------------------------------------------------------
 
-void unpackLightSample(ivec2 coord, out vec3 pos, out vec3 normal, out SH sh, out float weight, out float variance) {
+void unpackLightSample(ivec2 coord, out vec3 pos, out vec3 normal, out SH sh, out float variance) {
     vec4 sample_data0 = texelFetch(colortex3, coord, 0); // 几何信息
     vec4 sample_data1 = texelFetch(colortex4, coord, 0); // 光照样本信息
     pos = sample_data0.xyz;
     normal = decodeNormal(sample_data0.w);
     sh = unpackSH(sample_data1.x, sample_data1.y, sample_data1.z);
-    unpack2Half(sample_data1.w, weight, variance);
+    variance = sample_data1.w;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,9 +107,8 @@ void main() {
 
     vec3 center_pos, center_normal;
     SH center_sh;
-    float center_weight;
     float center_var_est;
-    unpackLightSample(pix, center_pos, center_normal, center_sh, center_weight, center_var_est);
+    unpackLightSample(pix, center_pos, center_normal, center_sh, center_var_est);
 
     // 像素的世界空间 footprint，用于距离无关的深度边缘停止
     float dist_to_cam = max(length(center_pos - camPos), 0.001);
@@ -151,9 +151,8 @@ void main() {
             // 贴图空间权重
             float w_kernel = hw[abs(i)] * hw[abs(j)];
 
-            float sample_weight;
             float sample_var_est;
-            unpackLightSample(sample_coord, sample_world_pos, sample_normal, sample_sh, sample_weight, sample_var_est);
+            unpackLightSample(sample_coord, sample_world_pos, sample_normal, sample_sh, sample_var_est);
 
             // ---- 深度权重 -------------------------------------------------
             // 采样点到中心平面的垂直距离，归一化到屏幕空间
@@ -163,15 +162,17 @@ void main() {
             // ---- 几何权重 -------------------------------------------------
             float w_geometry = SVGF_NORMAL_POWER * (1.0 - dot(center_normal, sample_normal)) + depthTerm;
 
+            // 在未使用方差预滤波的情况下，只有同时考虑到 simple_var_est 和 center_var_est 才能得到合理的亮度权重，使得降噪器不崩溃
+            // 但是在使用了方差预滤波后，simple_var_est 的修正作用已经减弱，并且会带来极其严重的频闪副作用，因此这里直接使用 center_var_est 作为亮度权重的方差估计值
+            // float sigma2 = max(center_var_est + simple_var_est, 1e-8);
 
-            float sigma2 = max(center_var_est + sample_var_est, 1e-8);
-            float delta_energy = length(center_sh.shY - sample_sh.shY);
+            // 方差预滤波使得下面的 sigma2 不再会导致降噪器彻底崩溃
+            float sigma2 = max(center_var_est , 1e-8);
+            float delta_energy = length(center_sh.shY.xyz - sample_sh.shY.xyz);
             float w_luma = SVGF_PHI_L * delta_energy * inversesqrt(sigma2);
-
-            float w1 = clamp(sample_weight / (center_weight + 1e-10), 0.0, 1.0); // 避免除零
-
+            
             // ---- 组合权重 -------------------------------------------------
-            float w0 = w_kernel * (1 + w_luma) * exp(-w_geometry - w_luma) * w1;
+            float w0 = w_kernel * (1 + w_luma) * exp(-w_geometry - w_luma);
 
             // ---- 累积加权样本 ---------------------------------------------
             accumulate_SH(accumulatedSH, sample_sh, w0);
@@ -187,9 +188,10 @@ void main() {
     // ---- 归一化并输出 ----------------------------------------------------
     accumulatedSH = scaleSH(accumulatedSH, inv_sumWeight);
     float varEnergyOut = sumVarEnergy * inv_sumWeight * inv_sumWeight;
-    float intrinsicOut = alice_variance(accumulatedSH.shY);
-    float filtered_weight;
-    filtered_weight = intrinsicOut / varEnergyOut;
-    varEnergyOut = max(varEnergyOut, accumulatedSH.shY.w * accumulatedSH.shY.w * 0.00005); // 根据光子能量约束方差最小值
-    out_light_sample = vec4(packSH(accumulatedSH), pack2Half(center_weight, varEnergyOut));
+    out_light_sample = vec4(packSH(accumulatedSH), varEnergyOut);
+
+    #if STEP == 6
+    // --- 输出模糊后的结果（仅在最后一步） ------------------------------------
+    out_light_sample_blurred = vec4(packSH(accumulatedSH), 0.0);
+    #endif
 }
