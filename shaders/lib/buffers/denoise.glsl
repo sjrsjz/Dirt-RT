@@ -115,17 +115,18 @@ SH irradiance_to_SH(vec3 color, vec3 dir)
 // 返回余弦加权漫反射辐照度 RGB
 vec3 project_SH_irradiance(SH sh, vec3 N)
 {
-    // 1. 使用 ALICE 最大熵分布计算半球余弦投影辐照度 (标量)
+    float total_omega = sh.shY.w;
+    
     float irradiance = alice_irradiance(sh.shY, N);
 
-    // 2. YCoCg → RGB (辐照度作为重建亮度，色度保持线性不变)
-    float Co = sh.CoCg.x;
-    float Cg = sh.CoCg.y;
+    float attenuation = (total_omega > 1e-10) ? (irradiance / total_omega) : 0.0;
+
+    float Co = sh.CoCg.x * attenuation;
+    float Cg = sh.CoCg.y * attenuation;
 
     float B = irradiance - 1.1404 * Co - 1.4304 * Cg;
     float R = B + 2.0 * Co;
     float G = irradiance - 0.1404 * Co + 0.5696 * Cg;
-
     return max(vec3(R, G, B), vec3(0.0));
 }
 

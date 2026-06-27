@@ -3,9 +3,8 @@
 #include "/lib/settings.glsl"
 const float PI = 3.141592654;
 const float SunDivMoon = 1000;
-const float EPSILON_MIN = 0.0001;
 const int MaxRay = RAY_BOUNCES;
-const float march_s = 1;
+const float FIREFLY_SUPPRESSION_MULTIPLIER = 50.0;
 const int Reflection = 1;
 const int Diffussion = 2;
 const int Refraction = 3;
