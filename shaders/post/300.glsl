@@ -162,9 +162,9 @@ void main() {
             // ---- 几何权重 -------------------------------------------------
             float w_geometry = SVGF_NORMAL_POWER * (1.0 - dot(center_normal, sample_normal)) + depthTerm;
 
-            // 在未使用方差预滤波的情况下，只有同时考虑到 simple_var_est 和 center_var_est 才能得到合理的亮度权重，使得降噪器不崩溃
-            // 但是在使用了方差预滤波后，simple_var_est 的修正作用已经减弱，并且会带来极其严重的频闪副作用，因此这里直接使用 center_var_est 作为亮度权重的方差估计值
-            // float sigma2 = max(center_var_est + simple_var_est, 1e-8);
+            // 在未使用方差预滤波的情况下，只有同时考虑到 sample_var_est 和 center_var_est 才能得到合理的亮度权重，使得降噪器不崩溃
+            // 但是在使用了方差预滤波后，sample_var_est 的修正作用已经减弱，并且会带来极其严重的频闪副作用，因此这里直接使用 center_var_est 作为亮度权重的方差估计值
+            // float sigma2 = max(center_var_est + sample_var_est, 1e-8);
 
             // 方差预滤波使得下面的 sigma2 不再会导致降噪器彻底崩溃
             float sigma2 = max(center_var_est , 1e-8);

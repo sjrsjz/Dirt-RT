@@ -165,7 +165,7 @@ vec4 sampleGodRay(vec3 b_Sun, vec3 b_Moon, vec3 ro, vec3 rd, float far, vec3 lig
     vec3 samplePos = ro + s * rd;
     float t = 1;
     if (sampleX > far) {
-        c = 0 * float(!hitFace) * getSkyColor(b_Sun, b_Moon, samplePos, rd, -lightDir);
+        c = float(!hitFace) * getSkyColor(b_Sun, b_Moon, samplePos, rd, -lightDir);
     } else {
         vec3 rd1, ro1;
         t = raycast(samplePos, -sampleDir, ro1, rd1, inside, i16vec2(1001, 0));
@@ -266,12 +266,12 @@ float AliceGuidingPdf(vec3 wi, vec3 axis, float kappa)
     float d = 1.0 - kappa * dot(axis, wi);
     float norm = 3.0 * pow(max(0.0, 1.0 - k2), 3.0)
                / (4.0 * PI * (3.0 + k2));
-    return norm / max(1e-8, d * d * d * d);
+    return norm / max(1e-6, d * d * d * d);
 }
 
 vec3 SampleAliceGuiding(vec3 axis, float kappa, vec2 xi)
 {
-    vec3 T = normalize(cross(abs(axis.y) < 0.999 ? vec3(0,1,0) : vec3(1,0,0), axis));
+    vec3 T = normalize(cross(abs(axis.y) < 0.99999 ? vec3(0,1,0) : vec3(1,0,0), axis));
     vec3 B = cross(axis, T);
 
     float mu;
@@ -473,61 +473,26 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
 
                     vec3 x = data0.data_swap.shY.xyz;
                     float omega = data0.data_swap.shY.w;
-                    float lenX = length(x) + 1e-10;
 
-                    bool validAlice =
-                        all(isnan(x)) &&
-                        isnan(omega) &&
-                        omega > max(1e-5, 1e-4 / max(avgExposure, 1e-4)) &&
-                        lenX > 1e-6 &&
-                        lenX <= omega * 1.002;
-
-                    if (true) {
-                        axis = x / lenX;
-
-                        float rho = clamp(lenX / omega, 0.0, 0.975);
-                        float sqrtTerm = sqrt(max(0.0, 16.0 - 12.0 * rho * rho));
-                        kappa = (6.0 * rho) / max(4.0 + sqrtTerm, 1e-6);
-
-                        float NoA = dot(axis, macroNormal);
-                        float anisotropy = smoothstep(0.08, 0.55, rho);
-                        float alignment = smoothstep(0.0, 0.45, NoA);
-                        float energyConf = smoothstep(
-                            max(1e-5, 1e-4 / max(avgExposure, 1e-4)),
-                            max(1e-4, 2e-3 / max(avgExposure, 1e-4)),
-                            omega
-                        );
-
-                        guideProb = 0.95 * anisotropy * alignment * energyConf;
-                    }
+                    float length_x = max(length(x), 1e-20);
+                    omega = max(omega, length_x);
+                    axis = x / length_x;
+                    float rho = clamp(length_x / omega, 0.0, 1.0);
+                    kappa = alice_kappa(length_x, omega);
+                    // 判定 length_x 是否过小，过小则不使用引导采样，这是因为极小值会导致 axis 方向不稳定甚至崩溃，造成后续的采样方向出现 NaN。
+                    guideProb = length_x > 1e-8 ? 0.9 * rho : 0.0;
                 }
-
                 bool useGuide = getRnd() < guideProb;
-
                 if (useGuide) {
                     next_rd = SampleAliceGuiding(axis, kappa, vec2(getRnd(), getRnd()));
-                    if (!all(isnan(next_rd)) || dot(next_rd, macroNormal) <= 0.0) {
-                        next_rd = DiffuseNormal(macroNormal, ro_o);
-                        guideProb = 0.0;
-                    }
                 } else {
                     next_rd = DiffuseNormal(macroNormal, ro_o);
                 }
-
                 float NoL = max(0.0, dot(macroNormal, next_rd));
                 float pdfCos = NoL / PI;
-
-                float pdfMix = pdfCos;
-                if (guideProb > 0.0) {
-                    float pdfAlice = AliceGuidingPdf(next_rd, axis, kappa);
-                    if (isnan(pdfAlice) && pdfAlice > 0.0) {
-                        pdfMix = (1.0 - guideProb) * pdfCos + guideProb * pdfAlice;
-                    } else {
-                        pdfMix = pdfCos;
-                    }
-                }
-
-                guideWeight = pdfCos / max(pdfMix, 1e-8);
+                float pdfAlice = guideProb > 0.0 ? AliceGuidingPdf(next_rd, axis, kappa) : 0.0;
+                float pdfMix = (1.0 - guideProb) * pdfCos + guideProb * pdfAlice;
+                guideWeight = (NoL > 0.0 && pdfMix > 1e-8) ? (pdfCos / pdfMix) : 0.0;
             } else {
                 next_rd = DiffuseNormal(macroNormal, ro_o);
             }
