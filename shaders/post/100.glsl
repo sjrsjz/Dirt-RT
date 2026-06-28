@@ -3,19 +3,17 @@
 // ===========================================================================
 // Pass 100: 漫反射时域累积 (Diffuse Temporal Accumulation)
 // ===========================================================================
-// 管线位置: 在光线追踪生成当前帧 GI 样本后，与上一帧历史混合
 //
-// 算法:
-//   1. 重投影 (Reprojection): 利用 camera 运动矩阵，将当前像素的世界空间
-//      位置反投影到上一帧的屏幕坐标
-//   2. 可见性验证: 检查重投影坐标是否在屏幕范围内、几何体是否有效
-//   3. 历史混合: 使用指数移动平均 (EMA) 将当前 SH 光照与历史混合，
-//      混合权重由位置/法线一致性决定
-//   4. 方差估计: 使用 Welford 在线算法维护时域方差，供后续 SVGF 使用
+// 本版本引入 ALICE 时域标量方差：
+//   variance = tr(Cov(X))
 //
-// 输出:
-//   - diffuseIllumiantionData (通过 WriteDiffuse): 更新后的 SH + 方差 + 权重
-//   - extInfoBuffer:                  (weight, variance) 供 110.glsl 使用
+// 约定:
+//   extInfoBuffer.x = temporal effective weight / N_eff
+//   extInfoBuffer.y = temporal raw trace variance = tr(Cov(X))
+//   estimator variance = extInfoBuffer.y / max(extInfoBuffer.x, 1.0)
+//
+// 注意:
+//   这里维护的是 raw variance，不是已经除以 N 的 estimator variance。
 // ===========================================================================
 
 #define DIFFUSE_BUFFER_MIN
@@ -24,6 +22,8 @@
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/denoise.glsl"
+
+#include "/lib/lighting/alice.glsl"
 
 // ---------------------------------------------------------------------------
 // Uniform 输入
@@ -51,214 +51,425 @@ uniform int worldTime;
 // 可调参数
 // ---------------------------------------------------------------------------
 
-// 法线相似度权重指数 — 值越大，法线差异导致的拒绝越严格
-const float NORMAL_PARAM = 8.0;
+#define NORMAL_PARAM TEMPORAL_NORMAL_PARAM
+#define POSITION_PARAM TEMPORAL_POSITION_PARAM
 
-// 位置/深度差异的敏感度 — 控制对几何不连续性的响应
-const float POSITION_PARAM = 64.0;
+// 历史最大有效样本数。
+#ifndef TEMPORAL_MAX_HISTORY
+#define TEMPORAL_MAX_HISTORY 1000.0
+#endif
 
-// 亮度相关参数 (本 pass 中未直接使用，保留供后续调参)
-const float LUMINANCE_PARAM = 4.0;
+// 当前帧 ALICE intrinsic variance 注入比例。
+// 1.0 = 完全使用 ALICE 理论 tr(Cov(X))
+// 0.0 = 当前帧视为一个裸观测样本，只由跨帧 Welford 估计经验方差
+#ifndef TEMPORAL_CURRENT_INTRINSIC_VAR_SCALE
+#define TEMPORAL_CURRENT_INTRINSIC_VAR_SCALE 1.0
+#endif
 
-// ---------------------------------------------------------------------------
-// SVGF 风格的边缘停止权重函数
-// ---------------------------------------------------------------------------
+// 重投影置信度幂。
+#ifndef TEMPORAL_CONFIDENCE_POWER
+#define TEMPORAL_CONFIDENCE_POWER 0.25
+#endif
 
-// 法线权重: 基于法线夹角余弦，距离越远容忍度越低 (近处严格，远处宽松)
-float svgfNormalWeight(vec3 centerNormal, vec3 normal, float distance) {
-    return pow(max(dot(centerNormal, normal), 0.0),
-               NORMAL_PARAM * (0.25 + 4.0 * exp(-0.25 * distance)));
-}
-
-// 位置权重: 检查采样点偏离中心平面的程度，按距离归一化
-float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float distance) {
-    return exp(-pow(POSITION_PARAM * abs(dot(pixelPos - centerPos, normal) / sqrt(distance)), 4.0));
-}
-
-// ---------------------------------------------------------------------------
-// 重投影 (Reprojection) 函数
-// ---------------------------------------------------------------------------
-
-// 从屏幕空间坐标重投影到上一帧 (使用完整的逆投影 + 模型变换链)
-vec3 reproject(vec3 screenPos) {
-    vec4 tmp = gbufferProjectionInverse * vec4(screenPos * 2.0 - 1.0, 1.0);
-    vec3 viewPos = tmp.xyz / tmp.w;
-    vec3 playerPos = (gbufferModelViewInverse * vec4(viewPos, 1.0)).xyz;
-    vec3 worldPos = playerPos + cameraPosition;
-    vec3 prevPlayerPos = worldPos - previousCameraPosition;
-    vec3 prevViewPos = (gbufferPreviousModelView * vec4(prevPlayerPos, 1.0)).xyz;
-    vec4 prevClipPos = gbufferPreviousProjection * vec4(prevViewPos, 1.0);
-    return prevClipPos.xyz / prevClipPos.w * 0.5 + 0.5;
-}
-
-// 从世界空间位置直接重投影到上一帧屏幕坐标 (简化路径)
-vec3 reproject2(vec3 worldPos) {
-    vec3 prevPlayerPos = worldPos - previousCameraPosition;
-    vec3 prevViewPos = (gbufferPreviousModelView * vec4(prevPlayerPos, 1.0)).xyz;
-    vec4 prevClipPos = gbufferPreviousProjection * vec4(prevViewPos, 1.0);
-    return prevClipPos.xyz / prevClipPos.w * 0.5 + 0.5;
-}
+// 历史有效权重低于该值时重置
+#ifndef TEMPORAL_HISTORY_MIN_WEIGHT
+#define TEMPORAL_HISTORY_MIN_WEIGHT 1e-4
+#endif
 
 // ---------------------------------------------------------------------------
-// 全局变量 (用于在不同函数间传递状态)
+// 输出
 // ---------------------------------------------------------------------------
-
-vec3 prevScreenPos;          // 重投影后的上一帧屏幕坐标
-float info_distance;         // 当前像素的光线追踪距离
-uint idx_l;                  // 重投影像素的去噪缓冲区索引
-vec2 texSize;                // 纹理尺寸
-uint idx;                    // 当前像素的去噪缓冲区索引
-
-in vec2 texCoord;
-
-bool notInRange(vec2 p) {
-    return clamp(p, vec2(0), vec2(1)) != p;
-}
-
-diffuseIllumiantionBufferData current_data;  // 当前帧数据 (来自光线追踪)
-diffuseIllumiantionData out_data;            // 输出数据
-
-// // ===========================================================================
-// // 无偏加权 Welford 在线方差更新 (West 1979)
-// // ===========================================================================
-// // 与原始 SVGF 的矩估计不同，这里使用单通道标量 (亮度 Y) 的加权方差
-// //
-// // 参数:
-// //   old_mean    : 历史加权均值 (亮度)
-// //   old_var     : 历史加权方差
-// //   new_val     : 当前帧亮度值
-// //   old_weight  : 历史累积权重
-// //   new_weight  : 当前帧权重 (通常 = 1.0)
-// //
-// // 返回: 更新后的方差
-// float updateVariance(float old_mean, float old_var, float new_val,
-//                      float old_weight, float new_weight) {
-//     float total = old_weight + new_weight;
-//     float delta = new_val - old_mean;
-//     float new_mean = old_mean + delta * new_weight / total;
-//     float new_var = (old_weight * old_var + new_weight * delta * (new_val - new_mean)) / total;
-//     return max(new_var, 0.0);
-// }
-
-
-// Welford 在线方差更新 — 单遍扫描计算邻域 SH 的加权方差
-// 参数:
-//   M_n     : 当前加权和 (avg_SH)
-//   D_n     : 当前方差
-//   X       : 新样本
-//   h_w     : 历史权重总和
-//   w       : 新样本的权重
-// 返回:      更新后的方差 D_{n+1}
-float updateVariance(vec4 M_n, float D_n, vec4 X, float h_w, float w) {
-    vec4 diff = X - M_n / h_w; // 新样本与当前均值的差
-    float t = 1.0 / (h_w + w);
-    return (D_n * h_w + dot(diff, diff) * w * t) * t;
-}
-
-float output_weight = 0.0;
-float output_variance = 0.0;
-
-// ===========================================================================
-// 时域累积核心逻辑
-// ===========================================================================
-void MixDiffuse() {
-    // ---- 情况 1: 重投影失败 (屏幕外 / 新增像素) ---------------------------
-    // 直接用当前帧数据初始化，方差设为 1.0 (最不确定状态)
-    if (notInRange(prevScreenPos.xy)) {
-        output_variance = 1.0;
-        output_weight = 1.0;
-        out_data.data_swap = current_data.data_swap;
-        return;
-    }
-
-    // ---- 情况 2: 正常重投影 — 采样历史数据 --------------------------------
-    vec2 prev_screen = prevScreenPos.xy * textureSize(colortex0, 0);
-    diffuseIllumiantionData data = sampleDiffuse(prev_screen);
-
-    // 计算重投影置信度: 位置一致性 × 法线一致性 × 几何有效性
-    float pos_weight = svgfPositionWeight(data.pos, current_data.pos,
-                                          current_data.normal, info_distance);
-    float normal_weight = pow(max(dot(data.normal, current_data.normal), 0.0),
-                              NORMAL_PARAM);
-
-    float s = float(info_distance > -0.5) * pos_weight * normal_weight;
-
-    // 历史权重受重投影置信度调制
-    float prevW = data.prev_weight * s;
-
-    // ---- 情况 2a: 历史数据不足 — 直接使用当前帧 ----------------------------
-    if (prevW < 1e-2) {
-        output_variance = max(current_data.data_swap.shY.w * 0.5, 0.5);
-        output_weight = 1.0;
-        out_data.data_swap = current_data.data_swap;
-    }
-    // ---- 情况 2b: 正常混合 — EMA 融合当前与历史 ---------------------------
-    else {
-        const float max_history = 1000.0;
-        float old_total = prevW;
-        float new_total = clamp(prevW + 1.0, 1.0, max_history);
-
-        // 光照混合: 新帧权重 = 1/new_total, 历史 = old_total/new_total
-        out_data.data_swap = mix_SH(data.data, current_data.data_swap,
-                                    1.0 / new_total);
-
-        // 方差更新: 基于亮度通道的 Welford 递推
-        output_variance = updateVariance(
-            data.data.shY,          // 历史亮度均值
-            data.prev_variance,       // 历史方差
-            current_data.data_swap.shY, // 当前亮度样本
-            old_total,                // 旧总权重
-            1.0                        // 当前帧权重 (=1)
-        );
-
-        output_weight = new_total;
-    }
-}
 
 /* RENDERTARGETS: 5 */
 layout(location = 0) out vec4 output_data;
 
 layout(rgba32f) uniform image2D extInfoBuffer;
 
+// ---------------------------------------------------------------------------
+// 全局变量
+// ---------------------------------------------------------------------------
+
+vec3 prevScreenPos;
+float info_distance;
+uint idx;
+
+in vec2 texCoord;
+
+diffuseIllumiantionBufferData current_data;
+diffuseIllumiantionData out_data;
+
+float output_weight = 0.0;
+float output_variance = 0.0;
+
+// ===========================================================================
+// 工具函数
+// ===========================================================================
+
+bool notInRange(vec2 p) {
+    return clamp(p, vec2(0.0), vec2(1.0)) != p;
+}
+
+bool notInRange3(vec3 p) {
+    return
+        p.x < 0.0 || p.x > 1.0 ||
+        p.y < 0.0 || p.y > 1.0 ||
+        p.z < 0.0 || p.z > 1.0;
+}
+
+float sanitizeFloatNonNegative(float x) {
+    // NaN 情况下 x >= 0.0 为 false
+    if (!(x >= 0.0)) return 0.0;
+    if (x > 1e20) return 0.0;
+    return x;
+}
+
+float sanitizeWeight(float w) {
+    w = sanitizeFloatNonNegative(w);
+    return min(w, TEMPORAL_MAX_HISTORY);
+}
+
+// ---------------------------------------------------------------------------
+// SVGF 风格的边缘停止权重函数
+// ---------------------------------------------------------------------------
+
+float svgfNormalWeight(vec3 centerNormal, vec3 normal, float distance) {
+    return pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM);
+}
+
+float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float distance) {
+    return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)));
+}
+
+// ---------------------------------------------------------------------------
+// 重投影
+// ---------------------------------------------------------------------------
+
+vec3 reproject(vec3 screenPos) {
+    vec4 tmp = gbufferProjectionInverse * vec4(screenPos * 2.0 - 1.0, 1.0);
+    vec3 viewPos = tmp.xyz / tmp.w;
+    vec3 playerPos = (gbufferModelViewInverse * vec4(viewPos, 1.0)).xyz;
+    vec3 worldPos = playerPos + cameraPosition;
+
+    vec3 prevPlayerPos = worldPos - previousCameraPosition;
+    vec3 prevViewPos = (gbufferPreviousModelView * vec4(prevPlayerPos, 1.0)).xyz;
+    vec4 prevClipPos = gbufferPreviousProjection * vec4(prevViewPos, 1.0);
+
+    return prevClipPos.xyz / prevClipPos.w * 0.5 + 0.5;
+}
+
+vec3 reproject2(vec3 worldPos) {
+    vec3 prevPlayerPos = worldPos - previousCameraPosition;
+    vec3 prevViewPos = (gbufferPreviousModelView * vec4(prevPlayerPos, 1.0)).xyz;
+    vec4 prevClipPos = gbufferPreviousProjection * vec4(prevViewPos, 1.0);
+
+    return prevClipPos.xyz / prevClipPos.w * 0.5 + 0.5;
+}
+
+// ---------------------------------------------------------------------------
+// ALICE 安全方差
+//
+// alice_variance(encoded) 理论要求 encoded.w >= length(encoded.xyz)。
+// 压缩、滤波、半精度写回后可能出现 omega < |v|，这里做锥投影保护。
+// ---------------------------------------------------------------------------
+
+vec4 alice_project_cone_safe(vec4 encoded) {
+    float lenV = length(encoded.xyz);
+    encoded.w = max(encoded.w, lenV);
+    return encoded;
+}
+
+float alice_trace_cov_x_safe(vec4 encoded) {
+    encoded = alice_project_cone_safe(encoded);
+
+    if (encoded.w < 1e-8) {
+        return 0.0;
+    }
+
+    return sanitizeFloatNonNegative(alice_variance(encoded));
+}
+
+// ===========================================================================
+// Vector Trace Welford / Chan Merge
+// ===========================================================================
+//
+// 维护对象:
+//   X ∈ R^3
+//   mean = E[X] = v
+//   rawTraceVar = tr(Cov(X))
+//   weight = effective sample count
+//
+// 历史:
+//   histMeanV
+//   histRawTraceVar
+//   histWeight
+//
+// 当前 batch:
+//   curMeanV
+//   curRawTraceVar
+//   curWeight
+//
+// 合并公式:
+//   delta = curMeanV - histMeanV
+//   W = Wh + Wc
+//   mean = histMeanV + delta * Wc / W
+//   M2 = M2h + M2c + |delta|^2 * Wh * Wc / W
+//   rawTraceVar = M2 / W
+//
+// 注意:
+//   rawTraceVar 不是 estimator variance。
+//   estimator variance = rawTraceVar / weight。
+// ===========================================================================
+
+void mergeTraceCovWelford(
+    vec3 histMeanV,
+    float histRawTraceVar,
+    float histWeight,
+
+    vec3 curMeanV,
+    float curRawTraceVar,
+    float curWeight,
+
+    float confidence,
+    float maxHistory,
+
+    out float outWeight,
+    out float outRawTraceVar,
+    out float outCurrentAlpha
+) {
+    histWeight = sanitizeWeight(histWeight);
+    histRawTraceVar = sanitizeFloatNonNegative(histRawTraceVar);
+
+    curWeight = max(sanitizeFloatNonNegative(curWeight), 1e-4);
+    curRawTraceVar = sanitizeFloatNonNegative(curRawTraceVar);
+
+    confidence = clamp(confidence, 0.0, 1.0);
+
+    // 历史有效样本数经过重投影置信度衰减
+    float Wh = histWeight * confidence;
+    float Wc = curWeight;
+
+    // 历史无效，直接重置到当前帧
+    if (Wh <= TEMPORAL_HISTORY_MIN_WEIGHT) {
+        outWeight = min(Wc, maxHistory);
+        outRawTraceVar = curRawTraceVar;
+        outCurrentAlpha = 1.0;
+        return;
+    }
+
+    float W = Wh + Wc;
+    float invW = 1.0 / max(W, 1e-6);
+
+    vec3 delta = curMeanV - histMeanV;
+
+    // 用于混合完整 SH/ALICE 数据
+    outCurrentAlpha = Wc * invW;
+
+    float M2h = histRawTraceVar * Wh;
+    float M2c = curRawTraceVar * Wc;
+
+    float M2 =
+        M2h +
+        M2c +
+        dot(delta, delta) * (Wh * Wc * invW);
+
+    // 限制历史权重，但保持 raw variance 不变
+    if (W > maxHistory) {
+        float scale = maxHistory / W;
+        W = maxHistory;
+        M2 *= scale;
+    }
+
+    outWeight = W;
+    outRawTraceVar = sanitizeFloatNonNegative(M2 / max(W, 1e-6));
+}
+
+// ===========================================================================
+// 时域累积核心逻辑
+// ===========================================================================
+
+void MixDiffuse() {
+    const float max_history = TEMPORAL_MAX_HISTORY;
+
+    // 当前帧 ALICE 状态
+    // 约定：shY.xyz = v, shY.w = omega
+    vec4 curY = alice_project_cone_safe(current_data.data_swap.shY);
+
+    // 当前帧 raw trace variance = tr(Cov(X))
+    float curRawTraceVar =
+        TEMPORAL_CURRENT_INTRINSIC_VAR_SCALE *
+        alice_trace_cov_x_safe(curY);
+
+    // 当前帧作为一个新 batch，默认权重为 1。
+    float curWeight = 1.0;
+
+    // -----------------------------------------------------------------------
+    // 情况 1: 重投影失败
+    // -----------------------------------------------------------------------
+    if (notInRange3(prevScreenPos)) {
+        output_weight = curWeight;
+        output_variance = curRawTraceVar;
+        out_data.data_swap = current_data.data_swap;
+        return;
+    }
+
+    // -----------------------------------------------------------------------
+    // 情况 2: 正常重投影，采样历史
+    // -----------------------------------------------------------------------
+    vec2 prev_screen =
+        prevScreenPos.xy * vec2(textureSize(colortex0, 0));
+
+    diffuseIllumiantionData histData = sampleDiffuse(prev_screen);
+
+    vec4 histY = alice_project_cone_safe(histData.data.shY);
+
+    // 历史权重与历史 raw trace variance
+    float histWeight = sanitizeWeight(histData.prev_weight);
+    float histRawTraceVar = sanitizeFloatNonNegative(histData.prev_variance);
+
+    // -----------------------------------------------------------------------
+    // 重投影置信度
+    // -----------------------------------------------------------------------
+    float pos_weight = svgfPositionWeight(
+        histData.pos,
+        current_data.pos,
+        current_data.normal,
+        info_distance
+    );
+
+    float normal_weight = svgfNormalWeight(
+        histData.normal,
+        current_data.normal,
+        info_distance
+    );
+
+    float confidence =
+        float(info_distance > -0.5) *
+        pos_weight *
+        normal_weight;
+
+    confidence = pow(
+        clamp(confidence, 0.0, 1.0),
+        TEMPORAL_CONFIDENCE_POWER
+    );
+
+    // -----------------------------------------------------------------------
+    // Welford / Chan 合并 raw trace variance
+    // -----------------------------------------------------------------------
+    float outWeightLocal;
+    float outRawTraceVarLocal;
+    float currentAlpha;
+
+    mergeTraceCovWelford(
+        histY.xyz,
+        histRawTraceVar,
+        histWeight,
+
+        curY.xyz,
+        curRawTraceVar,
+        curWeight,
+
+        confidence,
+        max_history,
+
+        outWeightLocal,
+        outRawTraceVarLocal,
+        currentAlpha
+    );
+
+    // -----------------------------------------------------------------------
+    // 混合完整 SH / ALICE 数据
+    //
+    // 注意:
+    //   Welford 统计量只维护 v 的 trace variance。
+    //   但是光照本身仍然在线性嵌入空间中整体混合。
+    // -----------------------------------------------------------------------
+    if (currentAlpha >= 0.9999) {
+        out_data.data_swap = current_data.data_swap;
+    } else {
+        out_data.data_swap = mix_SH(
+            histData.data,
+            current_data.data_swap,
+            currentAlpha
+        );
+    }
+
+    // 输出统计量
+    output_weight = outWeightLocal;
+    output_variance = outRawTraceVarLocal;
+}
+
 // ===========================================================================
 // 主入口
 // ===========================================================================
+
 void main() {
     uvec2 pix = uvec2(gl_FragCoord.xy);
     idx = getIdx(pix);
 
-    // ---- 读取当前像素的几何与光照数据 ------------------------------------
+
+    // -----------------------------------------------------------------------
+    // 读取当前像素几何与光照
+    // -----------------------------------------------------------------------
     info_distance = denoiseBuffer.data[idx].distance;
     current_data = diffuseIllumiantionBuffer.data[idx];
 
-    // 初始化输出为当前帧值 (天空 / 无效几何由后续分支处理)
+    // 默认输出初始化
     out_data.data_swap = current_data.data_swap;
     out_data.data = init_SH();
     out_data.normal = current_data.normal;
     out_data.normal2 = current_data.normal2;
     out_data.pos = current_data.pos;
+
     output_weight = 1.0;
     output_variance = 0.0;
 
-    // ---- 天空 / 无效几何: 直接写出，不做时域累积 -------------------------
+    // -----------------------------------------------------------------------
+    // 天空 / 无效几何
+    //
+    // 建议对天空写 weight = 0，避免未来帧重投影误采到天空历史。
+    // -----------------------------------------------------------------------
     if (info_distance < -0.5) {
+        output_weight = 0.0;
+        output_variance = 0.0;
+
         WriteDiffuse(out_data, ivec2(gl_FragCoord.xy));
-        imageStore(extInfoBuffer, ivec2(gl_FragCoord.xy),
-                   vec4(output_weight, output_variance, 0.0, 0.0));
+
+        imageStore(
+            extInfoBuffer,
+            ivec2(gl_FragCoord.xy),
+            vec4(output_weight, output_variance, 0.0, 0.0)
+        );
+
         return;
     }
 
-    // ---- 重投影到上一帧 --------------------------------------------------
+    // -----------------------------------------------------------------------
+    // 重投影到上一帧
+    // -----------------------------------------------------------------------
     prevScreenPos = reproject2(current_data.pos);
-    idx_l = getIdx(uvec2(prevScreenPos.xy * textureSize(colortex0, 0) + 0.5));
 
-    // ---- 执行时域混合 ----------------------------------------------------
+    // -----------------------------------------------------------------------
+    // 执行时域累积
+    // -----------------------------------------------------------------------
     MixDiffuse();
 
-    // 将 (weight, variance) 存入外部缓冲区，供 110.glsl 读取
-    imageStore(extInfoBuffer, ivec2(gl_FragCoord.xy),
-               vec4(output_weight, output_variance, 0.0, 0.0));
+    // -----------------------------------------------------------------------
+    // 输出时域统计量
+    //
+    // extInfoBuffer.x = N_eff
+    // extInfoBuffer.y = raw trace variance = tr(Cov(X))
+    //
+    // 后续 estimator variance:
+    //   extInfoBuffer.y / max(extInfoBuffer.x, 1.0)
+    // -----------------------------------------------------------------------
+    imageStore(
+        extInfoBuffer,
+        ivec2(gl_FragCoord.xy),
+        vec4(output_weight, output_variance, 0.0, 0.0)
+    );
 
-    // 写出更新后的 diffuse 数据
+    // -----------------------------------------------------------------------
+    // 写出 diffuse 数据
+    // -----------------------------------------------------------------------
     WriteDiffuse(out_data, ivec2(gl_FragCoord.xy));
 }
