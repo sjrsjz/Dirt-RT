@@ -222,44 +222,6 @@ vec3 GetSpecularDominantDirection(vec3 N, vec3 V, float R) {
     vec3 R0 = reflect(V, N);
     return normalize(mix(N, R0, f));
 }
-
-float evaluatePHat(GI_Sample s, vec3 centerPos, vec3 centerNormal, vec3 Cd) {
-    float lum = dot(s.radiance, vec3(0.2126, 0.7152, 0.0722));
-    float albedo_lum = dot(Cd, vec3(0.2126, 0.7152, 0.0722));
-    if (lum < 1e-5) return 0.0;
-
-    float G;
-    if (s.is_sky > 0.5) {
-        // 【立体角测度】天空：方向恒定为 wi，距离无穷远，不计算 cos_s 也不除以 dist2
-        float cos_v = clamp(dot(centerNormal, s.wi), 0.0, 1.0);
-        G = cos_v;
-    } else {
-        // 【面积测度】局部方块：严格的表面间换算
-        vec3 L_to_sample = s.pos - centerPos;
-        float dist2 = max(dot(L_to_sample, L_to_sample), 0.001); // 避免极其贴近时除以0
-        vec3 L_dir = L_to_sample / sqrt(dist2);
-
-        float cos_v = clamp(dot(centerNormal, L_dir), 0.0, 1.0);
-        float cos_s = clamp(dot(s.normal, -L_dir), 0.0, 1.0);
-        G = (cos_v * cos_s) / dist2;
-    }
-
-    return albedo_lum * lum * G;
-}
-
-// --- 安全的可见性验证 (双向法线偏移，彻底解决贴地自交) ---
-bool traceShadowSafe(vec3 p1, vec3 n1, vec3 p2, vec3 n2) {
-    vec3 ro = p1 + n1 * 0.05;
-    vec3 target = p2 + n2 * 0.05;
-    vec3 dir = target - ro;
-    float dist = length(dir);
-    if (dist < 0.1) return true;
-    vec3 rd = dir / dist;
-    vec3 ro_o, rd_o;
-    float t = raycast(ro, rd, ro_o, rd_o, false);
-    return (t < -0.5 || t > dist - 0.15);
-}
-
 float AliceGuidingPdf(vec3 wi, vec3 axis, float kappa)
 {
     float k2 = kappa * kappa;
@@ -328,12 +290,9 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
     float first_n_o = 1.0;
     vec3 first_micro_n = -rd;
     vec2 mixWeight = vec2(0.0);
-    bool hitSmoothSurface = false;
     vec3 first_absorption = vec3(1.0);
     vec3 first_emission_val = vec3(0.0);
     vec3 first_light_surf = vec3(0.0);
-
-    bool suppressFirstDiffuseDirectHitLighting = false;
 
     int depth = 0;
     for (; depth < MaxRay; depth++) {
@@ -354,7 +313,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
                 first_absorption = original_inverse_0 ? vec3(0.0) : vec3(1.0);
             }
 
-            bool skipFirstBounceSky = suppressFirstDiffuseDirectHitLighting && depth == 1;
+            bool skipFirstBounceSky = false;
             if (!skipFirstBounceSky) {
                 vec3 sky = SampleSky(rd_i).xyz;
                 vec3 sky_contrib = throughput * sky * current_absorption;
@@ -393,7 +352,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
 
         vec3 segment_emission = (1.0 - segment_absorption) / (fogA.yzw + 1e-5) * emissionA;
 
-        bool suppressSurfaceLight = (depth == 0) || (suppressFirstDiffuseDirectHitLighting && depth == 1);
+        bool suppressSurfaceLight = (depth == 0);
         vec3 local_emission = (suppressSurfaceLight ? vec3(0.0) : surface.light) + segment_emission;
 
         vec3 bounce_emission = throughput * local_emission;
@@ -550,187 +509,6 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
             float refractWeight = P_refr * (1.0 - F);
             mixWeight = vec2(reflectWeight, refractWeight);
 
-            hitSmoothSurface = (surface.R.x < 0.00125);
-
-            #if useReSTIR
-            // =======================================================================
-            // ReSTIR GI：只替代第一跳 diffuse 后的“直达命中光/天空光”
-            // 后续路径仍继续追踪，但 depth == 1 的 sky/surface.light 会被抑制，避免双算。
-            // =======================================================================
-            if (current_type == Diffussion && P_diff > 1e-6) {
-                suppressFirstDiffuseDirectHitLighting = true;
-
-                Reservoir r = Reservoir(
-                    GI_Sample(vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0), 0.0),
-                    0.0,
-                    0.0,
-                    0.0
-                );
-
-                vec2 prev_coord = reproject(first_p).xy;
-                bool validPrevCoord = all(greaterThanEqual(prev_coord, vec2(0.0))) &&
-                                      all(lessThanEqual(prev_coord, vec2(1.0)));
-
-                // 1. 当前帧初始候选：余弦半球，测度转换为面积/天空方向测度
-                vec3 candidate_rd = DiffuseNormal(first_macro_n, first_p);
-                vec3 ro_1, rd_1;
-                float t_1 = raycast(first_p + first_macro_n * 0.001, candidate_rd, ro_1, rd_1, !inverse_0);
-
-                GI_Sample candidate;
-                candidate.wi = candidate_rd;
-
-                vec3 sample_rad = vec3(0.0);
-
-                if (t_1 > -0.5) {
-                    candidate.pos = ro_1;
-                    candidate.normal = faceforward(tmp_Payload.material.normal, tmp_Payload.material.normal, candidate_rd);
-                    candidate.is_sky = 0.0;
-
-                    material surf_1 = Material_(ro_1, candidate.normal);
-                    sample_rad += surf_1.light;
-                } else {
-                    candidate.pos = first_p + candidate_rd * 10000.0;
-                    candidate.normal = -candidate_rd;
-                    candidate.is_sky = 1.0;
-
-                    sample_rad += SampleSky(candidate_rd).xyz;
-                }
-
-                candidate.radiance = sample_rad;
-
-                float p_hat_init = evaluatePHat(candidate, first_p, first_n, first_albedo2);
-
-                float cos_init = clamp(dot(first_macro_n, candidate_rd), 0.0, 1.0);
-                float pdf_dir_init = cos_init / PI;
-
-                float p_sample_init;
-                if (candidate.is_sky > 0.5) {
-                    p_sample_init = max(pdf_dir_init, 1e-7);
-                } else {
-                    float cos_s_init = clamp(dot(candidate.normal, -candidate_rd), 0.0, 1.0);
-                    float dist2_init = max(dot(candidate.pos - first_p, candidate.pos - first_p), 0.001);
-                    p_sample_init = max(pdf_dir_init * cos_s_init / dist2_init, 1e-7);
-                }
-
-                float init_weight = p_hat_init / p_sample_init;
-                if (init_weight > 0.0) {
-                    updateReservoir(r, candidate, p_hat_init, init_weight, getRnd());
-                }
-                r.M = 1.0;
-
-                // 2. 时域重用
-                if (validPrevCoord) {
-                    Reservoir r_prev = samplePrevReservoirStochastic(prev_coord, resolution_global, getRnd());
-
-                    if (r_prev.M > 0.0 && r_prev.W > 0.0) {
-                        float p_hat_temporal = evaluatePHat(r_prev.samplePoint, first_p, first_n, first_albedo2);
-                        float temp_weight = max(0.0, p_hat_temporal) * r_prev.W * r_prev.M;
-
-                        if (temp_weight > 0.0) {
-                            updateReservoir(r, r_prev.samplePoint, p_hat_temporal, temp_weight, getRnd());
-                        }
-
-                        r.M += r_prev.M;
-                    }
-                }
-
-                float p_hat_temp_final = evaluatePHat(r.samplePoint, first_p, first_n, first_albedo2);
-                r.W = (r.M > 0.0 && p_hat_temp_final > 0.0) ? (r.w_sum / (r.M * p_hat_temp_final)) : 0.0;
-
-                // 3. 空域重用
-                Reservoir spatialR = Reservoir(
-                    GI_Sample(vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0), 0.0),
-                    0.0,
-                    0.0,
-                    0.0
-                );
-
-                float p_hat_self = evaluatePHat(r.samplePoint, first_p, first_n, first_albedo2);
-                float self_weight = max(0.0, p_hat_self) * r.W * r.M;
-
-                if (self_weight > 0.0) {
-                    updateReservoir(spatialR, r.samplePoint, p_hat_self, self_weight, getRnd());
-                }
-
-                float spatial_M_sum = r.M;
-
-                if (validPrevCoord) {
-                    for (int i = 0; i < RESTIR_SPATIAL_SAMPLES; i++) {
-                        vec2 offset = (vec2(getRnd(), getRnd()) * 2.0 - 1.0) * float(RESTIR_SPATIAL_RADIUS);
-                        vec2 neighbor_uv = (prev_coord * resolution_global + offset) / resolution_global;
-
-                        if (all(greaterThanEqual(neighbor_uv, vec2(0.0))) &&
-                            all(lessThanEqual(neighbor_uv, vec2(1.0)))) {
-                            Reservoir r_n = samplePrevReservoirStochastic(neighbor_uv, resolution_global, getRnd());
-
-                            if (r_n.M > 0.0 && r_n.W > 0.0) {
-                                float p_hat_n = evaluatePHat(r_n.samplePoint, first_p, first_n, first_albedo2);
-                                float weight_n = max(0.0, p_hat_n) * r_n.W * r_n.M;
-
-                                if (weight_n > 0.0) {
-                                    updateReservoir(spatialR, r_n.samplePoint, p_hat_n, weight_n, getRnd());
-                                }
-
-                                spatial_M_sum += r_n.M;
-                            }
-                        }
-                    }
-                }
-
-                const float M_cap = RESTIR_M_CAP;
-
-                float old_M = spatial_M_sum;
-                float scale = M_cap / max(old_M, 1e-10);
-                float cond = step(M_cap, old_M);
-
-                spatialR.w_sum = mix(spatialR.w_sum, spatialR.w_sum * scale, cond);
-                spatial_M_sum = min(old_M, M_cap);
-
-                spatialR.M = spatial_M_sum;
-
-                float p_hat_final = evaluatePHat(spatialR.samplePoint, first_p, first_n, first_albedo2);
-                spatialR.W = (spatialR.M > 0.0 && p_hat_final > 0.0)
-                    ? (spatialR.w_sum / (spatialR.M * p_hat_final))
-                    : 0.0;
-
-                curReservoirs.data[idx] = packReservoir(spatialR);
-
-                // 4. 延迟可见性
-                bool is_visible = true;
-                if (p_hat_final > 0.0 && spatialR.samplePoint.is_sky < 0.5) {
-                    is_visible = traceShadowSafe(first_p, first_macro_n, spatialR.samplePoint.pos, spatialR.samplePoint.normal);
-                }
-
-                // 5. 直接重建：必须乘当前 diffuse lobe 的选择补偿 diffLobeWeight
-                if (p_hat_final > 0.0 && spatialR.W > 0.0 && is_visible) {
-                    float G_final;
-                    vec3 L_dir_final;
-
-                    if (spatialR.samplePoint.is_sky > 0.5) {
-                        L_dir_final = spatialR.samplePoint.wi;
-                        G_final = clamp(dot(first_n, L_dir_final), 0.0, 1.0);
-                    } else {
-                        vec3 L_to_sample = spatialR.samplePoint.pos - first_p;
-                        float dist2 = max(dot(L_to_sample, L_to_sample), 0.00001);
-                        L_dir_final = L_to_sample / sqrt(dist2);
-
-                        float cos_v = clamp(dot(first_n, L_dir_final), 0.0, 1.0);
-                        float cos_s = clamp(dot(spatialR.samplePoint.normal, -L_dir_final), 0.0, 1.0);
-
-                        G_final = (cos_v * cos_s) / dist2;
-                    }
-
-                    vec3 restir_contrib = throughput *
-                        spatialR.samplePoint.radiance *
-                        G_final *
-                        spatialR.W *
-                        (diffLobeWeight / PI);
-
-                    L_indirect += restir_contrib;
-                    first_rd_o = spatialR.samplePoint.wi;
-                }
-            }
-            #endif
         }
 
         // --- 7. 更新吞吐量 ---
