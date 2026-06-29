@@ -25,6 +25,10 @@ option.Refractive_Index = Refractive index
 option.ACCUMULATION_LENGTH = Accumulation length
 option.maxWetness = Max wetness
 option.ExposureS = Exposure factor
+
+# Bloom
+option.BLOOM_MIX = Bloom amount
+
 option.Sharp_Volumetric_Light = Sharp volumetric light
 option.Volumetric_Light_Samples = Volumetric light samples
 value.Sharp_Volumetric_Light.1 = Sharp

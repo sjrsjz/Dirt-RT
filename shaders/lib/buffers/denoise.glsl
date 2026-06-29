@@ -308,11 +308,8 @@ void WritePrevDiffuse(diffuseIllumiantionBufferDataW data, ivec2 p) {
 #if defined(DIFFUSE_BUFFER) || defined(DIFFUSE_BUFFER_MIN) || defined(DIFFUSE_BUFFER_MIN2)
 
 layout(rgba32f) uniform image2D diffuseIllumiantionData_shY_swap;
-layout(rgba32f) uniform image2D diffuseIllumiantionData_CoCg_swap;
 uniform sampler2D diffuseIllumiantionData_shY_Sampler;
-uniform sampler2D diffuseIllumiantionData_CoCg_Sampler;
 uniform sampler2D diffuseIllumiantionData_shY_swap_Sampler;
-uniform sampler2D diffuseIllumiantionData_CoCg_swap_Sampler;
 uniform sampler2D diffuseIllumiantionData_lnormal_Sampler;
 uniform sampler2D diffuseIllumiantionData_lpos_Sampler;
 #if !defined(DIFFUSE_BUFFER_MIN) && !defined(DIFFUSE_BUFFER_MIN2)

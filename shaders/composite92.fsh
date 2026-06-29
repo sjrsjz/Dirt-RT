@@ -1,1 +1,0 @@
-#include "/post/bloom_sampler_downscale.fsh"
