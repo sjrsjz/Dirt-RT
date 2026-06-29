@@ -45,31 +45,47 @@ int bloomKernelR(int diff) {
 }
 
 #define BLOOM_SAMPLE(result,img,srcL,dstL,dp,as) do{ \
-    ivec2 _sO=bloomOrigin(srcL,as),_sM=_sO+bloomSize(srcL,as)-1; \
-    int _diff=(dstL)-(srcL);ivec2 _sc;int _R;int _absDiff; \
-    if(_diff>=0){int _S=1<<_diff;_sc=_sO+(dp)*_S;_R=bloomKernelR(_diff);_absDiff=_diff;} \
-    else{int _S=1<<(-_diff);_sc=_sO+(dp)/_S;_R=bloomKernelR(-_diff);_absDiff=-_diff;} \
+    ivec2 _srcSize=bloomSize(srcL,as); \
+    ivec2 _dstSize=bloomSize(dstL,as); \
+    ivec2 _sO=bloomOrigin(srcL,as),_sM=_sO+_srcSize-1; \
+    int _diff=(dstL)-(srcL);int _absDiff=_diff>=0?_diff:-_diff; \
+    int _R=bloomKernelR(_absDiff); \
+    vec2 _dstUV=vec2(dp)/max(vec2(_dstSize)-1.0,vec2(1e-6)); \
+    vec2 _scf=vec2(_sO)+_dstUV*max(vec2(_srcSize)-1.0,vec2(0.0)); \
+    ivec2 _sc=ivec2(floor(_scf));vec2 _frac=_scf-vec2(_sc); \
     float _S_f=float(1<<_absDiff);float _alpha=1.0/(_S_f*_S_f); \
     vec3 _s=vec3(0);float _w=0.; \
     for(int _dy=-_R;_dy<=_R;_dy++)for(int _dx=-_R;_dx<=_R;_dx++){ \
-        float _gw=exp(-float(_dx*_dx+_dy*_dy)*_alpha); \
-        _s+=imageLoad(img,clamp(_sc+ivec2(_dx,_dy),_sO,_sM)).rgb*_gw;_w+=_gw; \
+        vec2 _d=vec2(_dx,_dy)-_frac; \
+        float _gw=exp(-dot(_d,_d)*_alpha); \
+        _w+=_gw; \
+        ivec2 _sc2=_sc+ivec2(_dx,_dy); \
+        if(_sc2.x>=_sO.x&&_sc2.x<=_sM.x&&_sc2.y>=_sO.y&&_sc2.y<=_sM.y) \
+            _s+=imageLoad(img,_sc2).rgb*_gw; \
     } \
     (result)=_s/max(_w,1e-5); \
 }while(false)
 
-#define BLOOM_SAMPLE_TEX(result,tex,srcL,dstL,dp,tsz) do{ \
+#define BLOOM_SAMPLE_TEX(result,tex,srcL,dstL,dp,tsz,as) do{ \
     int _srcEq=(srcL)<0?-1:(srcL); \
-    ivec2 _sO=_srcEq<0?ivec2(0):bloomOrigin(_srcEq,tsz); \
-    ivec2 _sM=_srcEq<0?tsz-1:_sO+bloomSize(_srcEq,tsz)-1; \
-    int _diff=(dstL)-_srcEq;ivec2 _sc;int _R;int _absDiff; \
-    if(_diff>=0){int _S=1<<_diff;_sc=_sO+(dp)*_S;_R=bloomKernelR(_diff);_absDiff=_diff;} \
-    else{int _S=1<<(-_diff);_sc=_sO+(dp)/_S;_R=bloomKernelR(-_diff);_absDiff=-_diff;} \
+    ivec2 _srcSize=_srcEq<0?tsz:bloomSize(_srcEq,as); \
+    ivec2 _dstSize=bloomSize(dstL,as); \
+    ivec2 _sO=_srcEq<0?ivec2(0):bloomOrigin(_srcEq,as); \
+    ivec2 _sM=_sO+_srcSize-1; \
+    int _diff=(dstL)-_srcEq;int _absDiff=_diff>=0?_diff:-_diff; \
+    int _R=bloomKernelR(_absDiff); \
+    vec2 _dstUV=vec2(dp)/max(vec2(_dstSize)-1.0,vec2(1e-6)); \
+    vec2 _scf=vec2(_sO)+_dstUV*max(vec2(_srcSize)-1.0,vec2(0.0)); \
+    ivec2 _sc=ivec2(floor(_scf));vec2 _frac=_scf-vec2(_sc); \
     float _S_f=float(1<<_absDiff);float _alpha=1.0/(_S_f*_S_f); \
     vec3 _s=vec3(0);float _w=0.; \
     for(int _dy=-_R;_dy<=_R;_dy++)for(int _dx=-_R;_dx<=_R;_dx++){ \
-        float _gw=exp(-float(_dx*_dx+_dy*_dy)*_alpha); \
-        _s+=texelFetch(tex,clamp(_sc+ivec2(_dx,_dy),_sO,_sM),0).rgb*_gw;_w+=_gw; \
+        vec2 _d=vec2(_dx,_dy)-_frac; \
+        float _gw=exp(-dot(_d,_d)*_alpha); \
+        _w+=_gw; \
+        ivec2 _sc2=_sc+ivec2(_dx,_dy); \
+        if(_sc2.x>=_sO.x&&_sc2.x<=_sM.x&&_sc2.y>=_sO.y&&_sc2.y<=_sM.y) \
+            _s+=texelFetch(tex,_sc2,0).rgb*_gw; \
     } \
     (result)=_s/max(_w,1e-5); \
 }while(false)

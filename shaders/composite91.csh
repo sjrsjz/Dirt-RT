@@ -9,6 +9,6 @@ void main(){
     ivec2 atlasSize=imageSize(bloomAtlas);
     ivec2 dstSize=bloomSize(0,atlasSize);
     if(localPix.x>=dstSize.x||localPix.y>=dstSize.y)return;
-    vec3 color;BLOOM_SAMPLE_TEX(color,colortex0,-1,0,localPix,textureSize(colortex0,0));
+    vec3 color;BLOOM_SAMPLE_TEX(color,colortex0,-1,0,localPix,textureSize(colortex0,0),atlasSize);
     imageStore(bloomAtlas,localPix,vec4(color,1.0));
 }
