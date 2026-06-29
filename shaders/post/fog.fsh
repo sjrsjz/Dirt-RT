@@ -15,7 +15,7 @@
 //
 // 天空:
 //   - distance < -0.5 → 使用 SampleSky() 计算大气散射颜色
-//   - 同时写入 prevDiffuseIllumiantionBuffer (为下一帧时域累积做准备)
+//   - 时域历史已由 swap3 写入 diffuseHistory SSBO，无需额外写回
 // ===========================================================================
 
 #define DIFFUSE_BUFFER_MIN2
@@ -59,8 +59,9 @@ void main() {
         vec3IllumiantionData tmp3     = fetchRefract(pix);
 
         // 保存当前漫反射数据到历史缓冲区 (供下一帧 100.glsl 使用)
-        prevDiffuseIllumiantionBuffer.data[idx].data_swap = tmp.data_swap;
-        prevDiffuseIllumiantionBuffer.data[idx].weight    = max(tmp.weight, 0.0);
+        // Temporal history now lives in diffuseHistory SSBO (binding 6).
+        // swap3 already wrote the final filtered SH + weight to the swap fields;
+        // ray0.rgen reads from there via samplePrevDiffuse. No additional write needed.
 
         // ---- 最终颜色合成 --------------------------------------------------
         // 公式:
