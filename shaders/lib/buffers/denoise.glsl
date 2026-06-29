@@ -235,31 +235,29 @@ struct diffuseIllumiantionData {
 
 // ===========================================================================
 // Unified diffuse buffer — replaces old binding 2 + binding 6 + 4 custom images.
-// 26 floats = 104 bytes, all float alignment (no std430 vec3 padding waste).
+// 20 floats = 80 bytes, normals oct-encoded into 1 float each and packed with positions.
 //
 // Layout rationale:
 //   - rt_* fields: ray0.rgen writes current frame RT output; 100.glsl reads via loadDiffuseInput
-//   - px/py/pz etc.: current geometry from ray0.rgen
-//   - hist_px/hist_py/hist_pz + hist_nx/hist_ny/hist_nz: history geometry from swap3,
+//   - px/py/pz + oct_n: current geometry + oct-encoded normal packed together
+//   - oct_n2: oct-encoded normal2 (no position to pair with; 1 float vs old 3)
+//   - hist_px/hist_py/hist_pz + hist_oct_n: history geometry from swap3,
 //     read by 100.glsl via fetchDiffuse for reprojection edge-stopping.
-//     MUST be separate from px/py/pz because ray0.rgen overwrites px/py/pz each frame,
-//     which would destroy the history needed for temporal reprojection.
+//     MUST be separate from px/py/pz because ray0.rgen overwrites those each frame.
 // ===========================================================================
 struct UnifiedDiffuseElement {
     // --- RT output (ray0.rgen writes, 100.glsl reads) — half-packed SH: 12B ---
     float rt_shY_xy, rt_shY_zw, rt_CoCg;
-    // --- Current geometry (ray0.rgen writes) — 36B ---
-    float px, py, pz;
-    float nx, ny, nz;
-    float n2x, n2y, n2z;
-    // --- History geometry (swap3 writes, 100.glsl reads via fetchDiffuse) — 24B ---
-    float hist_px, hist_py, hist_pz;
-    float hist_nx, hist_ny, hist_nz;
+    // --- Current geometry: pos.xyz + oct(normal) + oct(normal2) — 20B ---
+    float px, py, pz, oct_n;    // position + oct-encoded current normal
+    float oct_n2;                // oct-encoded normal2
+    // --- History geometry: pos.xyz + oct(normal) — 16B ---
+    float hist_px, hist_py, hist_pz, hist_oct_n;
     // --- Temporal history prev frame (swap3 writes, 100.glsl reads): 16B ---
     float hist_shY_xy, hist_shY_zw, hist_CoCg, hist_w_v;
     // --- Temporal history swap frame (100.glsl/swap3 write, swap2/fog read): 16B ---
     float swap_shY_xy, swap_shY_zw, swap_CoCg, swap_w_v;
-};
+};  // 20 floats = 80 bytes
 
 layout(std430, set = 3, binding = 2) buffer DiffuseBuffer {
     UnifiedDiffuseElement data[];
@@ -285,8 +283,8 @@ diffuseIllumiantionBufferDataW loadDiffuseInput(uint idx) {
     t.data_swap.shY = clamp(vec4(shY_xy, shY_zw), vec4(-10000), vec4(10000));
     t.data_swap.CoCg = unpackHalf2x16(floatBitsToUint(e.rt_CoCg));
     t.pos = vec3(e.px, e.py, e.pz);
-    t.normal = vec3(e.nx, e.ny, e.nz);
-    t.normal2 = vec3(e.n2x, e.n2y, e.n2z);
+    t.normal = decodeNormal(e.oct_n);
+    t.normal2 = decodeNormal(e.oct_n2);
     t.weight = 1.0;  // not stored in RT output
     return t;
 }
@@ -322,8 +320,8 @@ diffuseIllumiantionBufferDataW fetchPrevDiffuse(ivec2 p) {
     t.data_swap.shY = clamp(vec4(shY_xy, shY_zw), vec4(-10000), vec4(10000));
     t.data_swap.CoCg = unpackHalf2x16(floatBitsToUint(e.swap_CoCg));
     t.pos = vec3(e.px, e.py, e.pz);
-    t.normal = vec3(e.nx, e.ny, e.nz);
-    t.normal2 = vec3(e.n2x, e.n2y, e.n2z);
+    t.normal = decodeNormal(e.oct_n);
+    t.normal2 = decodeNormal(e.oct_n2);
     mediump vec2 w_v = unpackHalf2x16(floatBitsToUint(e.swap_w_v));
     t.weight = w_v.x;
     return t;
@@ -387,7 +385,7 @@ diffuseIllumiantionData fetchDiffuse(ivec2 p) {
     tmp.prev_variance = w_v.y;
 
     tmp.pos = vec3(e.hist_px, e.hist_py, e.hist_pz);
-    tmp.normal = vec3(e.hist_nx, e.hist_ny, e.hist_nz);
+    tmp.normal = decodeNormal(e.hist_oct_n);
     #endif
     return tmp;
 }
@@ -452,13 +450,11 @@ void WriteDiffuse(diffuseIllumiantionData data, ivec2 p) {
     diffuseIllumiantionBuffer.data[idx].hist_w_v    = uintBitsToFloat(packHalf2x16(vec2(data.prev_weight, data.prev_variance)));
 
     // Write history geometry for next frame's temporal reprojection.
-    // These survive ray0.rgen's next-frame overwrite of px/py/pz/nx/ny/nz.
+    // These survive ray0.rgen's next-frame overwrite of px/py/pz/oct_n.
     diffuseIllumiantionBuffer.data[idx].hist_px = data.pos.x;
     diffuseIllumiantionBuffer.data[idx].hist_py = data.pos.y;
     diffuseIllumiantionBuffer.data[idx].hist_pz = data.pos.z;
-    diffuseIllumiantionBuffer.data[idx].hist_nx = data.normal.x;
-    diffuseIllumiantionBuffer.data[idx].hist_ny = data.normal.y;
-    diffuseIllumiantionBuffer.data[idx].hist_nz = data.normal.z;
+    diffuseIllumiantionBuffer.data[idx].hist_oct_n = encodeNormal(data.normal);
     #endif
 }
 #endif

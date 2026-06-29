@@ -76,7 +76,7 @@ void main() {
         // albedo2: 漫反射/折射反照率 (非金属分量)
         // albedo:  镜面反射反照率 (金属/镜面分量)
         fragColor.xyz = data.absorption
-                      * ((project_SH_irradiance(tmp.data_swap, vec3(diffuseIllumiantionBuffer.data[idx].n2x, diffuseIllumiantionBuffer.data[idx].n2y, diffuseIllumiantionBuffer.data[idx].n2z))
+                      * ((project_SH_irradiance(tmp.data_swap, decodeNormal(diffuseIllumiantionBuffer.data[idx].oct_n2))
                           + tmp3.data_swap) * data.albedo2
                          + tmp2.data_swap * data.albedo
                          + data.light)
