@@ -108,8 +108,9 @@ float filterVariance3x3(
                 continue;
             }
 
-            vec3 samplePos    = diffuseIllumiantionBuffer.data[qidx].pos;
-            vec3 sampleNormal = diffuseIllumiantionBuffer.data[qidx].normal;
+            UnifiedDiffuseElement _e = diffuseIllumiantionBuffer.data[qidx];
+            vec3 samplePos    = vec3(_e.px, _e.py, _e.pz);
+            vec3 sampleNormal = vec3(_e.nx, _e.ny, _e.nz);
 
             float wKernel = hw[abs(x)] * hw[abs(y)];
             float wGeom = varianceGeometryWeight(
@@ -147,8 +148,9 @@ void main() {
     uint idx = getIdx(uvec2(pix));
 
     // 获取中心点几何与基础数据
-    vec3 centerNormal = diffuseIllumiantionBuffer.data[idx].normal;
-    vec3 centerPos    = diffuseIllumiantionBuffer.data[idx].pos;
+    UnifiedDiffuseElement _ce = diffuseIllumiantionBuffer.data[idx];
+    vec3 centerNormal = vec3(_ce.nx, _ce.ny, _ce.nz);
+    vec3 centerPos    = vec3(_ce.px, _ce.py, _ce.pz);
     diffuseIllumiantionData centerData = fetchDiffuse(pix);
 
     // 使用原始未过滤的光照数据

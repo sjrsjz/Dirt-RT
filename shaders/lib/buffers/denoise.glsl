@@ -17,7 +17,6 @@ struct bufferData {
     int illumiantionType;
     float reflectWeight;
     float refractWeight;
-    float last_rd_dot_n;
     float roughness;
 };
 
@@ -234,12 +233,40 @@ struct diffuseIllumiantionData {
     mediump float prev_variance;
 };
 
-struct diffuseIllumiantionBufferData {
-    SH data_swap;
-    vec3 pos;
-    lowp vec3 normal;
-    lowp vec3 normal2;
+// ===========================================================================
+// Unified diffuse buffer — replaces old binding 2 + binding 6 + 4 custom images.
+// 26 floats = 104 bytes, all float alignment (no std430 vec3 padding waste).
+//
+// Layout rationale:
+//   - rt_* fields: ray0.rgen writes current frame RT output; 100.glsl reads via loadDiffuseInput
+//   - px/py/pz etc.: current geometry from ray0.rgen
+//   - hist_px/hist_py/hist_pz + hist_nx/hist_ny/hist_nz: history geometry from swap3,
+//     read by 100.glsl via fetchDiffuse for reprojection edge-stopping.
+//     MUST be separate from px/py/pz because ray0.rgen overwrites px/py/pz each frame,
+//     which would destroy the history needed for temporal reprojection.
+// ===========================================================================
+struct UnifiedDiffuseElement {
+    // --- RT output (ray0.rgen writes, 100.glsl reads) — half-packed SH: 12B ---
+    float rt_shY_xy, rt_shY_zw, rt_CoCg;
+    // --- Current geometry (ray0.rgen writes) — 36B ---
+    float px, py, pz;
+    float nx, ny, nz;
+    float n2x, n2y, n2z;
+    // --- History geometry (swap3 writes, 100.glsl reads via fetchDiffuse) — 24B ---
+    float hist_px, hist_py, hist_pz;
+    float hist_nx, hist_ny, hist_nz;
+    // --- Temporal history prev frame (swap3 writes, 100.glsl reads): 16B ---
+    float hist_shY_xy, hist_shY_zw, hist_CoCg, hist_w_v;
+    // --- Temporal history swap frame (100.glsl/swap3 write, swap2/fog read): 16B ---
+    float swap_shY_xy, swap_shY_zw, swap_CoCg, swap_w_v;
 };
+
+layout(std430, set = 3, binding = 2) buffer DiffuseBuffer {
+    UnifiedDiffuseElement data[];
+} diffuseIllumiantionBuffer;
+
+// Keep old struct types for function interfaces (unpacked representation).
+// diffuseIllumiantionBufferDataW is still returned by fetchPrevDiffuse/samplePrevDiffuse.
 struct diffuseIllumiantionBufferDataW {
     SH data_swap;
     vec3 pos;
@@ -247,29 +274,22 @@ struct diffuseIllumiantionBufferDataW {
     lowp vec3 normal2;
     mediump float weight;
 };
-layout(std430, set = 3, binding = 2) buffer DiffuseIllumiantionDataBuffer {
-    diffuseIllumiantionBufferData data[];
-} diffuseIllumiantionBuffer;
 
-// Half-packed temporal history — replaces 4 custom images + old binding 6.
-// Layout matches the old RGBA32F texture packing bit-for-bit.
-// 14 floats = 56 bytes, all float alignment (no padding).
-struct DiffuseHistoryElement {
-    // Previous frame (matches old shY texture):
-    //   packHalf2x16(data.shY.xy), packHalf2x16(data.shY.zw),
-    //   packHalf2x16(data.CoCg), packHalf2x16(prev_weight, prev_variance)
-    float prev_shY_xy, prev_shY_zw, prev_CoCg, prev_w_v;
-    // Current frame (matches old shY_swap texture):
-    float swap_shY_xy, swap_shY_zw, swap_CoCg, swap_w_v; // w_v: weight, variance
-    // Position (matches old lpos texture, without the .w=0 padding):
-    float px, py, pz;
-    // Normal (matches old lnormal texture, without the .w=0 padding):
-    float nx, ny, nz;
-};
-
-layout(std430, set = 3, binding = 6) buffer DiffuseHistoryBuffer {
-    DiffuseHistoryElement data[];
-} diffuseHistory;
+// Helper: unpack RT output from unified SSBO into full-precision struct.
+// Used by 100.glsl to read the current frame's ray-traced input.
+diffuseIllumiantionBufferDataW loadDiffuseInput(uint idx) {
+    UnifiedDiffuseElement e = diffuseIllumiantionBuffer.data[idx];
+    diffuseIllumiantionBufferDataW t;
+    mediump vec2 shY_xy = unpackHalf2x16(floatBitsToUint(e.rt_shY_xy));
+    mediump vec2 shY_zw = unpackHalf2x16(floatBitsToUint(e.rt_shY_zw));
+    t.data_swap.shY = clamp(vec4(shY_xy, shY_zw), vec4(-10000), vec4(10000));
+    t.data_swap.CoCg = unpackHalf2x16(floatBitsToUint(e.rt_CoCg));
+    t.pos = vec3(e.px, e.py, e.pz);
+    t.normal = vec3(e.nx, e.ny, e.nz);
+    t.normal2 = vec3(e.n2x, e.n2y, e.n2z);
+    t.weight = 1.0;  // not stored in RT output
+    return t;
+}
 
 struct vec3IllumiantionData {
     mediump vec3 data;
@@ -295,7 +315,7 @@ layout(std430, set = 3, binding = 4) buffer RefractIllumiantionDataBuffer {
 // Only data_swap.shY fields are used by the caller; the rest are filled with
 // best-effort values from the history SSBO.
 diffuseIllumiantionBufferDataW fetchPrevDiffuse(ivec2 p) {
-    DiffuseHistoryElement e = diffuseHistory.data[getIdx(p)];
+    UnifiedDiffuseElement e = diffuseIllumiantionBuffer.data[getIdx(p)];
     diffuseIllumiantionBufferDataW t;
     mediump vec2 shY_xy = unpackHalf2x16(floatBitsToUint(e.swap_shY_xy));
     mediump vec2 shY_zw = unpackHalf2x16(floatBitsToUint(e.swap_shY_zw));
@@ -303,7 +323,7 @@ diffuseIllumiantionBufferDataW fetchPrevDiffuse(ivec2 p) {
     t.data_swap.CoCg = unpackHalf2x16(floatBitsToUint(e.swap_CoCg));
     t.pos = vec3(e.px, e.py, e.pz);
     t.normal = vec3(e.nx, e.ny, e.nz);
-    t.normal2 = vec3(0.0);
+    t.normal2 = vec3(e.n2x, e.n2y, e.n2z);
     mediump vec2 w_v = unpackHalf2x16(floatBitsToUint(e.swap_w_v));
     t.weight = w_v.x;
     return t;
@@ -330,25 +350,22 @@ diffuseIllumiantionBufferDataW samplePrevDiffuse(vec2 p) {
 
 void WritePrevDiffuse(diffuseIllumiantionBufferDataW data, ivec2 p) {
     uint idx = getIdx(p);
-    // Only update the swap half (data_swap goes to swap fields for ray guiding)
-    diffuseHistory.data[idx].swap_shY_xy = uintBitsToFloat(packHalf2x16(data.data_swap.shY.xy));
-    diffuseHistory.data[idx].swap_shY_zw = uintBitsToFloat(packHalf2x16(data.data_swap.shY.zw));
-    diffuseHistory.data[idx].swap_CoCg   = uintBitsToFloat(packHalf2x16(data.data_swap.CoCg));
-    // Preserve variance in w_v; only update weight
-    mediump vec2 old_wv = unpackHalf2x16(floatBitsToUint(diffuseHistory.data[idx].swap_w_v));
-    diffuseHistory.data[idx].swap_w_v = uintBitsToFloat(packHalf2x16(vec2(data.weight, old_wv.y)));
+    diffuseIllumiantionBuffer.data[idx].swap_shY_xy = uintBitsToFloat(packHalf2x16(data.data_swap.shY.xy));
+    diffuseIllumiantionBuffer.data[idx].swap_shY_zw = uintBitsToFloat(packHalf2x16(data.data_swap.shY.zw));
+    diffuseIllumiantionBuffer.data[idx].swap_CoCg   = uintBitsToFloat(packHalf2x16(data.data_swap.CoCg));
+    mediump vec2 old_wv = unpackHalf2x16(floatBitsToUint(diffuseIllumiantionBuffer.data[idx].swap_w_v));
+    diffuseIllumiantionBuffer.data[idx].swap_w_v = uintBitsToFloat(packHalf2x16(vec2(data.weight, old_wv.y)));
 }
 
 #endif
 
 #if defined(DIFFUSE_BUFFER) || defined(DIFFUSE_BUFFER_MIN) || defined(DIFFUSE_BUFFER_MIN2)
 
-// All diffuse temporal history now lives in diffuseHistory SSBO (binding 6).
-// No more custom images — texelFetch/imageStore replaced with SSBO reads/writes.
+// All diffuse temporal history now lives in unified diffuseIllumiantionBuffer (binding 2).
 
 diffuseIllumiantionData fetchDiffuse(ivec2 p) {
     diffuseIllumiantionData tmp;
-    DiffuseHistoryElement e = diffuseHistory.data[getIdx(p)];
+    UnifiedDiffuseElement e = diffuseIllumiantionBuffer.data[getIdx(p)];
 
     // Unpack current frame (swap)
     mediump vec2 shY_xy = unpackHalf2x16(floatBitsToUint(e.swap_shY_xy));
@@ -360,17 +377,17 @@ diffuseIllumiantionData fetchDiffuse(ivec2 p) {
     tmp.variance = w_v.y;
 
     #ifndef DIFFUSE_BUFFER_MIN2
-    // Unpack previous frame (prev)
-    shY_xy = unpackHalf2x16(floatBitsToUint(e.prev_shY_xy));
-    shY_zw = unpackHalf2x16(floatBitsToUint(e.prev_shY_zw));
+    // Unpack previous frame (hist)
+    shY_xy = unpackHalf2x16(floatBitsToUint(e.hist_shY_xy));
+    shY_zw = unpackHalf2x16(floatBitsToUint(e.hist_shY_zw));
     tmp.data.shY = clamp(vec4(shY_xy, shY_zw), vec4(-10000), vec4(10000));
-    tmp.data.CoCg = unpackHalf2x16(floatBitsToUint(e.prev_CoCg));
-    w_v = unpackHalf2x16(floatBitsToUint(e.prev_w_v));
+    tmp.data.CoCg = unpackHalf2x16(floatBitsToUint(e.hist_CoCg));
+    w_v = unpackHalf2x16(floatBitsToUint(e.hist_w_v));
     tmp.prev_weight = w_v.x;
     tmp.prev_variance = w_v.y;
 
-    tmp.pos = vec3(e.px, e.py, e.pz);
-    tmp.normal = vec3(e.nx, e.ny, e.nz);
+    tmp.pos = vec3(e.hist_px, e.hist_py, e.hist_pz);
+    tmp.normal = vec3(e.hist_nx, e.hist_ny, e.hist_nz);
     #endif
     return tmp;
 }
@@ -407,8 +424,8 @@ diffuseIllumiantionData sampleDiffuse(vec2 p) {
     return data;
 }
 vec3 sampleDiffusePos(vec2 p) {
-    DiffuseHistoryElement e = diffuseHistory.data[getIdx(ivec2(floor(p) + round(fract(p))))];
-    return vec3(e.px, e.py, e.pz);
+    UnifiedDiffuseElement e = diffuseIllumiantionBuffer.data[getIdx(ivec2(floor(p) + round(fract(p))))];
+    return vec3(e.hist_px, e.hist_py, e.hist_pz);
 }
 void WriteDiffuse(diffuseIllumiantionData data, ivec2 p) {
     uint idx = getIdx(p);
@@ -417,29 +434,31 @@ void WriteDiffuse(diffuseIllumiantionData data, ivec2 p) {
     data.weight = clamp(data.weight, 0.0, 65504);
     data.variance = clamp(data.variance, 0.0, 65504);
 
-    diffuseHistory.data[idx].swap_shY_xy = uintBitsToFloat(packHalf2x16(data.data_swap.shY.xy));
-    diffuseHistory.data[idx].swap_shY_zw = uintBitsToFloat(packHalf2x16(data.data_swap.shY.zw));
-    diffuseHistory.data[idx].swap_CoCg   = uintBitsToFloat(packHalf2x16(data.data_swap.CoCg));
-    diffuseHistory.data[idx].swap_w_v    = uintBitsToFloat(packHalf2x16(vec2(data.weight, data.variance)));
+    diffuseIllumiantionBuffer.data[idx].swap_shY_xy = uintBitsToFloat(packHalf2x16(data.data_swap.shY.xy));
+    diffuseIllumiantionBuffer.data[idx].swap_shY_zw = uintBitsToFloat(packHalf2x16(data.data_swap.shY.zw));
+    diffuseIllumiantionBuffer.data[idx].swap_CoCg   = uintBitsToFloat(packHalf2x16(data.data_swap.CoCg));
+    diffuseIllumiantionBuffer.data[idx].swap_w_v    = uintBitsToFloat(packHalf2x16(vec2(data.weight, data.variance)));
 
     #if !defined(DIFFUSE_BUFFER_MIN) && !defined(DIFFUSE_BUFFER_MIN2)
-    // Full write: also update prev (history) and geometry
+    // Full write: also update hist (history) and geometry
     data.data.shY = clamp(data.data.shY, vec4(-65504), vec4(65504));
     data.data.CoCg = clamp(data.data.CoCg, vec2(-65504), vec2(65504));
     data.prev_weight = clamp(data.prev_weight, 0.0, 65504);
     data.prev_variance = clamp(data.prev_variance, 0.0, 65504);
 
-    diffuseHistory.data[idx].prev_shY_xy = uintBitsToFloat(packHalf2x16(data.data.shY.xy));
-    diffuseHistory.data[idx].prev_shY_zw = uintBitsToFloat(packHalf2x16(data.data.shY.zw));
-    diffuseHistory.data[idx].prev_CoCg   = uintBitsToFloat(packHalf2x16(data.data.CoCg));
-    diffuseHistory.data[idx].prev_w_v    = uintBitsToFloat(packHalf2x16(vec2(data.prev_weight, data.prev_variance)));
+    diffuseIllumiantionBuffer.data[idx].hist_shY_xy = uintBitsToFloat(packHalf2x16(data.data.shY.xy));
+    diffuseIllumiantionBuffer.data[idx].hist_shY_zw = uintBitsToFloat(packHalf2x16(data.data.shY.zw));
+    diffuseIllumiantionBuffer.data[idx].hist_CoCg   = uintBitsToFloat(packHalf2x16(data.data.CoCg));
+    diffuseIllumiantionBuffer.data[idx].hist_w_v    = uintBitsToFloat(packHalf2x16(vec2(data.prev_weight, data.prev_variance)));
 
-    diffuseHistory.data[idx].px = data.pos.x;
-    diffuseHistory.data[idx].py = data.pos.y;
-    diffuseHistory.data[idx].pz = data.pos.z;
-    diffuseHistory.data[idx].nx = data.normal.x;
-    diffuseHistory.data[idx].ny = data.normal.y;
-    diffuseHistory.data[idx].nz = data.normal.z;
+    // Write history geometry for next frame's temporal reprojection.
+    // These survive ray0.rgen's next-frame overwrite of px/py/pz/nx/ny/nz.
+    diffuseIllumiantionBuffer.data[idx].hist_px = data.pos.x;
+    diffuseIllumiantionBuffer.data[idx].hist_py = data.pos.y;
+    diffuseIllumiantionBuffer.data[idx].hist_pz = data.pos.z;
+    diffuseIllumiantionBuffer.data[idx].hist_nx = data.normal.x;
+    diffuseIllumiantionBuffer.data[idx].hist_ny = data.normal.y;
+    diffuseIllumiantionBuffer.data[idx].hist_nz = data.normal.z;
     #endif
 }
 #endif

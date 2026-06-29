@@ -15,7 +15,7 @@
 //
 // 天空:
 //   - distance < -0.5 → 使用 SampleSky() 计算大气散射颜色
-//   - 时域历史已由 swap3 写入 diffuseHistory SSBO，无需额外写回
+//   - 时域历史已随统一 diffuseIllumiantionBuffer (binding 2) 流转，无需额外写回
 // ===========================================================================
 
 #define DIFFUSE_BUFFER_MIN2
@@ -45,7 +45,9 @@ void main() {
         fragColor.xyz = data.absorption * SampleSky(data.rd) + data.emission;
 
         // 重置漫反射历史 (避免天空像素使用上一帧地面数据)
-        diffuseIllumiantionBuffer.data[idx].data_swap = init_SH();
+        diffuseIllumiantionBuffer.data[idx].rt_shY_xy = 0.0;
+        diffuseIllumiantionBuffer.data[idx].rt_shY_zw = 0.0;
+        diffuseIllumiantionBuffer.data[idx].rt_CoCg   = 0.0;
     }
     // =========================================================================
     // 分支 2: 表面像素 — 组合所有光照分量
@@ -59,7 +61,7 @@ void main() {
         vec3IllumiantionData tmp3     = fetchRefract(pix);
 
         // 保存当前漫反射数据到历史缓冲区 (供下一帧 100.glsl 使用)
-        // Temporal history now lives in diffuseHistory SSBO (binding 6).
+        // Temporal history now lives in unified diffuseIllumiantionBuffer (binding 2).
         // swap3 already wrote the final filtered SH + weight to the swap fields;
         // ray0.rgen reads from there via samplePrevDiffuse. No additional write needed.
 
@@ -74,7 +76,7 @@ void main() {
         // albedo2: 漫反射/折射反照率 (非金属分量)
         // albedo:  镜面反射反照率 (金属/镜面分量)
         fragColor.xyz = data.absorption
-                      * ((project_SH_irradiance(tmp.data_swap, diffuseIllumiantionBuffer.data[idx].normal2)
+                      * ((project_SH_irradiance(tmp.data_swap, vec3(diffuseIllumiantionBuffer.data[idx].n2x, diffuseIllumiantionBuffer.data[idx].n2y, diffuseIllumiantionBuffer.data[idx].n2z))
                           + tmp3.data_swap) * data.albedo2
                          + tmp2.data_swap * data.albedo
                          + data.light)

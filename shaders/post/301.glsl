@@ -58,7 +58,8 @@ void main() {
     ivec2 pix = ivec2(gl_FragCoord.xy);
 
     // 几何法线 (用于构建反射平面)
-    vec3 geoNormal = diffuseIllumiantionBuffer.data[idx].normal2;
+    UnifiedDiffuseElement _de = diffuseIllumiantionBuffer.data[idx];
+    vec3 geoNormal = vec3(_de.n2x, _de.n2y, _de.n2z);
 
     // ---- 解包中心像素 ----------------------------------------------------
     vec4 centerGeom = texelFetch(colortex3, pix, 0);

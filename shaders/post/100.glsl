@@ -97,7 +97,7 @@ uint idx;
 
 in vec2 texCoord;
 
-diffuseIllumiantionBufferData current_data;
+diffuseIllumiantionBufferDataW current_data;
 diffuseIllumiantionData out_data;
 
 float output_weight = 0.0;
@@ -413,7 +413,7 @@ void main() {
     // 读取当前像素几何与光照
     // -----------------------------------------------------------------------
     info_distance = denoiseBuffer.data[idx].distance;
-    current_data = diffuseIllumiantionBuffer.data[idx];
+    current_data = loadDiffuseInput(idx);
 
     // 默认输出初始化
     out_data.data_swap = current_data.data_swap;

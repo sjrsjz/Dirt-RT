@@ -116,7 +116,8 @@ void MixReflect() {
     float ggxWeight = exp(-0.0001 * tanThetaSq / (alpha * alpha)); // GGX 分布形状
 
     // 可选位置权重（几何法线平面距离）
-    vec3 geoNormal = diffuseIllumiantionBuffer.data[idx].normal2;
+    UnifiedDiffuseElement _de = diffuseIllumiantionBuffer.data[idx];
+    vec3 geoNormal = vec3(_de.n2x, _de.n2y, _de.n2z);
     float posWeight = exp(-POSITION_PARAM * abs(dot(data.pos - data2.pos, geoNormal)));
 
     // 综合置信度
