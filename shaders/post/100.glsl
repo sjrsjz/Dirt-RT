@@ -8,12 +8,15 @@
 //   variance = tr(Cov(X))
 //
 // 约定:
-//   extInfoBuffer.x = temporal effective weight / N_eff
-//   extInfoBuffer.y = temporal raw trace variance = tr(Cov(X))
-//   estimator variance = extInfoBuffer.y / max(extInfoBuffer.x, 1.0)
+//   diffuseIllumiantionData.weight = temporal effective weight / N_eff
+//   diffuseIllumiantionData.variance = temporal raw trace variance = tr(Cov(X))
+//   estimator variance = variance / max(weight, 1.0)
 //
 // 注意:
 //   这里维护的是 raw variance，不是已经除以 N 的 estimator variance。
+//
+// 统计量直接写入 diffuseIllumiantionData，随 WriteDiffuse 一并回写，
+// 不再需要 extInfoBuffer 间接缓冲区。
 // ===========================================================================
 
 #define DIFFUSE_BUFFER_MIN
@@ -83,7 +86,6 @@ uniform int worldTime;
 /* RENDERTARGETS: 5 */
 layout(location = 0) out vec4 output_data;
 
-layout(rgba32f) uniform image2D extInfoBuffer;
 
 // ---------------------------------------------------------------------------
 // 全局变量
@@ -429,16 +431,10 @@ void main() {
     // 建议对天空写 weight = 0，避免未来帧重投影误采到天空历史。
     // -----------------------------------------------------------------------
     if (info_distance < -0.5) {
-        output_weight = 0.0;
-        output_variance = 0.0;
+        out_data.weight = 0.0;
+        out_data.variance = 0.0;
 
         WriteDiffuse(out_data, ivec2(gl_FragCoord.xy));
-
-        imageStore(
-            extInfoBuffer,
-            ivec2(gl_FragCoord.xy),
-            vec4(output_weight, output_variance, 0.0, 0.0)
-        );
 
         return;
     }
@@ -454,19 +450,15 @@ void main() {
     MixDiffuse();
 
     // -----------------------------------------------------------------------
-    // 输出时域统计量
+    // 回写时域统计量 (随 diffuse 数据一起走，无需额外缓冲区)
     //
-    // extInfoBuffer.x = N_eff
-    // extInfoBuffer.y = raw trace variance = tr(Cov(X))
+    // out_data.weight = N_eff = temporal effective weight
+    // out_data.variance = raw trace variance = tr(Cov(X))
     //
-    // 后续 estimator variance:
-    //   extInfoBuffer.y / max(extInfoBuffer.x, 1.0)
+    // 后续 estimator variance = variance / max(weight, 1.0)
     // -----------------------------------------------------------------------
-    imageStore(
-        extInfoBuffer,
-        ivec2(gl_FragCoord.xy),
-        vec4(output_weight, output_variance, 0.0, 0.0)
-    );
+    out_data.weight = output_weight;
+    out_data.variance = output_variance;
 
     // -----------------------------------------------------------------------
     // 写出 diffuse 数据

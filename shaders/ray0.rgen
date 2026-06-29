@@ -655,13 +655,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
             break;
     }
 
-    // 体积光 (God Rays)
-    vec3 sumGodRay = vec3(0.0);
-    for (int i = 0; i < Volumetric_Light_Samples; i++) {
-        sumGodRay += sampleGodRay(SunLight, MoonLight, ro, rd, first_t, lightDir, true, original_inverse_0).xyz;
-    }
-
-    denoiseBuffer.data[idx].emission = first_emission_val + sumGodRay * (1.0 / Volumetric_Light_Samples);
+    denoiseBuffer.data[idx].emission = first_emission_val;
 
     return vec4(total_illumination, first_t);
 }
