@@ -19,11 +19,12 @@ void main() {
     float weightSum = 0.0;
     for (int dy = -8; dy <= 8; dy++) {
         ivec2 sampleCoord = coord + ivec2(0, dy);
-        float gaussWeight = exp(-float(dy * dy) * 0.06);
-        weightSum += gaussWeight;
         if (sampleCoord.x >= regionMin.x && sampleCoord.x <= regionMax.x
-         && sampleCoord.y >= regionMin.y && sampleCoord.y <= regionMax.y)
+         && sampleCoord.y >= regionMin.y && sampleCoord.y <= regionMax.y) {
+            float gaussWeight = exp(-float(dy * dy) * 0.06);
             sum += imageLoad(bloomBlur, sampleCoord).rgb * gaussWeight;
+            weightSum += gaussWeight;
+        }
     }
     vec3 result = sum / max(weightSum, 1e-5);
     imageStore(bloomAtlas, coord, vec4(result, 1.0));
