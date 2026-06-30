@@ -40,10 +40,13 @@ void main() {
     if (level < 0) { imageStore(bloomAtlas, coord, vec4(0)); return; }
 
     // --- 33-tap filter from shared memory ---
+    // LOD-dependent sigma: L0 sharp (σ~1.6px), higher LODs blurrier
+    float sigma2_inv = 0.2 / (1.0 + float(level));
+
     vec3 sum = vec3(0);
     float weightSum = 0.0;
     for (int dy = -RADIUS; dy <= RADIUS; dy++) {
-        float w = exp(-float(dy * dy) * 0.05);
+        float w = exp(-float(dy * dy) * sigma2_inv);
         weightSum += w;
 
         ivec2 sampleCoord = coord + ivec2(0, dy);
