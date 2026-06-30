@@ -21,8 +21,8 @@ void main() {
     vec3 bloom = texture(colortex1, texCoord).rgb;
     bloomOut = vec4(bloom, 1.0);
     vec3 hdr = mix(scene, bloom, BLOOM_MIX);
-    vec3 mapped = tonemap_NeuralNetwork(hdr.zyx / (1.0 + hdr.zyx)) - tonemap_NeuralNetwork(vec3(0.0));
-    fragColor = vec4(pow(max(mapped, 0.0), vec3(1.0 / 2.2)), 1.0);
+    vec3 mapped = TonyMcMapface_Tiny(hdr);
+    fragColor = vec4(pow(mapped, vec3(1.0 / 2.2)), 1.0);
     if (any(isnan(fragColor.xyz))) fragColor.xyz = vec3(0.0);
 #endif
 }

@@ -146,7 +146,7 @@ void main() {
             // float sigma2 = max(center_var_est + sample_var_est, 1e-8);
 
             // 方差预滤波使得下面的 sigma2 不再会导致降噪器彻底崩溃
-            float sigma2 = max(center_var_est , 1e-8);
+            float sigma2 = max(center_var_est , 1e-7);
             float delta_energy = length(center_sh.shY.xyz - sample_sh.shY.xyz);
             float w_luma = SVGF_PHI_L * delta_energy * inversesqrt(sigma2);
             
