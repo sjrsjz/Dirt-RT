@@ -4,9 +4,9 @@
 // Pass swap2_c: Diffuse Variance Filter → Colortex Push (Compute)
 // ===========================================================================
 // Replaces fragment shader swap2.glsl with a compute shader using:
-//   - 16x16 workgroups + 2px halo = 20x20 shared memory tile
+//   - 16x16 workgroups + 3px halo = 22x22 shared memory tile
 //   - Precomputed raw ALICE variance loaded into shared memory
-//   - 5x5 geometry-aware bilateral variance filter
+//   - 7x7 geometry-aware bilateral variance filter
 //   - imageStore output to colorimg3 (geometry) and colorimg4 (SH+variance)
 
 layout(local_size_x = 16, local_size_y = 16) in;
@@ -27,7 +27,7 @@ layout(rgba32f) uniform writeonly image2D colorimg3;
 layout(rgba32f) uniform writeonly image2D colorimg4;
 
 // --- Kernel constants ---
-const float hw[3] = float[](1.0, 0.66667, 0.44444); // B-spline 5x5 kernel
+const float hw[4] = float[](1.0, 0.66667, 0.44444, 0.29630); // B-spline 7x7 kernel
 
 #ifndef VAR_FILTER_NORMAL_POWER
 #define VAR_FILTER_NORMAL_POWER SVGF_NORMAL_POWER
@@ -39,16 +39,17 @@ const float hw[3] = float[](1.0, 0.66667, 0.44444); // B-spline 5x5 kernel
 
 #define VAR_FILTER_CONSERVATIVE 0
 
-// --- Shared memory tile: 20x20 (16+4 halo for 5x5 kernel) ---
-const uint SM_W = 20u;
-const uint SM_H = 20u;
-const uint HALO = 2u;
+// --- Shared memory tile: 22x22 (16+6 halo for 7x7 kernel) ---
+const uint SM_W = 22u;
+const uint SM_H = 22u;
+const uint HALO = 3u;
 
 struct TileSample {
     float dist;
     float px, py, pz;
     float oct_n;
     float rawVar;
+    float omega;    // shY.w = total ALICE energy, for 3-sigma clamping
 };
 shared TileSample sm_tile[SM_H][SM_W];
 
@@ -65,8 +66,8 @@ float sanitizeVariance(float v) {
     return max(v, 0.0);
 }
 
-// Unpack swap SH + weight from unified SSBO, return raw ALICE variance.
-float computeRawVariance(uint idx) {
+// Unpack swap SH + weight from unified SSBO, return raw ALICE variance and omega.
+float computeRawVariance(uint idx, out float outOmega) {
     UnifiedDiffuseElement e = diffuseIllumiantionBuffer.data[idx];
 
     mediump vec2 shY_xy = unpackHalf2x16(floatBitsToUint(e.swap_shY_xy));
@@ -79,6 +80,7 @@ float computeRawVariance(uint idx) {
     if (any(isnan(shY)) || any(isinf(shY))) shY = vec4(0.0);
     if (isnan(weight) || isinf(weight))        weight = 0.0;
 
+    outOmega = shY.w;
     return sanitizeVariance(alice_estimator_variance(shY, max(weight, 1.0)));
 }
 
@@ -109,9 +111,9 @@ void main() {
     // =========================================================================
     uint threadIdx = lid.y * 16u + lid.x; // 线程在 Workgroup 内的 1D 索引 (0~255)
 
-    for (uint i = threadIdx; i < 400u; i += 256u) {
-        uint row = i / 20u;
-        uint col = i % 20u;
+    for (uint i = threadIdx; i < 484u; i += 256u) {
+        uint row = i / 22u;
+        uint col = i % 22u;
 
         ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(col, row);
         ivec2 clamped = clamp(gc, ivec2(0), texSize - ivec2(1));
@@ -126,7 +128,9 @@ void main() {
         s.py    = e.py;
         s.pz    = e.pz;
         s.oct_n = e.oct_n;
-        s.rawVar = (d > -0.5) ? computeRawVariance(loadIdx) : 0.0;
+        float om = 0.0;
+        s.rawVar = (d > -0.5) ? computeRawVariance(loadIdx, om) : 0.0;
+        s.omega  = om;
 
         sm_tile[row][col] = s;
     }
@@ -151,7 +155,7 @@ void main() {
     }
 
     // =========================================================================
-    // Phase 3: Unpack center SH for output (not for variance — that's precomputed)
+    // Phase 3: Unpack center SH, apply 3-sigma energy clamp on outSH
     // =========================================================================
     uint idx = getIdx(uvec2(clamp(ivec2(gid), ivec2(0), texSize - ivec2(1))));
     UnifiedDiffuseElement ce = diffuseIllumiantionBuffer.data[idx];
@@ -165,32 +169,69 @@ void main() {
     outSH.CoCg = c_CoCg;
     outSH = sanitizeSH(outSH);
 
-    float centerVariance = sanitizeVariance(
-        alice_estimator_variance(outSH.shY, max(c_w_v.x, 1.0))
-    );
-
-    // =========================================================================
-    // Phase 4: 5x5 geometry-aware bilateral variance filter
-    // =========================================================================
+    // --- 3-sigma energy clamp on output SH ---
+    // Compute neighborhood mean & sigma of ω, clamp center outSH if outlier.
     vec3 centerPos    = vec3(centerTile.px, centerTile.py, centerTile.pz);
     vec3 centerNormal = decodeNormal(centerTile.oct_n);
 
-    float sumVar = 0.0;
-    float sumW   = 0.0;
+    float sumOmega  = 0.0;
+    float sumOmega2 = 0.0;
+    float sumStatW  = 0.0;
 
     for (int ky = -2; ky <= 2; ky++) {
         for (int kx = -2; kx <= 2; kx++) {
             int sx = int(cx) + kx;
             int sy = int(cy) + ky;
-
             TileSample s = sm_tile[sy][sx];
             if (s.dist < -0.5) continue;
 
-            vec3 samplePos    = vec3(s.px, s.py, s.pz);
-            vec3 sampleNormal = decodeNormal(s.oct_n);
+            vec3 sPos = vec3(s.px, s.py, s.pz);
+            vec3 sNrm = decodeNormal(s.oct_n);
+
+            float wK = hw[abs(kx)] * hw[abs(ky)];
+            float wG = varianceGeometryWeight(centerPos, centerNormal, sPos, sNrm);
+            float w  = wK * wG;
+
+            sumOmega  += w * s.omega;
+            sumOmega2 += w * s.omega * s.omega;
+            sumStatW  += w;
+        }
+    }
+
+    float meanOmega  = (sumStatW > 1e-8) ? (sumOmega / sumStatW) : centerTile.omega;
+    float varOmega   = (sumStatW > 1e-8) ? max(sumOmega2 / sumStatW - meanOmega * meanOmega, 0.0) : 0.0;
+    float sigmaOmega = sqrt(varOmega);
+
+    // Clamp center SH energy to [μ-3σ, μ+3σ]; scale full shY + CoCg by r.
+    // Preserves ρ=|v|/ω and cone constraint ω≥|v|.
+    float centerOmega = outSH.shY.w;
+    float omegaClamped = clamp(centerOmega, meanOmega - 3.0 * sigmaOmega, meanOmega + 3.0 * sigmaOmega);
+    float shY_scale = omegaClamped / max(centerOmega, 1e-8);
+    outSH.shY  *= shY_scale;
+    outSH.CoCg *= shY_scale;
+
+    float centerVariance = sanitizeVariance(
+        alice_estimator_variance(outSH.shY, max(c_w_v.x, 1.0))
+    );
+
+    // =========================================================================
+    // Phase 4: 7x7 geometry-aware bilateral variance filter
+    // =========================================================================
+    float sumVar = 0.0;
+    float sumW   = 0.0;
+
+    for (int ky = -3; ky <= 3; ky++) {
+        for (int kx = -3; kx <= 3; kx++) {
+            int sx = int(cx) + kx;
+            int sy = int(cy) + ky;
+            TileSample s = sm_tile[sy][sx];
+            if (s.dist < -0.5) continue;
+
+            vec3 sPos = vec3(s.px, s.py, s.pz);
+            vec3 sNrm = decodeNormal(s.oct_n);
 
             float wKernel = hw[abs(kx)] * hw[abs(ky)];
-            float wGeom = varianceGeometryWeight(centerPos, centerNormal, samplePos, sampleNormal);
+            float wGeom = varianceGeometryWeight(centerPos, centerNormal, sPos, sNrm);
             float w = wKernel * wGeom;
 
             sumVar += w * s.rawVar;
