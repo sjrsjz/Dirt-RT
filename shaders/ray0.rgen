@@ -227,13 +227,13 @@ float AliceGuidingPdf(vec3 wi, vec3 axis, float kappa)
     float k2 = kappa * kappa;
     float d = 1.0 - kappa * dot(axis, wi);
     float norm = 3.0 * pow(max(0.0, 1.0 - k2), 3.0)
-               / (4.0 * PI * (3.0 + k2));
+            / (4.0 * PI * (3.0 + k2));
     return norm / max(1e-6, d * d * d * d);
 }
 
 vec3 SampleAliceGuiding(vec3 axis, float kappa, vec2 xi)
 {
-    vec3 T = normalize(cross(abs(axis.y) < 0.99999 ? vec3(0,1,0) : vec3(1,0,0), axis));
+    vec3 T = normalize(cross(abs(axis.y) < 0.99999 ? vec3(0, 1, 0) : vec3(1, 0, 0), axis));
     vec3 B = cross(axis, T);
 
     float mu;
@@ -424,7 +424,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
             if (depth == 0) {
                 vec2 prev_coord = reproject(ro_o).xy;
                 bool validPrev = all(greaterThanEqual(prev_coord, vec2(0.0))) &&
-                                all(lessThanEqual(prev_coord, vec2(1.0)));
+                        all(lessThanEqual(prev_coord, vec2(1.0)));
 
                 if (validPrev) {
                     diffuseIllumiantionBufferDataW data0 =
@@ -461,19 +461,19 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
         // --- 5. NEE：直接阳光 ---
         if (current_type >= 0 && dot(macroNormal, lightDir) < 0.0 && !isDarkened) {
             vec3 sunL = sampleSunlight(
-                ro_o,
-                normal,
-                surface.Cs,
-                surface.Cd,
-                rd_i,
-                surface.S,
-                surface.R,
-                lightDir,
-                lightDir.y > 0.0,
-                current_type,
-                macroNormal,
-                inverse_0
-            );
+                    ro_o,
+                    normal,
+                    surface.Cs,
+                    surface.Cd,
+                    rd_i,
+                    surface.S,
+                    surface.R,
+                    lightDir,
+                    lightDir.y > 0.0,
+                    current_type,
+                    macroNormal,
+                    inverse_0
+                );
 
             if (depth == 0) {
                 L_direct_0 = sunL;
@@ -508,7 +508,6 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
             float reflectWeight = P_spec + P_refr * F;
             float refractWeight = P_refr * (1.0 - F);
             mixWeight = vec2(reflectWeight, refractWeight);
-
         }
 
         // --- 7. 更新吞吐量 ---
@@ -557,13 +556,13 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
     // RT output: zero-initialize SH
     diffuseIllumiantionBuffer.data[idx].rt_shY_xy = 0.0;
     diffuseIllumiantionBuffer.data[idx].rt_shY_zw = 0.0;
-    diffuseIllumiantionBuffer.data[idx].rt_CoCg   = 0.0;
+    diffuseIllumiantionBuffer.data[idx].rt_CoCg = 0.0;
     reflectIllumiantionBuffer.data[idx].data_swap = vec3(0.0);
     refractIllumiantionBuffer.data[idx].data_swap = vec3(0.0);
 
-    diffuseIllumiantionBuffer.data[idx].px  = first_p.x;
-    diffuseIllumiantionBuffer.data[idx].py  = first_p.y;
-    diffuseIllumiantionBuffer.data[idx].pz  = first_p.z;
+    diffuseIllumiantionBuffer.data[idx].px = first_p.x;
+    diffuseIllumiantionBuffer.data[idx].py = first_p.y;
+    diffuseIllumiantionBuffer.data[idx].pz = first_p.z;
     diffuseIllumiantionBuffer.data[idx].oct_n = encodeNormal(first_macro_n);
     diffuseIllumiantionBuffer.data[idx].oct_n2 = encodeNormal(faceforward(first_n, first_n, -first_macro_n));
 
@@ -608,18 +607,17 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
             if (!is_refract) refract_rd = reflect(first_rd_i, first_n);
 
             float t_refr = raycast(
-                first_p + (is_refract ? -1.0 : 1.0) * first_macro_n * 0.0001,
-                refract_rd,
-                r_ro,
-                r_rd,
-                false
-            );
+                    first_p + (is_refract ? -1.0 : 1.0) * first_macro_n * 0.0001,
+                    refract_rd,
+                    r_ro,
+                    r_rd,
+                    false
+                );
 
             if (t_refr > -0.5) {
                 vec3 reconstructed_pos = is_refract ? first_p : first_p + reflect(r_ro - first_p, first_n);
                 vec3 reconstructed_normal = is_refract
-                    ? refract(tmp_Payload.material.normal, first_n, rs_refract)
-                    : reflect(tmp_Payload.material.normal, first_n);
+                    ? refract(tmp_Payload.material.normal, first_n, rs_refract) : reflect(tmp_Payload.material.normal, first_n);
 
                 refractIllumiantionBuffer.data[idx].normal = reconstructed_normal;
                 refractIllumiantionBuffer.data[idx].pos = reconstructed_pos;
@@ -631,10 +629,11 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
     // 分配光照到对应的降噪 Buffer
     switch (first_type) {
         case 0:
-            reflectIllumiantionBuffer.data[idx].data_swap = total_illumination;
-            break;
+        reflectIllumiantionBuffer.data[idx].data_swap = total_illumination;
+        break;
 
-        case Diffussion: {
+        case Diffussion:
+        {
             L_indirect = clamp(L_indirect, 0.0, 10000.0 * div_avgExposure);
 
             SH indSH = irradiance_to_SH(L_indirect / (first_albedo2 + 1e-3), first_rd_o);
@@ -645,21 +644,21 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
 
             diffuseIllumiantionBuffer.data[idx].rt_shY_xy = uintBitsToFloat(packHalf2x16(indSH.shY.xy));
             diffuseIllumiantionBuffer.data[idx].rt_shY_zw = uintBitsToFloat(packHalf2x16(indSH.shY.zw));
-            diffuseIllumiantionBuffer.data[idx].rt_CoCg   = uintBitsToFloat(packHalf2x16(indSH.CoCg));
+            diffuseIllumiantionBuffer.data[idx].rt_CoCg = uintBitsToFloat(packHalf2x16(indSH.CoCg));
             break;
         }
 
         case Reflection:
-            total_illumination = clamp(total_illumination, 0.0, 1000.0 * div_avgExposure);
-            reflectIllumiantionBuffer.data[idx].data_swap = total_illumination;
-            break;
+        total_illumination = clamp(total_illumination, 0.0, 1000.0 * div_avgExposure);
+        reflectIllumiantionBuffer.data[idx].data_swap = total_illumination;
+        break;
 
         case Refraction:
-            refractIllumiantionBuffer.data[idx].data_swap = total_illumination;
-            break;
+        refractIllumiantionBuffer.data[idx].data_swap = total_illumination;
+        break;
 
         default:
-            break;
+        break;
     }
 
     denoiseBuffer.data[idx].emission = first_emission_val;

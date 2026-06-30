@@ -42,10 +42,6 @@ void unpackLightSample(ivec2 coord, out vec3 pos, out vec3 normal, out SH sh, ou
     blur_sh = unpackSH(sample_data2.x, sample_data2.y, sample_data2.z);
 }
 
-uniform vec2 resolution;
-
-/* RENDERTARGETS: 0 */
-
 void main() {
     ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
     diffuseIllumiantionData tmp = fetchDiffuse(pix);

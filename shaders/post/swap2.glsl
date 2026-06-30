@@ -18,8 +18,6 @@ layout(local_size_x = 16, local_size_y = 16) in;
 #include "/lib/buffers/denoise.glsl"
 #include "/lib/sky_color.glsl"
 
-/* RENDERTARGETS: 3,4 */
-
 uniform vec2 resolution;
 
 // --- Output images (colorimgN = writable colortex in compute shaders) ---
