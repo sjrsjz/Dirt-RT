@@ -3,10 +3,7 @@
 uniform sampler2D gtexture;
 uniform sampler2D colortex9;
 in vec2 texCoord;
-/*
-const int colortex4Format = RGBA32F;
-const bool colortex8Clear = true;
-*/
+
 /* RENDERTARGETS: 7,8 */
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragCoord;

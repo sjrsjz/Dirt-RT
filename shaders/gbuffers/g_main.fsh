@@ -6,14 +6,7 @@ uniform mat4 gbufferModelViewInverse;
 in vec2 texCoord;
 in vec3 normal;
 uniform sampler2D colortex9;
-/*
-const int depthtex0Format = RGBA32F;
-const int colortex7Format = RGBA32F;
-const int colortex8Format = RGBA32F;
-const int colortex9Format = RGBA32F;
-const bool colortex8Clear = true;
-const bool colortex9Clear = true;
-*/
+
 /* RENDERTARGETS: 7,9 */
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragCoord;

@@ -1,26 +1,33 @@
 #version 430 compatibility
+
+// ===========================================================================
+// Pass swap2_c: Diffuse Variance Filter → Colortex Push (Compute)
+// ===========================================================================
+// Replaces fragment shader swap2.glsl with a compute shader using:
+//   - 16x16 workgroups + 2px halo = 20x20 shared memory tile
+//   - Precomputed raw ALICE variance loaded into shared memory
+//   - 5x5 geometry-aware bilateral variance filter
+//   - imageStore output to colorimg3 (geometry) and colorimg4 (SH+variance)
+
+layout(local_size_x = 16, local_size_y = 16) in;
 #define DIFFUSE_BUFFER
+
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
 #include "/lib/buffers/denoise.glsl"
 #include "/lib/sky_color.glsl"
 
-uniform sampler2D colortex0;
-
 /* RENDERTARGETS: 3,4 */
-
-layout(location = 0) out vec4 geometry;
-layout(location = 1) out vec4 light_sample;
 
 uniform vec2 resolution;
 
-PackedLightSample packLightSample(vec3 pos, vec3 normal, SH sh, float variance) {
-    PackedLightSample sample_data;
-    sample_data.data0 = vec4(pos, encodeNormal(normal));
-    sample_data.data1 = vec4(packSH(sh), variance);
-    return sample_data;
-}
+// --- Output images (colorimgN = writable colortex in compute shaders) ---
+layout(rgba32f) uniform writeonly image2D colorimg3;
+layout(rgba32f) uniform writeonly image2D colorimg4;
+
+// --- Kernel constants ---
+const float hw[3] = float[](1.0, 0.66667, 0.44444); // B-spline 5x5 kernel
 
 #ifndef VAR_FILTER_NORMAL_POWER
 #define VAR_FILTER_NORMAL_POWER SVGF_NORMAL_POWER
@@ -30,19 +37,26 @@ PackedLightSample packLightSample(vec3 pos, vec3 normal, SH sh, float variance) 
 #define VAR_FILTER_POSITION_PARAM SVGF_POSITION_PARAM
 #endif
 
-// 0 = 标准 3x3 平均方差滤波
-// 1 = 保守模式：只允许提升方差，不允许降低中心方差
 #define VAR_FILTER_CONSERVATIVE 0
 
+// --- Shared memory tile: 20x20 (16+4 halo for 5x5 kernel) ---
+const uint SM_W = 20u;
+const uint SM_H = 20u;
+const uint HALO = 2u;
+
+struct TileSample {
+    float dist;
+    float px, py, pz;
+    float oct_n;
+    float rawVar;
+};
+shared TileSample sm_tile[SM_H][SM_W];
+
+// --- Helpers ---
+
 SH sanitizeSH(SH sh) {
-    if (any(isnan(sh.shY)) || any(isinf(sh.shY))) {
-        sh.shY = vec4(0.0);
-    }
-
-    if (any(isnan(sh.CoCg)) || any(isinf(sh.CoCg))) {
-        sh.CoCg = vec2(0.0);
-    }
-
+    if (any(isnan(sh.shY)) || any(isinf(sh.shY))) sh.shY = vec4(0.0);
+    if (any(isnan(sh.CoCg)) || any(isinf(sh.CoCg))) sh.CoCg = vec2(0.0);
     return sh;
 }
 
@@ -51,28 +65,30 @@ float sanitizeVariance(float v) {
     return max(v, 0.0);
 }
 
-float fetchRawAliceVariance(ivec2 coord) {
-    diffuseIllumiantionData d = fetchDiffuse(coord);
+// Unpack swap SH + weight from unified SSBO, return raw ALICE variance.
+float computeRawVariance(uint idx) {
+    UnifiedDiffuseElement e = diffuseIllumiantionBuffer.data[idx];
 
-    SH sh;
-    sh.shY  = d.data_swap.shY;
-    sh.CoCg = d.data_swap.CoCg;
-    sh = sanitizeSH(sh);
+    mediump vec2 shY_xy = unpackHalf2x16(floatBitsToUint(e.swap_shY_xy));
+    mediump vec2 shY_zw = unpackHalf2x16(floatBitsToUint(e.swap_shY_zw));
 
-    return sanitizeVariance(alice_estimator_variance(sh.shY, d.weight));
+    vec4 shY = clamp(vec4(shY_xy, shY_zw), vec4(-10000), vec4(10000));
+    mediump vec2 w_v = unpackHalf2x16(floatBitsToUint(e.swap_w_v));
+    float weight = w_v.x;
+
+    if (any(isnan(shY)) || any(isinf(shY))) shY = vec4(0.0);
+    if (isnan(weight) || isinf(weight))        weight = 0.0;
+
+    return sanitizeVariance(alice_estimator_variance(shY, max(weight, 1.0)));
 }
 
 float varianceGeometryWeight(
-    vec3 centerPos,
-    vec3 centerNormal,
-    vec3 samplePos,
-    vec3 sampleNormal
+    vec3 centerPos, vec3 centerNormal,
+    vec3 samplePos, vec3 sampleNormal
 ) {
-    // normal bilateral
     float nd = clamp(dot(centerNormal, sampleNormal), 0.0, 1.0);
     float wNormal = pow(nd, VAR_FILTER_NORMAL_POWER);
 
-    // plane-distance bilateral
     float distToCam = max(length(centerPos - camPos), 0.01);
     float pixelFootprint = max(distToCam / max(resolution.y, 1.0), 1e-4);
 
@@ -80,105 +96,122 @@ float varianceGeometryWeight(
     float depthTerm = planeDist / max(VAR_FILTER_POSITION_PARAM * pixelFootprint, 1e-6);
 
     float wDepth = exp(-depthTerm);
-
     return wNormal * wDepth;
 }
 
-float filterVariance3x3(
-    ivec2 pix,
-    vec3 centerPos,
-    vec3 centerNormal,
-    float centerVariance
-) {
-    ivec2 texSize = ivec2(resolution) - ivec2(1);
+void main() {
+    uvec2 gid = gl_GlobalInvocationID.xy;
+    uvec2 lid = gl_LocalInvocationID.xy;
+    ivec2 texSize = ivec2(resolution);
 
-    // 5x5 B-spline-like kernel
-    float hw[3] = float[](1.0, 0.66667, 0.44444);
+    // =========================================================================
+    // Phase 1: Cooperative load into shared memory
+    // =========================================================================
+    uint threadIdx = lid.y * 16u + lid.x; // 线程在 Workgroup 内的 1D 索引 (0~255)
+
+    for (uint i = threadIdx; i < 400u; i += 256u) {
+        uint row = i / 20u;
+        uint col = i % 20u;
+
+        ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(col, row);
+        ivec2 clamped = clamp(gc, ivec2(0), texSize - ivec2(1));
+        uint loadIdx = getIdx(uvec2(clamped));
+
+        UnifiedDiffuseElement e = diffuseIllumiantionBuffer.data[loadIdx];
+        float d = denoiseBuffer.data[loadIdx].distance;
+
+        TileSample s;
+        s.dist  = d;
+        s.px    = e.px;
+        s.py    = e.py;
+        s.pz    = e.pz;
+        s.oct_n = e.oct_n;
+        s.rawVar = (d > -0.5) ? computeRawVariance(loadIdx) : 0.0;
+
+        sm_tile[row][col] = s;
+    }
+
+    barrier();
+    memoryBarrierShared();
+
+    // =========================================================================
+    // Phase 2: Skip out-of-bounds and sky pixels
+    // =========================================================================
+    if (any(greaterThanEqual(gid, uvec2(resolution)))) return;
+
+    uint cx = lid.x + HALO;
+    uint cy = lid.y + HALO;
+
+    TileSample centerTile = sm_tile[cy][cx];
+
+    if (centerTile.dist < -0.5) {
+        imageStore(colorimg3, ivec2(gid), vec4(0.0));
+        imageStore(colorimg4, ivec2(gid), vec4(0.0));
+        return;
+    }
+
+    // =========================================================================
+    // Phase 3: Unpack center SH for output (not for variance — that's precomputed)
+    // =========================================================================
+    uint idx = getIdx(uvec2(clamp(ivec2(gid), ivec2(0), texSize - ivec2(1))));
+    UnifiedDiffuseElement ce = diffuseIllumiantionBuffer.data[idx];
+    mediump vec2 c_shY_xy = unpackHalf2x16(floatBitsToUint(ce.swap_shY_xy));
+    mediump vec2 c_shY_zw = unpackHalf2x16(floatBitsToUint(ce.swap_shY_zw));
+    mediump vec2 c_CoCg   = unpackHalf2x16(floatBitsToUint(ce.swap_CoCg));
+    mediump vec2 c_w_v    = unpackHalf2x16(floatBitsToUint(ce.swap_w_v));
+
+    SH outSH;
+    outSH.shY  = vec4(c_shY_xy, c_shY_zw);
+    outSH.CoCg = c_CoCg;
+    outSH = sanitizeSH(outSH);
+
+    float centerVariance = sanitizeVariance(
+        alice_estimator_variance(outSH.shY, max(c_w_v.x, 1.0))
+    );
+
+    // =========================================================================
+    // Phase 4: 5x5 geometry-aware bilateral variance filter
+    // =========================================================================
+    vec3 centerPos    = vec3(centerTile.px, centerTile.py, centerTile.pz);
+    vec3 centerNormal = decodeNormal(centerTile.oct_n);
 
     float sumVar = 0.0;
     float sumW   = 0.0;
 
-    for (int y = -2; y <= 2; y++) {
-        for (int x = -2; x <= 2; x++) {
-            ivec2 q = clamp(pix + ivec2(x, y), ivec2(0), texSize);
-            uint qidx = getIdx(uvec2(q));
+    for (int ky = -2; ky <= 2; ky++) {
+        for (int kx = -2; kx <= 2; kx++) {
+            int sx = int(cx) + kx;
+            int sy = int(cy) + ky;
 
-            // 如果 denoiseBuffer 中天空/无命中是 distance < -0.5，就跳过
-            if (denoiseBuffer.data[qidx].distance < -0.5) {
-                continue;
-            }
+            TileSample s = sm_tile[sy][sx];
+            if (s.dist < -0.5) continue;
 
-            UnifiedDiffuseElement _e = diffuseIllumiantionBuffer.data[qidx];
-            vec3 samplePos    = vec3(_e.px, _e.py, _e.pz);
-            vec3 sampleNormal = decodeNormal(_e.oct_n);
+            vec3 samplePos    = vec3(s.px, s.py, s.pz);
+            vec3 sampleNormal = decodeNormal(s.oct_n);
 
-            float wKernel = hw[abs(x)] * hw[abs(y)];
-            float wGeom = varianceGeometryWeight(
-                centerPos,
-                centerNormal,
-                samplePos,
-                sampleNormal
-            );
-
+            float wKernel = hw[abs(kx)] * hw[abs(ky)];
+            float wGeom = varianceGeometryWeight(centerPos, centerNormal, samplePos, sampleNormal);
             float w = wKernel * wGeom;
 
-            float v = fetchRawAliceVariance(q);
-
-            sumVar += w * v;
+            sumVar += w * s.rawVar;
             sumW   += w;
         }
     }
 
     float filteredVariance = centerVariance;
-
     if (sumW > 1e-8) {
         filteredVariance = sumVar / sumW;
     }
-
 #if VAR_FILTER_CONSERVATIVE
-    // 保守模式：防止方差 guide 被滤得过低。
     filteredVariance = max(filteredVariance, centerVariance);
 #endif
+    filteredVariance = sanitizeVariance(filteredVariance);
 
-    return sanitizeVariance(filteredVariance);
-}
-
-void main() {
-    ivec2 pix = ivec2(gl_FragCoord.xy);
-    uint idx = getIdx(uvec2(pix));
-
-    // 获取中心点几何与基础数据
-    UnifiedDiffuseElement _ce = diffuseIllumiantionBuffer.data[idx];
-    vec3 centerNormal = decodeNormal(_ce.oct_n);
-    vec3 centerPos    = vec3(_ce.px, _ce.py, _ce.pz);
-    diffuseIllumiantionData centerData = fetchDiffuse(pix);
-
-    // 使用原始未过滤的光照数据
-    SH outSH;
-    outSH.shY  = centerData.data_swap.shY;
-    outSH.CoCg = centerData.data_swap.CoCg;
-    outSH = sanitizeSH(outSH);
-
-    // 原始 ALICE 方差
-    float rawVariance = sanitizeVariance(
-        alice_estimator_variance(outSH.shY, centerData.weight)
-    );
-
-    // 3x3 几何感知方差滤波
-    float variance = filterVariance3x3(
-        pix,
-        centerPos,
-        centerNormal,
-        rawVariance
-    );
-
-    PackedLightSample outSample = packLightSample(
-        centerPos,
-        centerNormal,
-        outSH,
-        variance
-    );
-
-    geometry = outSample.data0;
-    light_sample = outSample.data1;
+    // =========================================================================
+    // Phase 5: Write outputs
+    // =========================================================================
+    // colortex3: pos.xyz + oct-encoded normal (matches old swap2 geometry layout)
+    imageStore(colorimg3, ivec2(gid), vec4(centerPos, centerTile.oct_n));
+    // colortex4: packed SH + filtered variance (matches old swap2 light_sample layout)
+    imageStore(colorimg4, ivec2(gid), vec4(packSH(outSH), filteredVariance));
 }
