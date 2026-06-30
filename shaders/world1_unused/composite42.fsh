@@ -1,1 +1,0 @@
-#include "/composite42.fsh"
