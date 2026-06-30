@@ -25,11 +25,4 @@ layout(std140, set = 3, binding = 1) buffer frameData {
     vec3 previousCameraPosition_global;
 };
 
-mat3x4 mixAB(mat3x4 A, mat3x4 B, float x) {
-    return A + (B - A) * x;
-}
-float mixAB(float A, float B, float x) {
-    return A + (B - A) * x;
-}
-
 #endif // FRAME_DATA_GLSL
