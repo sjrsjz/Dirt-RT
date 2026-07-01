@@ -24,14 +24,6 @@ const float POSITION_PARAM = 1.0;
 // ---------------------------------------------------------------------------
 // 边缘停止 / 权重函数
 // ---------------------------------------------------------------------------
-float svgfNormalWeight(vec3 centerNormal, vec3 normal, float S) {
-    return pow(max(dot(centerNormal, normal), 0.0), S);
-}
-
-float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal) {
-    return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)));
-}
-
 float computeAnisotropicAxisScale(vec3 B, vec3 A, vec3 n) {
     float an = dot(A, n);
     float bn = dot(B, n);
@@ -53,7 +45,12 @@ void main() {
 
     // ---- 跳过无效像素 (天空/未命中) --------------------------------------
     bufferData info_ = denoiseBuffer.data[idx];
-    if (info_.distance < -0.5) return;
+    if (info_.distance < -0.5) {
+        // 天空像素: 写入负值 roughness 作为天空 mask
+        // colortex4 格式: f16(R,G)|f16(B,roughness)|weight|spare
+        color = vec4(0.0, uintBitsToFloat(packHalf2x16(vec2(0.0, -1.0))), 0.0, 0.0);
+        return;
+    }
 
     ivec2 pix = ivec2(gl_FragCoord.xy);
 
@@ -88,9 +85,9 @@ void main() {
     ivec2 samplePos;
     ivec2 texSize = textureSize(colortex3, 0);
 
+    #if STEP >= 4
+    // 旋转抖动 — 仅大步长启用, 避免网格伪影
     float theta = 2.0 * PI * rand(vec2(pix + 11 + R0));
-
-    #if STEP != 1
     mat2 rotM = mat2(cos(theta), -sin(theta), sin(theta), cos(theta)) * R0;
     #endif
 
@@ -101,17 +98,16 @@ void main() {
         for (int j = -1; j <= 1; j++) {
             if (i == 0 && j == 0) continue;
 
-            #if STEP == 1
-            samplePos = pix + ivec2(i, j);
-            #else
+            #if STEP >= 4
             samplePos = pix + ivec2(rotM * vec2(i, j));
+            #else
+            // 小步长 (≤3): 轴对齐 à‑trous, 无需旋转抖动
+            samplePos = pix + R0 * ivec2(i, j);
             #endif
             if (samplePos.x < 0 || samplePos.y < 0 ||
                     samplePos.x >= texSize.x || samplePos.y >= texSize.y) {
                 continue;
             }
-
-            if (denoiseBuffer.data[getIdx(uvec2(samplePos))].distance < -0.5) continue;
 
             // ---- 解包邻域样本 ----------------------------------------------------
             vec4 sampleGeom = texelFetch(colortex3, samplePos, 0);
@@ -122,19 +118,16 @@ void main() {
                 samplePosW, sampleNormal, sampleRadiance,
                 sampleWeight, sampleRoughness);
 
+            // 天空检查 — roughness < 0 复用作天空 mask
+            if (sampleRoughness < 0.0) continue;
+
             float rW = GetRoughnessWeight(centerRoughness, sampleRoughness);
 
-            // 各向异性深度权重
-            float w1 = exp(-blur_factor * (axis_A * i * i + axis_B * j * j));
-
-            // 位置/平面距离权重
-            float w_pos = exp(-POSITION_PARAM * abs(dot(centerPos - samplePosW, centerNormal)));
-
-            // 法线一致性权重
-            float w_norm = svgfNormalWeight(centerNormal, sampleNormal, normal_factor);
-
-            // 边界裁剪与组合
-            float w0 = rW * w_pos * w_norm * w1
+            // 单次 exp: 各向异性深度 + 位置平面距离 + 法线
+            // 法线权重 pow(dot,S) 用 exp(-S·(1-dot)) 逼近 (SVGF 标准近似)
+            float w0 = rW * exp(-(blur_factor * (axis_A * i * i + axis_B * j * j)
+                                + POSITION_PARAM * abs(dot(centerPos - samplePosW, centerNormal))
+                                + normal_factor * (1.0 - dot(centerNormal, sampleNormal))))
                     * float(samplePos == clamp(samplePos, vec2(0), texSize));
 
             A += sampleRadiance * w0;
@@ -147,7 +140,12 @@ void main() {
     w += 1.0;
 
     if (any(isnan(A))) A = vec3(0.0);
-    // ---- 输出：重新打包为 light_sample 格式 --------------------------------
-    float packedWR = pack2Half(centerWeight, centerRoughness);
-    color = vec4(A / max(w, 0.01), packedWR);
+    // ---- 输出: f16(R,G) | f16(B,roughness) | weight | spare ---------------
+    vec3 filteredRadiance = A / max(w, 0.01);
+    color = vec4(
+        uintBitsToFloat(packHalf2x16(filteredRadiance.rg)),
+        uintBitsToFloat(packHalf2x16(vec2(filteredRadiance.b, centerRoughness))),
+        centerWeight,
+        0.0
+    );
 }

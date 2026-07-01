@@ -202,23 +202,34 @@ SH unpackSH(float s0, float s1, float s2) {
 }
 
 struct PackedLightSample {
-    vec4 data0; // (pos.xyz, encoded_normal)
-    vec4 data1; // (encoded_shY.xy, encoded_shY.zw, encoded_CoCg.xy)
+    vec4 data0; // (pos.xyz, encoded_normal) — 几何, specular/diffuse 共用
+    vec4 data1; // specular: f16(R,G)|f16(B,roughness)|weight|spare; diffuse: ALICE SH packed
 };
 
 
 PackedLightSample packSpecularSample(vec3 pos, vec3 normal, vec3 radiance, float weight, float roughness) {
     PackedLightSample sample_data;
     sample_data.data0 = vec4(pos, encodeNormal(normal));
-    sample_data.data1 = vec4(radiance, pack2Half(weight, roughness));
+    // colortex4 新格式: f16(R,G) | f16(B,roughness) | weight | spare
+    // roughness < 0 复用为天空 mask (合法 roughness ∈ [0,1])
+    sample_data.data1 = vec4(
+        uintBitsToFloat(packHalf2x16(radiance.rg)),
+        uintBitsToFloat(packHalf2x16(vec2(radiance.b, roughness))),
+        weight,
+        0.0
+    );
     return sample_data;
 }
 
 void unpackSpecularSample(PackedLightSample sample_data, out vec3 pos, out vec3 normal, out vec3 radiance, out float weight, out float roughness) {
     pos = sample_data.data0.xyz;
     normal = decodeNormal(sample_data.data0.w);
-    radiance = sample_data.data1.xyz;
-    unpack2Half(sample_data.data1.w, weight, roughness);
+    // colortex4 新格式: .x=f16(R,G), .y=f16(B,roughness), .z=weight, .w=spare
+    vec2 rg = unpackHalf2x16(floatBitsToUint(sample_data.data1.x));
+    vec2 br = unpackHalf2x16(floatBitsToUint(sample_data.data1.y));
+    radiance  = vec3(rg.x, rg.y, br.x);
+    roughness = br.y;
+    weight    = sample_data.data1.z;
 }
 
 struct diffuseIllumiantionData {
