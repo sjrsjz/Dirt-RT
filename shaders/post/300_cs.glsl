@@ -139,7 +139,7 @@ void main() {
     unpackLightSampleSM(center_idx, center_pos, center_normal, center_sh, center_var_est);
 
     // 像素的世界空间 footprint, 用于距离无关的深度边缘停止
-    float dist_to_cam = max(length(center_pos - camPos), 0.001);
+    float dist_to_cam = max(length(center_pos), 0.001);
     float inv_pixel_footprint = 1.0 / (SVGF_POSITION_PARAM * max(dist_to_cam / float(resolution_global.y), 0.00001));
 
     // ---- 初始化累积器 (中心像素权重 = 1) -----------------------------------

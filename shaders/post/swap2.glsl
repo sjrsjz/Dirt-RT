@@ -89,7 +89,7 @@ float varianceGeometryWeight(
     float nd = clamp(dot(centerNormal, sampleNormal), 0.0, 1.0);
     float wNormal = pow(nd, VAR_FILTER_NORMAL_POWER);
 
-    float distToCam = max(length(centerPos - camPos), 0.01);
+    float distToCam = max(length(centerPos), 0.01);
     float pixelFootprint = max(distToCam / max(resolution.y, 1.0), 1e-4);
 
     float planeDist = abs(dot(samplePos - centerPos, centerNormal));

@@ -93,7 +93,7 @@ void main() {
     // 天空: 早退, 保留 swap4 写入的 mask
     if (cVar < 0.0) return;
 
-    vec3 V = normalize(camPos - cPos);
+    vec3 V = -normalize(cPos);
     vec3 planeN = cross(V, cR);
     vec3 viewDir = cross(camX_global, camY_global);
     float axis_A = 0.75 + max(computeAnisotropicAxisScale(viewDir, camX_global, planeN), 0.0);

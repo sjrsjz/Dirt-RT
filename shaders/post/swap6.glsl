@@ -45,7 +45,7 @@ float luma3(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 float varianceGeometryWeight(vec3 cPos, vec3 cH, vec3 sPos, vec3 sH) {
     float nd = clamp(dot(cH, sH), 0.0, 1.0);
     float wNormal = pow(nd, VAR_FILTER_NORMAL_POWER);
-    float distToCam = max(length(cPos - camPos), 0.01);
+    float distToCam = max(length(cPos), 0.01);
     float pixelFootprint = max(distToCam / max(resolution.y, 1.0), 1e-4);
     float planeDist = abs(dot(sPos - cPos, cH));
     float depthTerm = planeDist / max(VAR_FILTER_POSITION_PARAM * pixelFootprint, 1e-6);
@@ -72,7 +72,7 @@ void main() {
             vec3 color = texelFetch(refractIllumiantionData_color_swap_Sampler, cc, 0).xyz;
             if (any(isnan(color)) || any(isinf(color))) color = vec3(0.0);
             vec3 R = decodeNormal(e.oct_dir);
-            vec3 H = normalize(normalize(camPos - e.pos) + R);
+            vec3 H = normalize(-normalize(e.pos) + R);
             if (any(isnan(H)) || any(isinf(H))) H = R;
             s.pos_oct = vec4(e.pos, e.oct_dir);
             s.color_vproj = vec4(color, e.vprojdist);

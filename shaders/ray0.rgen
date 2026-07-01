@@ -558,9 +558,10 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
     diffuseIllumiantionBuffer.data[idx].rt_shY_zw = 0.0;
     diffuseIllumiantionBuffer.data[idx].rt_CoCg = 0.0;
 
-    diffuseIllumiantionBuffer.data[idx].px = first_p.x;
-    diffuseIllumiantionBuffer.data[idx].py = first_p.y;
-    diffuseIllumiantionBuffer.data[idx].pz = first_p.z;
+    vec3 pos_rel = first_p - ro;
+    diffuseIllumiantionBuffer.data[idx].px = pos_rel.x;
+    diffuseIllumiantionBuffer.data[idx].py = pos_rel.y;
+    diffuseIllumiantionBuffer.data[idx].pz = pos_rel.z;
     diffuseIllumiantionBuffer.data[idx].oct_n = encodeNormal(first_macro_n);
     diffuseIllumiantionBuffer.data[idx].oct_n2 = encodeNormal(faceforward(first_n, first_n, -first_macro_n));
 
@@ -632,8 +633,8 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
     }
 
     // 写入镜面 RT 输出 (SpecularRTElement, 32B) — pos=主命中点, dir=R, dist=vprojdist
-    reflectIllumiantionBuffer.data[idx] = packSpecularRT(first_p, refl_R, refl_vprojdist, refl_color);
-    refractIllumiantionBuffer.data[idx] = packSpecularRT(first_p, refr_R, refr_vprojdist, refr_color);
+    reflectIllumiantionBuffer.data[idx] = packSpecularRT(pos_rel, refl_R, refl_vprojdist, refl_color);
+    refractIllumiantionBuffer.data[idx] = packSpecularRT(pos_rel, refr_R, refr_vprojdist, refr_color);
 
     denoiseBuffer.data[idx].emission = first_emission_val;
 

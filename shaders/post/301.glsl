@@ -58,7 +58,7 @@ void main() {
     }
 
     // 视线 / 入射面 (替代旧 geoNormal 反射平面)
-    vec3 V = normalize(camPos - cPos);
+    vec3 V = -normalize(cPos);
     vec3 planeN = cross(V, cR);
     vec3 viewDir = cross(camX_global, camY_global);
     float axis_A = 0.75 + max(computeAnisotropicAxisScale(viewDir, camX_global, planeN), 0.0);

@@ -159,8 +159,10 @@ vec3 reproject(vec3 screenPos) {
     return prevClipPos.xyz / prevClipPos.w * 0.5 + 0.5;
 }
 
-vec3 reproject2(vec3 worldPos) {
-    vec3 prevPlayerPos = worldPos - previousCameraPosition;
+vec3 cameraDelta;
+
+vec3 reproject2(vec3 pos_rel, vec3 cameraDelta) {
+    vec3 prevPlayerPos = pos_rel + cameraDelta;
     vec3 prevViewPos = (gbufferPreviousModelView * vec4(prevPlayerPos, 1.0)).xyz;
     vec4 prevClipPos = gbufferPreviousProjection * vec4(prevViewPos, 1.0);
 
@@ -331,8 +333,9 @@ void MixDiffuse() {
     // -----------------------------------------------------------------------
     // 重投影置信度
     // -----------------------------------------------------------------------
+    vec3 histPosCur = histData.pos - cameraDelta;
     float pos_weight = svgfPositionWeight(
-        histData.pos,
+        histPosCur,
         current_data.pos,
         current_data.normal,
         info_distance
@@ -442,7 +445,8 @@ void main() {
     // -----------------------------------------------------------------------
     // 重投影到上一帧
     // -----------------------------------------------------------------------
-    prevScreenPos = reproject2(current_data.pos);
+    cameraDelta = cameraPosition - previousCameraPosition;
+    prevScreenPos = reproject2(current_data.pos, cameraDelta);
 
     // -----------------------------------------------------------------------
     // 执行时域累积

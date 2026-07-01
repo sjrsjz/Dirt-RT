@@ -90,8 +90,10 @@ vec3 reproject(vec3 screenPos) {
     return (prevClipPos.xyz / prevClipPos.w * 0.5 + 0.5);
 }
 
-vec3 reproject2(vec3 worldPos) {
-    vec3 prevPlayerPos = worldPos - previousCameraPosition;
+vec3 cameraDelta;
+
+vec3 reproject2(vec3 pos_rel, vec3 cameraDelta) {
+    vec3 prevPlayerPos = pos_rel + cameraDelta;
     vec3 prevViewPos = (gbufferPreviousModelView * vec4(prevPlayerPos, 1.0)).xyz;
     vec4 prevClipPos = gbufferPreviousProjection * vec4(prevViewPos, 1.0);
     return prevClipPos.xyz / prevClipPos.w * 0.5 + 0.5;
@@ -129,7 +131,8 @@ void MixRefract() {
     vec3IllumiantionData data = sampleRefract(prevScreenPos.xy * textureSize(colortex0, 0));
 
     // 位置权重: 主命中点在 data3.normal 平面上的距离差 (对重投影亚像素误差鲁棒)
-    float posWeight = svgfPositionWeight(data.pos, data3.pos, data3.normal, info_distance);
+    vec3 histPosCur = data.pos - cameraDelta;
+    float posWeight = svgfPositionWeight(histPosCur, data3.pos, data3.normal, info_distance);
     // req 6: 虚拟投射距离 (hit distance) 变化时衰减累积 — vprojdist (= length(normal))
     float hitWeight = exp2(-4.0 * LOG2_E * abs(length(data.normal) - length(data3.normal))
                          / max(length(data3.normal), 0.1));
@@ -170,7 +173,8 @@ void main() {
     }
 
     // ---- 重投影到上一帧 (主命中点: 定位同一折射表面点) ------------------
-    prevScreenPos = reproject2(data3.pos);
+    cameraDelta = cameraPosition - previousCameraPosition;
+    prevScreenPos = reproject2(data3.pos, cameraDelta);
     idx_l = getIdx(uvec2(prevScreenPos.xy * textureSize(colortex0, 0)));
 
     // ---- 执行时域混合 ----------------------------------------------------
