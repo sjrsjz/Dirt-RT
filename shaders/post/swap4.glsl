@@ -113,7 +113,11 @@ void main() {
     vec3 cPos = c.pos_oct.xyz;
     vec3 cR = decodeNormal(c.pos_oct.w);
     vec3 cH = c.H_dist.xyz;
-    vec3 cColor = c.color_vproj.xyz;
+    vec4 cSample = texelFetch(reflectIllumiantionData_color_swap_Sampler, ivec2(gid), 0);
+    vec3 cColor = cSample.xyz;
+    // 解包时域累积权重 (101 写入: pack2HalfClamped(weight, mixWeight))
+    vec2 cWMW = unpackHalf2x16(floatBitsToUint(cSample.w));
+    float cWeight = cWMW.x;
     float cVproj = c.color_vproj.w;
     // roughness 仅中心输出需要, 邻域方差不用 → 直接读 denoiseBuffer (中心)
     uint cidx = getIdx(uvec2(clamp(ivec2(gid), ivec2(0), texSize - 1)));
@@ -133,6 +137,11 @@ void main() {
     }
     float mean = (sumW > 1e-8) ? sumL / sumW : luma3(cColor);
     float variance = (sumW > 1e-8) ? max(sumL2 / sumW - mean * mean, 0.0) : 0.0;
+
+    // 时域权重引导的方差加速: 低累积权重(初始帧/遮挡)→放大方差→301 自动加强模糊
+    // cWeight=1.0(首帧)→boost≈2.4x, cWeight≥10(收敛)→boost≈1.0x
+    float varBoost = 1.0 + clamp(1.5 / max(cWeight, 1.0) - 0.1, 0.0, 2.0);
+    variance *= varBoost;
 
     // ---- Phase 3: 打包输出 ----
     PackedLightSample ps = packSpecularSample(cPos, cR, cColor, cRough, variance, cVproj, cH);

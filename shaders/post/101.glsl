@@ -91,7 +91,7 @@ void MixReflect() {
     float roughness = denoiseBuffer.data[idx].roughness;
     float alpha = roughness * roughness; // GGX α
     float cosTheta = abs(dot(normalize(data.normal), normalize(data2.normal))); // H_prev · H_curr
-    float tanThetaSq = max((0.999999 - cosTheta * cosTheta) / (1e-5 + cosTheta * cosTheta), 0.0);
+    float tanThetaSq = max((0.999999 - cosTheta * cosTheta) / (1e-9 + cosTheta * cosTheta), 0.0);
     float ggxWeight = exp2(-0.00014426950 * tanThetaSq / (alpha * alpha)); // GGX 分布形状
 
     // req 6: 虚拟击中点 (pos + R*vprojdist) 重建后用于重投影+权重
@@ -106,7 +106,7 @@ void MixReflect() {
             * ggxWeight * posWeight;
 
     float prevW = data.prev_weight;
-    prevW = min(prevW * s + 1.0, 3 * ACCUMULATION_LENGTH);
+    prevW = min(prevW * s + 1.0, ACCUMULATION_LENGTH);
 
     data2.data_swap = data.data + (data2.data_swap - data.data) / prevW;
     data2.weight = prevW;

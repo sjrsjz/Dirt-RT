@@ -21,13 +21,6 @@ uniform sampler2D colortex4; // f16(R,G)|f16(B,roughness)|f16(variance,vprojdist
 const float NORMAL_PARAM = 8.0;
 const float POSITION_PARAM = 1.0;
 
-float computeAnisotropicAxisScale(vec3 B, vec3 A, vec3 n) {
-    float an = dot(A, n);
-    float bn = dot(B, n);
-    vec3 x = an * B - bn * A;
-    return abs(bn) * sqrt(max(1.0 - an * an, 0.0)) / max(0.01, dot(x, x));
-}
-
 float GetRoughnessWeight(float roughness0, float roughness) {
     float norm = roughness0 * roughness0 * 0.99 + 0.01;
     float w = abs(roughness0 - roughness) * (1.0 / norm);
@@ -60,22 +53,40 @@ void main() {
     // 视线 / 入射面 (替代旧 geoNormal 反射平面)
     vec3 V = -normalize(cPos);
     vec3 planeN = cross(V, cR);
-    vec3 viewDir = cross(camX_global, camY_global);
-    float axis_A = 0.75 + max(computeAnisotropicAxisScale(viewDir, camX_global, planeN), 0.0);
-    float axis_B = 0.75 + max(computeAnisotropicAxisScale(viewDir, camY_global, planeN), 0.0);
+
+    // 屏幕空间各向异性: 入射面法线在屏幕上的投影决定拉伸方向
+    // 镜面高光沿入射面(⊥planeN)拉伸, 滤波核在垂直于拉伸的方向更宽
+    vec2 ssPN = vec2(dot(planeN, camX_global), dot(planeN, camY_global));
+    float ssPN_len2 = dot(ssPN, ssPN);
+
+    // 各向异性强度: 擦边角 → 强拉伸, 粗糙 → 弱拉伸 (NRD REBLUR)
+    float grazing = 1.0 - abs(dot(V, cR));  // 0=face-on, 1=grazing
+    float anisoStr = grazing / (1.0 + cRough * 2.0);
+
+    float axis_A = 0.75, axis_B = 0.75;
+    if (ssPN_len2 > 0.0001) {
+        // 屏幕空间拉伸方向 = 垂直于 planeN 的屏幕投影
+        vec2 ssStretch = vec2(-ssPN.y, ssPN.x) * inversesqrt(ssPN_len2);
+        // 轴缩放: 拉伸方向上的轴变窄, 垂直方向变宽
+        axis_A += anisoStr * abs(ssStretch.y); // camX 在 stretch⊥camX 时变宽
+        axis_B += anisoStr * abs(ssStretch.x); // camY 在 stretch⊥camY 时变宽
+    }
     axis_A *= axis_A;
     axis_B *= axis_B;
 
     // 模糊尺度由虚拟投射距离驱动 (取代旧 info_.distance)
+    // 粗糙度调制: 粗糙表面需要更大模糊半径 (NRD REBLUR specular lobe 宽度 ∝ roughness²)
     float depth = cVproj;
-    float blur_factor   = (1.0 - exp2(-0.36067376 * depth)) / 3.0;        // exp(-0.25*depth) → exp2
-    float normal_factor = (1.0 - exp2(-0.14426950 * depth)) * NORMAL_PARAM; // exp(-0.1*depth) → exp2
+    float rghScale       = 1.0 + cRough * cRough * 4.0;
+    float blur_factor    = rghScale * (1.0 - exp2(-0.36067376 * depth)) / 3.0;        // exp(-0.25*depth) → exp2
+    float normal_factor  = rghScale * (1.0 - exp2(-0.14426950 * depth)) * NORMAL_PARAM; // exp(-0.1*depth) → exp2
 
     // exp → exp2: LOG2_E 折叠进循环不变量
     float blur_factor2   = blur_factor   * LOG2_E;
     float pos_param2     = POSITION_PARAM * LOG2_E;
     float normal_factor2 = normal_factor * LOG2_E;
-    float luma_phi2      = SVGF_PHI_L * LOG2_E * inversesqrt(max(cVar, 1e-8));
+    // 粗糙表面放宽亮度边缘停止 (rough lobe 噪声频率更高, 需要更少拒绝)
+    float luma_phi2      = SVGF_PHI_L * LOG2_E * inversesqrt(max(cVar, 1e-8)) / (1.0 + cRough * 3.0);
     float cLuma = luma3(cRad);
 
     #if STEP >= 4
@@ -94,7 +105,7 @@ void main() {
             if (i == 0 && j == 0) continue;
 
             #if STEP >= 4
-            samplePos = pix + ivec2(rotM * vec2(i, j));
+            samplePos = pix + ivec2(round(rotM * vec2(i, j)));
             #else
             samplePos = pix + R0 * ivec2(i, j);
             #endif
@@ -115,6 +126,7 @@ void main() {
             float rW = GetRoughnessWeight(cRough, sRough);
 
             // 单次 exp2: 各向异性 + 位置平面(⊥H) + 法线(H) + 亮度(方差引导)
+            // 镜面高动态范围需锐利 e^(-x) 边缘停止, 不宜用漫反射的 (1+x)e^(-x)
             float w0 = rW * exp2(-(blur_factor2 * (axis_A * float(i * i) + axis_B * float(j * j))
                                  + pos_param2 * abs(dot(cPos - sPos, cH))
                                  + normal_factor2 * (1.0 - dot(cH, sH))

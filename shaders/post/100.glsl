@@ -43,7 +43,7 @@ uniform sampler2D colortex0;
 
 // 历史最大有效样本数。
 #ifndef TEMPORAL_MAX_HISTORY
-#define TEMPORAL_MAX_HISTORY 1000.0
+#define TEMPORAL_MAX_HISTORY 32.0
 #endif
 
 // 当前帧 ALICE intrinsic variance 注入比例。
@@ -55,7 +55,7 @@ uniform sampler2D colortex0;
 
 // 重投影置信度幂。
 #ifndef TEMPORAL_CONFIDENCE_POWER
-#define TEMPORAL_CONFIDENCE_POWER 0.25
+#define TEMPORAL_CONFIDENCE_POWER 1.0
 #endif
 
 // 历史有效权重低于该值时重置

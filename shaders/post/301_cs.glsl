@@ -28,13 +28,6 @@ shared vec4 sm_light[TILE_AREA];
 const float NORMAL_PARAM = 8.0;
 const float POSITION_PARAM = 1.0;
 
-float computeAnisotropicAxisScale(vec3 B, vec3 A, vec3 n) {
-    float an = dot(A, n);
-    float bn = dot(B, n);
-    vec3 x = an * B - bn * A;
-    return abs(bn) * sqrt(max(1.0 - an * an, 0.0)) / max(0.01, dot(x, x));
-}
-
 float GetRoughnessWeight(float roughness0, float roughness) {
     float norm = roughness0 * roughness0 * 0.99 + 0.01;
     float w = abs(roughness0 - roughness) * (1.0 / norm);
@@ -95,20 +88,31 @@ void main() {
 
     vec3 V = -normalize(cPos);
     vec3 planeN = cross(V, cR);
-    vec3 viewDir = cross(camX_global, camY_global);
-    float axis_A = 0.75 + max(computeAnisotropicAxisScale(viewDir, camX_global, planeN), 0.0);
-    float axis_B = 0.75 + max(computeAnisotropicAxisScale(viewDir, camY_global, planeN), 0.0);
+
+    vec2 ssPN = vec2(dot(planeN, camX_global), dot(planeN, camY_global));
+    float ssPN_len2 = dot(ssPN, ssPN);
+
+    float grazing = 1.0 - abs(dot(V, cR));
+    float anisoStr = grazing / (1.0 + cRough * 2.0);
+
+    float axis_A = 0.75, axis_B = 0.75;
+    if (ssPN_len2 > 0.0001) {
+        vec2 ssStretch = vec2(-ssPN.y, ssPN.x) * inversesqrt(ssPN_len2);
+        axis_A += anisoStr * abs(ssStretch.y);
+        axis_B += anisoStr * abs(ssStretch.x);
+    }
     axis_A *= axis_A;
     axis_B *= axis_B;
 
     float depth = cVproj;
-    float blur_factor   = (1.0 - exp2(-0.36067376 * depth)) / 3.0;
-    float normal_factor = (1.0 - exp2(-0.14426950 * depth)) * NORMAL_PARAM;
+    float rghScale       = 1.0 + cRough * cRough * 4.0;
+    float blur_factor    = rghScale * (1.0 - exp2(-0.36067376 * depth)) / 3.0;
+    float normal_factor  = rghScale * (1.0 - exp2(-0.14426950 * depth)) * NORMAL_PARAM;
 
     float blur_factor2   = blur_factor   * LOG2_E;
     float pos_param2     = POSITION_PARAM * LOG2_E;
     float normal_factor2 = normal_factor * LOG2_E;
-    float luma_phi2      = SVGF_PHI_L * LOG2_E * inversesqrt(max(cVar, 1e-8));
+    float luma_phi2      = SVGF_PHI_L * LOG2_E * inversesqrt(max(cVar, 1e-8)) / (1.0 + cRough * 3.0);
     float cLuma = luma3(cRad);
 
     vec3 A = cRad;          // 中心像素 (权重 = 1)
