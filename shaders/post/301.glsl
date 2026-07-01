@@ -1,7 +1,12 @@
 #version 430 compatibility
 
 // ===========================================================================
-// Pass 301: 屏幕空间模糊滤波器 (Screen-Space Blur Filter)
+// Pass 301: 镜面反射/折射 NRD 风格屏幕空间降噪 (à-trous, fragment 变体 R0≥8)
+// ===========================================================================
+// 仅读 colortex3 (pos.xyz + oct(R)) + colortex4 (f16 RGB | roughness | variance |
+// vprojdist | oct(H)), 无 SSBO. 虚拟平面法线 = H (GGX 主半向量); 各向异性由入射面
+// cross(V,R) 决定; 模糊尺度由虚拟投射距离 vprojdist 驱动; 亮度权重由预计算方差引导.
+// 每采样点仅一次 exp2 (各向异性+位置+法线+亮度权重合并, LOG2_E 折叠进常量).
 // ===========================================================================
 
 #include "/lib/constants.glsl"
@@ -9,21 +14,13 @@
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/denoise.glsl"
 
-// ---------------------------------------------------------------------------
-// Uniform 输入
-// ---------------------------------------------------------------------------
-uniform sampler2D colortex3; // geometry: pos.xyz + encoded normal
-uniform sampler2D colortex4; // light_sample: radiance.xyz + packed(weight, roughness)
+uniform sampler2D colortex3; // (pos.xyz, oct(R))
+uniform sampler2D colortex4; // f16(R,G)|f16(B,roughness)|f16(variance,vprojdist)|oct(H)
 
-// ---------------------------------------------------------------------------
 // 可调参数
-// ---------------------------------------------------------------------------
 const float NORMAL_PARAM = 8.0;
 const float POSITION_PARAM = 1.0;
 
-// ---------------------------------------------------------------------------
-// 边缘停止 / 权重函数
-// ---------------------------------------------------------------------------
 float computeAnisotropicAxisScale(vec3 B, vec3 A, vec3 n) {
     float an = dot(A, n);
     float bn = dot(B, n);
@@ -37,58 +34,49 @@ float GetRoughnessWeight(float roughness0, float roughness) {
     return clamp(1.0 - w, 0.0, 1.0);
 }
 
+float luma3(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+
 /* RENDERTARGETS: 4 */
 layout(location = 0) out vec4 color;
 
 void main() {
-    uint idx = getIdx(uvec2(gl_FragCoord.xy));
+    ivec2 pix = ivec2(gl_FragCoord.xy);
+    ivec2 texSize = textureSize(colortex3, 0);
 
-    // ---- 跳过无效像素 (天空/未命中) --------------------------------------
-    bufferData info_ = denoiseBuffer.data[idx];
-    if (info_.distance < -0.5) {
-        // 天空像素: 写入负值 roughness 作为天空 mask
-        // colortex4 格式: f16(R,G)|f16(B,roughness)|weight|spare
-        color = vec4(0.0, uintBitsToFloat(packHalf2x16(vec2(0.0, -1.0))), 0.0, 0.0);
+    vec4 centerGeom = texelFetch(colortex3, pix, 0);
+    vec4 centerLight = texelFetch(colortex4, pix, 0);
+
+    vec3 cPos, cR, cRad, cH;
+    float cRough, cVar, cVproj;
+    unpackSpecularSample(PackedLightSample(centerGeom, centerLight),
+        cPos, cR, cRad, cRough, cVar, cVproj, cH);
+
+    // 天空 (variance<0): 透传
+    if (cVar < 0.0) {
+        color = centerLight;
         return;
     }
 
-    ivec2 pix = ivec2(gl_FragCoord.xy);
-
-    // 几何法线 (用于构建反射平面)
-    vec3 geoNormal = decodeNormal(diffuseIllumiantionBuffer.data[idx].oct_n2);
-
-    // ---- 解包中心像素 ----------------------------------------------------
-    vec4 centerGeom = texelFetch(colortex3, pix, 0);
-    vec4 centerLight = texelFetch(colortex4, pix, 0);
-    vec3 centerPos, centerNormal, centerRadiance;
-    float centerWeight, centerRoughness;
-    unpackSpecularSample(PackedLightSample(centerGeom, centerLight),
-        centerPos, centerNormal, centerRadiance,
-        centerWeight, centerRoughness);
-
-    // 使用正确的 hit distance 作为深度
-    float depth = info_.distance;
-
-    // ---- 各向异性轴计算 (基于反射平面) ------------------------------------
-    vec3 planeN = -reflect(centerNormal, geoNormal);
+    // 视线 / 入射面 (替代旧 geoNormal 反射平面)
+    vec3 V = normalize(camPos - cPos);
+    vec3 planeN = cross(V, cR);
     vec3 viewDir = cross(camX_global, camY_global);
     float axis_A = 0.75 + max(computeAnisotropicAxisScale(viewDir, camX_global, planeN), 0.0);
     float axis_B = 0.75 + max(computeAnisotropicAxisScale(viewDir, camY_global, planeN), 0.0);
     axis_A *= axis_A;
     axis_B *= axis_B;
 
-    // ---- 动态模糊因子 (用深度取代原来错误的权重) ---------------------------
-    float blur_factor  = (1.0 - exp2(-0.36067376 * depth)) / 3.0;   // exp(-0.25*depth) → exp2
+    // 模糊尺度由虚拟投射距离驱动 (取代旧 info_.distance)
+    float depth = cVproj;
+    float blur_factor   = (1.0 - exp2(-0.36067376 * depth)) / 3.0;        // exp(-0.25*depth) → exp2
     float normal_factor = (1.0 - exp2(-0.14426950 * depth)) * NORMAL_PARAM; // exp(-0.1*depth) → exp2
 
-    // exp → exp2: 将 LOG2_E 折叠进循环不变量, 避免内层循环重复乘
+    // exp → exp2: LOG2_E 折叠进循环不变量
     float blur_factor2   = blur_factor   * LOG2_E;
-    float pos_param2     = POSITION_PARAM * LOG2_E;  // = 1.442695
+    float pos_param2     = POSITION_PARAM * LOG2_E;
     float normal_factor2 = normal_factor * LOG2_E;
-
-    // ---- à-trous 采样 ----------------------------------------------------
-    ivec2 samplePos;
-    ivec2 texSize = textureSize(colortex3, 0);
+    float luma_phi2      = SVGF_PHI_L * LOG2_E * inversesqrt(max(cVar, 1e-8));
+    float cLuma = luma3(cRad);
 
     #if STEP >= 4
     // 旋转抖动 — 仅大步长启用, 避免网格伪影
@@ -96,8 +84,10 @@ void main() {
     mat2 rotM = mat2(cos(theta), -sin(theta), sin(theta), cos(theta)) * R0;
     #endif
 
-    vec3 A = vec3(0.0); // 累积加权颜色
-    float w = 0.0; // 累积总权重
+    vec3 A = cRad;            // 中心像素 (权重 = 1)
+    float w = 1.0;
+    float varEnergy = cVar;   // 方差传播 (Σa²·var / (Σa)²)
+    ivec2 samplePos;
 
     for (int i = -1; i <= 1; i++) {
         for (int j = -1; j <= 1; j++) {
@@ -106,7 +96,6 @@ void main() {
             #if STEP >= 4
             samplePos = pix + ivec2(rotM * vec2(i, j));
             #else
-            // 小步长 (≤3): 轴对齐 à‑trous, 无需旋转抖动
             samplePos = pix + R0 * ivec2(i, j);
             #endif
             if (samplePos.x < 0 || samplePos.y < 0 ||
@@ -114,43 +103,33 @@ void main() {
                 continue;
             }
 
-            // ---- 解包邻域样本 ----------------------------------------------------
-            vec4 sampleGeom = texelFetch(colortex3, samplePos, 0);
-            vec4 sampleLight = texelFetch(colortex4, samplePos, 0);
-            vec3 samplePosW, sampleNormal, sampleRadiance;
-            float sampleWeight, sampleRoughness;
-            unpackSpecularSample(PackedLightSample(sampleGeom, sampleLight),
-                samplePosW, sampleNormal, sampleRadiance,
-                sampleWeight, sampleRoughness);
+            vec4 sG = texelFetch(colortex3, samplePos, 0);
+            vec4 sL = texelFetch(colortex4, samplePos, 0);
+            vec3 sPos, sR, sRad, sH;
+            float sRough, sVar, sVproj;
+            unpackSpecularSample(PackedLightSample(sG, sL),
+                sPos, sR, sRad, sRough, sVar, sVproj, sH);
 
-            // 天空检查 — roughness < 0 复用作天空 mask
-            if (sampleRoughness < 0.0) continue;
+            if (sVar < 0.0) continue; // 天空
 
-            float rW = GetRoughnessWeight(centerRoughness, sampleRoughness);
+            float rW = GetRoughnessWeight(cRough, sRough);
 
-            // 单次 exp2: 各向异性深度 + 位置平面距离 + 法线 (LOG2_E 已折叠入常量)
-            // 法线权重 pow(dot,S) 用 exp2(-S2·(1-dot)) 逼近 (SVGF 标准近似)
-            float w0 = rW * exp2(-(blur_factor2 * (axis_A * i * i + axis_B * j * j)
-                                 + pos_param2 * abs(dot(centerPos - samplePosW, centerNormal))
-                                 + normal_factor2 * (1.0 - dot(centerNormal, sampleNormal))))
-                    * float(samplePos == clamp(samplePos, vec2(0), texSize));
+            // 单次 exp2: 各向异性 + 位置平面(⊥H) + 法线(H) + 亮度(方差引导)
+            float w0 = rW * exp2(-(blur_factor2 * (axis_A * float(i * i) + axis_B * float(j * j))
+                                 + pos_param2 * abs(dot(cPos - sPos, cH))
+                                 + normal_factor2 * (1.0 - dot(cH, sH))
+                                 + luma_phi2 * abs(cLuma - luma3(sRad))));
 
-            A += sampleRadiance * w0;
+            A += sRad * w0;
             w += w0;
+            varEnergy += w0 * w0 * sVar;
         }
     }
 
-    // ---- 中心像素 (权重 = 1) -----------------------------------------------
-    A += centerRadiance;
-    w += 1.0;
-
     if (any(isnan(A))) A = vec3(0.0);
-    // ---- 输出: f16(R,G) | f16(B,roughness) | weight | spare ---------------
-    vec3 filteredRadiance = A / max(w, 0.01);
-    color = vec4(
-        uintBitsToFloat(packHalf2x16(filteredRadiance.rg)),
-        uintBitsToFloat(packHalf2x16(vec2(filteredRadiance.b, centerRoughness))),
-        centerWeight,
-        0.0
-    );
+    vec3 filtered = A / max(w, 0.01);
+    float outVar = varEnergy / max(w * w, 1e-8);
+
+    // 输出: 仅颜色+方差变化, roughness/vprojdist/H 透传
+    color = packSpecularSample(cPos, cR, filtered, cRough, outVar, cVproj, cH).data1;
 }

@@ -15,6 +15,8 @@
 // ===========================================================================
 
 #define REFLECT_BUFFER_MIN
+// 仅写 swap_color (color/lpos/lnormal 由 swap5 写),
+// 避免 fragment 内 sampler 读 + imageStore 写同一纹理的 UB (原 101 已验证可行).
 
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
@@ -115,13 +117,18 @@ void MixReflect() {
     float tanThetaSq = max((0.99995 - cosTheta * cosTheta) / (1e-5 + cosTheta * cosTheta), 0.0);
     float ggxWeight = exp2(-0.00014426950 * tanThetaSq / (alpha * alpha)); // GGX 分布形状
 
-    // 可选位置权重（几何法线平面距离）
+    // 可选位置权重 (主命中点在几何法线平面上的距离差, 对重投影亚像素误差鲁棒)
     vec3 geoNormal = decodeNormal(diffuseIllumiantionBuffer.data[idx].oct_n2);
     float posWeight = exp2(-POSITION_PARAM * LOG2_E * abs(dot(data.pos - data2.pos, geoNormal)));
 
+    // req 6: 虚拟投射距离 (hit distance) 变化时衰减累积 — 使用 vprojdist (= length(normal))
+    // 而非虚拟击中点位置, 对重投影误差鲁棒 (相邻像素 vprojdist 相近)
+    float hitWeight = exp2(-4.0 * LOG2_E * abs(length(data.normal) - length(data2.normal))
+                         / max(length(data2.normal), 0.1));
+
     // 综合置信度
     float s = float(denoiseBuffer.data[idx].distance > -0.5)
-            * ggxWeight * posWeight;
+            * ggxWeight * posWeight * hitWeight;
 
     float prevW = data.prev_weight;
     prevW = min(prevW * s + 1.0, 3 * ACCUMULATION_LENGTH);
@@ -137,7 +144,13 @@ void main() {
     idx = getIdx(uvec2(gl_FragCoord.xy));
 
     info_distance = denoiseBuffer.data[idx].distance;
-    data2 = reflectIllumiantionBuffer.data[idx];
+
+    // 从 SSBO (SpecularRTElement) 重建当前帧反射数据: normal = R*vprojdist
+    unpackSpecularRT(reflectIllumiantionBuffer.data[idx], data2.pos, data2.normal, data2.data_swap);
+    data2.data = vec3(0.0);
+    data2.weight = 0.0;
+    data2.prev_weight = 0.0;
+    data2.mixWeight = 0.0;
 
     // ---- 天空 / 无效几何: 重置权重后直接写出 -----------------------------
     if (info_distance < -0.5) {
@@ -147,12 +160,15 @@ void main() {
         return;
     }
 
-    // ---- 重投影到上一帧 --------------------------------------------------
+    // ---- 重投影到上一帧 (主命中点: 定位同一反射表面点) ------------------
     prevScreenPos = reproject2(data2.pos);
     idx_l = getIdx(uvec2(prevScreenPos.xy * textureSize(colortex0, 0) + 0.5));
 
     // ---- 执行时域混合 ----------------------------------------------------
     MixReflect();
 
+    // 控制字段通过 swap_color.w 传递 (REFLECT_BUFFER_MIN 仅写 swap_color).
+    // flip / prev_weight / lpos / lnormal 由 swap5 写出.
+    data2.mixWeight = denoiseBuffer.data[idx].reflectWeight;
     WriteReflect(data2, ivec2(gl_FragCoord.xy));
 }

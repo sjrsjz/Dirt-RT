@@ -5,42 +5,19 @@
 #include "/lib/buffers/denoise.glsl"
 
 // ===========================================================================
-// Pass 301 CS: 屏幕空间模糊滤波器 (计算着色器变体) — 前 3 级 à‑trous (R0=1,2,3)
+// Pass 301 CS: 镜面 NRD 风格降噪 (计算着色器变体, 前 3 级 à-trous R0=1,2,4)
 // ===========================================================================
-// 参考: 301.glsl — 镜面反射/折射的屏幕空间各向异性模糊
-//
-// 设计动机:
-//   301.glsl 为 fragment shader, 每线程通过 texelFetch 读取 18 个 vec4。
-//   R0 ≤ 3 时邻域高度重叠, 共享内存可显著减少冗余读取。
-//   STEP ≤ 3 全部轴对齐 (无旋转抖动), HALO = R0, tile 尺寸最小化。
-//
-// 共享内存使用量 (16×16 工作组, 轴对齐):
-//   R0=1: 18×18 tile →  324 vec4(geom) +  324 vec4(light) = 10.1 KB
-//   R0=2: 20×20 tile →  400 vec4(geom) +  400 vec4(light) = 12.5 KB
-//   R0=3: 22×22 tile →  484 vec4(geom) +  484 vec4(light) = 15.1 KB
-//
-// 管线:
-//   R0=1 → dispatch CS (R0=1, 轴对齐)
-//   R0=2 → dispatch CS (R0=2, 轴对齐)
-//   R0=3 → dispatch CS (R0=3, 轴对齐)
-//   R0≥4 → 301.glsl (fragment shader, 旋转抖动)
-//
-// 天空掩码: roughness < 0 (由 swap4/swap6/301 写入)
+// 参考 301.glsl. R0≤4 轴对齐, HALO=R0, LDS 缓存 tile 几何+光照, 减少 texelFetch.
+// 天空 (variance<0) 早退, 保留 swap4 写入的 mask.
 // ===========================================================================
 
-// ---- 工作组配置 — 16×16 = 256 线程 ------------------------------------------
 layout(local_size_x = 16, local_size_y = 16) in;
 
-// ---- 输入纹理 (只读) -------------------------------------------------------
-uniform sampler2D colortex3; // 几何: pos.xyz + encoded normal
-uniform sampler2D colortex4; // 镜面反射: f16(R,G)|f16(B,roughness)|weight|spare
+uniform sampler2D colortex3; // (pos.xyz, oct(R))
+uniform sampler2D colortex4; // f16(R,G)|f16(B,roughness)|f16(variance,vprojdist)|oct(H)
 
-// ---- 输出图像 --------------------------------------------------------------
 layout(rgba32f) uniform image2D colorimg4;
 
-// ---- 共享内存 — 缓存 tile 内的几何 + 光照数据 ------------------------------
-// 天空掩码复用 roughness (sm_light[].y 的 second half): < 0 = 天空
-// STEP ≤ 3 全部轴对齐 → HALO = R0, 无需旋转扩展
 #define HALO R0
 #define TILE_SIZE (16 + 2 * HALO)
 #define TILE_AREA (TILE_SIZE * TILE_SIZE)
@@ -48,13 +25,8 @@ layout(rgba32f) uniform image2D colorimg4;
 shared vec4 sm_geometry[TILE_AREA];
 shared vec4 sm_light[TILE_AREA];
 
-// ---- 可调参数 (与 301.glsl 一致) --------------------------------------------
 const float NORMAL_PARAM = 8.0;
 const float POSITION_PARAM = 1.0;
-
-// ===========================================================================
-// 辅助函数
-// ===========================================================================
 
 float computeAnisotropicAxisScale(vec3 B, vec3 A, vec3 n) {
     float an = dot(A, n);
@@ -69,157 +41,109 @@ float GetRoughnessWeight(float roughness0, float roughness) {
     return clamp(1.0 - w, 0.0, 1.0);
 }
 
-// 从共享内存解包镜面反射样本 (与 denoise.glsl unpackSpecularSample 语义一致)
-void unpackSpecularSampleSM(uint tile_idx, out vec3 pos, out vec3 normal,
-    out vec3 radiance, out float weight, out float roughness) {
-    vec4 geom = sm_geometry[tile_idx];
-    vec4 light = sm_light[tile_idx];
-    pos = geom.xyz;
-    normal = decodeNormal(geom.w);
-    // colortex4 新格式: .x=f16(R,G), .y=f16(B,roughness), .z=weight
-    vec2 rg = unpackHalf2x16(floatBitsToUint(light.x));
-    vec2 br = unpackHalf2x16(floatBitsToUint(light.y));
-    radiance = vec3(rg.x, rg.y, br.x);
-    roughness = br.y;
-    weight = light.z;
+float luma3(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+
+// 从共享内存解包镜面样本 (与 denoise.glsl unpackSpecularSample 语义一致)
+void unpackSpecularSampleSM(uint tile_idx, out vec3 pos, out vec3 R, out vec3 radiance,
+    out float roughness, out float variance, out float vprojdist, out vec3 H) {
+    PackedLightSample s;
+    s.data0 = sm_geometry[tile_idx];
+    s.data1 = sm_light[tile_idx];
+    unpackSpecularSample(s, pos, R, radiance, roughness, variance, vprojdist, H);
 }
 
-// ===========================================================================
-// 主函数
-// ===========================================================================
-
 void main() {
-    // ---- 工作项标识 --------------------------------------------------------
     ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
-    uvec2 local_id = gl_LocalInvocationID.xy;
+    uvec2 lid = gl_LocalInvocationID.xy;
     uint local_idx = gl_LocalInvocationIndex;
     uvec2 group_id = gl_WorkGroupID.xy;
-
     ivec2 texSize = textureSize(colortex3, 0);
 
-    // ---- Tile 原点 (含 HALO 边框, 覆盖 à‑trous 邻域) -------------------------
     ivec2 tile_origin = ivec2(group_id * 16u) - ivec2(HALO);
 
-    // =========================================================================
-    // Phase 1: 协作加载 tile 到共享内存
-    // =========================================================================
+    // ---- Phase 1: 协作加载 tile 到共享内存 ----
     for (uint i = local_idx; i < uint(TILE_AREA); i += 256u) {
         uint tx = i % uint(TILE_SIZE);
         uint ty = i / uint(TILE_SIZE);
         ivec2 gc = tile_origin + ivec2(tx, ty);
         ivec2 cc = clamp(gc, ivec2(0), texSize - 1);
-
         if (gc == cc) {
             sm_geometry[i] = texelFetch(colortex3, cc, 0);
             sm_light[i] = texelFetch(colortex4, cc, 0);
         } else {
-            // 越界像素: 几何清零, roughness 标记为负 → 天空
+            // 越界: 天空 mask (variance<0)
             sm_geometry[i] = vec4(0.0);
-            sm_light[i] = vec4(0.0, uintBitsToFloat(packHalf2x16(vec2(0.0, -1.0))), 0.0, 0.0);
+            sm_light[i] = vec4(0.0, 0.0, pack2HalfClamped(-1.0, 0.0), 0.0);
         }
     }
 
     barrier();
     memoryBarrierShared();
 
-    // =========================================================================
-    // Phase 2: 中心像素有效性检查
-    // =========================================================================
-    uint cx = local_id.x + uint(HALO);
-    uint cy = local_id.y + uint(HALO);
-    uint center_idx = cy * uint(TILE_SIZE) + cx;
-
-    // 跳过越界像素
     if (pix.x >= texSize.x || pix.y >= texSize.y) return;
 
-    // 天空检查 — roughness < 0 复用作天空 mask
-    float centerRoughCheck = unpackHalf2x16(floatBitsToUint(sm_light[center_idx].y)).y;
-    if (centerRoughCheck < 0.0) return;
+    uint cx = lid.x + uint(HALO);
+    uint cy = lid.y + uint(HALO);
+    uint center_idx = cy * uint(TILE_SIZE) + cx;
 
-    // ---- 中心像素深度 (用于模糊因子计算) -----------------------------------
-    uint idx = getIdx(uvec2(clamp(pix, ivec2(0), texSize - 1)));
-    bufferData info_ = denoiseBuffer.data[idx];
-    // 保险: 双重确认非天空像素
-    if (info_.distance < -0.5) return;
+    vec3 cPos, cR, cRad, cH;
+    float cRough, cVar, cVproj;
+    unpackSpecularSampleSM(center_idx, cPos, cR, cRad, cRough, cVar, cVproj, cH);
 
-    // ---- 解包中心像素 ------------------------------------------------------
-    vec3 centerPos, centerNormal, centerRadiance;
-    float centerWeight, centerRoughness;
-    unpackSpecularSampleSM(center_idx, centerPos, centerNormal, centerRadiance,
-        centerWeight, centerRoughness);
+    // 天空: 早退, 保留 swap4 写入的 mask
+    if (cVar < 0.0) return;
 
-    // ---- 几何法线 (用于构建反射平面) ---------------------------------------
-    vec3 geoNormal = decodeNormal(diffuseIllumiantionBuffer.data[idx].oct_n2);
-
-    float depth = info_.distance;
-
-    // ---- 各向异性轴计算 (基于反射平面) --------------------------------------
-    vec3 planeN = -reflect(centerNormal, geoNormal);
+    vec3 V = normalize(camPos - cPos);
+    vec3 planeN = cross(V, cR);
     vec3 viewDir = cross(camX_global, camY_global);
     float axis_A = 0.75 + max(computeAnisotropicAxisScale(viewDir, camX_global, planeN), 0.0);
     float axis_B = 0.75 + max(computeAnisotropicAxisScale(viewDir, camY_global, planeN), 0.0);
     axis_A *= axis_A;
     axis_B *= axis_B;
 
-    // ---- 动态模糊因子 ------------------------------------------------------
-    float blur_factor  = (1.0 - exp2(-0.36067376 * depth)) / 3.0;   // exp(-0.25*depth) → exp2
-    float normal_factor = (1.0 - exp2(-0.14426950 * depth)) * NORMAL_PARAM; // exp(-0.1*depth) → exp2
+    float depth = cVproj;
+    float blur_factor   = (1.0 - exp2(-0.36067376 * depth)) / 3.0;
+    float normal_factor = (1.0 - exp2(-0.14426950 * depth)) * NORMAL_PARAM;
 
-    // exp → exp2: 将 LOG2_E 折叠进循环不变量, 避免内层循环重复乘
     float blur_factor2   = blur_factor   * LOG2_E;
-    float pos_param2     = POSITION_PARAM * LOG2_E;  // = 1.442695
+    float pos_param2     = POSITION_PARAM * LOG2_E;
     float normal_factor2 = normal_factor * LOG2_E;
+    float luma_phi2      = SVGF_PHI_L * LOG2_E * inversesqrt(max(cVar, 1e-8));
+    float cLuma = luma3(cRad);
 
-    // ---- 累积器 (中心像素权重 = 1) ------------------------------------------
-    vec3 A = centerRadiance;
+    vec3 A = cRad;          // 中心像素 (权重 = 1)
     float w = 1.0;
+    float varEnergy = cVar; // 方差传播
 
-    // =========================================================================
-    // Phase 3: 3×3 à‑trous 采样循环 — 全部从共享内存读取
-    // =========================================================================
     for (int i = -1; i <= 1; i++) {
         for (int j = -1; j <= 1; j++) {
             if (i == 0 && j == 0) continue;
-
-            // 邻域在 tile 内的坐标 — 轴对齐步进 (小步长无需旋转抖动)
             int sx = int(cx) + i * R0;
             int sy = int(cy) + j * R0;
-
-            // 边界裁剪 (tile 内)
             if (sx < 0 || sy < 0 || sx >= int(TILE_SIZE) || sy >= int(TILE_SIZE)) continue;
-
             uint sample_idx = uint(sy) * uint(TILE_SIZE) + uint(sx);
 
-            // ---- 解包邻域样本 (共享内存) -----------------------------------
-            vec3 samplePosW, sampleNormal, sampleRadiance;
-            float sampleWeight, sampleRoughness;
-            unpackSpecularSampleSM(sample_idx, samplePosW, sampleNormal,
-                sampleRadiance, sampleWeight, sampleRoughness);
+            vec3 sPos, sR, sRad, sH;
+            float sRough, sVar, sVproj;
+            unpackSpecularSampleSM(sample_idx, sPos, sR, sRad, sRough, sVar, sVproj, sH);
 
-            // 天空检查 — roughness < 0
-            if (sampleRoughness < 0.0) continue;
+            if (sVar < 0.0) continue; // 天空
 
-            // ---- 粗糙度权重 ------------------------------------------------
-            float rW = GetRoughnessWeight(centerRoughness, sampleRoughness);
-
-            // ---- 组合权重: 单次 exp2 (各向异性+位置+法线), LOG2_E 已折叠入常量 ----
+            float rW = GetRoughnessWeight(cRough, sRough);
             float w0 = rW * exp2(-(blur_factor2 * (axis_A * float(i * i) + axis_B * float(j * j))
-                                 + pos_param2 * abs(dot(centerPos - samplePosW, centerNormal))
-                                 + normal_factor2 * (1.0 - dot(centerNormal, sampleNormal))));
+                                 + pos_param2 * abs(dot(cPos - sPos, cH))
+                                 + normal_factor2 * (1.0 - dot(cH, sH))
+                                 + luma_phi2 * abs(cLuma - luma3(sRad))));
 
-            A += sampleRadiance * w0;
+            A += sRad * w0;
             w += w0;
+            varEnergy += w0 * w0 * sVar;
         }
     }
 
-    // ---- 归一化并输出 (新压缩格式) ------------------------------------------
     if (any(isnan(A))) A = vec3(0.0);
-    vec3 filteredRadiance = A / max(w, 0.01);
+    vec3 filtered = A / max(w, 0.01);
+    float outVar = varEnergy / max(w * w, 1e-8);
 
-    imageStore(colorimg4, pix, vec4(
-            uintBitsToFloat(packHalf2x16(filteredRadiance.rg)),
-            uintBitsToFloat(packHalf2x16(vec2(filteredRadiance.b, centerRoughness))),
-            centerWeight,
-            0.0
-        ));
+    imageStore(colorimg4, pix, packSpecularSample(cPos, cR, filtered, cRough, outVar, cVproj, cH).data1);
 }

@@ -553,12 +553,10 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
     denoiseBuffer.data[idx].absorption = current_absorption;
     denoiseBuffer.data[idx].rd = first_rd_i;
 
-    // RT output: zero-initialize SH
+    // RT output: zero-initialize diffuse SH
     diffuseIllumiantionBuffer.data[idx].rt_shY_xy = 0.0;
     diffuseIllumiantionBuffer.data[idx].rt_shY_zw = 0.0;
     diffuseIllumiantionBuffer.data[idx].rt_CoCg = 0.0;
-    reflectIllumiantionBuffer.data[idx].data_swap = vec3(0.0);
-    refractIllumiantionBuffer.data[idx].data_swap = vec3(0.0);
 
     diffuseIllumiantionBuffer.data[idx].px = first_p.x;
     diffuseIllumiantionBuffer.data[idx].py = first_p.y;
@@ -566,70 +564,43 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
     diffuseIllumiantionBuffer.data[idx].oct_n = encodeNormal(first_macro_n);
     diffuseIllumiantionBuffer.data[idx].oct_n2 = encodeNormal(faceforward(first_n, first_n, -first_macro_n));
 
-    reflectIllumiantionBuffer.data[idx].normal = vec3(0.0);
-    reflectIllumiantionBuffer.data[idx].pos = first_p;
-    refractIllumiantionBuffer.data[idx].normal = first_n;
-    refractIllumiantionBuffer.data[idx].pos = first_p;
+    // 镜面 RT 输出 (SpecularRTElement) 局部累积: pos=主命中点, R=主导方向, vprojdist=虚拟投射距离.
+    // 默认 vprojdist=0 → normal=R*0=0 → 虚拟击中点=pos (非镜面像素的安全默认, 与旧 .normal=0 等价).
+    vec3 refl_R = first_rd_i;
+    float refl_vprojdist = 0.0;
+    vec3 refl_color = vec3(0.0);
+    vec3 refr_R = first_rd_i;
+    float refr_vprojdist = 0.0;
+    vec3 refr_color = vec3(0.0);
 
     if (!hit_sky_first && first_t > -0.5) {
-        // 写入反射重投影特征
+        // 反射虚拟投射距离: 沿 GGX 主导方向 (最大概率半向量对应的反射方向) 做一次额外求交
         vec3 r_rd, r_ro;
         vec3 r_n = normalize(mix(first_n, first_macro_n, 1.0 - exp2(-0.07213475 * first_t)));
         vec3 r_rd_i = GetSpecularDominantDirection(r_n, first_rd_i, first_roughness);
         float t_refl = raycast(first_p + first_macro_n * 0.0001, r_rd_i, r_ro, r_rd, false);
+        refl_R = r_rd_i;
+        refl_vprojdist = (t_refl > -0.5) ? t_refl : VPROJDIST_SKY;
 
-        if (first_roughness <= 0.000125) {
-            if (t_refl > -0.5) {
-                vec3 reconstructed_pos = first_p + reflect(r_ro - first_p, r_n);
-                vec3 reconstructed_normal = reflect(tmp_Payload.material.normal, r_n);
-                reflectIllumiantionBuffer.data[idx].normal = t_refl * reconstructed_normal;
-                reflectIllumiantionBuffer.data[idx].pos = reconstructed_pos;
-            } else {
-                reflectIllumiantionBuffer.data[idx].normal = 5.0 * r_rd_i;
-                reflectIllumiantionBuffer.data[idx].pos = first_p;
-            }
-        } else {
-            if (t_refl > -0.5) {
-                reflectIllumiantionBuffer.data[idx].normal = t_refl * r_rd_i;
-                reflectIllumiantionBuffer.data[idx].pos = first_p;
-            } else {
-                reflectIllumiantionBuffer.data[idx].normal = 5.0 * r_rd_i;
-                reflectIllumiantionBuffer.data[idx].pos = first_p;
-            }
-        }
-
-        // 写入折射重投影特征
-        if (first_roughness <= 0.00125 && mixWeight.y > 0.001) {
+        // 折射虚拟投射距离 (有折射概率时; 镜面退化不再特殊处理, 统一走镜面降噪)
+        if (mixWeight.y > 0.001) {
             float rs_refract = first_n_i == Refractive_Index ? Refractive_Index : 1.0 / Refractive_Index;
             vec3 refract_rd = refract(first_rd_i, first_n, rs_refract);
             bool is_refract = dot(refract_rd, refract_rd) > 0.0;
-
             if (!is_refract) refract_rd = reflect(first_rd_i, first_n);
 
             float t_refr = raycast(
                     first_p + (is_refract ? -1.0 : 1.0) * first_macro_n * 0.0001,
-                    refract_rd,
-                    r_ro,
-                    r_rd,
-                    false
-                );
-
-            if (t_refr > -0.5) {
-                vec3 reconstructed_pos = is_refract ? first_p : first_p + reflect(r_ro - first_p, first_n);
-                vec3 reconstructed_normal = is_refract
-                    ? refract(tmp_Payload.material.normal, first_n, rs_refract) : reflect(tmp_Payload.material.normal, first_n);
-
-                refractIllumiantionBuffer.data[idx].normal = reconstructed_normal;
-                refractIllumiantionBuffer.data[idx].pos = reconstructed_pos;
-                diffuseIllumiantionBuffer.data[idx].oct_n2 = encodeNormal(-reconstructed_normal);
-            }
+                    refract_rd, r_ro, r_rd, false);
+            refr_R = refract_rd;
+            refr_vprojdist = (t_refr > -0.5) ? t_refr : VPROJDIST_SKY;
         }
     }
 
     // 分配光照到对应的降噪 Buffer
     switch (first_type) {
         case 0:
-        reflectIllumiantionBuffer.data[idx].data_swap = total_illumination;
+        refl_color = total_illumination;
         break;
 
         case Diffussion:
@@ -649,17 +620,20 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 half_rd, vec3 lightDir) {
         }
 
         case Reflection:
-        total_illumination = clamp(total_illumination, 0.0, 1000.0 * div_avgExposure);
-        reflectIllumiantionBuffer.data[idx].data_swap = total_illumination;
+        refl_color = clamp(total_illumination, 0.0, 1000.0 * div_avgExposure);
         break;
 
         case Refraction:
-        refractIllumiantionBuffer.data[idx].data_swap = total_illumination;
+        refr_color = total_illumination;
         break;
 
         default:
         break;
     }
+
+    // 写入镜面 RT 输出 (SpecularRTElement, 32B) — pos=主命中点, dir=R, dist=vprojdist
+    reflectIllumiantionBuffer.data[idx] = packSpecularRT(first_p, refl_R, refl_vprojdist, refl_color);
+    refractIllumiantionBuffer.data[idx] = packSpecularRT(first_p, refr_R, refr_vprojdist, refr_color);
 
     denoiseBuffer.data[idx].emission = first_emission_val;
 

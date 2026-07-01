@@ -45,6 +45,15 @@ void unpack2Half(float packed_, out float a, out float b) {
     b = v.y;
 }
 
+// 镜面反射射线击中天空时的虚拟投射距离哨兵值 (f16 可表示, ~6e4)
+const float VPROJDIST_SKY = 60000.0;
+
+// 打包两个 half 并钳制到 f16 范围, 避免 HDR 颜色溢出为 Inf
+float pack2HalfClamped(float a, float b) {
+    return uintBitsToFloat(packHalf2x16(
+        vec2(clamp(a, -65504.0, 65504.0), clamp(b, -65504.0, 65504.0))));
+}
+
 // 编码：vec3 -> float
 float encodeNormal(vec3 n) {
     // 确保输入是单位向量（非零）
@@ -201,35 +210,43 @@ SH unpackSH(float s0, float s1, float s2) {
     return sh;
 }
 
+// 镜面降噪纹理打包 (colortex3 + colortex4)
+//   data0 (colortex3): pos.xyz + oct(R)            R = 主导反射/折射方向
+//   data1 (colortex4): f16(R,G) | f16(B,roughness) | f16(variance, vprojdist) | oct(H)
+//   variance < 0 复用为天空 mask; vprojdist = VPROJDIST_SKY 表示反射射线击中天空
+//   H = GGX 主半向量 (虚拟平面法线)
+//   weight 不再走纹理 — 由 101/102 直接写入 image, 降噪 pass 不参与
 struct PackedLightSample {
-    vec4 data0; // (pos.xyz, encoded_normal) — 几何, specular/diffuse 共用
-    vec4 data1; // specular: f16(R,G)|f16(B,roughness)|weight|spare; diffuse: ALICE SH packed
+    vec4 data0;
+    vec4 data1;
 };
 
-
-PackedLightSample packSpecularSample(vec3 pos, vec3 normal, vec3 radiance, float weight, float roughness) {
-    PackedLightSample sample_data;
-    sample_data.data0 = vec4(pos, encodeNormal(normal));
-    // colortex4 新格式: f16(R,G) | f16(B,roughness) | weight | spare
-    // roughness < 0 复用为天空 mask (合法 roughness ∈ [0,1])
-    sample_data.data1 = vec4(
-        uintBitsToFloat(packHalf2x16(radiance.rg)),
-        uintBitsToFloat(packHalf2x16(vec2(radiance.b, roughness))),
-        weight,
-        0.0
+PackedLightSample packSpecularSample(vec3 pos, vec3 R, vec3 radiance,
+    float roughness, float variance, float vprojdist, vec3 H) {
+    PackedLightSample s;
+    s.data0 = vec4(pos, encodeNormal(R));
+    s.data1 = vec4(
+        pack2HalfClamped(radiance.r, radiance.g),
+        pack2HalfClamped(radiance.b, roughness),
+        pack2HalfClamped(variance, vprojdist),
+        encodeNormal(H)
     );
-    return sample_data;
+    return s;
 }
 
-void unpackSpecularSample(PackedLightSample sample_data, out vec3 pos, out vec3 normal, out vec3 radiance, out float weight, out float roughness) {
-    pos = sample_data.data0.xyz;
-    normal = decodeNormal(sample_data.data0.w);
-    // colortex4 新格式: .x=f16(R,G), .y=f16(B,roughness), .z=weight, .w=spare
-    vec2 rg = unpackHalf2x16(floatBitsToUint(sample_data.data1.x));
-    vec2 br = unpackHalf2x16(floatBitsToUint(sample_data.data1.y));
+void unpackSpecularSample(PackedLightSample s,
+    out vec3 pos, out vec3 R, out vec3 radiance,
+    out float roughness, out float variance, out float vprojdist, out vec3 H) {
+    pos = s.data0.xyz;
+    R = decodeNormal(s.data0.w);
+    vec2 rg = unpackHalf2x16(floatBitsToUint(s.data1.x));
+    vec2 br = unpackHalf2x16(floatBitsToUint(s.data1.y));
+    vec2 vv = unpackHalf2x16(floatBitsToUint(s.data1.z));
     radiance  = vec3(rg.x, rg.y, br.x);
     roughness = br.y;
-    weight    = sample_data.data1.z;
+    variance  = vv.x;
+    vprojdist = vv.y;
+    H = decodeNormal(s.data1.w);
 }
 
 struct diffuseIllumiantionData {
@@ -310,12 +327,46 @@ struct vec3IllumiantionData {
     mediump float mixWeight;
 };
 
+// ---------------------------------------------------------------------------
+// 镜面反射/折射 RT 输出 (SSBO, 32B/元素) — ray0.rgen 写, 101/102/swap4/swap6 读
+// 方向以八面体压缩存储, 虚拟投射距离单独存放, 颜色 f16 压缩 (旧 vec3IllumiantionData
+// SSBO 为 80B, 多数字段 vestigial — 真正的时域累积状态在 image 中, 见 fetchReflect).
+// vec3 normal = decodeNormal(oct_dir)*vprojdist 可按需重建 (dir*dist 语义, 供 101 重投影
+// 与 swap4 几何权重使用). H (GGX 主半向量) 不存于此 — 由 swap4 从 R+V 计算后写入 colortex4.w.
+// ---------------------------------------------------------------------------
+struct SpecularRTElement {
+    vec3  pos;        // 主命中点世界坐标 (f32)
+    float oct_dir;    // 八面体压缩主导方向 R
+    float vprojdist;  // 虚拟投射距离 (反射击中天空 = VPROJDIST_SKY)
+    float color_rg;   // packHalf2x16(color.r, color.g)
+    float color_b;    // packHalf2x16(color.b, 0)
+};
+
+SpecularRTElement packSpecularRT(vec3 pos, vec3 R, float vprojdist, vec3 color) {
+    SpecularRTElement e;
+    e.pos       = pos;
+    e.oct_dir   = encodeNormal(R);
+    e.vprojdist = vprojdist;
+    e.color_rg  = pack2HalfClamped(color.r, color.g);
+    e.color_b   = pack2HalfClamped(color.b, 0.0);
+    return e;
+}
+
+// 重建 dir*dist (normal, 兼容 vec3IllumiantionData.normal 语义) 与当前帧颜色
+void unpackSpecularRT(SpecularRTElement e, out vec3 pos, out vec3 normal, out vec3 color) {
+    pos    = e.pos;
+    normal = decodeNormal(e.oct_dir) * e.vprojdist;
+    vec2 rg = unpackHalf2x16(floatBitsToUint(e.color_rg));
+    float b = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
+    color  = vec3(rg.x, rg.y, b);
+}
+
 layout(std430, set = 3, binding = 3) buffer ReflectIllumiantionDataBuffer {
-    vec3IllumiantionData data[];
+    SpecularRTElement data[];
 } reflectIllumiantionBuffer;
 
 layout(std430, set = 3, binding = 4) buffer RefractIllumiantionDataBuffer {
-    vec3IllumiantionData data[];
+    SpecularRTElement data[];
 } refractIllumiantionBuffer;
 
 #if defined(PREV_DIFFUSE_BUFFER)

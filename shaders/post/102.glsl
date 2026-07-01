@@ -16,6 +16,8 @@
 // ===========================================================================
 
 #define REFRACT_BUFFER_MIN
+// 仅写 swap_color (color/lpos/lnormal 由 swap7 写),
+// 避免 fragment 内 sampler 读 + imageStore 写同一纹理的 UB (原 102 已验证可行).
 
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
@@ -126,15 +128,15 @@ void MixRefract() {
 
     vec3IllumiantionData data = sampleRefract(prevScreenPos.xy * textureSize(colortex0, 0));
 
-    // 重投影置信度 — 四重验证:
-    //   1. refractWeight 一致性: 折射权重差 → 材质边界
-    //   2. 几何有效性: distance > -0.5 → 非天空
-    //   3. 法线一致性
-    //   4. 位置一致性
+    // 位置权重: 主命中点在 data3.normal 平面上的距离差 (对重投影亚像素误差鲁棒)
+    float posWeight = svgfPositionWeight(data.pos, data3.pos, data3.normal, info_distance);
+    // req 6: 虚拟投射距离 (hit distance) 变化时衰减累积 — vprojdist (= length(normal))
+    float hitWeight = exp2(-4.0 * LOG2_E * abs(length(data.normal) - length(data3.normal))
+                         / max(length(data3.normal), 0.1));
     float s = exp2(-0.36067376 * abs(denoiseBuffer.data[idx_l].refractWeight - data.mixWeight))
             * float(denoiseBuffer.data[idx_l].distance > -0.5)
             * svgfNormalWeight(data.normal, data3.normal)
-            * svgfPositionWeight(data.pos, data3.pos, data3.normal, info_distance);
+            * posWeight * hitWeight;
 
     float prevW = data.weight;
     // 历史权重上限 = ACCUMULATION_LENGTH (折射比反射更容易变化，所以限制更紧)
@@ -152,7 +154,13 @@ void main() {
     idx = getIdx(uvec2(gl_FragCoord.xy));
 
     info_distance = denoiseBuffer.data[idx].distance;
-    data3 = refractIllumiantionBuffer.data[idx];
+
+    // 从 SSBO (SpecularRTElement) 重建当前帧折射数据: normal = R*vprojdist
+    unpackSpecularRT(refractIllumiantionBuffer.data[idx], data3.pos, data3.normal, data3.data_swap);
+    data3.data = vec3(0.0);
+    data3.weight = 0.0;
+    data3.prev_weight = 0.0;
+    data3.mixWeight = 0.0;
 
     // ---- 天空 / 无效几何: 重置权重后直接写出 -----------------------------
     if (info_distance < -0.5) {
@@ -161,12 +169,13 @@ void main() {
         return;
     }
 
-    // ---- 重投影到上一帧 --------------------------------------------------
+    // ---- 重投影到上一帧 (主命中点: 定位同一折射表面点) ------------------
     prevScreenPos = reproject2(data3.pos);
     idx_l = getIdx(uvec2(prevScreenPos.xy * textureSize(colortex0, 0)));
 
     // ---- 执行时域混合 ----------------------------------------------------
     MixRefract();
 
+    // 控制字段由 swap7 写出 (REFRACT_BUFFER_MIN 仅写 swap_color).
     WriteRefract(data3, ivec2(gl_FragCoord.xy));
 }
