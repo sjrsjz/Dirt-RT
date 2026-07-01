@@ -76,18 +76,14 @@ void main() {
     // ---- 中心像素基础数据 -------------------------------------------------
     ivec2 pix = ivec2(gl_FragCoord.xy);
 
-    // 当前像素在去噪缓冲区中的索引
-    uint idx = getIdx(uvec2(pix));
-
-    // 跳过天空像素（distance < 0 表示无几何体命中）
-    bufferData info_ = denoiseBuffer.data[idx];
-    if (info_.distance < -0.5) return;
-
-
     vec3 center_pos, center_normal;
     SH center_sh;
     float center_var_est;
     unpackLightSample(pix, center_pos, center_normal, center_sh, center_var_est);
+
+    // 跳过天空像素 — 方差被 swap2 复用作天空 mask
+    // (方差合法值为非负数, 负值 = 天空/无效像素)
+    if (center_var_est < 0.0) return;
 
     // 像素的世界空间 footprint，用于距离无关的深度边缘停止
     float dist_to_cam = max(length(center_pos - camPos), 0.001);
@@ -124,14 +120,15 @@ void main() {
 
             // ---- 有效性检查 ------------------------------------------------
             if (sample_coord != clamp(sample_coord, ivec2(0), texSize)) continue; // 越界
-            float dist = denoiseBuffer.data[getIdx(uvec2(sample_coord))].distance;
-            if (dist < -0.5) continue; // 天空
 
             // 贴图空间权重
             float w_kernel = hw[abs(i)] * hw[abs(j)];
 
             float sample_var_est;
             unpackLightSample(sample_coord, sample_world_pos, sample_normal, sample_sh, sample_var_est);
+
+            // 天空检查 — 方差被 swap2 复用作天空 mask (负值 = 天空)
+            if (sample_var_est < 0.0) continue;
 
             // ---- 深度权重 -------------------------------------------------
             // 采样点到中心平面的垂直距离，归一化到屏幕空间

@@ -148,7 +148,9 @@ void main() {
 
     if (centerTile.dist < -0.5) {
         imageStore(colorimg3, ivec2(gid), vec4(0.0));
-        imageStore(colorimg4, ivec2(gid), vec4(0.0));
+        // 天空像素: 写入负值方差作为天空 mask, 供 300/300_cs 使用
+        // (方差合法值为非负数, 负值可安全复用为天空标记)
+        imageStore(colorimg4, ivec2(gid), vec4(0.0, 0.0, 0.0, -1.0));
         return;
     }
 
