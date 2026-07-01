@@ -1,6 +1,7 @@
 #ifndef BLOOM_GLSL
 #define BLOOM_GLSL
 #include "/lib/settings.glsl"
+#include "/lib/constants.glsl"
 
 ivec2 bloomOrigin(int l, ivec2 sz) {
     return sz - (sz >> l);
@@ -53,11 +54,11 @@ int bloomKernelR(int diff) {
     vec2 _dstUV=vec2(dp)/max(vec2(_dstSize)-1.0,vec2(1e-6)); \
     vec2 _scf=vec2(_sO)+_dstUV*max(vec2(_srcSize)-1.0,vec2(0.0)); \
     ivec2 _sc=ivec2(floor(_scf));vec2 _frac=_scf-vec2(_sc); \
-    float _S_f=float(1<<_absDiff);float _alpha=1.0/(_S_f*_S_f); \
+    float _S_f=float(1<<_absDiff);float _alpha=LOG2_E/(_S_f*_S_f); \
     vec3 _s=vec3(0);float _w=0.; \
     for(int _dy=-_R;_dy<=_R;_dy++)for(int _dx=-_R;_dx<=_R;_dx++){ \
         vec2 _d=vec2(_dx,_dy)-_frac; \
-        float _gw=exp(-dot(_d,_d)*_alpha); \
+        float _gw=exp2(-dot(_d,_d)*_alpha); \
         _w+=_gw; \
         ivec2 _sc2=_sc+ivec2(_dx,_dy); \
         if(_sc2.x>=_sO.x&&_sc2.x<=_sM.x&&_sc2.y>=_sO.y&&_sc2.y<=_sM.y) \
@@ -77,11 +78,11 @@ int bloomKernelR(int diff) {
     vec2 _dstUV=vec2(dp)/max(vec2(_dstSize)-1.0,vec2(1e-6)); \
     vec2 _scf=vec2(_sO)+_dstUV*max(vec2(_srcSize)-1.0,vec2(0.0)); \
     ivec2 _sc=ivec2(floor(_scf));vec2 _frac=_scf-vec2(_sc); \
-    float _S_f=float(1<<_absDiff);float _alpha=1.0/(_S_f*_S_f); \
+    float _S_f=float(1<<_absDiff);float _alpha=LOG2_E/(_S_f*_S_f); \
     vec3 _s=vec3(0);float _w=0.; \
     for(int _dy=-_R;_dy<=_R;_dy++)for(int _dx=-_R;_dx<=_R;_dx++){ \
         vec2 _d=vec2(_dx,_dy)-_frac; \
-        float _gw=exp(-dot(_d,_d)*_alpha); \
+        float _gw=exp2(-dot(_d,_d)*_alpha); \
         _w+=_gw; \
         ivec2 _sc2=_sc+ivec2(_dx,_dy); \
         if(_sc2.x>=_sO.x&&_sc2.x<=_sM.x&&_sc2.y>=_sO.y&&_sc2.y<=_sM.y) \

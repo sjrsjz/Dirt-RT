@@ -187,12 +187,12 @@ void main() {
 
             // ---- 亮度权重 -------------------------------------------------
             // 方差预滤波使得 sigma2 不再导致降噪器崩溃
-            float sigma2 = max(center_var_est, 1e-7);
+            float sigma2 = max(center_var_est, 1e-8);
             float delta_energy = length(center_sh.shY.xyz - sample_sh.shY.xyz);
             float w_luma = SVGF_PHI_L * delta_energy * inversesqrt(sigma2);
 
             // ---- 组合权重 -------------------------------------------------
-            float w0 = w_kernel * (1.0 + w_luma) * exp(-w_geometry - w_luma);
+            float w0 = w_kernel * (1.0 + w_luma) * exp2(-(w_geometry + w_luma) * LOG2_E);
 
             // ---- 累积加权样本 ---------------------------------------------
             accumulate_SH(accumulatedSH, sample_sh, w0);

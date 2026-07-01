@@ -113,11 +113,11 @@ void MixReflect() {
     float alpha = roughness * roughness; // GGX α
     float cosTheta = abs(dot(normalize(data.normal), normalize(data2.normal))); // H_prev · H_curr
     float tanThetaSq = max((0.99995 - cosTheta * cosTheta) / (1e-5 + cosTheta * cosTheta), 0.0);
-    float ggxWeight = exp(-0.0001 * tanThetaSq / (alpha * alpha)); // GGX 分布形状
+    float ggxWeight = exp2(-0.00014426950 * tanThetaSq / (alpha * alpha)); // GGX 分布形状
 
     // 可选位置权重（几何法线平面距离）
     vec3 geoNormal = decodeNormal(diffuseIllumiantionBuffer.data[idx].oct_n2);
-    float posWeight = exp(-POSITION_PARAM * abs(dot(data.pos - data2.pos, geoNormal)));
+    float posWeight = exp2(-POSITION_PARAM * LOG2_E * abs(dot(data.pos - data2.pos, geoNormal)));
 
     // 综合置信度
     float s = float(denoiseBuffer.data[idx].distance > -0.5)

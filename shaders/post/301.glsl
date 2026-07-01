@@ -78,8 +78,13 @@ void main() {
     axis_B *= axis_B;
 
     // ---- 动态模糊因子 (用深度取代原来错误的权重) ---------------------------
-    float blur_factor = (1.0 - exp(-0.25 * depth)) / 3.0;
-    float normal_factor = (1.0 - exp(-0.1 * depth)) * NORMAL_PARAM;
+    float blur_factor  = (1.0 - exp2(-0.36067376 * depth)) / 3.0;   // exp(-0.25*depth) → exp2
+    float normal_factor = (1.0 - exp2(-0.14426950 * depth)) * NORMAL_PARAM; // exp(-0.1*depth) → exp2
+
+    // exp → exp2: 将 LOG2_E 折叠进循环不变量, 避免内层循环重复乘
+    float blur_factor2   = blur_factor   * LOG2_E;
+    float pos_param2     = POSITION_PARAM * LOG2_E;  // = 1.442695
+    float normal_factor2 = normal_factor * LOG2_E;
 
     // ---- à-trous 采样 ----------------------------------------------------
     ivec2 samplePos;
@@ -123,11 +128,11 @@ void main() {
 
             float rW = GetRoughnessWeight(centerRoughness, sampleRoughness);
 
-            // 单次 exp: 各向异性深度 + 位置平面距离 + 法线
-            // 法线权重 pow(dot,S) 用 exp(-S·(1-dot)) 逼近 (SVGF 标准近似)
-            float w0 = rW * exp(-(blur_factor * (axis_A * i * i + axis_B * j * j)
-                                + POSITION_PARAM * abs(dot(centerPos - samplePosW, centerNormal))
-                                + normal_factor * (1.0 - dot(centerNormal, sampleNormal))))
+            // 单次 exp2: 各向异性深度 + 位置平面距离 + 法线 (LOG2_E 已折叠入常量)
+            // 法线权重 pow(dot,S) 用 exp2(-S2·(1-dot)) 逼近 (SVGF 标准近似)
+            float w0 = rW * exp2(-(blur_factor2 * (axis_A * i * i + axis_B * j * j)
+                                 + pos_param2 * abs(dot(centerPos - samplePosW, centerNormal))
+                                 + normal_factor2 * (1.0 - dot(centerNormal, sampleNormal))))
                     * float(samplePos == clamp(samplePos, vec2(0), texSize));
 
             A += sampleRadiance * w0;

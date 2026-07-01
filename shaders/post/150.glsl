@@ -53,7 +53,7 @@ float svgfNormalWeight(vec3 centerNormal, vec3 normal) {
 }
 
 float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal) {
-    return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)));
+    return exp2(-POSITION_PARAM * LOG2_E * abs(dot(pixelPos - centerPos, normal)));
 }
 
 // ---------------------------------------------------------------------------

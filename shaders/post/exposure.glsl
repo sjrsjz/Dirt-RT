@@ -26,7 +26,7 @@ void main() {
     // --- Delta time & state updates ---
     dTime_global = frameTimeCounter - time_global;
     time_global = frameTimeCounter;
-    float mix0 = exp(-0.0625 * dTime_global);
+    float mix0 = exp2(-0.09016844 * dTime_global);
     rainStrength_global = rainStrength;
     wetStrength_global = wetStrength_global * mix0 + rainStrength * (1.0 - mix0);
     wetness_global = wetness_global * mix0 + wetness * (1.0 - mix0);
@@ -61,7 +61,7 @@ void main() {
     for (int i = 0; i < NUM_SAMPLES; i++) {
         float diff = logLumas[i] - mean;
         
-        float pdf_weight = exp(-(diff * diff) / (tolerance * variance));
+        float pdf_weight = exp2(-(diff * diff) / (tolerance * variance) * LOG2_E);
         
         weighted_sum_log += logLumas[i] * pdf_weight;
         total_weight += pdf_weight;
@@ -77,11 +77,11 @@ void main() {
         avgExposure = targetExposure;
     } else {
         float adaptSpeed = (targetExposure < avgExposure) ? 3.0 : 0.8;
-        avgExposure = exp(mix(
+        avgExposure = exp2(mix(
             log(avgExposure),
             log(targetExposure),
-            1.0 - exp(-dTime_global * adaptSpeed)
-        ));
+            1.0 - exp2(-dTime_global * adaptSpeed * LOG2_E)
+        ) * LOG2_E);
     }
     div_avgExposure = 1.0 / max(avgExposure, 1e-6);
 

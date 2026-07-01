@@ -95,7 +95,7 @@ float varianceGeometryWeight(
     float planeDist = abs(dot(samplePos - centerPos, centerNormal));
     float depthTerm = planeDist / max(VAR_FILTER_POSITION_PARAM * pixelFootprint, 1e-6);
 
-    float wDepth = exp(-depthTerm);
+    float wDepth = exp2(-depthTerm * LOG2_E);
     return wNormal * wDepth;
 }
 

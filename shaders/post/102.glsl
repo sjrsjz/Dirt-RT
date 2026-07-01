@@ -64,13 +64,13 @@ const float LUMINANCE_PARAM = 4.0;
 
 // 法线权重: 基于法线矢量差的指数衰减 (替代夹角余弦方式)
 float svgfNormalWeight(vec3 centerNormal, vec3 normal) {
-    return clamp(exp(-5.0 * length(centerNormal - normal)), 0.0, 1.0);
+    return clamp(exp2(-7.21347520 * length(centerNormal - normal)), 0.0, 1.0);
 }
 
 // 位置权重: 平面距离衰减 (注: "1 + 0*exp(...)" 当前退化为常数 1)
 float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float distance) {
-    return exp(-POSITION_PARAM * abs(dot(pixelPos - centerPos, normal)
-               * (1.0 + 0.0 * exp(-0.125 * distance))));
+    return exp2(-POSITION_PARAM * LOG2_E * abs(dot(pixelPos - centerPos, normal)
+               * (1.0 + 0.0 * exp2(-0.18033688 * distance))));
 }
 
 // ---------------------------------------------------------------------------
@@ -131,7 +131,7 @@ void MixRefract() {
     //   2. 几何有效性: distance > -0.5 → 非天空
     //   3. 法线一致性
     //   4. 位置一致性
-    float s = exp(-0.25 * abs(denoiseBuffer.data[idx_l].refractWeight - data.mixWeight))
+    float s = exp2(-0.36067376 * abs(denoiseBuffer.data[idx_l].refractWeight - data.mixWeight))
             * float(denoiseBuffer.data[idx_l].distance > -0.5)
             * svgfNormalWeight(data.normal, data3.normal)
             * svgfPositionWeight(data.pos, data3.pos, data3.normal, info_distance);

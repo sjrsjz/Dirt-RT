@@ -200,9 +200,9 @@ void main() {
     payload.material = getMaterial(albedo, normal, specular, tbn, payload.wetStrength_global, payload.wetness_global, payload.material.light_texture.y, fragInfo.normal);
     if (payload.inside_block) {
         if (quad.vertices[0].block_id.x == 1000) {
-            payload.shadowTransmission *= exp(-clamp(gl_HitTEXT - payload.prev_distance, 0, 100) * vec3(0.1, 0.03, 0.04));
+            payload.shadowTransmission *= exp2(-clamp(gl_HitTEXT - payload.prev_distance, 0, 100) * vec3(0.14426950, 0.04328085, 0.05770780));
         } else {
-            payload.shadowTransmission *= exp(-10 * clamp(gl_HitTEXT - payload.prev_distance, 0, 10) * (1.05 - albedo.rgb) * albedo.a);
+            payload.shadowTransmission *= exp2(-14.42695 * clamp(gl_HitTEXT - payload.prev_distance, 0, 10) * (1.05 - albedo.rgb) * albedo.a);
         }
     }
     payload.material.block_id = quad.vertices[0].block_id;

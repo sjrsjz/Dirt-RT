@@ -162,8 +162,13 @@ void main() {
     axis_B *= axis_B;
 
     // ---- 动态模糊因子 ------------------------------------------------------
-    float blur_factor = (1.0 - exp(-0.25 * depth)) / 3.0;
-    float normal_factor = (1.0 - exp(-0.1 * depth)) * NORMAL_PARAM;
+    float blur_factor  = (1.0 - exp2(-0.36067376 * depth)) / 3.0;   // exp(-0.25*depth) → exp2
+    float normal_factor = (1.0 - exp2(-0.14426950 * depth)) * NORMAL_PARAM; // exp(-0.1*depth) → exp2
+
+    // exp → exp2: 将 LOG2_E 折叠进循环不变量, 避免内层循环重复乘
+    float blur_factor2   = blur_factor   * LOG2_E;
+    float pos_param2     = POSITION_PARAM * LOG2_E;  // = 1.442695
+    float normal_factor2 = normal_factor * LOG2_E;
 
     // ---- 累积器 (中心像素权重 = 1) ------------------------------------------
     vec3 A = centerRadiance;
@@ -197,10 +202,10 @@ void main() {
             // ---- 粗糙度权重 ------------------------------------------------
             float rW = GetRoughnessWeight(centerRoughness, sampleRoughness);
 
-            // ---- 组合权重: 单次 exp (各向异性+位置+法线), 法线用 exp(-k(1-dot)) ----
-            float w0 = rW * exp(-(blur_factor * (axis_A * float(i * i) + axis_B * float(j * j))
-                                + POSITION_PARAM * abs(dot(centerPos - samplePosW, centerNormal))
-                                + normal_factor * (1.0 - dot(centerNormal, sampleNormal))));
+            // ---- 组合权重: 单次 exp2 (各向异性+位置+法线), LOG2_E 已折叠入常量 ----
+            float w0 = rW * exp2(-(blur_factor2 * (axis_A * float(i * i) + axis_B * float(j * j))
+                                 + pos_param2 * abs(dot(centerPos - samplePosW, centerNormal))
+                                 + normal_factor2 * (1.0 - dot(centerNormal, sampleNormal))));
 
             A += sampleRadiance * w0;
             w += w0;

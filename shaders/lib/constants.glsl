@@ -2,6 +2,7 @@
 #define CONSTANTS_GLSL
 #include "/lib/settings.glsl"
 const float PI = 3.141592654;
+const float LOG2_E = 1.44269504089; // 1/ln(2), for exp(x)=exp2(x*LOG2_E)
 const float SunDivMoon = 1000;
 const int MaxRay = RAY_BOUNCES;
 const float FIREFLY_SUPPRESSION_MULTIPLIER = 50.0;
