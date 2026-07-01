@@ -16,10 +16,6 @@ uniform float wetness;
 uniform float viewWidth;
 uniform float viewHeight;
 
-uniform mat4 gbufferProjection;
-uniform mat4 gbufferModelView;
-uniform vec3 cameraPosition;
-
 const int NUM_SAMPLES = 33;
 
 void main() {
@@ -86,7 +82,5 @@ void main() {
     div_avgExposure = 1.0 / max(avgExposure, 1e-6);
 
     // --- Save camera matrices ---
-    gbufferPreviousModelView_global = gbufferModelView;
-    gbufferPreviousProjection_global = gbufferProjection;
-    previousCameraPosition_global = cameraPosition;
+    prevRaytracingCamPos = camPos;     // 光线追踪相机 (供下一帧时域 cameraDelta)
 }

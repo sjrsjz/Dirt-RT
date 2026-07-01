@@ -33,22 +33,6 @@
 // ---------------------------------------------------------------------------
 
 uniform sampler2D colortex0;
-uniform sampler2D depthtex0;
-
-uniform mat4 gbufferProjectionInverse;
-uniform mat4 gbufferModelViewInverse;
-uniform vec3 cameraPosition;
-
-uniform mat4 gbufferProjection;
-uniform mat4 gbufferModelView;
-uniform mat4 gbufferPreviousProjection;
-uniform mat4 gbufferPreviousModelView;
-uniform vec3 previousCameraPosition;
-
-uniform float near;
-uniform float far;
-uniform vec2 resolution;
-uniform int worldTime;
 
 // ---------------------------------------------------------------------------
 // 可调参数
@@ -146,27 +130,14 @@ float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float dista
 // 重投影
 // ---------------------------------------------------------------------------
 
-vec3 reproject(vec3 screenPos) {
-    vec4 tmp = gbufferProjectionInverse * vec4(screenPos * 2.0 - 1.0, 1.0);
-    vec3 viewPos = tmp.xyz / tmp.w;
-    vec3 playerPos = (gbufferModelViewInverse * vec4(viewPos, 1.0)).xyz;
-    vec3 worldPos = playerPos + cameraPosition;
-
-    vec3 prevPlayerPos = worldPos - previousCameraPosition;
-    vec3 prevViewPos = (gbufferPreviousModelView * vec4(prevPlayerPos, 1.0)).xyz;
-    vec4 prevClipPos = gbufferPreviousProjection * vec4(prevViewPos, 1.0);
-
-    return prevClipPos.xyz / prevClipPos.w * 0.5 + 0.5;
-}
-
 vec3 cameraDelta;
 
-vec3 reproject2(vec3 pos_rel, vec3 cameraDelta) {
+// 重投影: 全光线追踪推导矩阵 (单源一致, 零 Iris 混合)
+vec3 reproject(vec3 pos_rel) {
     vec3 prevPlayerPos = pos_rel + cameraDelta;
-    vec3 prevViewPos = (gbufferPreviousModelView * vec4(prevPlayerPos, 1.0)).xyz;
-    vec4 prevClipPos = gbufferPreviousProjection * vec4(prevViewPos, 1.0);
-
-    return prevClipPos.xyz / prevClipPos.w * 0.5 + 0.5;
+    vec4 clipPos = rtPrevProjection * rtPrevModelView * vec4(prevPlayerPos, 1.0);
+    vec3 ndc = clipPos.xyz / clipPos.w;
+    return ndc * 0.5 + 0.5;
 }
 
 // ---------------------------------------------------------------------------
@@ -445,8 +416,8 @@ void main() {
     // -----------------------------------------------------------------------
     // 重投影到上一帧
     // -----------------------------------------------------------------------
-    cameraDelta = cameraPosition - previousCameraPosition;
-    prevScreenPos = reproject2(current_data.pos, cameraDelta);
+    cameraDelta = camPos - prevRaytracingCamPos;
+    prevScreenPos = reproject(current_data.pos);
 
     // -----------------------------------------------------------------------
     // 执行时域累积

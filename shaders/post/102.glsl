@@ -29,24 +29,7 @@
 // Uniform 输入
 // ---------------------------------------------------------------------------
 
-in vec2 texCoord;
-
 uniform sampler2D colortex0;
-
-uniform mat4 gbufferProjectionInverse;
-uniform mat4 gbufferModelViewInverse;
-uniform vec3 cameraPosition;
-
-uniform mat4 gbufferProjection;
-uniform mat4 gbufferModelView;
-uniform mat4 gbufferPreviousProjection;
-uniform mat4 gbufferPreviousModelView;
-uniform vec3 previousCameraPosition;
-
-uniform float near;
-uniform float far;
-uniform vec2 resolution;
-uniform int worldTime;
 
 // ---------------------------------------------------------------------------
 // 可调参数
@@ -79,24 +62,14 @@ float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float dista
 // 重投影函数
 // ---------------------------------------------------------------------------
 
-vec3 reproject(vec3 screenPos) {
-    vec4 tmp = gbufferProjectionInverse * vec4(screenPos * 2.0 - 1.0, 1.0);
-    vec3 viewPos = tmp.xyz / tmp.w;
-    vec3 playerPos = (gbufferModelViewInverse * vec4(viewPos, 1.0)).xyz;
-    vec3 worldPos = playerPos + cameraPosition;
-    vec3 prevPlayerPos = worldPos - previousCameraPosition;
-    vec3 prevViewPos = (gbufferPreviousModelView * vec4(prevPlayerPos, 1.0)).xyz;
-    vec4 prevClipPos = gbufferPreviousProjection * vec4(prevViewPos, 1.0);
-    return (prevClipPos.xyz / prevClipPos.w * 0.5 + 0.5);
-}
-
 vec3 cameraDelta;
 
-vec3 reproject2(vec3 pos_rel, vec3 cameraDelta) {
+// 重投影: 全光线追踪推导矩阵 (单源一致, 零 Iris 混合)
+vec3 reproject(vec3 pos_rel) {
     vec3 prevPlayerPos = pos_rel + cameraDelta;
-    vec3 prevViewPos = (gbufferPreviousModelView * vec4(prevPlayerPos, 1.0)).xyz;
-    vec4 prevClipPos = gbufferPreviousProjection * vec4(prevViewPos, 1.0);
-    return prevClipPos.xyz / prevClipPos.w * 0.5 + 0.5;
+    vec4 clipPos = rtPrevProjection * rtPrevModelView * vec4(prevPlayerPos, 1.0);
+    vec3 ndc = clipPos.xyz / clipPos.w;
+    return ndc * 0.5 + 0.5;
 }
 
 /* RENDERTARGETS: 0 */
@@ -130,16 +103,15 @@ void MixRefract() {
 
     vec3IllumiantionData data = sampleRefract(prevScreenPos.xy * textureSize(colortex0, 0));
 
-    // 位置权重: 主命中点在 data3.normal 平面上的距离差 (对重投影亚像素误差鲁棒)
-    vec3 histPosCur = data.pos - cameraDelta;
-    float posWeight = svgfPositionWeight(histPosCur, data3.pos, data3.normal, info_distance);
-    // req 6: 虚拟投射距离 (hit distance) 变化时衰减累积 — vprojdist (= length(normal))
-    float hitWeight = exp2(-4.0 * LOG2_E * abs(length(data.normal) - length(data3.normal))
+    // req 6: 虚拟击中点 (pos + R*vprojdist) 用于重投影+权重
+    vec3 curVirtual = data3.pos + data3.normal;
+    vec3 histVirtualCur = (data.pos - cameraDelta) + data.normal;
+    float posWeight = exp2(-POSITION_PARAM * LOG2_E * length(histVirtualCur - curVirtual)
                          / max(length(data3.normal), 0.1));
     float s = exp2(-0.36067376 * abs(denoiseBuffer.data[idx_l].refractWeight - data.mixWeight))
             * float(denoiseBuffer.data[idx_l].distance > -0.5)
             * svgfNormalWeight(data.normal, data3.normal)
-            * posWeight * hitWeight;
+            * posWeight;
 
     float prevW = data.weight;
     // 历史权重上限 = ACCUMULATION_LENGTH (折射比反射更容易变化，所以限制更紧)
@@ -173,8 +145,8 @@ void main() {
     }
 
     // ---- 重投影到上一帧 (主命中点: 定位同一折射表面点) ------------------
-    cameraDelta = cameraPosition - previousCameraPosition;
-    prevScreenPos = reproject2(data3.pos, cameraDelta);
+    cameraDelta = camPos - prevRaytracingCamPos;
+    prevScreenPos = reproject(data3.pos);
     idx_l = getIdx(uvec2(prevScreenPos.xy * textureSize(colortex0, 0)));
 
     // ---- 执行时域混合 ----------------------------------------------------

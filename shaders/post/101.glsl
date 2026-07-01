@@ -8,7 +8,7 @@
 // 与 100.glsl (漫反射) 的区别:
 //   - 反射信号是 vec3 颜色而非 SH 结构 → 使用更简单的时域混合
 //   - 法线权重更激进 (NORMAL_PARAM=512)，因为反射对法线方向极其敏感
-//   - 使用 reproject2 直接重投影 (与 100.glsl 相同的路径)
+//   - 使用 reproject 直接重投影 (与 100.glsl 相同的路径)
 //
 // 注意: 此 pass 曾是性能瓶颈 (与 200.glsl 合计占用 ~1/4~1/3 的帧时间)，
 //       但 200.glsl 目前已禁用 (return; 截断)，因此仅剩本 pass 的开销。
@@ -30,21 +30,6 @@ in vec2 texCoord;
 
 uniform sampler2D colortex0;
 
-uniform mat4 gbufferProjectionInverse;
-uniform mat4 gbufferModelViewInverse;
-uniform vec3 cameraPosition;
-
-uniform mat4 gbufferProjection;
-uniform mat4 gbufferModelView;
-uniform mat4 gbufferPreviousProjection;
-uniform mat4 gbufferPreviousModelView;
-uniform vec3 previousCameraPosition;
-
-uniform float near;
-uniform float far;
-uniform vec2 resolution;
-uniform int worldTime;
-
 // ---------------------------------------------------------------------------
 // 可调参数
 // ---------------------------------------------------------------------------
@@ -59,24 +44,14 @@ const float POSITION_PARAM = 32.0;
 // 重投影函数
 // ---------------------------------------------------------------------------
 
-vec3 reproject(vec3 screenPos) {
-    vec4 tmp = gbufferProjectionInverse * vec4(screenPos * 2.0 - 1.0, 1.0);
-    vec3 viewPos = tmp.xyz / tmp.w;
-    vec3 playerPos = (gbufferModelViewInverse * vec4(viewPos, 1.0)).xyz;
-    vec3 worldPos = playerPos + cameraPosition;
-    vec3 prevPlayerPos = worldPos - previousCameraPosition;
-    vec3 prevViewPos = (gbufferPreviousModelView * vec4(prevPlayerPos, 1.0)).xyz;
-    vec4 prevClipPos = gbufferPreviousProjection * vec4(prevViewPos, 1.0);
-    return (prevClipPos.xyz / prevClipPos.w * 0.5 + 0.5);
-}
+vec3 cameraDelta; // camPos - prevRaytracingCamPos (光线追踪源)
 
-vec3 cameraDelta;
-
-vec3 reproject2(vec3 pos_rel, vec3 cameraDelta) {
+// 重投影: 全光线追踪推导矩阵 (单源一致, 零 Iris 混合, 零大数相消)
+vec3 reproject(vec3 pos_rel) {
     vec3 prevPlayerPos = pos_rel + cameraDelta;
-    vec3 prevViewPos = (gbufferPreviousModelView * vec4(prevPlayerPos, 1.0)).xyz;
-    vec4 prevClipPos = gbufferPreviousProjection * vec4(prevViewPos, 1.0);
-    return prevClipPos.xyz / prevClipPos.w * 0.5 + 0.5;
+    vec4 clipPos = rtPrevProjection * rtPrevModelView * vec4(prevPlayerPos, 1.0);
+    vec3 ndc = clipPos.xyz / clipPos.w;
+    return ndc * 0.5 + 0.5;
 }
 
 /* RENDERTARGETS: 0 */
@@ -116,22 +91,19 @@ void MixReflect() {
     float roughness = denoiseBuffer.data[idx].roughness;
     float alpha = roughness * roughness; // GGX α
     float cosTheta = abs(dot(normalize(data.normal), normalize(data2.normal))); // H_prev · H_curr
-    float tanThetaSq = max((0.99995 - cosTheta * cosTheta) / (1e-5 + cosTheta * cosTheta), 0.0);
+    float tanThetaSq = max((0.999999 - cosTheta * cosTheta) / (1e-5 + cosTheta * cosTheta), 0.0);
     float ggxWeight = exp2(-0.00014426950 * tanThetaSq / (alpha * alpha)); // GGX 分布形状
 
-    // 可选位置权重 (主命中点在几何法线平面上的距离差, 对重投影亚像素误差鲁棒)
-    vec3 geoNormal = decodeNormal(diffuseIllumiantionBuffer.data[idx].oct_n2);
-    vec3 histPosCur = data.pos - cameraDelta;
-    float posWeight = exp2(-POSITION_PARAM * LOG2_E * abs(dot(histPosCur - data2.pos, geoNormal)));
-
-    // req 6: 虚拟投射距离 (hit distance) 变化时衰减累积 — 使用 vprojdist (= length(normal))
-    // 而非虚拟击中点位置, 对重投影误差鲁棒 (相邻像素 vprojdist 相近)
-    float hitWeight = exp2(-4.0 * LOG2_E * abs(length(data.normal) - length(data2.normal))
+    // req 6: 虚拟击中点 (pos + R*vprojdist) 重建后用于重投影+权重
+    // 归一化到 vprojdist — 权重由相对位移驱动, 与击中距离无关
+    vec3 curVirtual = data2.pos + data2.normal;
+    vec3 histVirtualCur = (data.pos - cameraDelta) + data.normal;
+    float posWeight = exp2(-POSITION_PARAM * LOG2_E * length(histVirtualCur - curVirtual)
                          / max(length(data2.normal), 0.1));
 
     // 综合置信度
     float s = float(denoiseBuffer.data[idx].distance > -0.5)
-            * ggxWeight * posWeight * hitWeight;
+            * ggxWeight * posWeight;
 
     float prevW = data.prev_weight;
     prevW = min(prevW * s + 1.0, 3 * ACCUMULATION_LENGTH);
@@ -164,8 +136,8 @@ void main() {
     }
 
     // ---- 重投影到上一帧 (主命中点: 定位同一反射表面点) ------------------
-    cameraDelta = cameraPosition - previousCameraPosition;
-    prevScreenPos = reproject2(data2.pos, cameraDelta);
+    cameraDelta = camPos - prevRaytracingCamPos;
+    prevScreenPos = reproject(data2.pos);
     idx_l = getIdx(uvec2(prevScreenPos.xy * textureSize(colortex0, 0) + 0.5));
 
     // ---- 执行时域混合 ----------------------------------------------------

@@ -80,7 +80,7 @@ void main() {
 
     #if STEP >= 4
     // 旋转抖动 — 仅大步长启用, 避免网格伪影
-    float theta = 2.0 * PI * rand(vec2(pix + 11 + R0));
+    float theta = 2.0 * PI * rand(vec2(pix + R0));
     mat2 rotM = mat2(cos(theta), -sin(theta), sin(theta), cos(theta)) * R0;
     #endif
 
