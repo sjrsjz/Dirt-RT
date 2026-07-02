@@ -328,37 +328,63 @@ struct vec3IllumiantionData {
 };
 
 // ---------------------------------------------------------------------------
-// 镜面反射/折射 RT 输出 (SSBO, 32B/元素) — ray0.rgen 写, 101/102/swap4/swap6 读
-// 方向以八面体压缩存储, 虚拟投射距离单独存放, 颜色 f16 压缩 (旧 vec3IllumiantionData
-// SSBO 为 80B, 多数字段 vestigial — 真正的时域累积状态在 image 中, 见 fetchReflect).
-// vec3 normal = decodeNormal(oct_dir)*vprojdist 可按需重建 (dir*dist 语义, 供 101 重投影
-// 与 swap4 几何权重使用). H (GGX 主半向量) 不存于此 — 由 swap4 从 R+V 计算后写入 colortex4.w.
+// 镜面反射/折射 RT 输出 + 时域历史 (SSBO, 64B/元素) — ray0.rgen 写当前帧,
+// 101/102 写累积颜色+权重, swap5/7 写历史, swap4/6 读累积颜色.
+// 替代了原先 8 个独立的 rgba32f image (reflect+refract 各4个, 共~253MB VRAM).
+// 方向以八面体压缩存储, 虚拟投射距离单独存放, 颜色 f16 压缩.
+// normal = decodeNormal(oct_dir)*vprojdist 可按需重建 (dir*dist 语义).
+// H (GGX 主半向量) 不存于此 — 由 swap4/6 从 R+V 计算后写入 colortex4.w.
 // ---------------------------------------------------------------------------
 struct SpecularRTElement {
-    vec3  pos;        // 主命中点世界坐标 (f32)
-    float oct_dir;    // 八面体压缩主导方向 R
-    float vprojdist;  // 虚拟投射距离 (反射击中天空 = VPROJDIST_SKY)
-    float color_rg;   // packHalf2x16(color.r, color.g)
-    float color_b;    // packHalf2x16(color.b, 0)
-};
+    // === 当前帧 (32B) — ray0.rgen 写入 raw RT, 101/102 覆写为累积色 ===
+    float px, py, pz;    // 主命中点世界坐标 (12B)
+    float oct_dir;       // 八面体压缩主导方向 R (4B)
+    float vprojdist;     // 虚拟投射距离 (4B)
+    float color_rg;      // packHalf2x16: ray0→raw RT, 101/102→accumulated (4B)
+    float color_b;       // packHalf2x16: ray0→raw RT, 101/102→accumulated (4B)
+    float accum_weight;  // 时域累积权重 (4B, 101/102 写, swap4/5/6/7 读)
+    // [4B 隐式填充到 32B 对齐]
+
+    // === 时域历史 (32B) — swap5/7 写, 101/102 下帧读 ===
+    float hist_px, hist_py, hist_pz; // 上帧世界坐标 (12B)
+    float hist_oct_dir;  // 上帧八面体压缩方向 R (4B)
+    float hist_vprojdist;// 上帧虚拟投射距离 (4B)
+    float hist_color_rg; // packHalf2x16: 上帧 pre-denoise 累积色 (4B)
+    float hist_color_b;  // packHalf2x16 (4B)
+    float hist_weight;   // 上帧累积权重 (4B)
+}; // 64B 总计, 16B 对齐
 
 SpecularRTElement packSpecularRT(vec3 pos, vec3 R, float vprojdist, vec3 color) {
     SpecularRTElement e;
-    e.pos       = pos;
-    e.oct_dir   = encodeNormal(R);
-    e.vprojdist = vprojdist;
-    e.color_rg  = pack2HalfClamped(color.r, color.g);
-    e.color_b   = pack2HalfClamped(color.b, 0.0);
+    e.px         = pos.x;
+    e.py         = pos.y;
+    e.pz         = pos.z;
+    e.oct_dir    = encodeNormal(R);
+    e.vprojdist  = vprojdist;
+    e.color_rg   = pack2HalfClamped(color.r, color.g);
+    e.color_b    = pack2HalfClamped(color.b, 0.0);
+    e.accum_weight = 0.0;
+    // hist_* fields left uninitialized (written later by swap5/7)
     return e;
 }
 
-// 重建 dir*dist (normal, 兼容 vec3IllumiantionData.normal 语义) 与当前帧颜色
+// 重建当前帧: pos + normal(=R*vprojdist) + raw RT color
 void unpackSpecularRT(SpecularRTElement e, out vec3 pos, out vec3 normal, out vec3 color) {
-    pos    = e.pos;
+    pos    = vec3(e.px, e.py, e.pz);
     normal = decodeNormal(e.oct_dir) * e.vprojdist;
     vec2 rg = unpackHalf2x16(floatBitsToUint(e.color_rg));
     float b = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
     color  = vec3(rg.x, rg.y, b);
+}
+
+// 读取时域历史 (swap5/7 写入, 101/102 下帧读)
+void unpackSpecularHistory(SpecularRTElement e, out vec3 histPos, out vec3 histNormal, out vec3 histColor, out float histWeight) {
+    histPos    = vec3(e.hist_px, e.hist_py, e.hist_pz);
+    histNormal = decodeNormal(e.hist_oct_dir) * e.hist_vprojdist;
+    vec2 rg = unpackHalf2x16(floatBitsToUint(e.hist_color_rg));
+    float b = unpackHalf2x16(floatBitsToUint(e.hist_color_b)).x;
+    histColor  = vec3(rg.x, rg.y, b);
+    histWeight = e.hist_weight;
 }
 
 layout(std430, set = 3, binding = 3) buffer ReflectIllumiantionDataBuffer {
@@ -523,45 +549,29 @@ void WriteDiffuse(diffuseIllumiantionData data, ivec2 p) {
 
 #if defined(REFLECT_BUFFER) || defined(REFLECT_BUFFER_MIN) || defined(REFLECT_BUFFER_MIN2)
 
-layout(rgba32f) uniform image2D reflectIllumiantionData_swap_color;
-uniform sampler2D reflectIllumiantionData_color_Sampler;
-uniform sampler2D reflectIllumiantionData_color_swap_Sampler;
-uniform sampler2D reflectIllumiantionData_lnormal_Sampler;
-uniform sampler2D reflectIllumiantionData_lpos_Sampler;
-#if !defined(REFLECT_BUFFER_MIN) && !defined(REFLECT_BUFFER_MIN2)
-layout(rgba32f) uniform image2D reflectIllumiantionData_color;
-layout(rgba32f) uniform image2D reflectIllumiantionData_lnormal;
-layout(rgba32f) uniform image2D reflectIllumiantionData_lpos;
-#endif
-
-// vec3IllumiantionData sampleReflect(vec2 p) {
-//     vec3IllumiantionData tmp;
-//     vec4 tmp4 = texture(reflectIllumiantionData_color_swap_Sampler, p);
-//     tmp.data_swap = tmp4.xyz;
-//     #ifndef REFLECT_BUFFER_MIN
-//     tmp4 = texture(reflectIllumiantionData_color_Sampler, p);
-//     tmp.data = tmp4.xyz;
-//     tmp.weight = tmp4.w;
-//     tmp.normal = texture(reflectIllumiantionData_lnormal_Sampler, p).xyz;
-//     tmp.pos = texture(reflectIllumiantionData_lpos_Sampler, p).xyz;
-//     #endif
-//     return tmp;
-// }
+// 时域历史全部存入 SSBO reflectIllumiantionBuffer (SpecularRTElement.hist_*).
+// 原先的 4 个 rgba32f image (swap_color/color/lpos/lnormal, ~32MB) 已删除.
 
 vec3IllumiantionData fetchReflect(ivec2 p) {
     vec3IllumiantionData tmp;
-    vec4 tmp4 = texelFetch(reflectIllumiantionData_color_swap_Sampler, p, 0);
-    tmp.data_swap = tmp4.xyz;
-    vec2 w_mw = unpackHalf2x16(floatBitsToUint(tmp4.w)); // weight, mixWeight
-    tmp.weight = w_mw.x;
-    tmp.mixWeight = w_mw.y;
+    uint i = getIdx(uvec2(clamp(p, ivec2(0), ivec2(resolution_global) - 1)));
+    SpecularRTElement e = reflectIllumiantionBuffer.data[i];
+
+    // 当前帧累积颜色 + 权重 (101 写入, swap4/swap5 读取)
+    vec2 rg = unpackHalf2x16(floatBitsToUint(e.color_rg));
+    float b = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
+    tmp.data_swap = vec3(rg.x, rg.y, b);
+    tmp.weight = e.accum_weight;
+    tmp.mixWeight = 0.0;
+
     #ifndef REFLECT_BUFFER_MIN2
-    tmp4 = texelFetch(reflectIllumiantionData_color_Sampler, p, 0);
-    tmp.data = tmp4.xyz;
-    w_mw = unpackHalf2x16(floatBitsToUint(tmp4.w)); // prev_weight, 0
-    tmp.prev_weight = w_mw.x;
-    tmp.normal = texelFetch(reflectIllumiantionData_lnormal_Sampler, p, 0).xyz;
-    tmp.pos = texelFetch(reflectIllumiantionData_lpos_Sampler, p, 0).xyz;
+    // 时域历史 (swap5 写入, 101 下帧读取)
+    rg = unpackHalf2x16(floatBitsToUint(e.hist_color_rg));
+    b  = unpackHalf2x16(floatBitsToUint(e.hist_color_b)).x;
+    tmp.data = vec3(rg.x, rg.y, b);
+    tmp.prev_weight = e.hist_weight;
+    tmp.normal = decodeNormal(e.hist_oct_dir) * e.hist_vprojdist;
+    tmp.pos = vec3(e.hist_px, e.hist_py, e.hist_pz);
     #endif
     return tmp;
 }
@@ -581,11 +591,7 @@ vec3IllumiantionData blendReflect(vec3IllumiantionData A, vec3IllumiantionData B
 }
 
 vec3IllumiantionData sampleReflect(vec2 p) {
-
-    //p*=textureSize(diffuseIllumiantionData_CoCg_swap_Sampler,0);
-    //p-=0.25;
     ivec2 p1 = ivec2(p);
-
     vec2 p2 = fract(p);
     vec3IllumiantionData A = fetchReflect(p1);
     vec3IllumiantionData B = fetchReflect(p1 + ivec2(1, 0));
@@ -594,58 +600,50 @@ vec3IllumiantionData sampleReflect(vec2 p) {
     return blendReflect(blendReflect(A, B, p2.x), blendReflect(C, D, p2.x), p2.y);
 }
 
+// 101 调用: 写入累积颜色 + 权重到 SSBO 当前帧区段
 void WriteReflect(vec3IllumiantionData data, ivec2 p) {
-    float packed_w_mw = uintBitsToFloat(packHalf2x16(vec2(data.weight, data.mixWeight)));
-    imageStore(reflectIllumiantionData_swap_color, p, vec4(data.data_swap, packed_w_mw));
-    #if !defined(REFLECT_BUFFER_MIN) && !defined(REFLECT_BUFFER_MIN2)
-    packed_w_mw = uintBitsToFloat(packHalf2x16(vec2(data.prev_weight, 0)));
-    imageStore(reflectIllumiantionData_color, p, vec4(data.data, packed_w_mw));
-    imageStore(reflectIllumiantionData_lpos, p, vec4(data.pos, 0));
-    imageStore(reflectIllumiantionData_lnormal, p, vec4(data.normal, 0));
-    #endif
+    uint i = getIdx(uvec2(p));
+    reflectIllumiantionBuffer.data[i].color_rg = pack2HalfClamped(data.data_swap.r, data.data_swap.g);
+    reflectIllumiantionBuffer.data[i].color_b  = pack2HalfClamped(data.data_swap.b, 0.0);
+    reflectIllumiantionBuffer.data[i].accum_weight = data.weight;
+}
+
+// swap5 调用: 写入时域历史到 SSBO hist_* 区段 (供 101 下帧读取)
+void WriteReflectHistory(vec3 preDenoiseColor, float prevWeight, vec3 pos, vec3 R, float vprojdist, ivec2 p) {
+    uint i = getIdx(uvec2(p));
+    reflectIllumiantionBuffer.data[i].hist_px = pos.x;
+    reflectIllumiantionBuffer.data[i].hist_py = pos.y;
+    reflectIllumiantionBuffer.data[i].hist_pz = pos.z;
+    reflectIllumiantionBuffer.data[i].hist_oct_dir = encodeNormal(R);
+    reflectIllumiantionBuffer.data[i].hist_vprojdist = vprojdist;
+    reflectIllumiantionBuffer.data[i].hist_color_rg = pack2HalfClamped(preDenoiseColor.r, preDenoiseColor.g);
+    reflectIllumiantionBuffer.data[i].hist_color_b  = pack2HalfClamped(preDenoiseColor.b, 0.0);
+    reflectIllumiantionBuffer.data[i].hist_weight = prevWeight;
 }
 #endif
 
 #if defined(REFRACT_BUFFER) || defined(REFRACT_BUFFER_MIN) || defined(REFRACT_BUFFER_MIN2)
 
-layout(rgba32f) uniform image2D refractIllumiantionData_swap_color;
-uniform sampler2D refractIllumiantionData_color_Sampler;
-uniform sampler2D refractIllumiantionData_color_swap_Sampler;
-uniform sampler2D refractIllumiantionData_lnormal_Sampler;
-uniform sampler2D refractIllumiantionData_lpos_Sampler;
-#if !defined(REFRACT_BUFFER_MIN) && !defined(REFRACT_BUFFER_MIN2)
-layout(rgba32f) uniform image2D refractIllumiantionData_color;
-layout(rgba32f) uniform image2D refractIllumiantionData_lnormal;
-layout(rgba32f) uniform image2D refractIllumiantionData_lpos;
-
-#endif
-
-// vec3IllumiantionData sampleRefract(vec2 p) {
-//     vec3IllumiantionData tmp;
-//     vec4 tmp4 = texture(refractIllumiantionData_color_swap_Sampler, p);
-//     tmp.data_swap = tmp4.xyz;
-//     #ifndef REFRACT_BUFFER_MIN
-//     tmp4 = texture(refractIllumiantionData_color_Sampler, p);
-//     tmp.data = tmp4.xyz;
-//     tmp.weight = tmp4.w;
-
-//     tmp.normal = texture(refractIllumiantionData_lnormal_Sampler, p).xyz;
-//     tmp.pos = texture(refractIllumiantionData_lpos_Sampler, p).xyz;
-//     #endif
-//     return tmp;
-// }
+// 时域历史全部存入 SSBO refractIllumiantionBuffer (SpecularRTElement.hist_*).
+// 原先的 4 个 rgba32f image 已删除.
 
 vec3IllumiantionData fetchRefract(ivec2 p) {
     vec3IllumiantionData tmp;
-    vec4 tmp4 = texelFetch(refractIllumiantionData_color_swap_Sampler, p, 0);
-    tmp.data_swap = tmp4.xyz;
-    tmp.weight = tmp4.w;
+    uint i = getIdx(uvec2(clamp(p, ivec2(0), ivec2(resolution_global) - 1)));
+    SpecularRTElement e = refractIllumiantionBuffer.data[i];
+
+    vec2 rg = unpackHalf2x16(floatBitsToUint(e.color_rg));
+    float b = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
+    tmp.data_swap = vec3(rg.x, rg.y, b);
+    tmp.weight = e.accum_weight;
+
     #ifndef REFRACT_BUFFER_MIN2
-    tmp4 = texelFetch(refractIllumiantionData_color_Sampler, p, 0);
-    tmp.data = tmp4.xyz;
-    tmp.mixWeight = tmp4.w;
-    tmp.normal = texelFetch(refractIllumiantionData_lnormal_Sampler, p, 0).xyz;
-    tmp.pos = texelFetch(refractIllumiantionData_lpos_Sampler, p, 0).xyz;
+    rg = unpackHalf2x16(floatBitsToUint(e.hist_color_rg));
+    b  = unpackHalf2x16(floatBitsToUint(e.hist_color_b)).x;
+    tmp.data = vec3(rg.x, rg.y, b);
+    tmp.mixWeight = 0.0;
+    tmp.normal = decodeNormal(e.hist_oct_dir) * e.hist_vprojdist;
+    tmp.pos = vec3(e.hist_px, e.hist_py, e.hist_pz);
     #endif
     return tmp;
 }
@@ -665,11 +663,7 @@ vec3IllumiantionData blendRefract(vec3IllumiantionData A, vec3IllumiantionData B
 }
 
 vec3IllumiantionData sampleRefract(vec2 p) {
-
-    //p*=textureSize(diffuseIllumiantionData_CoCg_swap_Sampler,0);
-    //p-=0.375;
     ivec2 p1 = ivec2(p);
-
     vec2 p2 = fract(p);
     vec3IllumiantionData A = fetchRefract(p1);
     vec3IllumiantionData B = fetchRefract(p1 + ivec2(1, 0));
@@ -679,11 +673,21 @@ vec3IllumiantionData sampleRefract(vec2 p) {
 }
 
 void WriteRefract(vec3IllumiantionData data, ivec2 p) {
-    imageStore(refractIllumiantionData_swap_color, p, vec4(data.data_swap, data.weight));
-    #if !defined(REFRACT_BUFFER_MIN) && !defined(REFRACT_BUFFER_MIN2)
-    imageStore(refractIllumiantionData_color, p, vec4(data.data, data.mixWeight));
-    imageStore(refractIllumiantionData_lpos, p, vec4(data.pos, 0));
-    imageStore(refractIllumiantionData_lnormal, p, vec4(data.normal, 0));
-    #endif
+    uint i = getIdx(uvec2(p));
+    refractIllumiantionBuffer.data[i].color_rg = pack2HalfClamped(data.data_swap.r, data.data_swap.g);
+    refractIllumiantionBuffer.data[i].color_b  = pack2HalfClamped(data.data_swap.b, 0.0);
+    refractIllumiantionBuffer.data[i].accum_weight = data.weight;
+}
+
+void WriteRefractHistory(vec3 preDenoiseColor, float prevWeight, vec3 pos, vec3 R, float vprojdist, ivec2 p) {
+    uint i = getIdx(uvec2(p));
+    refractIllumiantionBuffer.data[i].hist_px = pos.x;
+    refractIllumiantionBuffer.data[i].hist_py = pos.y;
+    refractIllumiantionBuffer.data[i].hist_pz = pos.z;
+    refractIllumiantionBuffer.data[i].hist_oct_dir = encodeNormal(R);
+    refractIllumiantionBuffer.data[i].hist_vprojdist = vprojdist;
+    refractIllumiantionBuffer.data[i].hist_color_rg = pack2HalfClamped(preDenoiseColor.r, preDenoiseColor.g);
+    refractIllumiantionBuffer.data[i].hist_color_b  = pack2HalfClamped(preDenoiseColor.b, 0.0);
+    refractIllumiantionBuffer.data[i].hist_weight = prevWeight;
 }
 #endif

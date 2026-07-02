@@ -644,9 +644,22 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         break;
     }
 
-    // 写入镜面 RT 输出 (SpecularRTElement, 32B) — pos=主命中点, dir=R, dist=vprojdist
-    reflectIllumiantionBuffer.data[idx] = packSpecularRT(pos_rel, refl_R, refl_vprojdist, refl_color);
-    refractIllumiantionBuffer.data[idx] = packSpecularRT(pos_rel, refr_R, refr_vprojdist, refr_color);
+    // 写入镜面 RT 输出 — 仅写当前帧字段, hist_* 保留供 101 读取
+    reflectIllumiantionBuffer.data[idx].px = pos_rel.x;
+    reflectIllumiantionBuffer.data[idx].py = pos_rel.y;
+    reflectIllumiantionBuffer.data[idx].pz = pos_rel.z;
+    reflectIllumiantionBuffer.data[idx].oct_dir = encodeNormal(refl_R);
+    reflectIllumiantionBuffer.data[idx].vprojdist = refl_vprojdist;
+    reflectIllumiantionBuffer.data[idx].color_rg = pack2HalfClamped(refl_color.r, refl_color.g);
+    reflectIllumiantionBuffer.data[idx].color_b  = pack2HalfClamped(refl_color.b, 0.0);
+
+    refractIllumiantionBuffer.data[idx].px = pos_rel.x;
+    refractIllumiantionBuffer.data[idx].py = pos_rel.y;
+    refractIllumiantionBuffer.data[idx].pz = pos_rel.z;
+    refractIllumiantionBuffer.data[idx].oct_dir = encodeNormal(refr_R);
+    refractIllumiantionBuffer.data[idx].vprojdist = refr_vprojdist;
+    refractIllumiantionBuffer.data[idx].color_rg = pack2HalfClamped(refr_color.r, refr_color.g);
+    refractIllumiantionBuffer.data[idx].color_b  = pack2HalfClamped(refr_color.b, 0.0);
 
     denoiseBuffer.data[idx].emission = first_emission_val;
 

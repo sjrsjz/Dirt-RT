@@ -29,24 +29,24 @@ void main() {
     vec2 rg = unpackHalf2x16(floatBitsToUint(light.x));
     vec2 br = unpackHalf2x16(floatBitsToUint(light.y));
     vec2 vv = unpackHalf2x16(floatBitsToUint(light.z));
-    vec3 denoised = vec3(rg.x, rg.y, br.x);
     float vprojdist = vv.y;
-    if (vv.x < 0.0) denoised = vec3(0.0);
-    if (any(isnan(denoised))) denoised = vec3(0.0);
+    if (vv.x < 0.0) return; // 天空
 
-    // 读 swap_color (102 写入: (accumulated, weight_raw))
-    vec4 sc = texelFetch(refractIllumiantionData_color_swap_Sampler, pix, 0);
-
-    // 写 swap_color: 降噪后颜色 + 保留 weight
-    imageStore(refractIllumiantionData_swap_color, pix, vec4(denoised, sc.w));
-
-    // flip: color (history) = 累积颜色 (pre-denoise = sc.xyz), mixWeight = refractWeight
     uint idx = getIdx(uvec2(pix));
-    imageStore(refractIllumiantionData_color, pix,
-        vec4(sc.xyz, denoiseBuffer.data[idx].refractWeight));
+    SpecularRTElement e = refractIllumiantionBuffer.data[idx];
+    vec2 erg = unpackHalf2x16(floatBitsToUint(e.color_rg));
+    float eb = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
+    vec3 preDenoise = vec3(erg.x, erg.y, eb);
+    float weight = e.accum_weight;
+    if (any(isnan(preDenoise))) preDenoise = vec3(0.0);
 
-    // lpos = pos, lnormal = R * vprojdist
+    vec2 drg = unpackHalf2x16(floatBitsToUint(light.x));
+    vec2 dbr = unpackHalf2x16(floatBitsToUint(light.y));
+    vec3 denoised = vec3(drg.x, drg.y, dbr.x);
+    if (any(isnan(denoised))) denoised = vec3(0.0);
+    refractIllumiantionBuffer.data[idx].color_rg = pack2HalfClamped(denoised.r, denoised.g);
+    refractIllumiantionBuffer.data[idx].color_b  = pack2HalfClamped(denoised.b, 0.0);
+
     vec3 R = decodeNormal(geom.w);
-    imageStore(refractIllumiantionData_lpos, pix, vec4(geom.xyz, 0.0));
-    imageStore(refractIllumiantionData_lnormal, pix, vec4(R * vprojdist, 0.0));
+    WriteRefractHistory(preDenoise, weight, geom.xyz, R, vprojdist, pix);
 }

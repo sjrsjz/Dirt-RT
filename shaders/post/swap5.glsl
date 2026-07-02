@@ -26,29 +26,30 @@ void main() {
     vec4 geom = texelFetch(colortex3, pix, 0);
     vec4 light = texelFetch(colortex4, pix, 0);
 
-    // 解包降噪后颜色 + vprojdist
     vec2 rg = unpackHalf2x16(floatBitsToUint(light.x));
     vec2 br = unpackHalf2x16(floatBitsToUint(light.y));
     vec2 vv = unpackHalf2x16(floatBitsToUint(light.z));
-    vec3 denoised = vec3(rg.x, rg.y, br.x);
     float vprojdist = vv.y;
-    if (vv.x < 0.0) denoised = vec3(0.0);  // 天空
+    if (vv.x < 0.0) return; // 天空 → 跳过, 保留 SSBO 原有值
+
+    // 从 SSBO 读 101 写入的累积颜色 + 权重 (pre-denoise history 源)
+    uint idx = getIdx(uvec2(pix));
+    SpecularRTElement e = reflectIllumiantionBuffer.data[idx];
+    vec2 erg = unpackHalf2x16(floatBitsToUint(e.color_rg));
+    float eb = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
+    vec3 preDenoise = vec3(erg.x, erg.y, eb);
+    float weight = e.accum_weight;
+    if (any(isnan(preDenoise))) preDenoise = vec3(0.0);
+
+    // 写回降噪颜色到 SSBO 当前帧区段 (fog.fsh 通过 fetchReflect 读取)
+    vec2 drg = unpackHalf2x16(floatBitsToUint(light.x));
+    vec2 dbr = unpackHalf2x16(floatBitsToUint(light.y));
+    vec3 denoised = vec3(drg.x, drg.y, dbr.x);
     if (any(isnan(denoised))) denoised = vec3(0.0);
+    reflectIllumiantionBuffer.data[idx].color_rg = pack2HalfClamped(denoised.r, denoised.g);
+    reflectIllumiantionBuffer.data[idx].color_b  = pack2HalfClamped(denoised.b, 0.0);
 
-    // 读 swap_color (101 写入: (accumulated, pack(weight, mixWeight)))
-    vec4 sc = texelFetch(reflectIllumiantionData_color_swap_Sampler, pix, 0);
-    vec2 w_mw = unpackHalf2x16(floatBitsToUint(sc.w));
-    float weight = w_mw.x;
-
-    // 写 swap_color: 降噪后颜色 + 保留 weight/mixWeight
-    imageStore(reflectIllumiantionData_swap_color, pix, vec4(denoised, sc.w));
-
-    // flip: color (history) = 累积颜色 (pre-denoise = sc.xyz), prev_weight = weight
-    imageStore(reflectIllumiantionData_color, pix,
-        vec4(sc.xyz, pack2HalfClamped(weight, 0.0)));
-
-    // lpos = pos, lnormal = R * vprojdist (供下一帧 101 hitWeight)
+    // 写时域历史到 SSBO hist_* 区段 (替代原先 4 个 rgba32f image write)
     vec3 R = decodeNormal(geom.w);
-    imageStore(reflectIllumiantionData_lpos, pix, vec4(geom.xyz, 0.0));
-    imageStore(reflectIllumiantionData_lnormal, pix, vec4(R * vprojdist, 0.0));
+    WriteReflectHistory(preDenoise, weight, geom.xyz, R, vprojdist, pix);
 }

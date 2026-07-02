@@ -23,10 +23,5 @@ layout(location = 0) out vec4 fragColor;
 
 void main() {
     // 已禁用 — swap 操作已分散到 swap2-7.glsl
-
-    // 原始实现 (保留供参考):
-    // uint idx = getIdx(uvec2(gl_FragCoord.xy));
-    // diffuseIllumiantionBuffer.data[idx].data_swap = diffuseIllumiantionBuffer.data[idx].data;
-    // reflectIllumiantionBuffer.data[idx].data_swap = reflectIllumiantionBuffer.data[idx].data;
-    // refractIllumiantionBuffer.data[idx].data_swap = refractIllumiantionBuffer.data[idx].data;
+    // 时域历史现在全部存储在 SSBO 中 (SpecularRTElement.hist_*)
 }

@@ -69,12 +69,15 @@ void main() {
         TileSample s;
         if (dist > -0.5) {
             SpecularRTElement e = refractIllumiantionBuffer.data[idx];
-            vec3 color = texelFetch(refractIllumiantionData_color_swap_Sampler, cc, 0).xyz;
+            vec2 rg = unpackHalf2x16(floatBitsToUint(e.color_rg));
+            float b = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
+            vec3 color = vec3(rg.x, rg.y, b);
             if (any(isnan(color)) || any(isinf(color))) color = vec3(0.0);
             vec3 R = decodeNormal(e.oct_dir);
-            vec3 H = normalize(-normalize(e.pos) + R);
+            vec3 epos = vec3(e.px, e.py, e.pz);
+            vec3 H = normalize(-normalize(epos) + R);
             if (any(isnan(H)) || any(isinf(H))) H = R;
-            s.pos_oct = vec4(e.pos, e.oct_dir);
+            s.pos_oct = vec4(epos, e.oct_dir);
             s.color_vproj = vec4(color, e.vprojdist);
             s.H_dist = vec4(H, dist);
         } else {

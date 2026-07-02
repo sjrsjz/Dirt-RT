@@ -78,12 +78,15 @@ void main() {
         TileSample s;
         if (dist > -0.5) {
             SpecularRTElement e = reflectIllumiantionBuffer.data[idx];
-            vec3 color = texelFetch(reflectIllumiantionData_color_swap_Sampler, cc, 0).xyz;
+            vec2 rg = unpackHalf2x16(floatBitsToUint(e.color_rg));
+            float b = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
+            vec3 color = vec3(rg.x, rg.y, b);
             if (any(isnan(color)) || any(isinf(color))) color = vec3(0.0);
             vec3 R = decodeNormal(e.oct_dir);
-            vec3 H = normalize(-normalize(e.pos) + R);
+            vec3 epos = vec3(e.px, e.py, e.pz);
+            vec3 H = normalize(-normalize(epos) + R);
             if (any(isnan(H)) || any(isinf(H))) H = R;
-            s.pos_oct = vec4(e.pos, e.oct_dir);
+            s.pos_oct = vec4(epos, e.oct_dir);
             s.color_vproj = vec4(color, e.vprojdist);
             s.H_dist = vec4(H, dist);
         } else {
@@ -113,11 +116,12 @@ void main() {
     vec3 cPos = c.pos_oct.xyz;
     vec3 cR = decodeNormal(c.pos_oct.w);
     vec3 cH = c.H_dist.xyz;
-    vec4 cSample = texelFetch(reflectIllumiantionData_color_swap_Sampler, ivec2(gid), 0);
-    vec3 cColor = cSample.xyz;
-    // 解包时域累积权重 (101 写入: pack2HalfClamped(weight, mixWeight))
-    vec2 cWMW = unpackHalf2x16(floatBitsToUint(cSample.w));
-    float cWeight = cWMW.x;
+    uint gidx = getIdx(uvec2(clamp(ivec2(gid), ivec2(0), texSize - 1)));
+    SpecularRTElement ce = reflectIllumiantionBuffer.data[gidx];
+    vec2 crg = unpackHalf2x16(floatBitsToUint(ce.color_rg));
+    float cb = unpackHalf2x16(floatBitsToUint(ce.color_b)).x;
+    vec3 cColor = vec3(crg.x, crg.y, cb);
+    float cWeight = ce.accum_weight;
     float cVproj = c.color_vproj.w;
     // roughness 仅中心输出需要, 邻域方差不用 → 直接读 denoiseBuffer (中心)
     uint cidx = getIdx(uvec2(clamp(ivec2(gid), ivec2(0), texSize - 1)));
