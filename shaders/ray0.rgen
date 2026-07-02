@@ -454,7 +454,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                     float rho = clamp(length_x / omega, 0.0, 1.0);
                     kappa = alice_kappa(length_x, omega);
                     // 判定 length_x 是否过小，过小则不使用引导采样，这是因为极小值会导致 axis 方向不稳定甚至崩溃，造成后续的采样方向出现 NaN。
-                    guideProb = length_x > 1e-8 ? 0.9 * rho : 0.0;
+                    guideProb = length_x > 1e-8 ? 0.975 * rho : 0.0;
                 }
                 bool useGuide = getRnd() < guideProb;
                 if (useGuide) {

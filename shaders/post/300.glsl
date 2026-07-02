@@ -107,6 +107,10 @@ void main() {
     vec3 sample_world_pos, sample_normal;
     ivec2 sample_coord;
 
+    // 方差预滤波使得下面的 sigma2 不再会导致降噪器彻底崩溃
+    float sigma2 = max(center_var_est, 1e-8);
+    float inv_sqrt_sigma2 = SVGF_PHI_L * inversesqrt(sigma2);
+
     // ---- 主采样循环 --------------------------------------------------------
     for (int i = -1; i <= 1; i++) {
         for (int j = -1; j <= 1; j++) {
@@ -142,11 +146,9 @@ void main() {
             // 但是在使用了方差预滤波后，sample_var_est 的修正作用已经减弱，并且会带来极其严重的频闪副作用，因此这里直接使用 center_var_est 作为亮度权重的方差估计值
             // float sigma2 = max(center_var_est + sample_var_est, 1e-8);
 
-            // 方差预滤波使得下面的 sigma2 不再会导致降噪器彻底崩溃
-            float sigma2 = max(center_var_est , 1e-8);
             float delta_energy = length(center_sh.shY.xyz - sample_sh.shY.xyz);
-            float w_luma = SVGF_PHI_L * delta_energy * inversesqrt(sigma2);
-            
+            float w_luma = delta_energy * inv_sqrt_sigma2;
+
             // ---- 组合权重 -------------------------------------------------
             float w0 = w_kernel * (1 + w_luma) * exp2(-(w_geometry + w_luma) * LOG2_E);
 

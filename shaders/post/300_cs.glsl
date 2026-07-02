@@ -66,11 +66,11 @@ shared vec4 sm_light[TILE_AREA];
 // ===========================================================================
 
 void unpackLightSampleSM(uint tile_idx, out vec3 pos, out vec3 normal, out SH sh, out float variance) {
-    vec4 geom  = sm_geometry[tile_idx];
+    vec4 geom = sm_geometry[tile_idx];
     vec4 light = sm_light[tile_idx];
-    pos      = geom.xyz;
-    normal   = decodeNormal(geom.w);
-    sh       = unpackSH(light.x, light.y, light.z);
+    pos = geom.xyz;
+    normal = decodeNormal(geom.w);
+    sh = unpackSH(light.x, light.y, light.z);
     variance = light.w;
 }
 
@@ -80,10 +80,10 @@ void unpackLightSampleSM(uint tile_idx, out vec3 pos, out vec3 normal, out SH sh
 
 void main() {
     // ---- 工作项标识 --------------------------------------------------------
-    ivec2 pix       = ivec2(gl_GlobalInvocationID.xy);
-    uvec2 local_id  = gl_LocalInvocationID.xy;
-    uint  local_idx = gl_LocalInvocationIndex;
-    uvec2 group_id  = gl_WorkGroupID.xy;
+    ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    uvec2 local_id = gl_LocalInvocationID.xy;
+    uint local_idx = gl_LocalInvocationIndex;
+    uvec2 group_id = gl_WorkGroupID.xy;
 
     ivec2 texSize = textureSize(colortex3, 0);
 
@@ -100,10 +100,10 @@ void main() {
     // 越界像素的方差写入负值作为天空标记 (方差合法值 ≥ 0)
 
     for (uint i = local_idx; i < uint(TILE_AREA); i += 256u) {
-        uint  tx = i % uint(TILE_SIZE);
-        uint  ty = i / uint(TILE_SIZE);
-        ivec2 gc = tile_origin + ivec2(tx, ty);          // 全局坐标
-        ivec2 cc = clamp(gc, ivec2(0), texSize - 1);     // 钳制到有效范围
+        uint tx = i % uint(TILE_SIZE);
+        uint ty = i / uint(TILE_SIZE);
+        ivec2 gc = tile_origin + ivec2(tx, ty); // 全局坐标
+        ivec2 cc = clamp(gc, ivec2(0), texSize - 1); // 钳制到有效范围
 
         sm_geometry[i] = texelFetch(colortex3, cc, 0);
 
@@ -143,12 +143,16 @@ void main() {
     float inv_pixel_footprint = 1.0 / (SVGF_POSITION_PARAM * max(dist_to_cam / float(resolution_global.y), 0.00001));
 
     // ---- 初始化累积器 (中心像素权重 = 1) -----------------------------------
-    float sumWeight    = 1.0;
+    float sumWeight = 1.0;
     float sumVarEnergy = center_var_est;
-    SH accumulatedSH   = center_sh;
+    SH accumulatedSH = center_sh;
 
     // B‑样条权重核 (中心 1.0, 十字 0.66667)
     float hw[2] = float[](1.0, 0.66667);
+
+    // 方差预滤波使得 sigma2 不再导致降噪器崩溃
+    float sigma2 = max(center_var_est, 1e-8);
+    float inv_sqrt_sigma2 = SVGF_PHI_L * inversesqrt(sigma2);
 
     // =========================================================================
     // Phase 3: 3×3 à‑trous 采样循环 — 全部从共享内存读取
@@ -186,17 +190,15 @@ void main() {
             float w_geometry = SVGF_NORMAL_POWER * (1.0 - dot(center_normal, sample_normal)) + depthTerm;
 
             // ---- 亮度权重 -------------------------------------------------
-            // 方差预滤波使得 sigma2 不再导致降噪器崩溃
-            float sigma2 = max(center_var_est, 1e-8);
             float delta_energy = length(center_sh.shY.xyz - sample_sh.shY.xyz);
-            float w_luma = SVGF_PHI_L * delta_energy * inversesqrt(sigma2);
+            float w_luma = delta_energy * inv_sqrt_sigma2;
 
             // ---- 组合权重 -------------------------------------------------
             float w0 = w_kernel * (1.0 + w_luma) * exp2(-(w_geometry + w_luma) * LOG2_E);
 
             // ---- 累积加权样本 ---------------------------------------------
             accumulate_SH(accumulatedSH, sample_sh, w0);
-            sumWeight    += w0;
+            sumWeight += w0;
             sumVarEnergy += w0 * w0 * sample_var_est;
         }
     }

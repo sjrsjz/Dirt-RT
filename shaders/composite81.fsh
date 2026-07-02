@@ -1,1 +1,1 @@
-#include "/post/fog.fsh"
+#include "/post/fog.glsl"

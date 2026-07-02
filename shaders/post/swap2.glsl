@@ -3,11 +3,10 @@
 // ===========================================================================
 // Pass swap2_c: Diffuse Variance Filter → Colortex Push (Compute)
 // ===========================================================================
-// Replaces fragment shader swap2.glsl with a compute shader using:
-//   - 16x16 workgroups + 3px halo = 22x22 shared memory tile
-//   - Precomputed raw ALICE variance loaded into shared memory
-//   - 7x7 geometry-aware bilateral variance filter
-//   - imageStore output to colorimg3 (geometry) and colorimg4 (SH+variance)
+// 16x16 workgroups + 2px halo = 20x20 shared memory tile
+// Precomputed raw ALICE variance loaded into shared memory
+// 5x5 geometry-aware bilateral variance filter
+// imageStore output to colorimg3 (geometry) and colorimg4 (SH+variance)
 
 layout(local_size_x = 16, local_size_y = 16) in;
 #define DIFFUSE_BUFFER
@@ -25,7 +24,7 @@ layout(rgba32f) uniform writeonly image2D colorimg3;
 layout(rgba32f) uniform writeonly image2D colorimg4;
 
 // --- Kernel constants ---
-const float hw[4] = float[](1.0, 0.66667, 0.44444, 0.29630); // B-spline 7x7 kernel
+const float hw[3] = float[](1.0, 0.66667, 0.44444); // B-spline 5x5 kernel
 
 #ifndef VAR_FILTER_NORMAL_POWER
 #define VAR_FILTER_NORMAL_POWER SVGF_NORMAL_POWER
@@ -37,10 +36,10 @@ const float hw[4] = float[](1.0, 0.66667, 0.44444, 0.29630); // B-spline 7x7 ker
 
 #define VAR_FILTER_CONSERVATIVE 0
 
-// --- Shared memory tile: 22x22 (16+6 halo for 7x7 kernel) ---
-const uint SM_W = 22u;
-const uint SM_H = 22u;
-const uint HALO = 3u;
+// --- Shared memory tile: 20x20 (16+4 halo for 5x5 kernel) ---
+const uint SM_W = 20u;
+const uint SM_H = 20u;
+const uint HALO = 2u;
 
 struct TileSample {
     float dist;
@@ -108,9 +107,9 @@ void main() {
     // =========================================================================
     uint threadIdx = lid.y * 16u + lid.x; // 线程在 Workgroup 内的 1D 索引 (0~255)
 
-    for (uint i = threadIdx; i < 484u; i += 256u) {
-        uint row = i / 22u;
-        uint col = i % 22u;
+    for (uint i = threadIdx; i < 400u; i += 256u) {
+        uint row = i / 20u;
+        uint col = i % 20u;
 
         ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(col, row);
         ivec2 clamped = clamp(gc, ivec2(0), texSize - ivec2(1));
@@ -214,13 +213,13 @@ void main() {
     );
 
     // =========================================================================
-    // Phase 4: 7x7 geometry-aware bilateral variance filter
+    // Phase 4: 5x5 geometry-aware bilateral variance filter
     // =========================================================================
     float sumVar = 0.0;
     float sumW   = 0.0;
 
-    for (int ky = -3; ky <= 3; ky++) {
-        for (int kx = -3; kx <= 3; kx++) {
+    for (int ky = -2; ky <= 2; ky++) {
+        for (int kx = -2; kx <= 2; kx++) {
             int sx = int(cx) + kx;
             int sy = int(cy) + ky;
             TileSample s = sm_tile[sy][sx];
