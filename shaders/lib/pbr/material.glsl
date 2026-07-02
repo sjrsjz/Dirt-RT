@@ -1,7 +1,7 @@
 #ifndef MATERIAL_GLSL
 #define MATERIAL_GLSL
 #include "/lib/settings.glsl"
-const float EMISSION_INTENSITY = 0.55;
+const float EMISSION_INTENSITY = 15.0;
 
 // LabPBR 1.3 硬编码金属 F0 查找表 (specular.g ∈ [230,255])
 // 230-235: 固定金属, 236-237: 保留, 238-255: 自定义金属 (F0 = albedo.rgb)
@@ -98,7 +98,7 @@ Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn, float we
     if (aChannel < 255) {
         // 0~254: emission intensity, linear
         float emissionRaw = float(aChannel) / 254.0;
-        material.emission = albedo.rgb * pow(emissionRaw, 0.9) * EMISSION_INTENSITY;
+        material.emission = albedo.rgb * pow(emissionRaw, 2.0) * EMISSION_INTENSITY;
     } else {
         material.emission = vec3(0.0);
     }

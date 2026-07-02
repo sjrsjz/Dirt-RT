@@ -20,6 +20,9 @@ const float SPEC_LUMA_ROUGH_SOFT  = 3.0;   // roughness softening for luma weigh
 const float SPEC_ROUGH_NORM_A     = 0.99;  // roughness weight norm: r²·A + B
 const float SPEC_ROUGH_NORM_B     = 0.01;
 
+// Curvature-guided geometry skip (swap2 → 300)
+const float CURVATURE_THRESHOLD   = 0.01;  // |K| > this → omega negated → skip geometry edge-stop
+
 //Vulkanite
 const int World_OVERWORLD = 0;
 const int World_THE_NETHER = 1;

@@ -46,7 +46,7 @@ struct TileSample {
     float px, py, pz;
     float oct_n;
     float rawVar;
-    float omega;    // shY.w = total ALICE energy, for 3-sigma clamping
+    float omega; // shY.w = total ALICE energy, for 3-sigma clamping
 };
 shared TileSample sm_tile[SM_H][SM_W];
 
@@ -74,7 +74,7 @@ float computeRawVariance(uint idx, out float outOmega) {
     float weight = e.swap_weight;
 
     if (any(isnan(shY)) || any(isinf(shY))) shY = vec4(0.0);
-    if (isnan(weight) || isinf(weight))        weight = 0.0;
+    if (isnan(weight) || isinf(weight)) weight = 0.0;
 
     outOmega = shY.w;
     return sanitizeVariance(alice_estimator_variance(shY, max(weight, 1.0)));
@@ -119,14 +119,14 @@ void main() {
         float d = denoiseBuffer.data[loadIdx].distance;
 
         TileSample s;
-        s.dist  = d;
-        s.px    = e.px;
-        s.py    = e.py;
-        s.pz    = e.pz;
+        s.dist = d;
+        s.px = e.px;
+        s.py = e.py;
+        s.pz = e.pz;
         s.oct_n = e.oct_n;
         float om = 0.0;
         s.rawVar = (d > -0.5) ? computeRawVariance(loadIdx, om) : 0.0;
-        s.omega  = om;
+        s.omega = om;
 
         sm_tile[row][col] = s;
     }
@@ -159,22 +159,22 @@ void main() {
     UnifiedDiffuseElement ce = diffuseIllumiantionBuffer.data[idx];
     mediump vec2 c_shY_xy = unpackHalf2x16(floatBitsToUint(ce.swap_shY_xy));
     mediump vec2 c_shY_zw = unpackHalf2x16(floatBitsToUint(ce.swap_shY_zw));
-    mediump vec2 c_CoCg   = unpackHalf2x16(floatBitsToUint(ce.swap_CoCg));
+    mediump vec2 c_CoCg = unpackHalf2x16(floatBitsToUint(ce.swap_CoCg));
     float cWeight = ce.swap_weight;
 
     SH outSH;
-    outSH.shY  = vec4(c_shY_xy, c_shY_zw);
+    outSH.shY = vec4(c_shY_xy, c_shY_zw);
     outSH.CoCg = c_CoCg;
     outSH = sanitizeSH(outSH);
 
     // --- 3-sigma energy clamp on output SH ---
     // Compute neighborhood mean & sigma of ω, clamp center outSH if outlier.
-    vec3 centerPos    = vec3(centerTile.px, centerTile.py, centerTile.pz);
+    vec3 centerPos = vec3(centerTile.px, centerTile.py, centerTile.pz);
     vec3 centerNormal = decodeNormal(centerTile.oct_n);
 
-    float sumOmega  = 0.0;
+    float sumOmega = 0.0;
     float sumOmega2 = 0.0;
-    float sumStatW  = 0.0;
+    float sumStatW = 0.0;
 
     for (int ky = -2; ky <= 2; ky++) {
         for (int kx = -2; kx <= 2; kx++) {
@@ -188,16 +188,16 @@ void main() {
 
             float wK = hw[abs(kx)] * hw[abs(ky)];
             float wG = varianceGeometryWeight(centerPos, centerNormal, sPos, sNrm);
-            float w  = wK * wG;
+            float w = wK * wG;
 
-            sumOmega  += w * s.omega;
+            sumOmega += w * s.omega;
             sumOmega2 += w * s.omega * s.omega;
-            sumStatW  += w;
+            sumStatW += w;
         }
     }
 
-    float meanOmega  = (sumStatW > 1e-8) ? (sumOmega / sumStatW) : centerTile.omega;
-    float varOmega   = (sumStatW > 1e-8) ? max(sumOmega2 / sumStatW - meanOmega * meanOmega, 0.0) : 0.0;
+    float meanOmega = (sumStatW > 1e-8) ? (sumOmega / sumStatW) : centerTile.omega;
+    float varOmega = (sumStatW > 1e-8) ? max(sumOmega2 / sumStatW - meanOmega * meanOmega, 0.0) : 0.0;
     float sigmaOmega = sqrt(varOmega);
 
     // Clamp center SH energy to [μ-3σ, μ+3σ]; scale full shY + CoCg by r.
@@ -205,18 +205,18 @@ void main() {
     float centerOmega = outSH.shY.w;
     float omegaClamped = clamp(centerOmega, meanOmega - 3.0 * sigmaOmega, meanOmega + 3.0 * sigmaOmega);
     float shY_scale = omegaClamped / max(centerOmega, 1e-8);
-    outSH.shY  *= shY_scale;
+    outSH.shY *= shY_scale;
     outSH.CoCg *= shY_scale;
 
     float centerVariance = sanitizeVariance(
-        alice_estimator_variance(outSH.shY, max(cWeight, 1.0))
-    );
+            alice_estimator_variance(outSH.shY, max(cWeight, 1.0))
+        );
 
     // =========================================================================
     // Phase 4: 5x5 geometry-aware bilateral variance filter
     // =========================================================================
     float sumVar = 0.0;
-    float sumW   = 0.0;
+    float sumW = 0.0;
 
     for (int ky = -2; ky <= 2; ky++) {
         for (int kx = -2; kx <= 2; kx++) {
@@ -233,7 +233,7 @@ void main() {
             float w = wKernel * wGeom;
 
             sumVar += w * s.rawVar;
-            sumW   += w;
+            sumW += w;
         }
     }
 
@@ -241,13 +241,48 @@ void main() {
     if (sumW > 1e-8) {
         filteredVariance = sumVar / sumW;
     }
-#if VAR_FILTER_CONSERVATIVE
+    #if VAR_FILTER_CONSERVATIVE
     filteredVariance = max(filteredVariance, centerVariance);
-#endif
+    #endif
     filteredVariance = sanitizeVariance(filteredVariance);
 
     // =========================================================================
-    // Phase 5: Write outputs
+    // Phase 5: 高斯曲率 → omega 符号标记 (3×3 有限差分, 复用 LDS)
+    // =========================================================================
+    // |K| > threshold → 几何边缘不可靠(棱/角) → 标记 omega 为负
+    // 300 降噪 pass 检测到负 omega 时跳过几何权重
+    {
+        // 中心 + 邻域位置 (复用 Phase 1 加载的 sm_tile 2D 数组)
+        int scx = int(cx), scy = int(cy);
+        #define P(dx,dy) vec3(sm_tile[scy+(dy)][scx+(dx)].px, \
+                              sm_tile[scy+(dy)][scx+(dx)].py, \
+                              sm_tile[scy+(dy)][scx+(dx)].pz)
+        vec3 Pc = P(0, 0);
+
+        vec3 Dx = (P(1, 0) - P(-1, 0)) * 0.5;
+        vec3 Dy = (P(0, 1) - P(0, -1)) * 0.5;
+        vec3 Dxx = P(1, 0) - 2.0 * Pc + P(-1, 0);
+        vec3 Dyy = P(0, 1) - 2.0 * Pc + P(0, -1);
+        vec3 Dxy = (P(1, 1) - P(1, -1) - P(-1, 1) + P(-1, -1)) * 0.25;
+        #undef P
+
+        float E = dot(Dx, Dx);
+        float F = dot(Dx, Dy);
+        float G = dot(Dy, Dy);
+        float L = dot(Dxx, centerNormal);
+        float M = dot(Dxy, centerNormal);
+        float N2 = dot(Dyy, centerNormal);
+
+        float denom = max(E * G - F * F, 1e-8);
+        float K = (L * N2 - M * M) / denom;
+
+        // 分支无关: 曲率超阈值 → omega 取负 (标记跳过几何权重)
+        float kMask = float(abs(K) > CURVATURE_THRESHOLD);
+        outSH.shY.w = abs(outSH.shY.w) * (1.0 - 2.0 * kMask);
+    }
+
+    // =========================================================================
+    // Phase 6: Write outputs
     // =========================================================================
     // colortex3: pos.xyz + oct-encoded normal (matches old swap2 geometry layout)
     imageStore(colorimg3, ivec2(gid), vec4(centerPos, centerTile.oct_n));

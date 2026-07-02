@@ -138,6 +138,9 @@ void main() {
     float center_var_est;
     unpackLightSampleSM(center_idx, center_pos, center_normal, center_sh, center_var_est);
 
+    float geomValid = float(center_sh.shY.w >= 0.0);
+    center_sh.shY.w = abs(center_sh.shY.w);
+
     // 像素的世界空间 footprint, 用于距离无关的深度边缘停止
     float dist_to_cam = max(length(center_pos), 0.001);
     float inv_pixel_footprint = 1.0 / (SVGF_POSITION_PARAM * max(dist_to_cam / float(resolution_global.y), 0.00001));
@@ -181,13 +184,13 @@ void main() {
             float sample_var_est;
             unpackLightSampleSM(sample_idx, sample_world_pos, sample_normal, sample_sh, sample_var_est);
 
-            // ---- 深度权重 -------------------------------------------------
-            // 采样点到中心平面的垂直距离, 归一化到屏幕空间
+            sample_sh.shY.w = abs(sample_sh.shY.w);
+
             vec3 delta = (sample_world_pos - center_pos) * inv_pixel_footprint;
             float depthTerm = abs(dot(delta, center_normal));
 
-            // ---- 几何权重 -------------------------------------------------
-            float w_geometry = SVGF_NORMAL_POWER * (1.0 - dot(center_normal, sample_normal)) + depthTerm;
+            float raw_geom = SVGF_NORMAL_POWER * (1.0 - dot(center_normal, sample_normal)) + depthTerm * geomValid;
+            float w_geometry = raw_geom;
 
             // ---- 亮度权重 -------------------------------------------------
             float delta_energy = length(center_sh.shY.xyz - sample_sh.shY.xyz);
@@ -203,12 +206,12 @@ void main() {
         }
     }
 
-    // ---- 时空方差混合归一化 -------------------------------------------------
     float inv_sumWeight = 1.0 / sumWeight;
     accumulatedSH = scaleSH(accumulatedSH, inv_sumWeight);
+    #ifndef FINAL_DENOISE_PASS
+    accumulatedSH.shY.w *= (2.0 * geomValid - 1.0);
+    #endif
     float varEnergyOut = sumVarEnergy * inv_sumWeight * inv_sumWeight;
 
-    // ---- 输出: 压缩光照样本 -------------------------------------------------
-    // Iris/OptiFine: compute shader 写入 colortex 使用 imageStore + colorimgN
     imageStore(colorimg4, pix, vec4(packSH(accumulatedSH), varEnergyOut));
 }

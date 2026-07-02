@@ -68,7 +68,7 @@ vec3 background_0(float pos_y, in vec3 n, in vec3 lightDir) {
     const float R = 6370000; //地球半径
 
     const vec3 Sun = 20. * vec3(10, 10, 10); //太阳光颜色
-    const vec3 Moon = Sun * 0.00001; //月光颜色 (较暗的蓝白色)
+    const vec3 Moon = Sun * 0.0001; //月光颜色 (较暗的蓝白色)
 
     mediump vec3 b_g0_2 = b_g0 * b_g0;
 

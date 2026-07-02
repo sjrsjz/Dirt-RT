@@ -82,8 +82,11 @@ void main() {
     unpackLightSample(pix, center_pos, center_normal, center_sh, center_var_est);
 
     // 跳过天空像素 — 方差被 swap2 复用作天空 mask
-    // (方差合法值为非负数, 负值 = 天空/无效像素)
     if (center_var_est < 0.0) return;
+
+    // 高斯曲率标记: omega < 0 → 几何不可靠, geomValid=0 跳过几何权重
+    float geomValid = float(center_sh.shY.w >= 0.0);
+    center_sh.shY.w = abs(center_sh.shY.w);
 
     // 像素的世界空间 footprint，用于距离无关的深度边缘停止
     float dist_to_cam = max(length(center_pos), 0.001);
@@ -134,13 +137,14 @@ void main() {
             // 天空检查 — 方差被 swap2 复用作天空 mask (负值 = 天空)
             if (sample_var_est < 0.0) continue;
 
-            // ---- 深度权重 -------------------------------------------------
-            // 采样点到中心平面的垂直距离，归一化到屏幕空间
+            // 曲率标记: 仅中心点决定几何权重有效性
+            sample_sh.shY.w = abs(sample_sh.shY.w);
+
             vec3 delta = (sample_world_pos - center_pos) * inv_pixel_footprint;
             float depthTerm = abs(dot(delta, center_normal));
 
-            // ---- 几何权重 -------------------------------------------------
-            float w_geometry = SVGF_NORMAL_POWER * (1.0 - dot(center_normal, sample_normal)) + depthTerm;
+            float raw_geom = SVGF_NORMAL_POWER * (1.0 - dot(center_normal, sample_normal)) + depthTerm * geomValid;
+            float w_geometry = raw_geom;
 
             // 在未使用方差预滤波的情况下，只有同时考虑到 sample_var_est 和 center_var_est 才能得到合理的亮度权重，使得降噪器不崩溃
             // 但是在使用了方差预滤波后，sample_var_est 的修正作用已经减弱，并且会带来极其严重的频闪副作用，因此这里直接使用 center_var_est 作为亮度权重的方差估计值
@@ -160,11 +164,14 @@ void main() {
         }
     }
 
-    // ---- 时空方差混合 ------------------------------------------------
     float inv_sumWeight = 1.0 / sumWeight;
 
     // ---- 归一化并输出 ----------------------------------------------------
     accumulatedSH = scaleSH(accumulatedSH, inv_sumWeight);
+    // 传递几何有效性 mask 到下一级 à-trous (最终 pass 不传递)
+    #ifndef FINAL_DENOISE_PASS
+    accumulatedSH.shY.w *= (2.0 * geomValid - 1.0);
+    #endif
     float varEnergyOut = sumVarEnergy * inv_sumWeight * inv_sumWeight;
     out_light_sample = vec4(packSH(accumulatedSH), varEnergyOut);
 
