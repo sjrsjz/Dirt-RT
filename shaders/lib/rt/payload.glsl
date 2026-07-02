@@ -8,12 +8,13 @@ struct Payload {
     vec4 hitData;
     vec3 geometryNormal;
     vec3 shadowTransmission;
-    i16vec2 ignore_block_id; 
-    Material material;  
+    i16vec2 ignore_block_id;
+    Material material;
     float wetStrength_global;
     float wetness_global;
     bool inside_block;
     float prev_distance;
+    uint bounce_depth;   // 0=primary ray (POM enabled), >0=secondary (POM skipped)
 };
 
 #endif // PAYLOAD_GLSL

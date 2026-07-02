@@ -72,8 +72,7 @@ float computeRawVariance(uint idx, out float outOmega) {
     mediump vec2 shY_zw = unpackHalf2x16(floatBitsToUint(e.swap_shY_zw));
 
     vec4 shY = clamp(vec4(shY_xy, shY_zw), vec4(-10000), vec4(10000));
-    mediump vec2 w_v = unpackHalf2x16(floatBitsToUint(e.swap_w_v));
-    float weight = w_v.x;
+    float weight = e.swap_weight;
 
     if (any(isnan(shY)) || any(isinf(shY))) shY = vec4(0.0);
     if (isnan(weight) || isinf(weight))        weight = 0.0;
@@ -162,7 +161,7 @@ void main() {
     mediump vec2 c_shY_xy = unpackHalf2x16(floatBitsToUint(ce.swap_shY_xy));
     mediump vec2 c_shY_zw = unpackHalf2x16(floatBitsToUint(ce.swap_shY_zw));
     mediump vec2 c_CoCg   = unpackHalf2x16(floatBitsToUint(ce.swap_CoCg));
-    mediump vec2 c_w_v    = unpackHalf2x16(floatBitsToUint(ce.swap_w_v));
+    float cWeight = ce.swap_weight;
 
     SH outSH;
     outSH.shY  = vec4(c_shY_xy, c_shY_zw);
@@ -211,7 +210,7 @@ void main() {
     outSH.CoCg *= shY_scale;
 
     float centerVariance = sanitizeVariance(
-        alice_estimator_variance(outSH.shY, max(c_w_v.x, 1.0))
+        alice_estimator_variance(outSH.shY, max(cWeight, 1.0))
     );
 
     // =========================================================================

@@ -52,7 +52,6 @@ void main() {
 
     // ---- 保存历史统计信息 (供下一帧时域累积使用) -------------------------
     tmp.prev_weight   = tmp.weight;
-    tmp.prev_variance = tmp.variance;
 
     // // ---- 双缓冲 flip: 当前帧 → 历史帧 -----------------------------------
     tmp.data = tmp.data_swap;

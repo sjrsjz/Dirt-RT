@@ -163,13 +163,25 @@ void main() {
         );
 
     vec4 atlas = getTextureAtlasBox(quad);
-    vec4 parallaxTexCoord_grad = getParallaxOffset(fragInfo.uv, gl_WorldRayDirectionEXT, tbn, atlas);
 
-    vec2 parallaxTexCoord = parallaxTexCoord_grad.xy;
+    vec2 parallaxTexCoord;
+    vec2 derivatives;
+    if (payload.bounce_depth == 0u) {
+        // 仅主光线做完整 POM (32步线性 + 6步二分); 次级弹射跳过
+        vec4 pom = getParallaxOffset(fragInfo.uv, gl_WorldRayDirectionEXT, tbn, atlas);
+        parallaxTexCoord = pom.xy;
+        derivatives = pom.zw;
+    } else {
+        // 次级弹射: 无 POM 位移, 仍计算高度导数用于法线扰动
+        vec2 localTC = localUV(fragInfo.uv, atlas);
+        parallaxTexCoord = getTexCoord(localTC, atlas);
+        derivatives = computeDerivatives(localTC, atlas);
+    }
+
     vec4 specular = texture(blockTexSpecular, parallaxTexCoord);
     //vec4 normal = texture(blockTexNormal, parallaxTexCoord);
 
-    vec3 normal3 = normalize(vec3(parallaxTexCoord_grad.z, parallaxTexCoord_grad.w, 1));
+    vec3 normal3 = normalize(vec3(derivatives, 1));
     vec4 normal = vec4(normal3 * 0.5 + 0.5, texture(blockTexNormal, parallaxTexCoord).a);
 
     vec2 frag_uv = getRelativeUV(fragInfo.uv, atlas);

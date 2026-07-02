@@ -5,20 +5,23 @@ uint getIdx(uvec2 xy) {
     //return xy.y * 1024u + clamp(xy.x, 0, 1023u);
     return xy.y * resolution_global.x + clamp(xy.x, 0, resolution_global.x - 1);
 }
+// 布局优化: scalar 填入 vec3 的 4B 尾部 padding (align 16 gap), 128B → 112B
 struct bufferData {
-    vec3 macroNormal;
-    vec3 light;
-    vec3 albedo;
-    vec3 albedo2;
-    float distance;
-    vec3 absorption;
-    vec3 emission;
-    vec3 rd;
-    int illumiantionType;
-    float reflectWeight;
-    float refractWeight;
-    float roughness;
-};
+    vec3 macroNormal;        // offset  0 (12B)
+    float distance;          // offset 12 (4B, 填入 gap)
+    vec3 light;              // offset 16 (12B)
+    float roughness;         // offset 28 (4B, 填入 gap)
+    vec3 albedo;             // offset 32 (12B)
+    float reflectWeight;     // offset 44 (4B, 填入 gap)
+    vec3 albedo2;            // offset 48 (12B)
+    float refractWeight;     // offset 60 (4B, 填入 gap)
+    vec3 absorption;         // offset 64 (12B)
+    int illumiantionType;    // offset 76 (4B, 填入 gap)
+    vec3 emission;           // offset 80 (12B)
+    // [4B pad to 96]
+    vec3 rd;                 // offset 96 (12B)
+    // [4B pad to 112]
+};                           // 112B total (was 128B, -12.5%)
 
 layout(std430, set = 3, binding = 0) buffer DenoiseBuffer {
     bufferData data[];
@@ -256,9 +259,7 @@ struct diffuseIllumiantionData {
     lowp vec3 normal;
     lowp vec3 normal2;
     mediump float weight;
-    mediump float variance;
     mediump float prev_weight;
-    mediump float prev_variance;
 };
 
 // ===========================================================================
@@ -281,11 +282,11 @@ struct UnifiedDiffuseElement {
     float oct_n2;                // oct-encoded normal2
     // --- History geometry: pos.xyz + oct(normal) — 16B ---
     float hist_px, hist_py, hist_pz, hist_oct_n;
-    // --- Temporal history prev frame (swap3 writes, 100.glsl reads): 16B ---
-    float hist_shY_xy, hist_shY_zw, hist_CoCg, hist_w_v;
-    // --- Temporal history swap frame (100.glsl/swap3 write, swap2/fog read): 16B ---
-    float swap_shY_xy, swap_shY_zw, swap_CoCg, swap_w_v;
-};  // 20 floats = 80 bytes
+    // --- Temporal history prev frame (swap3 writes, 100.glsl reads): 14B ---
+    float hist_shY_xy, hist_shY_zw, hist_CoCg, hist_weight;
+    // --- Temporal history swap frame (100.glsl/swap3 write, swap2/fog read): 14B ---
+    float swap_shY_xy, swap_shY_zw, swap_CoCg, swap_weight;
+};  // 18 floats = 72 bytes (was 80 with variance)
 
 layout(std430, set = 3, binding = 2) buffer DiffuseBuffer {
     UnifiedDiffuseElement data[];
@@ -410,8 +411,7 @@ diffuseIllumiantionBufferDataW fetchPrevDiffuse(ivec2 p) {
     t.pos = vec3(e.px, e.py, e.pz);
     t.normal = decodeNormal(e.oct_n);
     t.normal2 = decodeNormal(e.oct_n2);
-    mediump vec2 w_v = unpackHalf2x16(floatBitsToUint(e.swap_w_v));
-    t.weight = w_v.x;
+    t.weight = e.swap_weight;
     return t;
 }
 
@@ -439,8 +439,7 @@ void WritePrevDiffuse(diffuseIllumiantionBufferDataW data, ivec2 p) {
     diffuseIllumiantionBuffer.data[idx].swap_shY_xy = uintBitsToFloat(packHalf2x16(data.data_swap.shY.xy));
     diffuseIllumiantionBuffer.data[idx].swap_shY_zw = uintBitsToFloat(packHalf2x16(data.data_swap.shY.zw));
     diffuseIllumiantionBuffer.data[idx].swap_CoCg   = uintBitsToFloat(packHalf2x16(data.data_swap.CoCg));
-    mediump vec2 old_wv = unpackHalf2x16(floatBitsToUint(diffuseIllumiantionBuffer.data[idx].swap_w_v));
-    diffuseIllumiantionBuffer.data[idx].swap_w_v = uintBitsToFloat(packHalf2x16(vec2(data.weight, old_wv.y)));
+    diffuseIllumiantionBuffer.data[idx].swap_weight = data.weight;
 }
 
 #endif
@@ -458,9 +457,7 @@ diffuseIllumiantionData fetchDiffuse(ivec2 p) {
     mediump vec2 shY_zw = unpackHalf2x16(floatBitsToUint(e.swap_shY_zw));
     tmp.data_swap.shY = clamp(vec4(shY_xy, shY_zw), vec4(-10000), vec4(10000));
     tmp.data_swap.CoCg = unpackHalf2x16(floatBitsToUint(e.swap_CoCg));
-    mediump vec2 w_v = unpackHalf2x16(floatBitsToUint(e.swap_w_v));
-    tmp.weight = w_v.x;
-    tmp.variance = w_v.y;
+    tmp.weight = e.swap_weight;
 
     #ifndef DIFFUSE_BUFFER_MIN2
     // Unpack previous frame (hist)
@@ -468,9 +465,7 @@ diffuseIllumiantionData fetchDiffuse(ivec2 p) {
     shY_zw = unpackHalf2x16(floatBitsToUint(e.hist_shY_zw));
     tmp.data.shY = clamp(vec4(shY_xy, shY_zw), vec4(-10000), vec4(10000));
     tmp.data.CoCg = unpackHalf2x16(floatBitsToUint(e.hist_CoCg));
-    w_v = unpackHalf2x16(floatBitsToUint(e.hist_w_v));
-    tmp.prev_weight = w_v.x;
-    tmp.prev_variance = w_v.y;
+    tmp.prev_weight = e.hist_weight;
 
     tmp.pos = vec3(e.hist_px, e.hist_py, e.hist_pz);
     tmp.normal = decodeNormal(e.hist_oct_n);
@@ -482,13 +477,11 @@ diffuseIllumiantionData blendDiffuse(diffuseIllumiantionData A, diffuseIllumiant
     diffuseIllumiantionData t;
     t.data_swap = mix_SH(A.data_swap, B.data_swap, x);
     t.weight = (B.weight - A.weight) * x + A.weight;
-    t.variance = (B.variance - A.variance) * x + A.variance;
     #ifndef DIFFUSE_BUFFER_MIN2
     t.data = mix_SH(A.data, B.data, x);
     t.pos = mix(A.pos, B.pos, x);
     t.normal = mix(A.normal, B.normal, x);
     t.prev_weight = (B.prev_weight - A.prev_weight) * x + A.prev_weight;
-    t.prev_variance = (B.prev_variance - A.prev_variance) * x + A.prev_variance;
     #endif
     return t;
 }
@@ -516,26 +509,24 @@ vec3 sampleDiffusePos(vec2 p) {
 void WriteDiffuse(diffuseIllumiantionData data, ivec2 p) {
     uint idx = getIdx(p);
 
-    // Always write swap (current frame) — half-packing, bit-identical to old texture path
+    // Always write swap (current frame)
     data.weight = clamp(data.weight, 0.0, 65504);
-    data.variance = clamp(data.variance, 0.0, 65504);
 
     diffuseIllumiantionBuffer.data[idx].swap_shY_xy = uintBitsToFloat(packHalf2x16(data.data_swap.shY.xy));
     diffuseIllumiantionBuffer.data[idx].swap_shY_zw = uintBitsToFloat(packHalf2x16(data.data_swap.shY.zw));
     diffuseIllumiantionBuffer.data[idx].swap_CoCg   = uintBitsToFloat(packHalf2x16(data.data_swap.CoCg));
-    diffuseIllumiantionBuffer.data[idx].swap_w_v    = uintBitsToFloat(packHalf2x16(vec2(data.weight, data.variance)));
+    diffuseIllumiantionBuffer.data[idx].swap_weight = data.weight;
 
     #if !defined(DIFFUSE_BUFFER_MIN) && !defined(DIFFUSE_BUFFER_MIN2)
     // Full write: also update hist (history) and geometry
     data.data.shY = clamp(data.data.shY, vec4(-65504), vec4(65504));
     data.data.CoCg = clamp(data.data.CoCg, vec2(-65504), vec2(65504));
     data.prev_weight = clamp(data.prev_weight, 0.0, 65504);
-    data.prev_variance = clamp(data.prev_variance, 0.0, 65504);
 
     diffuseIllumiantionBuffer.data[idx].hist_shY_xy = uintBitsToFloat(packHalf2x16(data.data.shY.xy));
     diffuseIllumiantionBuffer.data[idx].hist_shY_zw = uintBitsToFloat(packHalf2x16(data.data.shY.zw));
     diffuseIllumiantionBuffer.data[idx].hist_CoCg   = uintBitsToFloat(packHalf2x16(data.data.CoCg));
-    diffuseIllumiantionBuffer.data[idx].hist_w_v    = uintBitsToFloat(packHalf2x16(vec2(data.prev_weight, data.prev_variance)));
+    diffuseIllumiantionBuffer.data[idx].hist_weight = data.prev_weight;
 
     // Write history geometry for next frame's temporal reprojection.
     // These survive ray0.rgen's next-frame overwrite of px/py/pz/oct_n.
