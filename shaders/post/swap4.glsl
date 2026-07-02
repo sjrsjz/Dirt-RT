@@ -142,6 +142,12 @@ void main() {
     float mean = (sumW > 1e-8) ? sumL / sumW : luma3(cColor);
     float variance = (sumW > 1e-8) ? max(sumL2 / sumW - mean * mean, 0.0) : 0.0;
 
+    // ---- 3-sigma 压制: 钳制中心像素亮度到邻域 [μ-3σ, μ+3σ] ----
+    float cLuma = luma3(cColor);
+    float sigma = sqrt(max(variance, 0.0));
+    float clampedLuma = clamp(cLuma, mean - 3.0 * sigma, mean + 3.0 * sigma);
+    cColor *= clampedLuma / max(cLuma, 1e-8);
+
     // 时域权重引导的方差加速: 低累积权重(初始帧/遮挡)→放大方差→301 自动加强模糊
     // cWeight=1.0(首帧)→boost≈2.4x, cWeight≥10(收敛)→boost≈1.0x
     float varBoost = 1.0 + clamp(1.5 / max(cWeight, 1.0) - 0.1, 0.0, 2.0);

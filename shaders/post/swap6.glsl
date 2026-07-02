@@ -125,6 +125,12 @@ void main() {
     float mean = (sumW > 1e-8) ? sumL / sumW : luma3(cColor);
     float variance = (sumW > 1e-8) ? max(sumL2 / sumW - mean * mean, 0.0) : 0.0;
 
+    // ---- 3-sigma 压制 ----
+    float cLuma = luma3(cColor);
+    float sigma = sqrt(max(variance, 0.0));
+    float clampedLuma = clamp(cLuma, mean - 3.0 * sigma, mean + 3.0 * sigma);
+    cColor *= clampedLuma / max(cLuma, 1e-8);
+
     PackedLightSample ps = packSpecularSample(cPos, cR, cColor, cRough, variance, cVproj, cH);
     imageStore(colorimg3, ivec2(gid), ps.data0);
     imageStore(colorimg4, ivec2(gid), ps.data1);

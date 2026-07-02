@@ -7,8 +7,7 @@
 // ===========================================================================
 // Pass 301 CS: 镜面 NRD 风格降噪 (计算着色器变体, 前 3 级 à-trous R0=1,2,4)
 // ===========================================================================
-// 参考 301.glsl. R0≤4 轴对齐, HALO=R0, LDS 缓存 tile 几何+光照, 减少 texelFetch.
-// 天空 (variance<0) 早退, 保留 swap4 写入的 mask.
+// NRD 虚拟追踪权重 (同 301.glsl). R0≤4 轴对齐, HALO=R0, LDS 缓存 tile.
 // ===========================================================================
 
 layout(local_size_x = 16, local_size_y = 16) in;
@@ -25,11 +24,8 @@ layout(rgba32f) uniform image2D colorimg4;
 shared vec4 sm_geometry[TILE_AREA];
 shared vec4 sm_light[TILE_AREA];
 
-const float NORMAL_PARAM = 8.0;
-const float POSITION_PARAM = 1.0;
-
 float GetRoughnessWeight(float roughness0, float roughness) {
-    float norm = roughness0 * roughness0 * 0.99 + 0.01;
+    float norm = roughness0 * roughness0 * SPEC_ROUGH_NORM_A + SPEC_ROUGH_NORM_B;
     float w = abs(roughness0 - roughness) * (1.0 / norm);
     return clamp(1.0 - w, 0.0, 1.0);
 }
@@ -87,37 +83,20 @@ void main() {
     if (cVar < 0.0) return;
 
     vec3 V = -normalize(cPos);
-    vec3 planeN = cross(V, cR);
+    vec3 macroNormal = normalize(V + cR);
 
-    vec2 ssPN = vec2(dot(planeN, camX_global), dot(planeN, camY_global));
-    float ssPN_len2 = dot(ssPN, ssPN);
+    float alpha = max(cRough * cRough, SPEC_MIN_ALPHA);
+    float alpha2 = alpha * alpha;
+    float lobe_param2 = SPEC_BLUR_BOOST / (alpha2 * SPEC_LOBE_DIVISOR) * LOG2_E;
+    float hit_dist_param2 = SPEC_BLUR_BOOST * SPEC_HIT_DIST_SENS * LOG2_E;
+    float surf_pos_param2 = SPEC_BLUR_BOOST * SPEC_SURF_PARAM * LOG2_E;
 
-    float grazing = 1.0 - abs(dot(V, cR));
-    float anisoStr = grazing / (1.0 + cRough * 2.0);
-
-    float axis_A = 0.75, axis_B = 0.75;
-    if (ssPN_len2 > 0.0001) {
-        vec2 ssStretch = vec2(-ssPN.y, ssPN.x) * inversesqrt(ssPN_len2);
-        axis_A += anisoStr * abs(ssStretch.y);
-        axis_B += anisoStr * abs(ssStretch.x);
-    }
-    axis_A *= axis_A;
-    axis_B *= axis_B;
-
-    float depth = cVproj;
-    float rghScale       = 1.0 + cRough * cRough * 4.0;
-    float blur_factor    = rghScale * (1.0 - exp2(-0.36067376 * depth)) / 3.0;
-    float normal_factor  = rghScale * (1.0 - exp2(-0.14426950 * depth)) * NORMAL_PARAM;
-
-    float blur_factor2   = blur_factor   * LOG2_E;
-    float pos_param2     = POSITION_PARAM * LOG2_E;
-    float normal_factor2 = normal_factor * LOG2_E;
-    float luma_phi2      = SVGF_PHI_L * LOG2_E * inversesqrt(max(cVar, 1e-8)) / (1.0 + cRough * 3.0);
+    float luma_phi2 = SPEC_BLUR_BOOST * SVGF_PHI_L * LOG2_E * inversesqrt(max(cVar, 1e-8)) / (1.0 + cRough * SPEC_LUMA_ROUGH_SOFT);
     float cLuma = luma3(cRad);
 
     vec3 A = cRad;          // 中心像素 (权重 = 1)
     float w = 1.0;
-    float varEnergy = cVar; // 方差传播
+    float varEnergy = cVar;
 
     for (int i = -1; i <= 1; i++) {
         for (int j = -1; j <= 1; j++) {
@@ -134,10 +113,20 @@ void main() {
             if (sVar < 0.0) continue; // 天空
 
             float rW = GetRoughnessWeight(cRough, sRough);
-            float w0 = rW * exp2(-(blur_factor2 * (axis_A * float(i * i) + axis_B * float(j * j))
-                                 + pos_param2 * abs(dot(cPos - sPos, cH))
-                                 + normal_factor2 * (1.0 - dot(cH, sH))
-                                 + luma_phi2 * abs(cLuma - luma3(sRad))));
+
+            float surfDist = abs(dot(cPos - sPos, macroNormal));
+            float w_surf = exp2(-surf_pos_param2 * surfDist);
+
+            float R_dot_R = max(dot(cR, sR), 0.0);
+            float w_lobe = exp2(-(1.0 - R_dot_R) * lobe_param2);
+
+            float hitDistDiff = abs(cVproj - sVproj);
+            float hitDistSum = cVproj + sVproj + 1e-5;
+            float w_hitDist = exp2(-(hitDistDiff / hitDistSum) * hit_dist_param2);
+
+            float w_luma = exp2(-luma_phi2 * abs(cLuma - luma3(sRad)));
+
+            float w0 = rW * w_surf * w_lobe * w_hitDist * w_luma;
 
             A += sRad * w0;
             w += w0;
