@@ -3,13 +3,13 @@
 // ===========================================================================
 // Pass swap4: 反射缓冲打包 + 镜面方差预计算 (Compute, 共享内存加速)
 // ===========================================================================
-// 镜像 swap2 (漫反射). 读 SSBO (SpecularRTElement: pos/oct_dir/vprojdist) +
+// 镜像 swap2 (漫反射). 读 SSBO (SpecularRTElement: pos/oct_dir/virtualProjDist) +
 // image (累积颜色 *_color_swap_Sampler.xyz) + denoiseBuffer (roughness/distance),
 // 用 LDS 做 5×5 几何感知双边方差滤波, 计算 H = normalize(V+R) (GGX 主半向量),
 // 打包写入 colortex3/4 供 301 降噪.
 //
 //   colortex3 = (pos.xyz, oct(R))
-//   colortex4 = (f16(R,G) | f16(B,roughness) | f16(variance, vprojdist) | oct(H))
+//   colortex4 = (f16(R,G) | f16(B,roughness) | f16(variance, virtualProjDist) | oct(H))
 //   variance < 0 = 主天空 mask; weight 不写入 (由 101 直接写 image)
 //
 // TileSample 紧凑打包为 3 个 vec4 (48B), 避免 vec3 在 std140 shared 内存中的对齐填充.
@@ -43,12 +43,12 @@ const float hw[3] = float[](1.0, 0.66667, 0.44444); // B-spline 5×5 (|k|=0,1,2)
 
 struct TileSample {
     vec4 pos_oct;      // pos.xyz, oct(R)
-    vec4 color_vproj;  // color.xyz, vprojdist
+    vec4 color_vproj;  // color.xyz, virtualProjDist
     vec4 H_dist;       // H.xyz, dist (主命中 distance; < -0.5 = 天空)
 };
 shared TileSample sm[TILE_AREA];
 
-float luma3(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 
 float varianceGeometryWeight(vec3 cPos, vec3 cH, vec3 sPos, vec3 sH) {
     float nd = clamp(dot(cH, sH), 0.0, 1.0);
@@ -87,7 +87,7 @@ void main() {
             vec3 H = normalize(-normalize(epos) + R);
             if (any(isnan(H)) || any(isinf(H))) H = R;
             s.pos_oct = vec4(epos, e.oct_dir);
-            s.color_vproj = vec4(color, e.vprojdist);
+            s.color_vproj = vec4(color, e.virtualProjDist);
             s.H_dist = vec4(H, dist);
         } else {
             s.pos_oct = vec4(0.0);
@@ -135,15 +135,15 @@ void main() {
             if (s.H_dist.w < -0.5) continue;
             float w = hw[abs(kx)] * hw[abs(ky)]
                     * varianceGeometryWeight(cPos, cH, s.pos_oct.xyz, s.H_dist.xyz);
-            float L = luma3(s.color_vproj.xyz);
+            float L = luma(s.color_vproj.xyz);
             sumW += w; sumL += w * L; sumL2 += w * L * L;
         }
     }
-    float mean = (sumW > 1e-8) ? sumL / sumW : luma3(cColor);
+    float mean = (sumW > 1e-8) ? sumL / sumW : luma(cColor);
     float variance = (sumW > 1e-8) ? max(sumL2 / sumW - mean * mean, 0.0) : 0.0;
 
     // ---- 3-sigma 压制: 钳制中心像素亮度到邻域 [μ-3σ, μ+3σ] ----
-    float cLuma = luma3(cColor);
+    float cLuma = luma(cColor);
     float sigma = sqrt(max(variance, 0.0));
     float clampedLuma = clamp(cLuma, mean - 3.0 * sigma, mean + 3.0 * sigma);
     cColor *= clampedLuma / max(cLuma, 1e-8);

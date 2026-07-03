@@ -40,7 +40,7 @@ struct TileSample {
 };
 shared TileSample sm[TILE_AREA];
 
-float luma3(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 
 float varianceGeometryWeight(vec3 cPos, vec3 cH, vec3 sPos, vec3 sH) {
     float nd = clamp(dot(cH, sH), 0.0, 1.0);
@@ -78,7 +78,7 @@ void main() {
             vec3 H = normalize(-normalize(epos) + R);
             if (any(isnan(H)) || any(isinf(H))) H = R;
             s.pos_oct = vec4(epos, e.oct_dir);
-            s.color_vproj = vec4(color, e.vprojdist);
+            s.color_vproj = vec4(color, e.virtualProjDist);
             s.H_dist = vec4(H, dist);
         } else {
             s.pos_oct = vec4(0.0);
@@ -118,15 +118,15 @@ void main() {
             if (s.H_dist.w < -0.5) continue;
             float w = hw[abs(kx)] * hw[abs(ky)]
                     * varianceGeometryWeight(cPos, cH, s.pos_oct.xyz, s.H_dist.xyz);
-            float L = luma3(s.color_vproj.xyz);
+            float L = luma(s.color_vproj.xyz);
             sumW += w; sumL += w * L; sumL2 += w * L * L;
         }
     }
-    float mean = (sumW > 1e-8) ? sumL / sumW : luma3(cColor);
+    float mean = (sumW > 1e-8) ? sumL / sumW : luma(cColor);
     float variance = (sumW > 1e-8) ? max(sumL2 / sumW - mean * mean, 0.0) : 0.0;
 
     // ---- 3-sigma 压制 ----
-    float cLuma = luma3(cColor);
+    float cLuma = luma(cColor);
     float sigma = sqrt(max(variance, 0.0));
     float clampedLuma = clamp(cLuma, mean - 3.0 * sigma, mean + 3.0 * sigma);
     cColor *= clampedLuma / max(cLuma, 1e-8);

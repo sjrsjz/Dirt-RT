@@ -16,7 +16,7 @@ layout(local_size_x = 16, local_size_y = 16) in;
 #include "/lib/buffers/denoise.glsl"
 
 uniform sampler2D colortex3; // (pos.xyz, oct(R))
-uniform sampler2D colortex4; // 降噪后: f16(R,G)|f16(B,roughness)|f16(variance,vprojdist)|oct(H)
+uniform sampler2D colortex4; // 降噪后: f16(R,G)|f16(B,roughness)|f16(variance,virtualProjDist)|oct(H)
 
 void main() {
     ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
@@ -29,7 +29,7 @@ void main() {
     vec2 rg = unpackHalf2x16(floatBitsToUint(light.x));
     vec2 br = unpackHalf2x16(floatBitsToUint(light.y));
     vec2 vv = unpackHalf2x16(floatBitsToUint(light.z));
-    float vprojdist = vv.y;
+    float virtualProjDist = vv.y;
     if (vv.x < 0.0) return; // 天空
 
     uint idx = getIndex(uvec2(pix));
@@ -48,5 +48,5 @@ void main() {
     refractIlluminationBuffer.data[idx].color_b  = pack2HalfClamped(denoised.b, 0.0);
 
     vec3 R = decodeNormal(geom.w);
-    WriteRefractHistory(preDenoise, weight, geom.xyz, R, vprojdist, pix);
+    WriteRefractHistory(preDenoise, weight, geom.xyz, R, virtualProjDist, pix);
 }

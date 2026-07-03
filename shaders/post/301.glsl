@@ -3,7 +3,7 @@
 // ===========================================================================
 // Pass 301: 镜面反射/折射 NRD 风格屏幕空间降噪 (à-trous, fragment 变体 R0≥8)
 // ===========================================================================
-// NRD 虚拟追踪权重: 比较反射方向(R)的 GGX lobe 相似度 + 虚拟击中距离(vprojdist),
+// NRD 虚拟追踪权重: 比较反射方向(R)的 GGX lobe 相似度 + 虚拟击中距离(virtualProjDist),
 // 而非屏幕空间表面位置/H 向量. 平整镜面上表面属性一致但反射深度可差千米,
 // 必须追踪"镜子里的虚像"而非镜子表面.
 // ===========================================================================
@@ -14,7 +14,7 @@
 #include "/lib/buffers/denoise.glsl"
 
 uniform sampler2D colortex3; // (pos.xyz, oct(R))
-uniform sampler2D colortex4; // f16(R,G)|f16(B,roughness)|f16(variance,vprojdist)|oct(H)
+uniform sampler2D colortex4; // f16(R,G)|f16(B,roughness)|f16(variance,virtualProjDist)|oct(H)
 
 float GetRoughnessWeight(float roughness0, float roughness) {
     float norm = roughness0 * roughness0 * SPEC_ROUGH_NORM_A + SPEC_ROUGH_NORM_B;
@@ -22,7 +22,6 @@ float GetRoughnessWeight(float roughness0, float roughness) {
     return clamp(1.0 - w, 0.0, 1.0);
 }
 
-float luma3(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 
 /* RENDERTARGETS: 4 */
 layout(location = 0) out vec4 color;
@@ -61,7 +60,7 @@ void main() {
 
     // 亮度权重: 粗糙表面放宽拒绝
     float luma_phi2 = SPEC_BLUR_BOOST * SVGF_PHI_L * LOG2_E * inversesqrt(max(cVar, 1e-8)) / (1.0 + cRough * SPEC_LUMA_ROUGH_SOFT);
-    float cLuma = luma3(cRad);
+    float cLuma = luma(cRad);
 
     #if STEP >= 4
     float theta = 2.0 * PI * rand(vec2(pix + R0));
@@ -113,7 +112,7 @@ void main() {
             float w_hitDist = exp2(-(hitDistDiff / hitDistSum) * hit_dist_param2);
 
             // 4. 亮度方差引导
-            float w_luma = exp2(-luma_phi2 * abs(cLuma - luma3(sRad)));
+            float w_luma = exp2(-luma_phi2 * abs(cLuma - luma(sRad)));
 
             float w0 = rW * w_surf * w_lobe * w_hitDist * w_luma;
 
@@ -127,6 +126,6 @@ void main() {
     vec3 filtered = A / max(w, 0.01);
     float outVar = varEnergy / max(w * w, 1e-8);
 
-    // 输出: 仅颜色+方差变化, roughness/vprojdist/H 透传
+    // 输出: 仅颜色+方差变化, roughness/virtualProjDist/H 透传
     color = packSpecularSample(cPos, cR, filtered, cRough, outVar, cVproj, cH).data1;
 }

@@ -74,7 +74,7 @@ uint idx;
 
 in vec2 texCoord;
 
-diffuseIlluminationBufferDataW current_data;
+DiffuseIlluminationWriteData current_data;
 diffuseIlluminationData out_data;
 
 float output_weight = 0.0;

@@ -6,9 +6,9 @@ const float LOG2_E = 1.44269504089; // 1/ln(2), for exp(x)=exp2(x*LOG2_E)
 const float SunDivMoon = 1000;
 const int MaxRay = RAY_BOUNCES;
 const float FIREFLY_SUPPRESSION_MULTIPLIER = 50.0;
-const int Reflection = 1;
-const int Diffussion = 2;
-const int Refraction = 3;
+const int REFLECTION = 1;
+const int DIFFUSION = 2;
+const int REFRACTION = 3;
 
 // NRD specular denoising (301)
 const float SPEC_BLUR_BOOST       = 0.025; // edge-stop softening (<1 = more blur)

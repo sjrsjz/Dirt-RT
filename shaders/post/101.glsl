@@ -94,8 +94,8 @@ void MixReflect() {
     float tanThetaSq = max((0.999999 - cosTheta * cosTheta) / (1e-9 + cosTheta * cosTheta), 0.0);
     float ggxWeight = exp2(-0.00014426950 * tanThetaSq / (alpha * alpha)); // GGX 分布形状
 
-    // req 6: 虚拟击中点 (pos + R*vprojdist) 重建后用于重投影+权重
-    // 归一化到 vprojdist — 权重由相对位移驱动, 与击中距离无关
+    // req 6: 虚拟击中点 (pos + R*virtualProjDist) 重建后用于重投影+权重
+    // 归一化到 virtualProjDist — 权重由相对位移驱动, 与击中距离无关
     vec3 curVirtual = data2.pos + data2.normal;
     vec3 histVirtualCur = (data.pos - cameraDelta) + data.normal;
     float posWeight = exp2(-POSITION_PARAM * LOG2_E * length(histVirtualCur - curVirtual)
@@ -120,7 +120,7 @@ void main() {
 
     info_distance = denoiseBuffer.data[idx].distance;
 
-    // 从 SSBO (SpecularRTElement) 重建当前帧反射数据: normal = R*vprojdist
+    // 从 SSBO (SpecularRTElement) 重建当前帧反射数据: normal = R*virtualProjDist
     unpackSpecularRT(reflectIlluminationBuffer.data[idx], data2.pos, data2.normal, data2.data_swap);
     data2.data = vec3(0.0);
     data2.weight = 0.0;

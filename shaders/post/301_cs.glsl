@@ -13,7 +13,7 @@
 layout(local_size_x = 16, local_size_y = 16) in;
 
 uniform sampler2D colortex3; // (pos.xyz, oct(R))
-uniform sampler2D colortex4; // f16(R,G)|f16(B,roughness)|f16(variance,vprojdist)|oct(H)
+uniform sampler2D colortex4; // f16(R,G)|f16(B,roughness)|f16(variance,virtualProjDist)|oct(H)
 
 layout(rgba32f) uniform image2D colorimg4;
 
@@ -30,15 +30,14 @@ float GetRoughnessWeight(float roughness0, float roughness) {
     return clamp(1.0 - w, 0.0, 1.0);
 }
 
-float luma3(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 
 // 从共享内存解包镜面样本 (与 denoise.glsl unpackSpecularSample 语义一致)
 void unpackSpecularSampleSM(uint tile_idx, out vec3 pos, out vec3 R, out vec3 radiance,
-    out float roughness, out float variance, out float vprojdist, out vec3 H) {
+    out float roughness, out float variance, out float virtualProjDist, out vec3 H) {
     PackedLightSample s;
     s.data0 = sm_geometry[tile_idx];
     s.data1 = sm_light[tile_idx];
-    unpackSpecularSample(s, pos, R, radiance, roughness, variance, vprojdist, H);
+    unpackSpecularSample(s, pos, R, radiance, roughness, variance, virtualProjDist, H);
 }
 
 void main() {
@@ -92,7 +91,7 @@ void main() {
     float surf_pos_param2 = SPEC_BLUR_BOOST * SPEC_SURF_PARAM * LOG2_E;
 
     float luma_phi2 = SPEC_BLUR_BOOST * SVGF_PHI_L * LOG2_E * inversesqrt(max(cVar, 1e-8)) / (1.0 + cRough * SPEC_LUMA_ROUGH_SOFT);
-    float cLuma = luma3(cRad);
+    float cLuma = luma(cRad);
 
     vec3 A = cRad;          // 中心像素 (权重 = 1)
     float w = 1.0;
@@ -124,7 +123,7 @@ void main() {
             float hitDistSum = cVproj + sVproj + 1e-5;
             float w_hitDist = exp2(-(hitDistDiff / hitDistSum) * hit_dist_param2);
 
-            float w_luma = exp2(-luma_phi2 * abs(cLuma - luma3(sRad)));
+            float w_luma = exp2(-luma_phi2 * abs(cLuma - luma(sRad)));
 
             float w0 = rW * w_surf * w_lobe * w_hitDist * w_luma;
 

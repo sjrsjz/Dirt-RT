@@ -139,7 +139,7 @@ material newMaterial(vec3 Cs, vec3 Cd, vec2 S, vec4 R, vec3 light) {
     return a;
 }
 
-material Material_(vec3 pos, vec3 nor) {
+material buildSurfaceMaterial(vec3 pos, vec3 nor) {
     vec3 albedo = tmp_Payload.material.albedo * (1 - tmp_Payload.material.ambientOcclusion);
     bool water = tmp_Payload.material.block_id.x == 1000;
     float trans = float(!water && 0.9 < tmp_Payload.material.translucent && tmp_Payload.material.block_id.x != 1001);
@@ -218,9 +218,9 @@ vec3 sampleSunlight(vec3 ro, vec3 normal, vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S, v
 
     vec3 sampleColor = vec3(0.0);
 
-    if (type == Diffussion) {
+    if (type == DIFFUSION) {
         sampleColor = Cd;
-    } else if (type == Reflection) {
+    } else if (type == REFLECTION) {
         // Specular 直接光采用原版安全公式
         float IoH_sun = abs(dot(normalize(sampleDir + rd_i), rd_i)) + 1e-6;
         vec4 rC_sun = reflectanceColor(Cs, IoH_sun);
@@ -346,7 +346,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         // --- 2. 几何与材质信息提取 ---
         vec3 normal = faceforward(tmp_Payload.material.normal, tmp_Payload.material.normal, rd_i);
         vec3 macroNormal = faceforward(tmp_Payload.geometryNormal, tmp_Payload.geometryNormal, rd_i);
-        material surface = Material_(ro_o, normal);
+        material surface = buildSurfaceMaterial(ro_o, normal);
 
         if (surface.R.z > 0.5) {
             vec3 offset = fbm3D(ro_o * 0.125 + time_global * 0.125, 5).yzw * 0.25;
@@ -398,7 +398,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
         if (rnd_lobe < P_spec) {
             // [反射 Lobe]
-            current_type = Reflection;
+            current_type = REFLECTION;
             next_rd = reflect(rd_i, microNormal);
 
             if (dot(next_rd, normal) > 0.0) {
@@ -408,7 +408,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             }
         } else if (rnd_lobe < P_spec + P_refr) {
             // [折射/透射 Lobe，Fresnel 子事件在条件概率中抵消]
-            current_type = Refraction;
+            current_type = REFRACTION;
 
             bool chooseTransmission = getRandom() < (1.0 - F);
             if (chooseTransmission) {
@@ -418,17 +418,17 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                     inverse_0 = !inverse_0;
                 } else {
                     next_rd = reflect(rd_i, microNormal);
-                    current_type = Reflection;
+                    current_type = REFLECTION;
                 }
             } else {
                 next_rd = reflect(rd_i, microNormal);
-                current_type = Reflection;
+                current_type = REFLECTION;
             }
 
             bsdf_weight = refrLobeWeight;
         } else {
             // [漫反射 Lobe + ALICE 屏幕空间路径引导]
-            current_type = Diffussion;
+            current_type = DIFFUSION;
 
             float guideWeight = 1.0;
             float guideProb = 0.0;
@@ -441,7 +441,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                         all(lessThanEqual(prev_coord, vec2(1.0)));
 
                 if (validPrev) {
-                    diffuseIlluminationBufferDataW data0 =
+                    DiffuseIlluminationWriteData data0 =
                         samplePrevDiffuse(prev_coord * resolution_global);
 
                     vec3 x = data0.data_swap.shY.xyz;
@@ -513,7 +513,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             first_roughness = surface.R.x;
             first_rd_o = next_rd;
             first_n_i = n_i;
-            first_n_o = current_type == Refraction ? n_o : n_i;
+            first_n_o = current_type == REFRACTION ? n_o : n_i;
             first_micro_n = microNormal;
             first_emission_val = segment_emission;
             first_light_surf = surface.light;
@@ -543,7 +543,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             throughput /= p_survive;
         }
 
-        ro_i = ro_o + macroNormal * (current_type == Refraction ? -0.001 : 0.001);
+        ro_i = ro_o + macroNormal * (current_type == REFRACTION ? -0.001 : 0.001);
         rd_i = next_rd;
     }
 
@@ -562,7 +562,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     denoiseBuffer.data[idx].distance = first_t;
     denoiseBuffer.data[idx].light = first_light_surf;
     denoiseBuffer.data[idx].macroNormal = first_macro_n;
-    denoiseBuffer.data[idx].illumiantionType = first_type;
+    denoiseBuffer.data[idx].illuminationType = first_type;
     denoiseBuffer.data[idx].roughness = first_roughness;
     denoiseBuffer.data[idx].absorption = current_absorption;
     denoiseBuffer.data[idx].rd = first_rd_i;
@@ -579,8 +579,8 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     diffuseIlluminationBuffer.data[idx].oct_n = encodeNormal(first_macro_n);
     diffuseIlluminationBuffer.data[idx].oct_n2 = encodeNormal(faceforward(first_n, first_n, -first_macro_n));
 
-    // 镜面 RT 输出 (SpecularRTElement) 局部累积: pos=主命中点, R=主导方向, vprojdist=虚拟投射距离.
-    // 默认 vprojdist=0 → normal=R*0=0 → 虚拟击中点=pos (非镜面像素的安全默认, 与旧 .normal=0 等价).
+    // 镜面 RT 输出 (SpecularRTElement) 局部累积: pos=主命中点, R=主导方向, virtualProjDist=虚拟投射距离.
+    // 默认 virtualProjDist=0 → normal=R*0=0 → 虚拟击中点=pos (非镜面像素的安全默认, 与旧 .normal=0 等价).
     vec3 refl_R = first_rd_i;
     float refl_vprojdist = 0.0;
     vec3 refl_color = vec3(0.0);
@@ -618,7 +618,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         refl_color = total_illumination;
         break;
 
-        case Diffussion:
+        case DIFFUSION:
         {
             L_indirect = clamp(L_indirect, 0.0, 10000.0 * div_avgExposure);
 
@@ -634,11 +634,11 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             break;
         }
 
-        case Reflection:
+        case REFLECTION:
         refl_color = clamp(total_illumination, 0.0, 1000.0 * div_avgExposure);
         break;
 
-        case Refraction:
+        case REFRACTION:
         refr_color = total_illumination;
         break;
 
@@ -651,7 +651,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     reflectIlluminationBuffer.data[idx].py = pos_rel.y;
     reflectIlluminationBuffer.data[idx].pz = pos_rel.z;
     reflectIlluminationBuffer.data[idx].oct_dir = encodeNormal(refl_R);
-    reflectIlluminationBuffer.data[idx].vprojdist = refl_vprojdist;
+    reflectIlluminationBuffer.data[idx].virtualProjDist = refl_vprojdist;
     reflectIlluminationBuffer.data[idx].color_rg = pack2HalfClamped(refl_color.r, refl_color.g);
     reflectIlluminationBuffer.data[idx].color_b  = pack2HalfClamped(refl_color.b, 0.0);
 
@@ -659,7 +659,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     refractIlluminationBuffer.data[idx].py = pos_rel.y;
     refractIlluminationBuffer.data[idx].pz = pos_rel.z;
     refractIlluminationBuffer.data[idx].oct_dir = encodeNormal(refr_R);
-    refractIlluminationBuffer.data[idx].vprojdist = refr_vprojdist;
+    refractIlluminationBuffer.data[idx].virtualProjDist = refr_vprojdist;
     refractIlluminationBuffer.data[idx].color_rg = pack2HalfClamped(refr_color.r, refr_color.g);
     refractIlluminationBuffer.data[idx].color_b  = pack2HalfClamped(refr_color.b, 0.0);
 

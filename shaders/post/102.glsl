@@ -103,7 +103,7 @@ void MixRefract() {
 
     vec3IlluminationData data = sampleRefract(prevScreenPos.xy * textureSize(colortex0, 0));
 
-    // req 6: 虚拟击中点 (pos + R*vprojdist) 用于重投影+权重
+    // req 6: 虚拟击中点 (pos + R*virtualProjDist) 用于重投影+权重
     vec3 curVirtual = data3.pos + data3.normal;
     vec3 histVirtualCur = (data.pos - cameraDelta) + data.normal;
     float posWeight = exp2(-POSITION_PARAM * LOG2_E * length(histVirtualCur - curVirtual)
@@ -130,7 +130,7 @@ void main() {
 
     info_distance = denoiseBuffer.data[idx].distance;
 
-    // 从 SSBO (SpecularRTElement) 重建当前帧折射数据: normal = R*vprojdist
+    // 从 SSBO (SpecularRTElement) 重建当前帧折射数据: normal = R*virtualProjDist
     unpackSpecularRT(refractIlluminationBuffer.data[idx], data3.pos, data3.normal, data3.data_swap);
     data3.data = vec3(0.0);
     data3.weight = 0.0;

@@ -16,7 +16,7 @@ struct bufferData {
     vec3 albedo2;            // offset 48 (12B)
     float refractWeight;     // offset 60 (4B, 填入 gap)
     vec3 absorption;         // offset 64 (12B)
-    int illumiantionType;    // offset 76 (4B, 填入 gap)
+    int illuminationType;    // offset 76 (4B, 填入 gap)
     vec3 emission;           // offset 80 (12B)
     // [4B pad to 96]
     vec3 rd;                 // offset 96 (12B)
@@ -215,8 +215,8 @@ SH unpackSH(float s0, float s1, float s2) {
 
 // 镜面降噪纹理打包 (colortex3 + colortex4)
 //   data0 (colortex3): pos.xyz + oct(R)            R = 主导反射/折射方向
-//   data1 (colortex4): f16(R,G) | f16(B,roughness) | f16(variance, vprojdist) | oct(H)
-//   variance < 0 复用为天空 mask; vprojdist = VPROJDIST_SKY 表示反射射线击中天空
+//   data1 (colortex4): f16(R,G) | f16(B,roughness) | f16(variance, virtualProjDist) | oct(H)
+//   variance < 0 复用为天空 mask; virtualProjDist = VPROJDIST_SKY 表示反射射线击中天空
 //   H = GGX 主半向量 (虚拟平面法线)
 //   weight 不再走纹理 — 由 101/102 直接写入 image, 降噪 pass 不参与
 struct PackedLightSample {
@@ -225,13 +225,13 @@ struct PackedLightSample {
 };
 
 PackedLightSample packSpecularSample(vec3 pos, vec3 R, vec3 radiance,
-    float roughness, float variance, float vprojdist, vec3 H) {
+    float roughness, float variance, float virtualProjDist, vec3 H) {
     PackedLightSample s;
     s.data0 = vec4(pos, encodeNormal(R));
     s.data1 = vec4(
         pack2HalfClamped(radiance.r, radiance.g),
         pack2HalfClamped(radiance.b, roughness),
-        pack2HalfClamped(variance, vprojdist),
+        pack2HalfClamped(variance, virtualProjDist),
         encodeNormal(H)
     );
     return s;
@@ -239,7 +239,7 @@ PackedLightSample packSpecularSample(vec3 pos, vec3 R, vec3 radiance,
 
 void unpackSpecularSample(PackedLightSample s,
     out vec3 pos, out vec3 R, out vec3 radiance,
-    out float roughness, out float variance, out float vprojdist, out vec3 H) {
+    out float roughness, out float variance, out float virtualProjDist, out vec3 H) {
     pos = s.data0.xyz;
     R = decodeNormal(s.data0.w);
     vec2 rg = unpackHalf2x16(floatBitsToUint(s.data1.x));
@@ -248,7 +248,7 @@ void unpackSpecularSample(PackedLightSample s,
     radiance  = vec3(rg.x, rg.y, br.x);
     roughness = br.y;
     variance  = vv.x;
-    vprojdist = vv.y;
+    virtualProjDist = vv.y;
     H = decodeNormal(s.data1.w);
 }
 
@@ -293,8 +293,8 @@ layout(std430, set = 3, binding = 2) buffer DiffuseBuffer {
 } diffuseIlluminationBuffer;
 
 // Keep old struct types for function interfaces (unpacked representation).
-// diffuseIlluminationBufferDataW is still returned by fetchPrevDiffuse/samplePrevDiffuse.
-struct diffuseIlluminationBufferDataW {
+// DiffuseIlluminationWriteData is still returned by fetchPrevDiffuse/samplePrevDiffuse.
+struct DiffuseIlluminationWriteData {
     SH data_swap;
     vec3 pos;
     lowp vec3 normal;
@@ -304,9 +304,9 @@ struct diffuseIlluminationBufferDataW {
 
 // Helper: unpack RT output from unified SSBO into full-precision struct.
 // Used by 100.glsl to read the current frame's ray-traced input.
-diffuseIlluminationBufferDataW loadDiffuseInput(uint idx) {
+DiffuseIlluminationWriteData loadDiffuseInput(uint idx) {
     UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[idx];
-    diffuseIlluminationBufferDataW t;
+    DiffuseIlluminationWriteData t;
     mediump vec2 shY_xy = unpackHalf2x16(floatBitsToUint(e.rt_shY_xy));
     mediump vec2 shY_zw = unpackHalf2x16(floatBitsToUint(e.rt_shY_zw));
     t.data_swap.shY = clamp(vec4(shY_xy, shY_zw), vec4(-10000), vec4(10000));
@@ -333,14 +333,14 @@ struct vec3IlluminationData {
 // 101/102 写累积颜色+权重, swap5/7 写历史, swap4/6 读累积颜色.
 // 替代了原先 8 个独立的 rgba32f image (reflect+refract 各4个, 共~253MB VRAM).
 // 方向以八面体压缩存储, 虚拟投射距离单独存放, 颜色 f16 压缩.
-// normal = decodeNormal(oct_dir)*vprojdist 可按需重建 (dir*dist 语义).
+// normal = decodeNormal(oct_dir)*virtualProjDist 可按需重建 (dir*dist 语义).
 // H (GGX 主半向量) 不存于此 — 由 swap4/6 从 R+V 计算后写入 colortex4.w.
 // ---------------------------------------------------------------------------
 struct SpecularRTElement {
     // === 当前帧 (32B) — ray0.rgen 写入 raw RT, 101/102 覆写为累积色 ===
     float px, py, pz;    // 主命中点世界坐标 (12B)
     float oct_dir;       // 八面体压缩主导方向 R (4B)
-    float vprojdist;     // 虚拟投射距离 (4B)
+    float virtualProjDist;     // 虚拟投射距离 (4B)
     float color_rg;      // packHalf2x16: ray0→raw RT, 101/102→accumulated (4B)
     float color_b;       // packHalf2x16: ray0→raw RT, 101/102→accumulated (4B)
     float accum_weight;  // 时域累积权重 (4B, 101/102 写, swap4/5/6/7 读)
@@ -355,13 +355,13 @@ struct SpecularRTElement {
     float hist_weight;   // 上帧累积权重 (4B)
 }; // 64B 总计, 16B 对齐
 
-SpecularRTElement packSpecularRT(vec3 pos, vec3 R, float vprojdist, vec3 color) {
+SpecularRTElement packSpecularRT(vec3 pos, vec3 R, float virtualProjDist, vec3 color) {
     SpecularRTElement e;
     e.px         = pos.x;
     e.py         = pos.y;
     e.pz         = pos.z;
     e.oct_dir    = encodeNormal(R);
-    e.vprojdist  = vprojdist;
+    e.virtualProjDist  = virtualProjDist;
     e.color_rg   = pack2HalfClamped(color.r, color.g);
     e.color_b    = pack2HalfClamped(color.b, 0.0);
     e.accum_weight = 0.0;
@@ -369,10 +369,10 @@ SpecularRTElement packSpecularRT(vec3 pos, vec3 R, float vprojdist, vec3 color) 
     return e;
 }
 
-// 重建当前帧: pos + normal(=R*vprojdist) + raw RT color
+// 重建当前帧: pos + normal(=R*virtualProjDist) + raw RT color
 void unpackSpecularRT(SpecularRTElement e, out vec3 pos, out vec3 normal, out vec3 color) {
     pos    = vec3(e.px, e.py, e.pz);
-    normal = decodeNormal(e.oct_dir) * e.vprojdist;
+    normal = decodeNormal(e.oct_dir) * e.virtualProjDist;
     vec2 rg = unpackHalf2x16(floatBitsToUint(e.color_rg));
     float b = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
     color  = vec3(rg.x, rg.y, b);
@@ -401,9 +401,9 @@ layout(std430, set = 3, binding = 4) buffer RefractIlluminationDataBuffer {
 // Read previous frame's accumulated SH for ray guiding (ray0.rgen).
 // Only data_swap.shY fields are used by the caller; the rest are filled with
 // best-effort values from the history SSBO.
-diffuseIlluminationBufferDataW fetchPrevDiffuse(ivec2 p) {
+DiffuseIlluminationWriteData fetchPrevDiffuse(ivec2 p) {
     UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[getIndex(p)];
-    diffuseIlluminationBufferDataW t;
+    DiffuseIlluminationWriteData t;
     mediump vec2 shY_xy = unpackHalf2x16(floatBitsToUint(e.swap_shY_xy));
     mediump vec2 shY_zw = unpackHalf2x16(floatBitsToUint(e.swap_shY_zw));
     t.data_swap.shY = clamp(vec4(shY_xy, shY_zw), vec4(-10000), vec4(10000));
@@ -415,8 +415,8 @@ diffuseIlluminationBufferDataW fetchPrevDiffuse(ivec2 p) {
     return t;
 }
 
-diffuseIlluminationBufferDataW blendPrevDiffuse(diffuseIlluminationBufferDataW A, diffuseIlluminationBufferDataW B, float x) {
-    diffuseIlluminationBufferDataW t;
+DiffuseIlluminationWriteData blendPrevDiffuse(DiffuseIlluminationWriteData A, DiffuseIlluminationWriteData B, float x) {
+    DiffuseIlluminationWriteData t;
     t.data_swap = mix_SH(A.data_swap, B.data_swap, x);
     t.pos = mix(A.pos, B.pos, x);
     t.normal = normalize(mix(A.normal, B.normal, x));
@@ -424,17 +424,17 @@ diffuseIlluminationBufferDataW blendPrevDiffuse(diffuseIlluminationBufferDataW A
     return t;
 }
 
-diffuseIlluminationBufferDataW samplePrevDiffuse(vec2 p) {
+DiffuseIlluminationWriteData samplePrevDiffuse(vec2 p) {
     ivec2 p1 = ivec2(p);
     vec2 p2 = fract(p);
-    diffuseIlluminationBufferDataW A = fetchPrevDiffuse(p1);
-    diffuseIlluminationBufferDataW B = fetchPrevDiffuse(p1 + ivec2(1, 0));
-    diffuseIlluminationBufferDataW C = fetchPrevDiffuse(p1 + ivec2(0, 1));
-    diffuseIlluminationBufferDataW D = fetchPrevDiffuse(p1 + ivec2(1, 1));
+    DiffuseIlluminationWriteData A = fetchPrevDiffuse(p1);
+    DiffuseIlluminationWriteData B = fetchPrevDiffuse(p1 + ivec2(1, 0));
+    DiffuseIlluminationWriteData C = fetchPrevDiffuse(p1 + ivec2(0, 1));
+    DiffuseIlluminationWriteData D = fetchPrevDiffuse(p1 + ivec2(1, 1));
     return blendPrevDiffuse(blendPrevDiffuse(A, B, p2.x), blendPrevDiffuse(C, D, p2.x), p2.y);
 }
 
-void WritePrevDiffuse(diffuseIlluminationBufferDataW data, ivec2 p) {
+void WritePrevDiffuse(DiffuseIlluminationWriteData data, ivec2 p) {
     uint idx = getIndex(p);
     diffuseIlluminationBuffer.data[idx].swap_shY_xy = uintBitsToFloat(packHalf2x16(data.data_swap.shY.xy));
     diffuseIlluminationBuffer.data[idx].swap_shY_zw = uintBitsToFloat(packHalf2x16(data.data_swap.shY.zw));
@@ -597,13 +597,13 @@ void WriteReflect(vec3IlluminationData data, ivec2 p) {
 }
 
 // swap5 调用: 写入时域历史到 SSBO hist_* 区段 (供 101 下帧读取)
-void WriteReflectHistory(vec3 preDenoiseColor, float prevWeight, vec3 pos, vec3 R, float vprojdist, ivec2 p) {
+void WriteReflectHistory(vec3 preDenoiseColor, float prevWeight, vec3 pos, vec3 R, float virtualProjDist, ivec2 p) {
     uint i = getIndex(uvec2(p));
     reflectIlluminationBuffer.data[i].hist_px = pos.x;
     reflectIlluminationBuffer.data[i].hist_py = pos.y;
     reflectIlluminationBuffer.data[i].hist_pz = pos.z;
     reflectIlluminationBuffer.data[i].hist_oct_dir = encodeNormal(R);
-    reflectIlluminationBuffer.data[i].hist_vprojdist = vprojdist;
+    reflectIlluminationBuffer.data[i].hist_vprojdist = virtualProjDist;
     reflectIlluminationBuffer.data[i].hist_color_rg = pack2HalfClamped(preDenoiseColor.r, preDenoiseColor.g);
     reflectIlluminationBuffer.data[i].hist_color_b  = pack2HalfClamped(preDenoiseColor.b, 0.0);
     reflectIlluminationBuffer.data[i].hist_weight = prevWeight;
@@ -667,13 +667,13 @@ void WriteRefract(vec3IlluminationData data, ivec2 p) {
     refractIlluminationBuffer.data[i].accum_weight = data.weight;
 }
 
-void WriteRefractHistory(vec3 preDenoiseColor, float prevWeight, vec3 pos, vec3 R, float vprojdist, ivec2 p) {
+void WriteRefractHistory(vec3 preDenoiseColor, float prevWeight, vec3 pos, vec3 R, float virtualProjDist, ivec2 p) {
     uint i = getIndex(uvec2(p));
     refractIlluminationBuffer.data[i].hist_px = pos.x;
     refractIlluminationBuffer.data[i].hist_py = pos.y;
     refractIlluminationBuffer.data[i].hist_pz = pos.z;
     refractIlluminationBuffer.data[i].hist_oct_dir = encodeNormal(R);
-    refractIlluminationBuffer.data[i].hist_vprojdist = vprojdist;
+    refractIlluminationBuffer.data[i].hist_vprojdist = virtualProjDist;
     refractIlluminationBuffer.data[i].hist_color_rg = pack2HalfClamped(preDenoiseColor.r, preDenoiseColor.g);
     refractIlluminationBuffer.data[i].hist_color_b  = pack2HalfClamped(preDenoiseColor.b, 0.0);
     refractIlluminationBuffer.data[i].hist_weight = prevWeight;
