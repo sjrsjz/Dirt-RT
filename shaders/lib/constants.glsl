@@ -24,10 +24,10 @@ const float SPEC_ROUGH_NORM_B     = 0.01;
 const float CURVATURE_THRESHOLD   = 0.01;  // |K| > this → omega negated → skip geometry edge-stop
 
 //Vulkanite
-const int World_OVERWORLD = 0;
-const int World_THE_NETHER = 1;
-const int World_THE_END = 2;
-const int World_OVERWORLD_CAVE = 3;
+const int WORLD_OVERWORLD = 0;
+const int WORLD_THE_NETHER = 1;
+const int WORLD_THE_END = 2;
+const int WORLD_OVERWORLD_CAVE = 3;
 
 
 #endif // CONSTANTS_GLSL

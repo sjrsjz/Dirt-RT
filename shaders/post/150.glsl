@@ -10,7 +10,7 @@
 // 与 300.glsl (当前主 SVGF 管线) 的对比:
 //   - 150 使用固定 5×5 核，没有 à-trous 多尺度迭代
 //   - 150 在 SH 空间协方差上做阈值检测，而非像素级权重衰减
-//   - 150 直接读写 colortex5/6，不经过 diffuseIllumiantionData 结构
+//   - 150 直接读写 colortex5/6，不经过 diffuseIlluminationData 结构
 //
 // 注意: 此 pass 当前可能未被管线使用或作为备选路径保留。
 //       主要空间滤波现在由 300.glsl (SVGF à-trous) 处理。
@@ -82,7 +82,7 @@ float updateVariance(SH M_n, float D_n, SH X_nplus1, float w) {
 }
 
 // ---------------------------------------------------------------------------
-// 从 colortex 直接读取 SH (绕过 diffuseIllumiantionData 结构)
+// 从 colortex 直接读取 SH (绕过 diffuseIlluminationData 结构)
 // ---------------------------------------------------------------------------
 
 SH fetchSH(ivec2 coord) {
@@ -118,7 +118,7 @@ void MixDiffuse() {
         for (int j = -S; j <= S; j++) {
             if (i == 0 && j == 0) continue;  // 跳过中心
             ivec2 pix = ivec2(gl_FragCoord.xy) + ivec2(i, j);
-            uint idx2 = getIdx(uvec2(pix));
+            uint idx2 = getIndex(uvec2(pix));
 
             SH sample1 = fetchSH(pix);
             vec3 sampleNormal = texelFetch(colortex3, pix, 0).xyz;

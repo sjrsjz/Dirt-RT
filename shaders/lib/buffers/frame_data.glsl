@@ -2,7 +2,7 @@
 #define FRAME_DATA_GLSL
 #include "/lib/constants.glsl"
 
-layout(std140, set = 3, binding = 1) buffer frameData {
+layout(std140, set = 3, binding = 1) buffer FrameData {
     float avgExposure;
     float div_avgExposure;
     vec3 SunLight_global;

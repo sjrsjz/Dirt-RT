@@ -32,8 +32,8 @@ void main() {
     float vprojdist = vv.y;
     if (vv.x < 0.0) return; // 天空
 
-    uint idx = getIdx(uvec2(pix));
-    SpecularRTElement e = refractIllumiantionBuffer.data[idx];
+    uint idx = getIndex(uvec2(pix));
+    SpecularRTElement e = refractIlluminationBuffer.data[idx];
     vec2 erg = unpackHalf2x16(floatBitsToUint(e.color_rg));
     float eb = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
     vec3 preDenoise = vec3(erg.x, erg.y, eb);
@@ -44,8 +44,8 @@ void main() {
     vec2 dbr = unpackHalf2x16(floatBitsToUint(light.y));
     vec3 denoised = vec3(drg.x, drg.y, dbr.x);
     if (any(isnan(denoised))) denoised = vec3(0.0);
-    refractIllumiantionBuffer.data[idx].color_rg = pack2HalfClamped(denoised.r, denoised.g);
-    refractIllumiantionBuffer.data[idx].color_b  = pack2HalfClamped(denoised.b, 0.0);
+    refractIlluminationBuffer.data[idx].color_rg = pack2HalfClamped(denoised.r, denoised.g);
+    refractIlluminationBuffer.data[idx].color_b  = pack2HalfClamped(denoised.b, 0.0);
 
     vec3 R = decodeNormal(geom.w);
     WriteRefractHistory(preDenoise, weight, geom.xyz, R, vprojdist, pix);

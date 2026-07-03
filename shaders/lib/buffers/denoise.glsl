@@ -1,7 +1,7 @@
 
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/lighting/alice.glsl"
-uint getIdx(uvec2 xy) {
+uint getIndex(uvec2 xy) {
     //return xy.y * 1024u + clamp(xy.x, 0, 1023u);
     return xy.y * resolution_global.x + clamp(xy.x, 0, resolution_global.x - 1);
 }
@@ -252,7 +252,7 @@ void unpackSpecularSample(PackedLightSample s,
     H = decodeNormal(s.data1.w);
 }
 
-struct diffuseIllumiantionData {
+struct diffuseIlluminationData {
     SH data;
     SH data_swap;
     vec3 pos;
@@ -290,11 +290,11 @@ struct UnifiedDiffuseElement {
 
 layout(std430, set = 3, binding = 2) buffer DiffuseBuffer {
     UnifiedDiffuseElement data[];
-} diffuseIllumiantionBuffer;
+} diffuseIlluminationBuffer;
 
 // Keep old struct types for function interfaces (unpacked representation).
-// diffuseIllumiantionBufferDataW is still returned by fetchPrevDiffuse/samplePrevDiffuse.
-struct diffuseIllumiantionBufferDataW {
+// diffuseIlluminationBufferDataW is still returned by fetchPrevDiffuse/samplePrevDiffuse.
+struct diffuseIlluminationBufferDataW {
     SH data_swap;
     vec3 pos;
     lowp vec3 normal;
@@ -304,9 +304,9 @@ struct diffuseIllumiantionBufferDataW {
 
 // Helper: unpack RT output from unified SSBO into full-precision struct.
 // Used by 100.glsl to read the current frame's ray-traced input.
-diffuseIllumiantionBufferDataW loadDiffuseInput(uint idx) {
-    UnifiedDiffuseElement e = diffuseIllumiantionBuffer.data[idx];
-    diffuseIllumiantionBufferDataW t;
+diffuseIlluminationBufferDataW loadDiffuseInput(uint idx) {
+    UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[idx];
+    diffuseIlluminationBufferDataW t;
     mediump vec2 shY_xy = unpackHalf2x16(floatBitsToUint(e.rt_shY_xy));
     mediump vec2 shY_zw = unpackHalf2x16(floatBitsToUint(e.rt_shY_zw));
     t.data_swap.shY = clamp(vec4(shY_xy, shY_zw), vec4(-10000), vec4(10000));
@@ -318,7 +318,7 @@ diffuseIllumiantionBufferDataW loadDiffuseInput(uint idx) {
     return t;
 }
 
-struct vec3IllumiantionData {
+struct vec3IlluminationData {
     mediump vec3 data;
     mediump vec3 data_swap;
     vec3 pos;
@@ -388,22 +388,22 @@ void unpackSpecularHistory(SpecularRTElement e, out vec3 histPos, out vec3 histN
     histWeight = e.hist_weight;
 }
 
-layout(std430, set = 3, binding = 3) buffer ReflectIllumiantionDataBuffer {
+layout(std430, set = 3, binding = 3) buffer ReflectIlluminationDataBuffer {
     SpecularRTElement data[];
-} reflectIllumiantionBuffer;
+} reflectIlluminationBuffer;
 
-layout(std430, set = 3, binding = 4) buffer RefractIllumiantionDataBuffer {
+layout(std430, set = 3, binding = 4) buffer RefractIlluminationDataBuffer {
     SpecularRTElement data[];
-} refractIllumiantionBuffer;
+} refractIlluminationBuffer;
 
 #if defined(PREV_DIFFUSE_BUFFER)
 
 // Read previous frame's accumulated SH for ray guiding (ray0.rgen).
 // Only data_swap.shY fields are used by the caller; the rest are filled with
 // best-effort values from the history SSBO.
-diffuseIllumiantionBufferDataW fetchPrevDiffuse(ivec2 p) {
-    UnifiedDiffuseElement e = diffuseIllumiantionBuffer.data[getIdx(p)];
-    diffuseIllumiantionBufferDataW t;
+diffuseIlluminationBufferDataW fetchPrevDiffuse(ivec2 p) {
+    UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[getIndex(p)];
+    diffuseIlluminationBufferDataW t;
     mediump vec2 shY_xy = unpackHalf2x16(floatBitsToUint(e.swap_shY_xy));
     mediump vec2 shY_zw = unpackHalf2x16(floatBitsToUint(e.swap_shY_zw));
     t.data_swap.shY = clamp(vec4(shY_xy, shY_zw), vec4(-10000), vec4(10000));
@@ -415,8 +415,8 @@ diffuseIllumiantionBufferDataW fetchPrevDiffuse(ivec2 p) {
     return t;
 }
 
-diffuseIllumiantionBufferDataW blendPrevDiffuse(diffuseIllumiantionBufferDataW A, diffuseIllumiantionBufferDataW B, float x) {
-    diffuseIllumiantionBufferDataW t;
+diffuseIlluminationBufferDataW blendPrevDiffuse(diffuseIlluminationBufferDataW A, diffuseIlluminationBufferDataW B, float x) {
+    diffuseIlluminationBufferDataW t;
     t.data_swap = mix_SH(A.data_swap, B.data_swap, x);
     t.pos = mix(A.pos, B.pos, x);
     t.normal = normalize(mix(A.normal, B.normal, x));
@@ -424,33 +424,33 @@ diffuseIllumiantionBufferDataW blendPrevDiffuse(diffuseIllumiantionBufferDataW A
     return t;
 }
 
-diffuseIllumiantionBufferDataW samplePrevDiffuse(vec2 p) {
+diffuseIlluminationBufferDataW samplePrevDiffuse(vec2 p) {
     ivec2 p1 = ivec2(p);
     vec2 p2 = fract(p);
-    diffuseIllumiantionBufferDataW A = fetchPrevDiffuse(p1);
-    diffuseIllumiantionBufferDataW B = fetchPrevDiffuse(p1 + ivec2(1, 0));
-    diffuseIllumiantionBufferDataW C = fetchPrevDiffuse(p1 + ivec2(0, 1));
-    diffuseIllumiantionBufferDataW D = fetchPrevDiffuse(p1 + ivec2(1, 1));
+    diffuseIlluminationBufferDataW A = fetchPrevDiffuse(p1);
+    diffuseIlluminationBufferDataW B = fetchPrevDiffuse(p1 + ivec2(1, 0));
+    diffuseIlluminationBufferDataW C = fetchPrevDiffuse(p1 + ivec2(0, 1));
+    diffuseIlluminationBufferDataW D = fetchPrevDiffuse(p1 + ivec2(1, 1));
     return blendPrevDiffuse(blendPrevDiffuse(A, B, p2.x), blendPrevDiffuse(C, D, p2.x), p2.y);
 }
 
-void WritePrevDiffuse(diffuseIllumiantionBufferDataW data, ivec2 p) {
-    uint idx = getIdx(p);
-    diffuseIllumiantionBuffer.data[idx].swap_shY_xy = uintBitsToFloat(packHalf2x16(data.data_swap.shY.xy));
-    diffuseIllumiantionBuffer.data[idx].swap_shY_zw = uintBitsToFloat(packHalf2x16(data.data_swap.shY.zw));
-    diffuseIllumiantionBuffer.data[idx].swap_CoCg   = uintBitsToFloat(packHalf2x16(data.data_swap.CoCg));
-    diffuseIllumiantionBuffer.data[idx].swap_weight = data.weight;
+void WritePrevDiffuse(diffuseIlluminationBufferDataW data, ivec2 p) {
+    uint idx = getIndex(p);
+    diffuseIlluminationBuffer.data[idx].swap_shY_xy = uintBitsToFloat(packHalf2x16(data.data_swap.shY.xy));
+    diffuseIlluminationBuffer.data[idx].swap_shY_zw = uintBitsToFloat(packHalf2x16(data.data_swap.shY.zw));
+    diffuseIlluminationBuffer.data[idx].swap_CoCg   = uintBitsToFloat(packHalf2x16(data.data_swap.CoCg));
+    diffuseIlluminationBuffer.data[idx].swap_weight = data.weight;
 }
 
 #endif
 
 #if defined(DIFFUSE_BUFFER) || defined(DIFFUSE_BUFFER_MIN) || defined(DIFFUSE_BUFFER_MIN2)
 
-// All diffuse temporal history now lives in unified diffuseIllumiantionBuffer (binding 2).
+// All diffuse temporal history now lives in unified diffuseIlluminationBuffer (binding 2).
 
-diffuseIllumiantionData fetchDiffuse(ivec2 p) {
-    diffuseIllumiantionData tmp;
-    UnifiedDiffuseElement e = diffuseIllumiantionBuffer.data[getIdx(p)];
+diffuseIlluminationData fetchDiffuse(ivec2 p) {
+    diffuseIlluminationData tmp;
+    UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[getIndex(p)];
 
     // Unpack current frame (swap)
     mediump vec2 shY_xy = unpackHalf2x16(floatBitsToUint(e.swap_shY_xy));
@@ -473,8 +473,8 @@ diffuseIllumiantionData fetchDiffuse(ivec2 p) {
     return tmp;
 }
 
-diffuseIllumiantionData blendDiffuse(diffuseIllumiantionData A, diffuseIllumiantionData B, float x) {
-    diffuseIllumiantionData t;
+diffuseIlluminationData blendDiffuse(diffuseIlluminationData A, diffuseIlluminationData B, float x) {
+    diffuseIlluminationData t;
     t.data_swap = mix_SH(A.data_swap, B.data_swap, x);
     t.weight = (B.weight - A.weight) * x + A.weight;
     #ifndef DIFFUSE_BUFFER_MIN2
@@ -486,33 +486,33 @@ diffuseIllumiantionData blendDiffuse(diffuseIllumiantionData A, diffuseIllumiant
     return t;
 }
 
-diffuseIllumiantionData sampleDiffuse(vec2 p) {
+diffuseIlluminationData sampleDiffuse(vec2 p) {
     ivec2 p1 = ivec2(p);
     vec2 p2 = fract(p);
-    diffuseIllumiantionData A = fetchDiffuse(p1);
-    diffuseIllumiantionData B = fetchDiffuse(p1 + ivec2(1, 0));
-    diffuseIllumiantionData C = fetchDiffuse(p1 + ivec2(0, 1));
-    diffuseIllumiantionData D = fetchDiffuse(p1 + ivec2(1, 1));
-    diffuseIllumiantionData data = blendDiffuse(blendDiffuse(A, B, p2.x), blendDiffuse(C, D, p2.x), p2.y);
+    diffuseIlluminationData A = fetchDiffuse(p1);
+    diffuseIlluminationData B = fetchDiffuse(p1 + ivec2(1, 0));
+    diffuseIlluminationData C = fetchDiffuse(p1 + ivec2(0, 1));
+    diffuseIlluminationData D = fetchDiffuse(p1 + ivec2(1, 1));
+    diffuseIlluminationData data = blendDiffuse(blendDiffuse(A, B, p2.x), blendDiffuse(C, D, p2.x), p2.y);
     #ifndef DIFFUSE_BUFFER_MIN2
     data.normal = normalize(data.normal);
     #endif
     return data;
 }
 vec3 sampleDiffusePos(vec2 p) {
-    UnifiedDiffuseElement e = diffuseIllumiantionBuffer.data[getIdx(ivec2(floor(p) + round(fract(p))))];
+    UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[getIndex(ivec2(floor(p) + round(fract(p))))];
     return vec3(e.hist_px, e.hist_py, e.hist_pz);
 }
-void WriteDiffuse(diffuseIllumiantionData data, ivec2 p) {
-    uint idx = getIdx(p);
+void WriteDiffuse(diffuseIlluminationData data, ivec2 p) {
+    uint idx = getIndex(p);
 
     // Always write swap (current frame)
     data.weight = clamp(data.weight, 0.0, 65504);
 
-    diffuseIllumiantionBuffer.data[idx].swap_shY_xy = uintBitsToFloat(packHalf2x16(data.data_swap.shY.xy));
-    diffuseIllumiantionBuffer.data[idx].swap_shY_zw = uintBitsToFloat(packHalf2x16(data.data_swap.shY.zw));
-    diffuseIllumiantionBuffer.data[idx].swap_CoCg   = uintBitsToFloat(packHalf2x16(data.data_swap.CoCg));
-    diffuseIllumiantionBuffer.data[idx].swap_weight = data.weight;
+    diffuseIlluminationBuffer.data[idx].swap_shY_xy = uintBitsToFloat(packHalf2x16(data.data_swap.shY.xy));
+    diffuseIlluminationBuffer.data[idx].swap_shY_zw = uintBitsToFloat(packHalf2x16(data.data_swap.shY.zw));
+    diffuseIlluminationBuffer.data[idx].swap_CoCg   = uintBitsToFloat(packHalf2x16(data.data_swap.CoCg));
+    diffuseIlluminationBuffer.data[idx].swap_weight = data.weight;
 
     #if !defined(DIFFUSE_BUFFER_MIN) && !defined(DIFFUSE_BUFFER_MIN2)
     // Full write: also update hist (history) and geometry
@@ -520,30 +520,30 @@ void WriteDiffuse(diffuseIllumiantionData data, ivec2 p) {
     data.data.CoCg = clamp(data.data.CoCg, vec2(-65504), vec2(65504));
     data.prev_weight = clamp(data.prev_weight, 0.0, 65504);
 
-    diffuseIllumiantionBuffer.data[idx].hist_shY_xy = uintBitsToFloat(packHalf2x16(data.data.shY.xy));
-    diffuseIllumiantionBuffer.data[idx].hist_shY_zw = uintBitsToFloat(packHalf2x16(data.data.shY.zw));
-    diffuseIllumiantionBuffer.data[idx].hist_CoCg   = uintBitsToFloat(packHalf2x16(data.data.CoCg));
-    diffuseIllumiantionBuffer.data[idx].hist_weight = data.prev_weight;
+    diffuseIlluminationBuffer.data[idx].hist_shY_xy = uintBitsToFloat(packHalf2x16(data.data.shY.xy));
+    diffuseIlluminationBuffer.data[idx].hist_shY_zw = uintBitsToFloat(packHalf2x16(data.data.shY.zw));
+    diffuseIlluminationBuffer.data[idx].hist_CoCg   = uintBitsToFloat(packHalf2x16(data.data.CoCg));
+    diffuseIlluminationBuffer.data[idx].hist_weight = data.prev_weight;
 
     // Write history geometry for next frame's temporal reprojection.
     // These survive ray0.rgen's next-frame overwrite of px/py/pz/oct_n.
-    diffuseIllumiantionBuffer.data[idx].hist_px = data.pos.x;
-    diffuseIllumiantionBuffer.data[idx].hist_py = data.pos.y;
-    diffuseIllumiantionBuffer.data[idx].hist_pz = data.pos.z;
-    diffuseIllumiantionBuffer.data[idx].hist_oct_n = encodeNormal(data.normal);
+    diffuseIlluminationBuffer.data[idx].hist_px = data.pos.x;
+    diffuseIlluminationBuffer.data[idx].hist_py = data.pos.y;
+    diffuseIlluminationBuffer.data[idx].hist_pz = data.pos.z;
+    diffuseIlluminationBuffer.data[idx].hist_oct_n = encodeNormal(data.normal);
     #endif
 }
 #endif
 
 #if defined(REFLECT_BUFFER) || defined(REFLECT_BUFFER_MIN) || defined(REFLECT_BUFFER_MIN2)
 
-// 时域历史全部存入 SSBO reflectIllumiantionBuffer (SpecularRTElement.hist_*).
+// 时域历史全部存入 SSBO reflectIlluminationBuffer (SpecularRTElement.hist_*).
 // 原先的 4 个 rgba32f image (swap_color/color/lpos/lnormal, ~32MB) 已删除.
 
-vec3IllumiantionData fetchReflect(ivec2 p) {
-    vec3IllumiantionData tmp;
-    uint i = getIdx(uvec2(clamp(p, ivec2(0), ivec2(resolution_global) - 1)));
-    SpecularRTElement e = reflectIllumiantionBuffer.data[i];
+vec3IlluminationData fetchReflect(ivec2 p) {
+    vec3IlluminationData tmp;
+    uint i = getIndex(uvec2(clamp(p, ivec2(0), ivec2(resolution_global) - 1)));
+    SpecularRTElement e = reflectIlluminationBuffer.data[i];
 
     // 当前帧累积颜色 + 权重 (101 写入, swap4/swap5 读取)
     vec2 rg = unpackHalf2x16(floatBitsToUint(e.color_rg));
@@ -564,8 +564,8 @@ vec3IllumiantionData fetchReflect(ivec2 p) {
     return tmp;
 }
 
-vec3IllumiantionData blendReflect(vec3IllumiantionData A, vec3IllumiantionData B, float x) {
-    vec3IllumiantionData t;
+vec3IlluminationData blendReflect(vec3IlluminationData A, vec3IlluminationData B, float x) {
+    vec3IlluminationData t;
     t.data_swap = mix(A.data_swap, B.data_swap, x);
     t.weight = (B.weight - A.weight) * x + A.weight;
     #ifndef REFLECT_BUFFER_MIN2
@@ -578,47 +578,47 @@ vec3IllumiantionData blendReflect(vec3IllumiantionData A, vec3IllumiantionData B
     return t;
 }
 
-vec3IllumiantionData sampleReflect(vec2 p) {
+vec3IlluminationData sampleReflect(vec2 p) {
     ivec2 p1 = ivec2(p);
     vec2 p2 = fract(p);
-    vec3IllumiantionData A = fetchReflect(p1);
-    vec3IllumiantionData B = fetchReflect(p1 + ivec2(1, 0));
-    vec3IllumiantionData C = fetchReflect(p1 + ivec2(0, 1));
-    vec3IllumiantionData D = fetchReflect(p1 + ivec2(1, 1));
+    vec3IlluminationData A = fetchReflect(p1);
+    vec3IlluminationData B = fetchReflect(p1 + ivec2(1, 0));
+    vec3IlluminationData C = fetchReflect(p1 + ivec2(0, 1));
+    vec3IlluminationData D = fetchReflect(p1 + ivec2(1, 1));
     return blendReflect(blendReflect(A, B, p2.x), blendReflect(C, D, p2.x), p2.y);
 }
 
 // 101 调用: 写入累积颜色 + 权重到 SSBO 当前帧区段
-void WriteReflect(vec3IllumiantionData data, ivec2 p) {
-    uint i = getIdx(uvec2(p));
-    reflectIllumiantionBuffer.data[i].color_rg = pack2HalfClamped(data.data_swap.r, data.data_swap.g);
-    reflectIllumiantionBuffer.data[i].color_b  = pack2HalfClamped(data.data_swap.b, 0.0);
-    reflectIllumiantionBuffer.data[i].accum_weight = data.weight;
+void WriteReflect(vec3IlluminationData data, ivec2 p) {
+    uint i = getIndex(uvec2(p));
+    reflectIlluminationBuffer.data[i].color_rg = pack2HalfClamped(data.data_swap.r, data.data_swap.g);
+    reflectIlluminationBuffer.data[i].color_b  = pack2HalfClamped(data.data_swap.b, 0.0);
+    reflectIlluminationBuffer.data[i].accum_weight = data.weight;
 }
 
 // swap5 调用: 写入时域历史到 SSBO hist_* 区段 (供 101 下帧读取)
 void WriteReflectHistory(vec3 preDenoiseColor, float prevWeight, vec3 pos, vec3 R, float vprojdist, ivec2 p) {
-    uint i = getIdx(uvec2(p));
-    reflectIllumiantionBuffer.data[i].hist_px = pos.x;
-    reflectIllumiantionBuffer.data[i].hist_py = pos.y;
-    reflectIllumiantionBuffer.data[i].hist_pz = pos.z;
-    reflectIllumiantionBuffer.data[i].hist_oct_dir = encodeNormal(R);
-    reflectIllumiantionBuffer.data[i].hist_vprojdist = vprojdist;
-    reflectIllumiantionBuffer.data[i].hist_color_rg = pack2HalfClamped(preDenoiseColor.r, preDenoiseColor.g);
-    reflectIllumiantionBuffer.data[i].hist_color_b  = pack2HalfClamped(preDenoiseColor.b, 0.0);
-    reflectIllumiantionBuffer.data[i].hist_weight = prevWeight;
+    uint i = getIndex(uvec2(p));
+    reflectIlluminationBuffer.data[i].hist_px = pos.x;
+    reflectIlluminationBuffer.data[i].hist_py = pos.y;
+    reflectIlluminationBuffer.data[i].hist_pz = pos.z;
+    reflectIlluminationBuffer.data[i].hist_oct_dir = encodeNormal(R);
+    reflectIlluminationBuffer.data[i].hist_vprojdist = vprojdist;
+    reflectIlluminationBuffer.data[i].hist_color_rg = pack2HalfClamped(preDenoiseColor.r, preDenoiseColor.g);
+    reflectIlluminationBuffer.data[i].hist_color_b  = pack2HalfClamped(preDenoiseColor.b, 0.0);
+    reflectIlluminationBuffer.data[i].hist_weight = prevWeight;
 }
 #endif
 
 #if defined(REFRACT_BUFFER) || defined(REFRACT_BUFFER_MIN) || defined(REFRACT_BUFFER_MIN2)
 
-// 时域历史全部存入 SSBO refractIllumiantionBuffer (SpecularRTElement.hist_*).
+// 时域历史全部存入 SSBO refractIlluminationBuffer (SpecularRTElement.hist_*).
 // 原先的 4 个 rgba32f image 已删除.
 
-vec3IllumiantionData fetchRefract(ivec2 p) {
-    vec3IllumiantionData tmp;
-    uint i = getIdx(uvec2(clamp(p, ivec2(0), ivec2(resolution_global) - 1)));
-    SpecularRTElement e = refractIllumiantionBuffer.data[i];
+vec3IlluminationData fetchRefract(ivec2 p) {
+    vec3IlluminationData tmp;
+    uint i = getIndex(uvec2(clamp(p, ivec2(0), ivec2(resolution_global) - 1)));
+    SpecularRTElement e = refractIlluminationBuffer.data[i];
 
     vec2 rg = unpackHalf2x16(floatBitsToUint(e.color_rg));
     float b = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
@@ -636,8 +636,8 @@ vec3IllumiantionData fetchRefract(ivec2 p) {
     return tmp;
 }
 
-vec3IllumiantionData blendRefract(vec3IllumiantionData A, vec3IllumiantionData B, float x) {
-    vec3IllumiantionData t;
+vec3IlluminationData blendRefract(vec3IlluminationData A, vec3IlluminationData B, float x) {
+    vec3IlluminationData t;
     t.data_swap = mix(A.data_swap, B.data_swap, x);
     t.weight = (B.weight - A.weight) * x + A.weight;
 
@@ -650,32 +650,32 @@ vec3IllumiantionData blendRefract(vec3IllumiantionData A, vec3IllumiantionData B
     return t;
 }
 
-vec3IllumiantionData sampleRefract(vec2 p) {
+vec3IlluminationData sampleRefract(vec2 p) {
     ivec2 p1 = ivec2(p);
     vec2 p2 = fract(p);
-    vec3IllumiantionData A = fetchRefract(p1);
-    vec3IllumiantionData B = fetchRefract(p1 + ivec2(1, 0));
-    vec3IllumiantionData C = fetchRefract(p1 + ivec2(0, 1));
-    vec3IllumiantionData D = fetchRefract(p1 + ivec2(1, 1));
+    vec3IlluminationData A = fetchRefract(p1);
+    vec3IlluminationData B = fetchRefract(p1 + ivec2(1, 0));
+    vec3IlluminationData C = fetchRefract(p1 + ivec2(0, 1));
+    vec3IlluminationData D = fetchRefract(p1 + ivec2(1, 1));
     return blendRefract(blendRefract(A, B, p2.x), blendRefract(C, D, p2.x), p2.y);
 }
 
-void WriteRefract(vec3IllumiantionData data, ivec2 p) {
-    uint i = getIdx(uvec2(p));
-    refractIllumiantionBuffer.data[i].color_rg = pack2HalfClamped(data.data_swap.r, data.data_swap.g);
-    refractIllumiantionBuffer.data[i].color_b  = pack2HalfClamped(data.data_swap.b, 0.0);
-    refractIllumiantionBuffer.data[i].accum_weight = data.weight;
+void WriteRefract(vec3IlluminationData data, ivec2 p) {
+    uint i = getIndex(uvec2(p));
+    refractIlluminationBuffer.data[i].color_rg = pack2HalfClamped(data.data_swap.r, data.data_swap.g);
+    refractIlluminationBuffer.data[i].color_b  = pack2HalfClamped(data.data_swap.b, 0.0);
+    refractIlluminationBuffer.data[i].accum_weight = data.weight;
 }
 
 void WriteRefractHistory(vec3 preDenoiseColor, float prevWeight, vec3 pos, vec3 R, float vprojdist, ivec2 p) {
-    uint i = getIdx(uvec2(p));
-    refractIllumiantionBuffer.data[i].hist_px = pos.x;
-    refractIllumiantionBuffer.data[i].hist_py = pos.y;
-    refractIllumiantionBuffer.data[i].hist_pz = pos.z;
-    refractIllumiantionBuffer.data[i].hist_oct_dir = encodeNormal(R);
-    refractIllumiantionBuffer.data[i].hist_vprojdist = vprojdist;
-    refractIllumiantionBuffer.data[i].hist_color_rg = pack2HalfClamped(preDenoiseColor.r, preDenoiseColor.g);
-    refractIllumiantionBuffer.data[i].hist_color_b  = pack2HalfClamped(preDenoiseColor.b, 0.0);
-    refractIllumiantionBuffer.data[i].hist_weight = prevWeight;
+    uint i = getIndex(uvec2(p));
+    refractIlluminationBuffer.data[i].hist_px = pos.x;
+    refractIlluminationBuffer.data[i].hist_py = pos.y;
+    refractIlluminationBuffer.data[i].hist_pz = pos.z;
+    refractIlluminationBuffer.data[i].hist_oct_dir = encodeNormal(R);
+    refractIlluminationBuffer.data[i].hist_vprojdist = vprojdist;
+    refractIlluminationBuffer.data[i].hist_color_rg = pack2HalfClamped(preDenoiseColor.r, preDenoiseColor.g);
+    refractIlluminationBuffer.data[i].hist_color_b  = pack2HalfClamped(preDenoiseColor.b, 0.0);
+    refractIlluminationBuffer.data[i].hist_weight = prevWeight;
 }
 #endif

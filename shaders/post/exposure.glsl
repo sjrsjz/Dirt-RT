@@ -37,7 +37,7 @@ void main() {
         float r = sqrt(float(i) + 0.5) / sqrt(float(NUM_SAMPLES));
         vec2 uv = vec2(0.5) + vec2(cos(theta), sin(theta)) * r * 0.45; 
         
-        vec3 c = texture(colortex1, uv).rgb * ExposureS;
+        vec3 c = texture(colortex1, uv).rgb * EXPOSURE_S;
         float luma = max(luminance(c), 1e-4);
         float logL = log2(luma);
         

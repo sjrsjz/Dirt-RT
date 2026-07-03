@@ -8,14 +8,14 @@
 //   variance = tr(Cov(X))
 //
 // 约定:
-//   diffuseIllumiantionData.weight = temporal effective weight / N_eff
-//   diffuseIllumiantionData.variance = temporal raw trace variance = tr(Cov(X))
+//   diffuseIlluminationData.weight = temporal effective weight / N_eff
+//   diffuseIlluminationData.variance = temporal raw trace variance = tr(Cov(X))
 //   estimator variance = variance / max(weight, 1.0)
 //
 // 注意:
 //   这里维护的是 raw variance，不是已经除以 N 的 estimator variance。
 //
-// 统计量直接写入 diffuseIllumiantionData，随 WriteDiffuse 一并回写，
+// 统计量直接写入 diffuseIlluminationData，随 WriteDiffuse 一并回写，
 // 不再需要 extInfoBuffer 间接缓冲区。
 // ===========================================================================
 
@@ -74,8 +74,8 @@ uint idx;
 
 in vec2 texCoord;
 
-diffuseIllumiantionBufferDataW current_data;
-diffuseIllumiantionData out_data;
+diffuseIlluminationBufferDataW current_data;
+diffuseIlluminationData out_data;
 
 float output_weight = 0.0;
 
@@ -155,7 +155,7 @@ void MixDiffuse() {
     vec2 prev_screen =
         prevScreenPos.xy * vec2(textureSize(colortex0, 0));
 
-    diffuseIllumiantionData histData = sampleDiffuse(prev_screen);
+    diffuseIlluminationData histData = sampleDiffuse(prev_screen);
 
     // 历史权重
     float histWeight = sanitizeWeight(histData.prev_weight);
@@ -226,7 +226,7 @@ void MixDiffuse() {
 
 void main() {
     uvec2 pix = uvec2(gl_FragCoord.xy);
-    idx = getIdx(pix);
+    idx = getIndex(pix);
 
 
     // -----------------------------------------------------------------------

@@ -71,7 +71,7 @@ bool notInRange(vec2 p) {
     return clamp(p, vec2(0), vec2(1)) != p;
 }
 
-vec3IllumiantionData data2; // 当前像素的反射光照数据 (来自 SSBO)
+vec3IlluminationData data2; // 当前像素的反射光照数据 (来自 SSBO)
 
 // ===========================================================================
 // 时域混合 (Reflect)
@@ -85,7 +85,7 @@ void MixReflect() {
         return;
     }
 
-    vec3IllumiantionData data = sampleReflect(prevScreenPos.xy * textureSize(colortex0, 0));
+    vec3IlluminationData data = sampleReflect(prevScreenPos.xy * textureSize(colortex0, 0));
 
     // ---- GGX 方向相容性权重 ----
     float roughness = denoiseBuffer.data[idx].roughness;
@@ -116,12 +116,12 @@ void MixReflect() {
 // 主入口
 // ===========================================================================
 void main() {
-    idx = getIdx(uvec2(gl_FragCoord.xy));
+    idx = getIndex(uvec2(gl_FragCoord.xy));
 
     info_distance = denoiseBuffer.data[idx].distance;
 
     // 从 SSBO (SpecularRTElement) 重建当前帧反射数据: normal = R*vprojdist
-    unpackSpecularRT(reflectIllumiantionBuffer.data[idx], data2.pos, data2.normal, data2.data_swap);
+    unpackSpecularRT(reflectIlluminationBuffer.data[idx], data2.pos, data2.normal, data2.data_swap);
     data2.data = vec3(0.0);
     data2.weight = 0.0;
     data2.prev_weight = 0.0;
@@ -138,7 +138,7 @@ void main() {
     // ---- 重投影到上一帧 (主命中点: 定位同一反射表面点) ------------------
     cameraDelta = camPos - prevRaytracingCamPos;
     prevScreenPos = reproject(data2.pos);
-    idx_l = getIdx(uvec2(prevScreenPos.xy * textureSize(colortex0, 0) + 0.5));
+    idx_l = getIndex(uvec2(prevScreenPos.xy * textureSize(colortex0, 0) + 0.5));
 
     // ---- 执行时域混合 ----------------------------------------------------
     MixReflect();

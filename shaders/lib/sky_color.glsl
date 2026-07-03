@@ -22,7 +22,7 @@ void setSkyVars() {
     //cosD_S = 1 / sqrt(1 + S_R * S_R);
 
     switch (world_type_global) {
-        case World_THE_END:
+        case WORLD_THE_END:
         S_R = 0.25;
         cosD_S = 1 / sqrt(1 + S_R * S_R);
         Rayleigh = 5e9 * pow(vec3(1. / 700, 1. / 520, 1. / 450), vec3(4));
@@ -31,7 +31,7 @@ void setSkyVars() {
         b_P = vec3(4096);
         b_k = 0.95;
         break;
-        case World_THE_NETHER:
+        case WORLD_THE_NETHER:
         S_R = 0.5;
         cosD_S = 1 / sqrt(1 + S_R * S_R);
         Mie = vec3(0.9);

@@ -65,7 +65,7 @@ float sanitizeVariance(float v) {
 
 // Unpack swap SH + weight from unified SSBO, return raw ALICE variance and omega.
 float computeRawVariance(uint idx, out float outOmega) {
-    UnifiedDiffuseElement e = diffuseIllumiantionBuffer.data[idx];
+    UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[idx];
 
     mediump vec2 shY_xy = unpackHalf2x16(floatBitsToUint(e.swap_shY_xy));
     mediump vec2 shY_zw = unpackHalf2x16(floatBitsToUint(e.swap_shY_zw));
@@ -113,9 +113,9 @@ void main() {
 
         ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(col, row);
         ivec2 clamped = clamp(gc, ivec2(0), texSize - ivec2(1));
-        uint loadIdx = getIdx(uvec2(clamped));
+        uint loadIdx = getIndex(uvec2(clamped));
 
-        UnifiedDiffuseElement e = diffuseIllumiantionBuffer.data[loadIdx];
+        UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[loadIdx];
         float d = denoiseBuffer.data[loadIdx].distance;
 
         TileSample s;
@@ -155,8 +155,8 @@ void main() {
     // =========================================================================
     // Phase 3: Unpack center SH, apply 3-sigma energy clamp on outSH
     // =========================================================================
-    uint idx = getIdx(uvec2(clamp(ivec2(gid), ivec2(0), texSize - ivec2(1))));
-    UnifiedDiffuseElement ce = diffuseIllumiantionBuffer.data[idx];
+    uint idx = getIndex(uvec2(clamp(ivec2(gid), ivec2(0), texSize - ivec2(1))));
+    UnifiedDiffuseElement ce = diffuseIlluminationBuffer.data[idx];
     mediump vec2 c_shY_xy = unpackHalf2x16(floatBitsToUint(ce.swap_shY_xy));
     mediump vec2 c_shY_zw = unpackHalf2x16(floatBitsToUint(ce.swap_shY_zw));
     mediump vec2 c_CoCg = unpackHalf2x16(floatBitsToUint(ce.swap_CoCg));

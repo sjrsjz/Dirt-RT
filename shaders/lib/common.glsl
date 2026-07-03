@@ -32,8 +32,8 @@ float hash13(vec3 p3)
     return fract((p3.x + p3.y) * p3.z);
 }
 
-vec2 rot(vec2 a, float theata) {
-    return a.xx * vec2(cos(theata), sin(theata)) + a.yy * vec2(-sin(theata), cos(theata));
+vec2 rot(vec2 a, float theta) {
+    return a.xx * vec2(cos(theta), sin(theta)) + a.yy * vec2(-sin(theta), cos(theta));
 }
 
 float hash(float n)
@@ -96,19 +96,19 @@ uvec3 whash3(uvec3 seed)
     return seed;
 }
 
-float getRnd() {
+float getRandom() {
     wseed3 = whash3(wseed3.yzx);
     return fract(float(wseed3.x) * (1.0 / 4294967296.0));
 }
 
-vec3 rndS(vec3 pos) {
+vec3 randomDirection(vec3 pos) {
     return normalize(tan(vec3(rand(pos) - 0.5, rand(pos) - 0.5, rand(pos) - 0.5)));
 }
 float luma(vec3 c) {
     return dot(c, vec3(0.299, 0.587, 0.114));
 }
 
-vec4 rColor(vec3 c, float cosA) {
+vec4 reflectanceColor(vec3 c, float cosA) {
     vec3 F0 = c + (1.0 - c) * pow(1.0 - abs(cosA), 5.0);
     return vec4(F0, luma(F0));
 }

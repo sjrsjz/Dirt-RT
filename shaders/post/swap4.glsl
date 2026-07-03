@@ -72,12 +72,12 @@ void main() {
         uint ty = i / TILE;
         ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(tx, ty);
         ivec2 cc = clamp(gc, ivec2(0), texSize - 1);
-        uint idx = getIdx(uvec2(cc));
+        uint idx = getIndex(uvec2(cc));
 
         float dist = denoiseBuffer.data[idx].distance;
         TileSample s;
         if (dist > -0.5) {
-            SpecularRTElement e = reflectIllumiantionBuffer.data[idx];
+            SpecularRTElement e = reflectIlluminationBuffer.data[idx];
             vec2 rg = unpackHalf2x16(floatBitsToUint(e.color_rg));
             float b = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
             vec3 color = vec3(rg.x, rg.y, b);
@@ -116,15 +116,15 @@ void main() {
     vec3 cPos = c.pos_oct.xyz;
     vec3 cR = decodeNormal(c.pos_oct.w);
     vec3 cH = c.H_dist.xyz;
-    uint gidx = getIdx(uvec2(clamp(ivec2(gid), ivec2(0), texSize - 1)));
-    SpecularRTElement ce = reflectIllumiantionBuffer.data[gidx];
+    uint gidx = getIndex(uvec2(clamp(ivec2(gid), ivec2(0), texSize - 1)));
+    SpecularRTElement ce = reflectIlluminationBuffer.data[gidx];
     vec2 crg = unpackHalf2x16(floatBitsToUint(ce.color_rg));
     float cb = unpackHalf2x16(floatBitsToUint(ce.color_b)).x;
     vec3 cColor = vec3(crg.x, crg.y, cb);
     float cWeight = ce.accum_weight;
     float cVproj = c.color_vproj.w;
     // roughness 仅中心输出需要, 邻域方差不用 → 直接读 denoiseBuffer (中心)
-    uint cidx = getIdx(uvec2(clamp(ivec2(gid), ivec2(0), texSize - 1)));
+    uint cidx = getIndex(uvec2(clamp(ivec2(gid), ivec2(0), texSize - 1)));
     float cRough = denoiseBuffer.data[cidx].roughness;
 
     // ---- Phase 2: 5×5 几何感知双边方差 (亮度矩: var = Σw·L²/Σw − (Σw·L/Σw)²) ----

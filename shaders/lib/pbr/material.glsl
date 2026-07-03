@@ -106,7 +106,7 @@ Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn, float we
     // === Wetness modulation ===
     float adhesion_ = clamp(adhesion(macroNormal, vec3(0, -1, 0), vec3(0, -1, 0), material.roughness) + 0.25, 0.0, 1.0);
     float mix0 = min(wetStrength * adhesion_ * min(skylight / 255.0, 1.0) * porosity + wetness * 0.15, 1.0);
-    mix0 *= maxWetness;
+    mix0 *= MAX_WETNESS;
     material.roughness = max(1.0 - mix0 * 1.5, 0.0) * material.roughness;
     material.normal = normalize(mix(material.normal, macroNormal, mix0));
     // Wet dielectric → F0 blends toward 1.0 (thin water film); metals unaffected

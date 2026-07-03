@@ -3,7 +3,7 @@
 // ===========================================================================
 // Pass swap6: 折射缓冲打包 + 镜面方差预计算 (Compute, 共享内存加速)
 // ===========================================================================
-// 折射对应 swap4 (反射). 读 SSBO (refractIllumiantionBuffer) + image (折射累积颜色)
+// 折射对应 swap4 (反射). 读 SSBO (refractIlluminationBuffer) + image (折射累积颜色)
 // + denoiseBuffer, LDS 5×5 方差, H = normalize(V+R), 打包 colortex3/4 供 301 降噪.
 // TileSample 紧凑打包为 3 个 vec4 (48B).
 // ===========================================================================
@@ -63,12 +63,12 @@ void main() {
         uint ty = i / TILE;
         ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(tx, ty);
         ivec2 cc = clamp(gc, ivec2(0), texSize - 1);
-        uint idx = getIdx(uvec2(cc));
+        uint idx = getIndex(uvec2(cc));
 
         float dist = denoiseBuffer.data[idx].distance;
         TileSample s;
         if (dist > -0.5) {
-            SpecularRTElement e = refractIllumiantionBuffer.data[idx];
+            SpecularRTElement e = refractIlluminationBuffer.data[idx];
             vec2 rg = unpackHalf2x16(floatBitsToUint(e.color_rg));
             float b = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
             vec3 color = vec3(rg.x, rg.y, b);
@@ -108,7 +108,7 @@ void main() {
     vec3 cH = c.H_dist.xyz;
     vec3 cColor = c.color_vproj.xyz;
     float cVproj = c.color_vproj.w;
-    uint cidx = getIdx(uvec2(clamp(ivec2(gid), ivec2(0), texSize - 1)));
+    uint cidx = getIndex(uvec2(clamp(ivec2(gid), ivec2(0), texSize - 1)));
     float cRough = denoiseBuffer.data[cidx].roughness;
 
     float sumW = 0.0, sumL = 0.0, sumL2 = 0.0;

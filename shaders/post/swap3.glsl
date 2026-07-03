@@ -44,7 +44,7 @@ void unpackLightSample(ivec2 coord, out vec3 pos, out vec3 normal, out SH sh, ou
 
 void main() {
     ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
-    diffuseIllumiantionData tmp = fetchDiffuse(pix);
+    diffuseIlluminationData tmp = fetchDiffuse(pix);
 
     // ---- NaN 保护 --------------------------------------------------------
     if (any(isnan(tmp.data_swap.shY)))  tmp.data_swap.shY  = vec4(0.0);

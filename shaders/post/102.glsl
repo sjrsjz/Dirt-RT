@@ -89,7 +89,7 @@ bool notInRange(vec2 p) {
     return clamp(p, vec2(0), vec2(1)) != p;
 }
 
-vec3IllumiantionData data3;  // 当前像素的折射光照数据 (来自 SSBO)
+vec3IlluminationData data3;  // 当前像素的折射光照数据 (来自 SSBO)
 
 // ===========================================================================
 // 时域混合 (Refract)
@@ -101,7 +101,7 @@ void MixRefract() {
         return;
     }
 
-    vec3IllumiantionData data = sampleRefract(prevScreenPos.xy * textureSize(colortex0, 0));
+    vec3IlluminationData data = sampleRefract(prevScreenPos.xy * textureSize(colortex0, 0));
 
     // req 6: 虚拟击中点 (pos + R*vprojdist) 用于重投影+权重
     vec3 curVirtual = data3.pos + data3.normal;
@@ -126,12 +126,12 @@ void MixRefract() {
 // 主入口
 // ===========================================================================
 void main() {
-    idx = getIdx(uvec2(gl_FragCoord.xy));
+    idx = getIndex(uvec2(gl_FragCoord.xy));
 
     info_distance = denoiseBuffer.data[idx].distance;
 
     // 从 SSBO (SpecularRTElement) 重建当前帧折射数据: normal = R*vprojdist
-    unpackSpecularRT(refractIllumiantionBuffer.data[idx], data3.pos, data3.normal, data3.data_swap);
+    unpackSpecularRT(refractIlluminationBuffer.data[idx], data3.pos, data3.normal, data3.data_swap);
     data3.data = vec3(0.0);
     data3.weight = 0.0;
     data3.prev_weight = 0.0;
@@ -147,7 +147,7 @@ void main() {
     // ---- 重投影到上一帧 (主命中点: 定位同一折射表面点) ------------------
     cameraDelta = camPos - prevRaytracingCamPos;
     prevScreenPos = reproject(data3.pos);
-    idx_l = getIdx(uvec2(prevScreenPos.xy * textureSize(colortex0, 0)));
+    idx_l = getIndex(uvec2(prevScreenPos.xy * textureSize(colortex0, 0)));
 
     // ---- 执行时域混合 ----------------------------------------------------
     MixRefract();

@@ -21,15 +21,15 @@ option.RESTIR_SPATIAL_RADIUS = ReSTIR spatial radius
 option.RESTIR_M_CAP = ReSTIR M-cap
 
 option.RAY_BOUNCES = Bounce count
-option.Refractive_Index = Refractive index
+option.REFRACTIVE_INDEX = Refractive index
 option.ACCUMULATION_LENGTH = Accumulation length
-option.maxWetness = Max wetness
-option.ExposureS = Exposure factor
+option.MAX_WETNESS = Max wetness
+option.EXPOSURE_S = Exposure factor
 
 # Bloom
 option.BLOOM_MIX = Bloom amount
 
-option.Sharp_Volumetric_Light = Sharp volumetric light
-option.Volumetric_Light_Samples = Volumetric light samples
-value.Sharp_Volumetric_Light.1 = Sharp
-value.Sharp_Volumetric_Light.0 = Real
+option.SHARP_VOLUMETRIC_LIGHT = Sharp volumetric light
+option.VOLUMETRIC_LIGHT_SAMPLES = Volumetric light samples
+value.SHARP_VOLUMETRIC_LIGHT.1 = Sharp
+value.SHARP_VOLUMETRIC_LIGHT.0 = Real

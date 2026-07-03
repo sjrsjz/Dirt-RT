@@ -15,7 +15,7 @@ void main() {
     }
     
     //discard;
-    //uint idx=getIdx(uvec2(gl_FragCoord.xy));
+    //uint idx=getIndex(uvec2(gl_FragCoord.xy));
     //gBuffer.data[idx].depth.y=min(gl_FragCoord.z,gBuffer.data[idx].depth.y);
 
 }

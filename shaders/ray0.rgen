@@ -52,9 +52,9 @@ void main() {
     vec3 direction = normalize((cam.viewInverse * vec4(target.xyz, 0.0)).xyz);
 
     iFrame = cam.frameId;
-    isDarkened = world_type_global != World_OVERWORLD && world_type_global != World_THE_END && world_type_global != World_THE_NETHER;
+    isDarkened = world_type_global != WORLD_OVERWORLD && world_type_global != WORLD_THE_END && world_type_global != WORLD_THE_NETHER;
     SunLight = isDarkened ? vec3(0) : vec3(SunDivMoon * (1 - 0.975 * rainStrength_global));
-    SunLight = mix(SunLight, vec3(0.125 * SunDivMoon), float(world_type_global == World_THE_END));
+    SunLight = mix(SunLight, vec3(0.125 * SunDivMoon), float(world_type_global == WORLD_THE_END));
     MoonLight = isDarkened ? vec3(0) : vec3(0.2);
 
     vec4 celestialQuat = quatAxisAngle(vec3(1, 0, 0), radians(sunPathRotation));
@@ -163,13 +163,13 @@ vec3 reproject(vec3 worldPos) {
 vec4 sampleGodRay(vec3 b_Sun, vec3 b_Moon, vec3 ro, vec3 rd, float far, vec3 lightDir, bool hitFace, bool inside) {
     vec3 X, Y, Z;
     XYZ(lightDir, X, Y, Z);
-    float r1 = getRnd();
-    float alpha = getRnd() * 2 * PI;
+    float r1 = getRandom();
+    float alpha = getRandom() * 2 * PI;
     float cosbeta = (1 - r1 * (1 - cosD_S));
     vec3 sampleDir = cosbeta * Y + sqrt(1 - cosbeta * cosbeta) * (cos(alpha) * X + sin(alpha) * Z);
 
     if (isDarkened || sampleDir.y > 0) return vec4(0, 0, 0, 1e10);
-    float rnd = getRnd();
+    float rnd = getRandom();
     float h = b_P.x - ro.y;
     vec3 q = vec3(0.00000025);
     vec3 log_rnd = 2 * log(rnd) / q;
@@ -202,8 +202,8 @@ vec3 sampleSunlight(vec3 ro, vec3 normal, vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S, v
 
     vec3 X, Y, Z;
     XYZ(lightDir, X, Y, Z);
-    float r1 = getRnd();
-    float alpha = getRnd() * 2 * PI;
+    float r1 = getRandom();
+    float alpha = getRandom() * 2 * PI;
     float cosbeta = 1.0 - r1 * (1.0 - cosD_S);
     vec3 sampleDir = cosbeta * Y + sqrt(1.0 - cosbeta * cosbeta) * (cos(alpha) * X + sin(alpha) * Z);
 
@@ -223,7 +223,7 @@ vec3 sampleSunlight(vec3 ro, vec3 normal, vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S, v
     } else if (type == Reflection) {
         // Specular 直接光采用原版安全公式
         float IoH_sun = abs(dot(normalize(sampleDir + rd_i), rd_i)) + 1e-6;
-        vec4 rC_sun = rColor(Cs, IoH_sun);
+        vec4 rC_sun = reflectanceColor(Cs, IoH_sun);
         float weightA = GGXpdf(clamp(dot(normalize(sampleDir + rd_i), Y), 0.0, 1.0), 0.0, max(R.x, 1e-6)) * GGX_G2(IoN, abs(OoN), max(R.x, 1e-6));
         sampleColor = weightA * Cs * rC_sun.xyz * S.x / IoH_sun;
     }
@@ -271,7 +271,7 @@ vec3 SampleAliceGuiding(vec3 axis, float kappa, vec2 xi)
 // -----------------------------------------------------------------------------------
 vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     uint isEyeInWater = cam.flags & 3u;
-    uint idx = getIdx(coord);
+    uint idx = getIndex(coord);
 
     bool original_inverse_0 = isEyeInWater != 0;
     bool inverse_0 = original_inverse_0;
@@ -356,8 +356,8 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         }
 
         vec3 microNormal = GGXNormal(normal, surface.R.x, ro_o);
-        float n_i = inverse_0 ? Refractive_Index : 1.0;
-        float n_o = inverse_0 ? 1.0 : Refractive_Index;
+        float n_i = inverse_0 ? REFRACTIVE_INDEX : 1.0;
+        float n_o = inverse_0 ? 1.0 : REFRACTIVE_INDEX;
         float rs = n_i / n_o;
 
         // --- 3. 介质吸收与发光 ---
@@ -378,7 +378,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
         // --- 4. BSDF Lobe 概率与权重 ---
         float F = clamp(fresnel(-rd_i, microNormal, rs), 0.0, 1.0);
-        vec4 rC = rColor(surface.Cs, dot(rd_i, microNormal));
+        vec4 rC = reflectanceColor(surface.Cs, dot(rd_i, microNormal));
 
         float P_spec = clamp(rC.w * surface.S.x, 0.0, 1.0);
         float transmissionSelector = clamp(surface.S.y, 0.0, 1.0);
@@ -391,7 +391,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         vec3 refrLobeWeight = nonSpecColor * transmissionSelector / max(P_refr, 1e-5);
         vec3 diffLobeWeight = nonSpecColor * diffuseSelector / max(P_diff, 1e-5);
 
-        float rnd_lobe = getRnd();
+        float rnd_lobe = getRandom();
         int current_type = -1;
         vec3 next_rd = rd_i;
         vec3 bsdf_weight = vec3(0.0);
@@ -410,7 +410,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             // [折射/透射 Lobe，Fresnel 子事件在条件概率中抵消]
             current_type = Refraction;
 
-            bool chooseTransmission = getRnd() < (1.0 - F);
+            bool chooseTransmission = getRandom() < (1.0 - F);
             if (chooseTransmission) {
                 vec3 refract_dir = refract(rd_i, microNormal, rs);
                 if (dot(refract_dir, refract_dir) > 0.0) {
@@ -441,7 +441,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                         all(lessThanEqual(prev_coord, vec2(1.0)));
 
                 if (validPrev) {
-                    diffuseIllumiantionBufferDataW data0 =
+                    diffuseIlluminationBufferDataW data0 =
                         samplePrevDiffuse(prev_coord * resolution_global);
 
                     vec3 x = data0.data_swap.shY.xyz;
@@ -455,9 +455,9 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                     // 判定 length_x 是否过小，过小则不使用引导采样，这是因为极小值会导致 axis 方向不稳定甚至崩溃，造成后续的采样方向出现 NaN。
                     guideProb = length_x > 1e-8 ? 0.975 * rho : 0.0;
                 }
-                bool useGuide = getRnd() < guideProb;
+                bool useGuide = getRandom() < guideProb;
                 if (useGuide) {
-                    next_rd = SampleAliceGuiding(axis, kappa, vec2(getRnd(), getRnd()));
+                    next_rd = SampleAliceGuiding(axis, kappa, vec2(getRandom(), getRandom()));
                 } else {
                     next_rd = DiffuseNormal(macroNormal, ro_o);
                 }
@@ -539,7 +539,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         // --- 8. Russian Roulette ---
         if (depth >= 2) {
             float p_survive = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05, 0.95);
-            if (getRnd() > p_survive) break;
+            if (getRandom() > p_survive) break;
             throughput /= p_survive;
         }
 
@@ -568,16 +568,16 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     denoiseBuffer.data[idx].rd = first_rd_i;
 
     // RT output: zero-initialize diffuse SH
-    diffuseIllumiantionBuffer.data[idx].rt_shY_xy = 0.0;
-    diffuseIllumiantionBuffer.data[idx].rt_shY_zw = 0.0;
-    diffuseIllumiantionBuffer.data[idx].rt_CoCg = 0.0;
+    diffuseIlluminationBuffer.data[idx].rt_shY_xy = 0.0;
+    diffuseIlluminationBuffer.data[idx].rt_shY_zw = 0.0;
+    diffuseIlluminationBuffer.data[idx].rt_CoCg = 0.0;
 
     vec3 pos_rel = first_p - ro;
-    diffuseIllumiantionBuffer.data[idx].px = pos_rel.x;
-    diffuseIllumiantionBuffer.data[idx].py = pos_rel.y;
-    diffuseIllumiantionBuffer.data[idx].pz = pos_rel.z;
-    diffuseIllumiantionBuffer.data[idx].oct_n = encodeNormal(first_macro_n);
-    diffuseIllumiantionBuffer.data[idx].oct_n2 = encodeNormal(faceforward(first_n, first_n, -first_macro_n));
+    diffuseIlluminationBuffer.data[idx].px = pos_rel.x;
+    diffuseIlluminationBuffer.data[idx].py = pos_rel.y;
+    diffuseIlluminationBuffer.data[idx].pz = pos_rel.z;
+    diffuseIlluminationBuffer.data[idx].oct_n = encodeNormal(first_macro_n);
+    diffuseIlluminationBuffer.data[idx].oct_n2 = encodeNormal(faceforward(first_n, first_n, -first_macro_n));
 
     // 镜面 RT 输出 (SpecularRTElement) 局部累积: pos=主命中点, R=主导方向, vprojdist=虚拟投射距离.
     // 默认 vprojdist=0 → normal=R*0=0 → 虚拟击中点=pos (非镜面像素的安全默认, 与旧 .normal=0 等价).
@@ -599,7 +599,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
         // 折射虚拟投射距离 (有折射概率时; 镜面退化不再特殊处理, 统一走镜面降噪)
         if (mixWeight.y > 0.001) {
-            float rs_refract = first_n_i == Refractive_Index ? Refractive_Index : 1.0 / Refractive_Index;
+            float rs_refract = first_n_i == REFRACTIVE_INDEX ? REFRACTIVE_INDEX : 1.0 / REFRACTIVE_INDEX;
             vec3 refract_rd = refract(first_rd_i, first_n, rs_refract);
             bool is_refract = dot(refract_rd, refract_rd) > 0.0;
             if (!is_refract) refract_rd = reflect(first_rd_i, first_n);
@@ -628,9 +628,9 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             indSH.CoCg += dirSH.CoCg;
             indSH.shY += dirSH.shY;
 
-            diffuseIllumiantionBuffer.data[idx].rt_shY_xy = uintBitsToFloat(packHalf2x16(indSH.shY.xy));
-            diffuseIllumiantionBuffer.data[idx].rt_shY_zw = uintBitsToFloat(packHalf2x16(indSH.shY.zw));
-            diffuseIllumiantionBuffer.data[idx].rt_CoCg = uintBitsToFloat(packHalf2x16(indSH.CoCg));
+            diffuseIlluminationBuffer.data[idx].rt_shY_xy = uintBitsToFloat(packHalf2x16(indSH.shY.xy));
+            diffuseIlluminationBuffer.data[idx].rt_shY_zw = uintBitsToFloat(packHalf2x16(indSH.shY.zw));
+            diffuseIlluminationBuffer.data[idx].rt_CoCg = uintBitsToFloat(packHalf2x16(indSH.CoCg));
             break;
         }
 
@@ -647,21 +647,21 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     }
 
     // 写入镜面 RT 输出 — 仅写当前帧字段, hist_* 保留供 101 读取
-    reflectIllumiantionBuffer.data[idx].px = pos_rel.x;
-    reflectIllumiantionBuffer.data[idx].py = pos_rel.y;
-    reflectIllumiantionBuffer.data[idx].pz = pos_rel.z;
-    reflectIllumiantionBuffer.data[idx].oct_dir = encodeNormal(refl_R);
-    reflectIllumiantionBuffer.data[idx].vprojdist = refl_vprojdist;
-    reflectIllumiantionBuffer.data[idx].color_rg = pack2HalfClamped(refl_color.r, refl_color.g);
-    reflectIllumiantionBuffer.data[idx].color_b  = pack2HalfClamped(refl_color.b, 0.0);
+    reflectIlluminationBuffer.data[idx].px = pos_rel.x;
+    reflectIlluminationBuffer.data[idx].py = pos_rel.y;
+    reflectIlluminationBuffer.data[idx].pz = pos_rel.z;
+    reflectIlluminationBuffer.data[idx].oct_dir = encodeNormal(refl_R);
+    reflectIlluminationBuffer.data[idx].vprojdist = refl_vprojdist;
+    reflectIlluminationBuffer.data[idx].color_rg = pack2HalfClamped(refl_color.r, refl_color.g);
+    reflectIlluminationBuffer.data[idx].color_b  = pack2HalfClamped(refl_color.b, 0.0);
 
-    refractIllumiantionBuffer.data[idx].px = pos_rel.x;
-    refractIllumiantionBuffer.data[idx].py = pos_rel.y;
-    refractIllumiantionBuffer.data[idx].pz = pos_rel.z;
-    refractIllumiantionBuffer.data[idx].oct_dir = encodeNormal(refr_R);
-    refractIllumiantionBuffer.data[idx].vprojdist = refr_vprojdist;
-    refractIllumiantionBuffer.data[idx].color_rg = pack2HalfClamped(refr_color.r, refr_color.g);
-    refractIllumiantionBuffer.data[idx].color_b  = pack2HalfClamped(refr_color.b, 0.0);
+    refractIlluminationBuffer.data[idx].px = pos_rel.x;
+    refractIlluminationBuffer.data[idx].py = pos_rel.y;
+    refractIlluminationBuffer.data[idx].pz = pos_rel.z;
+    refractIlluminationBuffer.data[idx].oct_dir = encodeNormal(refr_R);
+    refractIlluminationBuffer.data[idx].vprojdist = refr_vprojdist;
+    refractIlluminationBuffer.data[idx].color_rg = pack2HalfClamped(refr_color.r, refr_color.g);
+    refractIlluminationBuffer.data[idx].color_b  = pack2HalfClamped(refr_color.b, 0.0);
 
     denoiseBuffer.data[idx].emission = first_emission_val;
 
