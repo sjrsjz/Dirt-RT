@@ -1,0 +1,50 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "/lib/rt/data.glsl"
+#include "/lib/rt/payload.glsl"
+#include "/lib/rt/fragment_info.glsl"
+layout(location = 6) rayPayloadInEXT Payload payload;
+
+hitAttributeEXT vec2 baryCoord;
+
+layout(std430, binding = 0) uniform CameraInfo {
+    vec3 corners[4];
+    mat4 viewInverse;
+    vec3 sunAngle;
+} cam;
+
+layout(binding = 3) uniform sampler2D blockTex;
+
+layout(set = 1, binding = 0) buffer Quads {
+    Quad quads[];
+} geometryBuffers[];
+
+Quad getRayQuad() {
+    return geometryBuffers[nonuniformEXT(gl_InstanceCustomIndexEXT + gl_GeometryIndexEXT)].quads[gl_PrimitiveID >> 1];
+}
+
+void main() {
+    Quad quad = getRayQuad();
+    vec2 uv = getFragmentUV(quad, baryCoord);
+    vec4 texColor = texture(blockTex, uv);
+    if (payload.inside_block) {
+        if (quad.vertices[0].block_id.x == 1000) {
+            payload.shadowTransmission *= exp(-clamp(gl_HitTEXT - payload.prev_distance, 0, 100) * vec3(0.1, 0.03, 0.04));
+        } else {
+            payload.shadowTransmission *= exp(-10 * clamp(gl_HitTEXT - payload.prev_distance, 0, 10) * (1.05 - texColor.rgb) * texColor.a);
+        }
+    }
+    if (texColor.a < 0.1 || quad.vertices[0].block_id.x == payload.ignore_block_id.x || quad.vertices[0].block_id.x == 1000 && payload.ignore_block_id.x != 0) {
+        payload.prev_distance = gl_HitTEXT;
+        payload.inside_block = !payload.inside_block;
+        ignoreIntersectionEXT;
+    }
+}
