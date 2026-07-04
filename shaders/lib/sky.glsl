@@ -97,7 +97,7 @@ vec3 sampleSky(float pos_y, in vec3 n, in vec3 lightDir) {
     c_moon *= abs((exp(-t * n_distance) - exp(-t * m_distance)) / (n.y - moonDir.y)) * max(dot(moonDir, moon_normal), 0.);
     c_moon += MoonStrength * exp(-t * n_distance) * Moon * smoothstep(0.999, 0.9995, dot(n0, moonDir));
 
-    return clamp(c_sun + c_moon, 0., 100000.);
+    return max(c_sun + c_moon, 0.);
 }
 
 // 无日盘天空 — PT pass 非 NEE 光线天空命中用 (太阳能量由 NEE 单独处理)
@@ -137,7 +137,7 @@ vec3 sampleSkyNoSun(float pos_y, in vec3 n, in vec3 lightDir) {
     vec3 c_moon = Moon * g_moon;
     c_moon *= abs((exp(-t * n_distance) - exp(-t * m_distance)) / (n.y - moonDir.y)) * max(dot(moonDir, moon_normal), 0.);
 
-    return clamp(c_sun + c_moon, 0., 100000.);
+    return max(c_sun + c_moon, 0.);
 }
 
 #endif // LIGHT_COLOR_GLSL

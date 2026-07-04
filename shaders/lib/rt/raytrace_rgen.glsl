@@ -196,35 +196,6 @@ vec3 GetSpecularDominantDirection(vec3 N, vec3 V, float R) {
     vec3 R0 = reflect(V, N);
     return normalize(mix(N, R0, f));
 }
-float AliceGuidingPdf(vec3 wi, vec3 axis, float kappa)
-{
-    float k2 = kappa * kappa;
-    float d = 1.0 - kappa * dot(axis, wi);
-    float norm = 3.0 * pow(max(0.0, 1.0 - k2), 3.0)
-            / (4.0 * PI * (3.0 + k2));
-    return norm / max(1e-6, d * d * d * d);
-}
-
-vec3 SampleAliceGuiding(vec3 axis, float kappa, vec2 xi)
-{
-    vec3 T = normalize(cross(abs(axis.y) < 0.99999 ? vec3(0, 1, 0) : vec3(1, 0, 0), axis));
-    vec3 B = cross(axis, T);
-
-    float mu;
-    if (kappa < 1e-4) {
-        mu = 1.0 - 2.0 * xi.x;
-    } else {
-        float a = 1.0 / pow(1.0 + kappa, 3.0);
-        float b = 1.0 / pow(max(1e-4, 1.0 - kappa), 3.0);
-        float invCube = mix(a, b, xi.x);
-        float t = pow(invCube, -1.0 / 3.0);
-        mu = clamp((1.0 - t) / kappa, -1.0, 1.0);
-    }
-
-    float phi = 2.0 * PI * xi.y;
-    float s = sqrt(max(0.0, 1.0 - mu * mu));
-    return normalize(mu * axis + s * (cos(phi) * T + sin(phi) * B));
-}
 
 // -----------------------------------------------------------------------------------
 // 核心：前向路径追踪 (Forward Path Tracing)
@@ -397,8 +368,8 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                     DiffuseIlluminationWriteData data0 =
                         samplePrevDiffuse(prev_coord * resolution_global);
 
-                    vec3 x = data0.data_swap.shY.xyz;
-                    float omega = data0.data_swap.shY.w;
+                    vec3 x = data0.data_swap.aliceY.xyz;
+                    float omega = data0.data_swap.aliceY.w;
 
                     float length_x = max(length(x), 1e-20);
                     omega = max(omega, length_x);
@@ -410,13 +381,13 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                 }
                 bool useGuide = getRandom() < guideProb;
                 if (useGuide) {
-                    next_rd = SampleAliceGuiding(axis, kappa, vec2(getRandom(), getRandom()));
+                    next_rd = sample_alice_guiding(axis, kappa, vec2(getRandom(), getRandom()));
                 } else {
                     next_rd = DiffuseNormal(macroNormal, ro_o);
                 }
                 float NoL = max(0.0, dot(macroNormal, next_rd));
                 float pdfCos = NoL / PI;
-                float pdfAlice = guideProb > 0.0 ? AliceGuidingPdf(next_rd, axis, kappa) : 0.0;
+                float pdfAlice = guideProb > 0.0 ? alice_guiding_pdf(next_rd, axis, kappa) : 0.0;
                 float pdfMix = (1.0 - guideProb) * pdfCos + guideProb * pdfAlice;
                 guideWeight = (NoL > 0.0 && pdfMix > 1e-8) ? (pdfCos / pdfMix) : 0.0;
             } else {
@@ -520,9 +491,9 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     denoiseBuffer.data[idx].absorption = current_absorption;
     denoiseBuffer.data[idx].rd = first_rd_i;
 
-    // RT output: zero-initialize diffuse SH
-    diffuseIlluminationBuffer.data[idx].rt_shY_xy = 0.0;
-    diffuseIlluminationBuffer.data[idx].rt_shY_zw = 0.0;
+    // RT output: zero-initialize diffuse AliceEncoding
+    diffuseIlluminationBuffer.data[idx].rt_aliceY_xy = 0.0;
+    diffuseIlluminationBuffer.data[idx].rt_aliceY_zw = 0.0;
     diffuseIlluminationBuffer.data[idx].rt_CoCg = 0.0;
 
     vec3 pos_rel = first_p - ro;
@@ -575,15 +546,15 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         {
             L_indirect = clamp(L_indirect, 0.0, 10000.0 * div_avgExposure);
 
-            SH indSH = irradiance_to_SH(L_indirect / (first_albedo2 + 1e-3), first_rd_o);
-            SH dirSH = irradiance_to_SH(L_direct_0 / (first_albedo2 + 1e-3), -lightDir);
+            AliceEncoding indAlice = irradiance_to_alice(L_indirect / (first_albedo2 + 1e-3), first_rd_o);
+            AliceEncoding dirAlice = irradiance_to_alice(L_direct_0 / (first_albedo2 + 1e-3), -lightDir);
 
-            indSH.CoCg += dirSH.CoCg;
-            indSH.shY += dirSH.shY;
+            indAlice.CoCg += dirAlice.CoCg;
+            indAlice.aliceY += dirAlice.aliceY;
 
-            diffuseIlluminationBuffer.data[idx].rt_shY_xy = uintBitsToFloat(packHalf2x16(indSH.shY.xy));
-            diffuseIlluminationBuffer.data[idx].rt_shY_zw = uintBitsToFloat(packHalf2x16(indSH.shY.zw));
-            diffuseIlluminationBuffer.data[idx].rt_CoCg = uintBitsToFloat(packHalf2x16(indSH.CoCg));
+            diffuseIlluminationBuffer.data[idx].rt_aliceY_xy = uintBitsToFloat(packHalf2x16(indAlice.aliceY.xy));
+            diffuseIlluminationBuffer.data[idx].rt_aliceY_zw = uintBitsToFloat(packHalf2x16(indAlice.aliceY.zw));
+            diffuseIlluminationBuffer.data[idx].rt_CoCg = uintBitsToFloat(packHalf2x16(indAlice.CoCg));
             break;
         }
 

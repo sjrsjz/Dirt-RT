@@ -91,13 +91,13 @@ vec3 decodeNormal(float f) {
 // ===========================================================================
 // ALICE 光照编码与辐照度重建 (NaCg-Safe, O(1) 闭型逼近)
 // ===========================================================================
-// SH.shY = vec4(v, ω) — 即 ALICE 线性嵌入表示，与 alice_encode 输出兼容
-// SH.CoCg = vec2(Co, Cg) — 色度 (YCoCg 空间)
+// AliceEncoding.aliceY = vec4(v, ω) — 即 ALICE 线性嵌入表示，与 alice_encode 输出兼容
+// AliceEncoding.CoCg = vec2(Co, Cg) — 色度 (YCoCg 空间)
 //
 // 辐照度解码使用 ALICE 最大熵半球余弦投影解析逼近，全域误差 < 0.4%
 
-struct SH {
-    mediump vec4 shY; // ALICE 嵌入: xyz = 方向向量 v, w = 总能量 ω = |v| + I
+struct AliceEncoding {
+    mediump vec4 aliceY; // ALICE 嵌入: xyz = 方向向量 v, w = 总能量 ω = |v| + I
     mediump vec2 CoCg; // (Co, Cg)
 };
 
@@ -105,9 +105,9 @@ struct SH {
 // 编解码与投影核心接口
 // ---------------------------------------------------------------------------
 
-SH irradiance_to_SH(vec3 color, vec3 dir)
+AliceEncoding irradiance_to_alice(vec3 color, vec3 dir)
 {
-    SH result;
+    AliceEncoding result;
 
     float Y = dot(color, vec3(0.2126, 0.7152, 0.0722));
 
@@ -116,24 +116,24 @@ SH irradiance_to_SH(vec3 color, vec3 dir)
 
     result.CoCg = vec2(Co, Cg);
     // ALICE 编码: v = dir*Y, ω = |v| + 0 = Y (单样本 I=0)
-    result.shY = vec4(dir * Y, Y);
+    result.aliceY = vec4(dir * Y, Y);
 
     return result;
 }
 
 // ALICE 辐照度投影 (替代原 SG 模型)
-// sh.shY 即为 ALICE 编码 vec4(v, ω)
+// encoded.aliceY 即为 ALICE 编码 vec4(v, ω)
 // 返回余弦加权漫反射辐照度 RGB
-vec3 project_SH_irradiance(SH sh, vec3 N)
+vec3 project_alice_irradiance(AliceEncoding encoded, vec3 N)
 {
-    float total_omega = sh.shY.w;
+    float total_omega = encoded.aliceY.w;
     
-    float irradiance = alice_irradiance(sh.shY, N);
+    float irradiance = alice_irradiance(encoded.aliceY, N);
 
     float attenuation = (total_omega > 1e-10) ? (irradiance / total_omega) : 0.0;
 
-    float Co = sh.CoCg.x * attenuation;
-    float Cg = sh.CoCg.y * attenuation;
+    float Co = encoded.CoCg.x * attenuation;
+    float Cg = encoded.CoCg.y * attenuation;
 
     float B = irradiance - 1.1404 * Co - 1.4304 * Cg;
     float R = B + 2.0 * Co;
@@ -165,52 +165,52 @@ void unpackDualVector(vec4 packed_, out vec3 dual_theta, out float dual_beta) {
 // ---------------------------------------------------------------------------
 // 基础混合原语
 // ---------------------------------------------------------------------------
-SH mix_SH(SH a, SH b, float s)
+AliceEncoding mix_alice(AliceEncoding a, AliceEncoding b, float s)
 {
-    SH result;
-    result.shY = mix(a.shY, b.shY, s);
+    AliceEncoding result;
+    result.aliceY = mix(a.aliceY, b.aliceY, s);
     result.CoCg = mix(a.CoCg, b.CoCg, s);
     return result;
 }
 
-SH init_SH()
+AliceEncoding init_alice()
 {
-    SH result;
-    result.shY = vec4(0.0);
+    AliceEncoding result;
+    result.aliceY = vec4(0.0);
     result.CoCg = vec2(0.0);
     return result;
 }
 
-SH scaleSH(SH A, float x) {
-    SH tmp;
+AliceEncoding scale_alice(AliceEncoding A, float x) {
+    AliceEncoding tmp;
     tmp.CoCg = A.CoCg * x;
-    tmp.shY = A.shY * x;
+    tmp.aliceY = A.aliceY * x;
     return tmp;
 }
 
-void accumulate_SH(inout SH accum, SH b, float scale)
+void accumulate_alice(inout AliceEncoding accum, AliceEncoding b, float scale)
 {
-    accum.shY += b.shY * scale;
+    accum.aliceY += b.aliceY * scale;
     accum.CoCg += b.CoCg * scale;
 }
 
-// 将 SH 压缩为 3 个 float
-vec3 packSH(SH sh) {
-    // 注意：shY 和 CoCg 可能超出 half 范围（但通常不会），必要时 clamp
-    float s0 = uintBitsToFloat(packHalf2x16(vec2(sh.shY.x, sh.shY.y)));
-    float s1 = uintBitsToFloat(packHalf2x16(vec2(sh.shY.z, sh.shY.w)));
-    float s2 = uintBitsToFloat(packHalf2x16(vec2(sh.CoCg.x, sh.CoCg.y)));
+// 将 AliceEncoding 压缩为 3 个 float
+vec3 packAlice(AliceEncoding encoded) {
+    // 注意：aliceY 和 CoCg 可能超出 half 范围（但通常不会），必要时 clamp
+    float s0 = uintBitsToFloat(packHalf2x16(vec2(encoded.aliceY.x, encoded.aliceY.y)));
+    float s1 = uintBitsToFloat(packHalf2x16(vec2(encoded.aliceY.z, encoded.aliceY.w)));
+    float s2 = uintBitsToFloat(packHalf2x16(vec2(encoded.CoCg.x, encoded.CoCg.y)));
     return vec3(s0, s1, s2);
 }
 
-SH unpackSH(float s0, float s1, float s2) {
-    SH sh;
+AliceEncoding unpackAlice(float s0, float s1, float s2) {
+    AliceEncoding encoded;
     vec2 v0 = unpackHalf2x16(floatBitsToUint(s0));
     vec2 v1 = unpackHalf2x16(floatBitsToUint(s1));
     vec2 v2 = unpackHalf2x16(floatBitsToUint(s2));
-    sh.shY = vec4(v0.x, v0.y, v1.x, v1.y);
-    sh.CoCg = v2;
-    return sh;
+    encoded.aliceY = vec4(v0.x, v0.y, v1.x, v1.y);
+    encoded.CoCg = v2;
+    return encoded;
 }
 
 // 镜面降噪纹理打包 (colortex3 + colortex4)
@@ -253,8 +253,8 @@ void unpackSpecularSample(PackedLightSample s,
 }
 
 struct diffuseIlluminationData {
-    SH data;
-    SH data_swap;
+    AliceEncoding data;
+    AliceEncoding data_swap;
     vec3 pos;
     lowp vec3 normal;
     lowp vec3 normal2;
@@ -275,17 +275,17 @@ struct diffuseIlluminationData {
 //     MUST be separate from px/py/pz because ray0.rgen overwrites those each frame.
 // ===========================================================================
 struct UnifiedDiffuseElement {
-    // --- RT output (ray0.rgen writes, 100.glsl reads) — half-packed SH: 12B ---
-    float rt_shY_xy, rt_shY_zw, rt_CoCg;
+    // --- RT output (ray0.rgen writes, 100.glsl reads) — half-packed AliceEncoding: 12B ---
+    float rt_aliceY_xy, rt_aliceY_zw, rt_CoCg;
     // --- Current geometry: pos.xyz + oct(normal) + oct(normal2) — 20B ---
     float px, py, pz, oct_n;    // position + oct-encoded current normal
     float oct_n2;                // oct-encoded normal2
     // --- History geometry: pos.xyz + oct(normal) — 16B ---
     float hist_px, hist_py, hist_pz, hist_oct_n;
     // --- Temporal history prev frame (swap3 writes, 100.glsl reads): 14B ---
-    float hist_shY_xy, hist_shY_zw, hist_CoCg, hist_weight;
+    float hist_aliceY_xy, hist_aliceY_zw, hist_CoCg, hist_weight;
     // --- Temporal history swap frame (100.glsl/swap3 write, swap2/fog read): 14B ---
-    float swap_shY_xy, swap_shY_zw, swap_CoCg, swap_weight;
+    float swap_aliceY_xy, swap_aliceY_zw, swap_CoCg, swap_weight;
 };  // 18 floats = 72 bytes (was 80 with variance)
 
 layout(std430, set = 3, binding = 2) buffer DiffuseBuffer {
@@ -295,7 +295,7 @@ layout(std430, set = 3, binding = 2) buffer DiffuseBuffer {
 // Keep old struct types for function interfaces (unpacked representation).
 // DiffuseIlluminationWriteData is still returned by fetchPrevDiffuse/samplePrevDiffuse.
 struct DiffuseIlluminationWriteData {
-    SH data_swap;
+    AliceEncoding data_swap;
     vec3 pos;
     lowp vec3 normal;
     lowp vec3 normal2;
@@ -307,9 +307,9 @@ struct DiffuseIlluminationWriteData {
 DiffuseIlluminationWriteData loadDiffuseInput(uint idx) {
     UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[idx];
     DiffuseIlluminationWriteData t;
-    mediump vec2 shY_xy = unpackHalf2x16(floatBitsToUint(e.rt_shY_xy));
-    mediump vec2 shY_zw = unpackHalf2x16(floatBitsToUint(e.rt_shY_zw));
-    t.data_swap.shY = clamp(vec4(shY_xy, shY_zw), vec4(-10000), vec4(10000));
+    mediump vec2 aliceY_xy = unpackHalf2x16(floatBitsToUint(e.rt_aliceY_xy));
+    mediump vec2 aliceY_zw = unpackHalf2x16(floatBitsToUint(e.rt_aliceY_zw));
+    t.data_swap.aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-10000), vec4(10000));
     t.data_swap.CoCg = unpackHalf2x16(floatBitsToUint(e.rt_CoCg));
     t.pos = vec3(e.px, e.py, e.pz);
     t.normal = decodeNormal(e.oct_n);
@@ -398,15 +398,15 @@ layout(std430, set = 3, binding = 4) buffer RefractIlluminationDataBuffer {
 
 #if defined(PREV_DIFFUSE_BUFFER)
 
-// Read previous frame's accumulated SH for ray guiding (ray0.rgen).
-// Only data_swap.shY fields are used by the caller; the rest are filled with
+// Read previous frame's accumulated AliceEncoding for ray guiding (ray0.rgen).
+// Only data_swap.aliceY fields are used by the caller; the rest are filled with
 // best-effort values from the history SSBO.
 DiffuseIlluminationWriteData fetchPrevDiffuse(ivec2 p) {
     UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[getIndex(p)];
     DiffuseIlluminationWriteData t;
-    mediump vec2 shY_xy = unpackHalf2x16(floatBitsToUint(e.swap_shY_xy));
-    mediump vec2 shY_zw = unpackHalf2x16(floatBitsToUint(e.swap_shY_zw));
-    t.data_swap.shY = clamp(vec4(shY_xy, shY_zw), vec4(-10000), vec4(10000));
+    mediump vec2 aliceY_xy = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_xy));
+    mediump vec2 aliceY_zw = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_zw));
+    t.data_swap.aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-10000), vec4(10000));
     t.data_swap.CoCg = unpackHalf2x16(floatBitsToUint(e.swap_CoCg));
     t.pos = vec3(e.px, e.py, e.pz);
     t.normal = decodeNormal(e.oct_n);
@@ -417,7 +417,7 @@ DiffuseIlluminationWriteData fetchPrevDiffuse(ivec2 p) {
 
 DiffuseIlluminationWriteData blendPrevDiffuse(DiffuseIlluminationWriteData A, DiffuseIlluminationWriteData B, float x) {
     DiffuseIlluminationWriteData t;
-    t.data_swap = mix_SH(A.data_swap, B.data_swap, x);
+    t.data_swap = mix_alice(A.data_swap, B.data_swap, x);
     t.pos = mix(A.pos, B.pos, x);
     t.normal = normalize(mix(A.normal, B.normal, x));
     t.weight = mix(A.weight, B.weight, x);
@@ -436,8 +436,8 @@ DiffuseIlluminationWriteData samplePrevDiffuse(vec2 p) {
 
 void WritePrevDiffuse(DiffuseIlluminationWriteData data, ivec2 p) {
     uint idx = getIndex(p);
-    diffuseIlluminationBuffer.data[idx].swap_shY_xy = uintBitsToFloat(packHalf2x16(data.data_swap.shY.xy));
-    diffuseIlluminationBuffer.data[idx].swap_shY_zw = uintBitsToFloat(packHalf2x16(data.data_swap.shY.zw));
+    diffuseIlluminationBuffer.data[idx].swap_aliceY_xy = uintBitsToFloat(packHalf2x16(data.data_swap.aliceY.xy));
+    diffuseIlluminationBuffer.data[idx].swap_aliceY_zw = uintBitsToFloat(packHalf2x16(data.data_swap.aliceY.zw));
     diffuseIlluminationBuffer.data[idx].swap_CoCg   = uintBitsToFloat(packHalf2x16(data.data_swap.CoCg));
     diffuseIlluminationBuffer.data[idx].swap_weight = data.weight;
 }
@@ -453,17 +453,17 @@ diffuseIlluminationData fetchDiffuse(ivec2 p) {
     UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[getIndex(p)];
 
     // Unpack current frame (swap)
-    mediump vec2 shY_xy = unpackHalf2x16(floatBitsToUint(e.swap_shY_xy));
-    mediump vec2 shY_zw = unpackHalf2x16(floatBitsToUint(e.swap_shY_zw));
-    tmp.data_swap.shY = clamp(vec4(shY_xy, shY_zw), vec4(-10000), vec4(10000));
+    mediump vec2 aliceY_xy = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_xy));
+    mediump vec2 aliceY_zw = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_zw));
+    tmp.data_swap.aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-10000), vec4(10000));
     tmp.data_swap.CoCg = unpackHalf2x16(floatBitsToUint(e.swap_CoCg));
     tmp.weight = e.swap_weight;
 
     #ifndef DIFFUSE_BUFFER_MIN2
     // Unpack previous frame (hist)
-    shY_xy = unpackHalf2x16(floatBitsToUint(e.hist_shY_xy));
-    shY_zw = unpackHalf2x16(floatBitsToUint(e.hist_shY_zw));
-    tmp.data.shY = clamp(vec4(shY_xy, shY_zw), vec4(-10000), vec4(10000));
+    aliceY_xy = unpackHalf2x16(floatBitsToUint(e.hist_aliceY_xy));
+    aliceY_zw = unpackHalf2x16(floatBitsToUint(e.hist_aliceY_zw));
+    tmp.data.aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-10000), vec4(10000));
     tmp.data.CoCg = unpackHalf2x16(floatBitsToUint(e.hist_CoCg));
     tmp.prev_weight = e.hist_weight;
 
@@ -475,10 +475,10 @@ diffuseIlluminationData fetchDiffuse(ivec2 p) {
 
 diffuseIlluminationData blendDiffuse(diffuseIlluminationData A, diffuseIlluminationData B, float x) {
     diffuseIlluminationData t;
-    t.data_swap = mix_SH(A.data_swap, B.data_swap, x);
+    t.data_swap = mix_alice(A.data_swap, B.data_swap, x);
     t.weight = (B.weight - A.weight) * x + A.weight;
     #ifndef DIFFUSE_BUFFER_MIN2
-    t.data = mix_SH(A.data, B.data, x);
+    t.data = mix_alice(A.data, B.data, x);
     t.pos = mix(A.pos, B.pos, x);
     t.normal = mix(A.normal, B.normal, x);
     t.prev_weight = (B.prev_weight - A.prev_weight) * x + A.prev_weight;
@@ -509,19 +509,19 @@ void WriteDiffuse(diffuseIlluminationData data, ivec2 p) {
     // Always write swap (current frame)
     data.weight = clamp(data.weight, 0.0, 65504);
 
-    diffuseIlluminationBuffer.data[idx].swap_shY_xy = uintBitsToFloat(packHalf2x16(data.data_swap.shY.xy));
-    diffuseIlluminationBuffer.data[idx].swap_shY_zw = uintBitsToFloat(packHalf2x16(data.data_swap.shY.zw));
+    diffuseIlluminationBuffer.data[idx].swap_aliceY_xy = uintBitsToFloat(packHalf2x16(data.data_swap.aliceY.xy));
+    diffuseIlluminationBuffer.data[idx].swap_aliceY_zw = uintBitsToFloat(packHalf2x16(data.data_swap.aliceY.zw));
     diffuseIlluminationBuffer.data[idx].swap_CoCg   = uintBitsToFloat(packHalf2x16(data.data_swap.CoCg));
     diffuseIlluminationBuffer.data[idx].swap_weight = data.weight;
 
     #if !defined(DIFFUSE_BUFFER_MIN) && !defined(DIFFUSE_BUFFER_MIN2)
     // Full write: also update hist (history) and geometry
-    data.data.shY = clamp(data.data.shY, vec4(-65504), vec4(65504));
+    data.data.aliceY = clamp(data.data.aliceY, vec4(-65504), vec4(65504));
     data.data.CoCg = clamp(data.data.CoCg, vec2(-65504), vec2(65504));
     data.prev_weight = clamp(data.prev_weight, 0.0, 65504);
 
-    diffuseIlluminationBuffer.data[idx].hist_shY_xy = uintBitsToFloat(packHalf2x16(data.data.shY.xy));
-    diffuseIlluminationBuffer.data[idx].hist_shY_zw = uintBitsToFloat(packHalf2x16(data.data.shY.zw));
+    diffuseIlluminationBuffer.data[idx].hist_aliceY_xy = uintBitsToFloat(packHalf2x16(data.data.aliceY.xy));
+    diffuseIlluminationBuffer.data[idx].hist_aliceY_zw = uintBitsToFloat(packHalf2x16(data.data.aliceY.zw));
     diffuseIlluminationBuffer.data[idx].hist_CoCg   = uintBitsToFloat(packHalf2x16(data.data.CoCg));
     diffuseIlluminationBuffer.data[idx].hist_weight = data.prev_weight;
 

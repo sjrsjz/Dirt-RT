@@ -286,4 +286,40 @@ float alice_total_energy(vec4 encoded) {
 vec3 alice_direction(vec4 encoded) {
     return encoded.xyz;
 }
+
+// ------------------------------------------------------------
+// ALICE 指导采样权重
+// ------------------------------------------------------------
+float alice_guiding_pdf(vec3 wi, vec3 axis, float kappa)
+{
+    float k2 = kappa * kappa;
+    float d = 1.0 - kappa * dot(axis, wi);
+    float norm = 3.0 * pow(max(0.0, 1.0 - k2), 3.0)
+            / (4.0 * PI * (3.0 + k2));
+    return norm / max(1e-6, d * d * d * d);
+}
+
+// ------------------------------------------------------------
+// ALICE 指导采样
+// ------------------------------------------------------------
+vec3 sample_alice_guiding(vec3 axis, float kappa, vec2 xi)
+{
+    vec3 T = normalize(cross(abs(axis.y) < 0.99999 ? vec3(0, 1, 0) : vec3(1, 0, 0), axis));
+    vec3 B = cross(axis, T);
+
+    float mu;
+    if (kappa < 1e-4) {
+        mu = 1.0 - 2.0 * xi.x;
+    } else {
+        float a = 1.0 / pow(1.0 + kappa, 3.0);
+        float b = 1.0 / pow(max(1e-4, 1.0 - kappa), 3.0);
+        float invCube = mix(a, b, xi.x);
+        float t = pow(invCube, -1.0 / 3.0);
+        mu = clamp((1.0 - t) / kappa, -1.0, 1.0);
+    }
+
+    float phi = 2.0 * PI * xi.y;
+    float s = sqrt(max(0.0, 1.0 - mu * mu));
+    return mu * axis + s * (cos(phi) * T + sin(phi) * B);
+}
 #endif // ALICE_GLSL

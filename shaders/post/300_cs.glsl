@@ -42,7 +42,7 @@ layout(local_size_x = 16, local_size_y = 16) in;
 // colortex3: 几何信息 (worldPos.xyz + encodedNormal)
 uniform sampler2D colortex3;
 
-// colortex4: 光照样本 (ALICE SH + variance)
+// colortex4: 光照样本 (AliceEncoding + variance)
 // 注意: colortex 自动双缓冲 — sampler 读取的是上一 pass 的输出, 不会产生 RAW 冲突
 uniform sampler2D colortex4;
 
@@ -64,12 +64,12 @@ shared vec4 sm_light[TILE_AREA];
 // 辅助函数 — 从共享内存解包光照样本 (与 300.glsl unpackLightSample 语义一致)
 // ===========================================================================
 
-void unpackLightSampleSM(uint tile_idx, out vec3 pos, out vec3 normal, out SH sh, out float variance) {
+void unpackLightSampleSM(uint tile_idx, out vec3 pos, out vec3 normal, out AliceEncoding encoded, out float variance) {
     vec4 geom = sm_geometry[tile_idx];
     vec4 light = sm_light[tile_idx];
     pos = geom.xyz;
     normal = decodeNormal(geom.w);
-    sh = unpackSH(light.x, light.y, light.z);
+    encoded = unpackAlice(light.x, light.y, light.z);
     variance = light.w;
 }
 
@@ -133,13 +133,13 @@ void main() {
 
     // ---- 解包中心像素 ------------------------------------------------------
     vec3 center_pos, center_normal;
-    SH center_sh;
+    AliceEncoding center_alice;
     float center_var_est;
-    unpackLightSampleSM(center_idx, center_pos, center_normal, center_sh, center_var_est);
+    unpackLightSampleSM(center_idx, center_pos, center_normal, center_alice, center_var_est);
 
     #if ENABLE_GAUSSIAN_FILTER == 1
-    float geomValid = float(center_sh.shY.w >= 0.0);
-    center_sh.shY.w = abs(center_sh.shY.w);
+    float geomValid = float(center_alice.aliceY.w >= 0.0);
+    center_alice.aliceY.w = abs(center_alice.aliceY.w);
     #else
     float geomValid = 1.0;
     #endif
@@ -151,7 +151,7 @@ void main() {
     // ---- 初始化累积器 (中心像素权重 = 1) -----------------------------------
     float sumWeight = 1.0;
     float sumVarEnergy = center_var_est;
-    SH accumulatedSH = center_sh;
+    AliceEncoding accumAlice = center_alice;
 
     // B‑样条权重核 (中心 1.0, 十字 0.66667)
     float hw[2] = float[](1.0, 0.66667);
@@ -183,11 +183,11 @@ void main() {
 
             // ---- 解包邻域样本 (共享内存读取) ------------------------------
             vec3 sample_world_pos, sample_normal;
-            SH sample_sh;
+            AliceEncoding sample_alice;
             float sample_var_est;
-            unpackLightSampleSM(sample_idx, sample_world_pos, sample_normal, sample_sh, sample_var_est);
+            unpackLightSampleSM(sample_idx, sample_world_pos, sample_normal, sample_alice, sample_var_est);
 
-            sample_sh.shY.w = abs(sample_sh.shY.w);
+            sample_alice.aliceY.w = abs(sample_alice.aliceY.w);
 
             vec3 delta = (sample_world_pos - center_pos) * inv_pixel_footprint;
             float depthTerm = abs(dot(delta, center_normal));
@@ -196,27 +196,27 @@ void main() {
             float w_geometry = raw_geom;
 
             // ---- 亮度权重 -------------------------------------------------
-            float delta_energy = length(center_sh.shY.xyz - sample_sh.shY.xyz);
+            float delta_energy = length(center_alice.aliceY.xyz - sample_alice.aliceY.xyz);
             float w_luma = delta_energy * inv_sqrt_sigma2;
 
             // ---- 组合权重 -------------------------------------------------
             float w0 = w_kernel * (1.0 + w_luma) * exp2(-(w_geometry + w_luma) * LOG2_E);
 
             // ---- 累积加权样本 ---------------------------------------------
-            accumulate_SH(accumulatedSH, sample_sh, w0);
+            accumulate_alice(accumAlice, sample_alice, w0);
             sumWeight += w0;
             sumVarEnergy += w0 * w0 * sample_var_est;
         }
     }
 
     float inv_sumWeight = 1.0 / sumWeight;
-    accumulatedSH = scaleSH(accumulatedSH, inv_sumWeight);
+    accumAlice = scale_alice(accumAlice, inv_sumWeight);
     #if ENABLE_GAUSSIAN_FILTER == 1
     #ifndef FINAL_DENOISE_PASS
-    accumulatedSH.shY.w *= (2.0 * geomValid - 1.0);
+    accumAlice.aliceY.w *= (2.0 * geomValid - 1.0);
     #endif
     #endif
     float varEnergyOut = sumVarEnergy * inv_sumWeight * inv_sumWeight;
 
-    imageStore(colorimg4, pix, vec4(packSH(accumulatedSH), varEnergyOut));
+    imageStore(colorimg4, pix, vec4(packAlice(accumAlice), varEnergyOut));
 }

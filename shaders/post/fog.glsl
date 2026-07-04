@@ -6,7 +6,7 @@
 // 这是管线末端的合成 pass，负责将各光照分量合成为最终像素颜色。
 //
 // 输入分量:
-//   - diffuse  SH 辐照度 → project_SH_irradiance() 解码为 RGB × albedo2
+//   - diffuse  AliceEncoding 辐照度 → project_alice_irradiance() 解码为 RGB × albedo2
 //   - refract  折射颜色 → 直接加到漫反射上
 //   - reflect  反射颜色 → × albedo (金属/镜面度)
 //   - light    直接光照 → 直接加入
@@ -45,8 +45,8 @@ void main() {
         fragColor.xyz = data.absorption * sampleSky(camPos.y, data.rd, -lightDir_global) + data.emission;
 
         // 重置漫反射历史 (避免天空像素使用上一帧地面数据)
-        diffuseIlluminationBuffer.data[idx].rt_shY_xy = 0.0;
-        diffuseIlluminationBuffer.data[idx].rt_shY_zw = 0.0;
+        diffuseIlluminationBuffer.data[idx].rt_aliceY_xy = 0.0;
+        diffuseIlluminationBuffer.data[idx].rt_aliceY_zw = 0.0;
         diffuseIlluminationBuffer.data[idx].rt_CoCg = 0.0;
     }
     // =========================================================================
@@ -62,7 +62,7 @@ void main() {
 
         // 保存当前漫反射数据到历史缓冲区 (供下一帧 100.glsl 使用)
         // Temporal history now lives in unified diffuseIlluminationBuffer (binding 2).
-        // swap3 already wrote the final filtered SH + weight to the swap fields;
+        // swap3 already wrote the final filtered AliceEncoding + weight to the swap fields;
         // ray0.rgen reads from there via samplePrevDiffuse. No additional write needed.
 
         // ---- 最终颜色合成 --------------------------------------------------
@@ -76,16 +76,16 @@ void main() {
         // albedo2: 漫反射/折射反照率 (非金属分量)
         // albedo:  镜面反射反照率 (金属/镜面分量)
         fragColor.xyz = data.absorption
-                * ((project_SH_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2))
+                * ((project_alice_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2))
                     + tmp3.data_swap) * data.albedo2
                     + tmp2.data_swap
                     + data.light)
                 + data.emission;
         // // 调试输出: 直接输出各分量的线性组合，验证时域累积效果
-        // fragColor.xyz = project_SH_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2));
+        fragColor.xyz = project_alice_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2));
         // fragColor.xyz = tmp2.data_swap * data.albedo;
-        // fragColor.xyz = normalize(abs(tmp.data_swap.shY.xyz));
-        // fragColor.xyz = vec3(alice_estimator_variance(tmp.data_swap.shY, tmp.weight));
+        // fragColor.xyz = normalize(abs(tmp.data_swap.aliceY.xyz));
+        // fragColor.xyz = vec3(alice_estimator_variance(tmp.data_swap.aliceY, tmp.weight));
         // fragColor.xyz = vec3(tmp.weight);
     }
 }

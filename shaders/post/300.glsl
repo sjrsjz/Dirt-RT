@@ -55,12 +55,12 @@ layout(location = 1) out mediump vec4 out_light_sample_blurred; // 压缩光照�
 // 辅助函数
 // ---------------------------------------------------------------------------
 
-void unpackLightSample(ivec2 coord, out vec3 pos, out vec3 normal, out SH sh, out float variance) {
+void unpackLightSample(ivec2 coord, out vec3 pos, out vec3 normal, out AliceEncoding encoded, out float variance) {
     vec4 sample_data0 = texelFetch(colortex3, coord, 0); // 几何信息
     vec4 sample_data1 = texelFetch(colortex4, coord, 0); // 光照样本信息
     pos = sample_data0.xyz;
     normal = decodeNormal(sample_data0.w);
-    sh = unpackSH(sample_data1.x, sample_data1.y, sample_data1.z);
+    encoded = unpackAlice(sample_data1.x, sample_data1.y, sample_data1.z);
     variance = sample_data1.w;
 }
 
@@ -76,17 +76,17 @@ void main() {
     ivec2 pix = ivec2(gl_FragCoord.xy);
 
     vec3 center_pos, center_normal;
-    SH center_sh;
+    AliceEncoding center_alice;
     float center_var_est;
-    unpackLightSample(pix, center_pos, center_normal, center_sh, center_var_est);
+    unpackLightSample(pix, center_pos, center_normal, center_alice, center_var_est);
 
     // 跳过天空像素 — 方差被 swap2 复用作天空 mask
     if (center_var_est < 0.0) return;
 
     // 高斯曲率标记: omega < 0 → 几何不可靠, geomValid=0 跳过几何权重
     #if ENABLE_GAUSSIAN_FILTER == 1
-    float geomValid = float(center_sh.shY.w >= 0.0);
-    center_sh.shY.w = abs(center_sh.shY.w);
+    float geomValid = float(center_alice.aliceY.w >= 0.0);
+    center_alice.aliceY.w = abs(center_alice.aliceY.w);
     #else
     float geomValid = 1.0;
     #endif
@@ -98,7 +98,7 @@ void main() {
     // ---- 初始化累积器 ----------------------------------------------------
     float sumWeight = 1.0; // 总权重（中心像素初始权重=1）
     float sumVarEnergy = center_var_est; // 中心权重 a0 = 1，所以 a0^2 * var = var
-    SH accumulatedSH = center_sh; // 加权和，最后除以 sumWeight 得到平均
+    AliceEncoding accumAlice = center_alice; // 加权和，最后除以 sumWeight 得到平均
 
     #if STEP >= 4
     // ---- 抖动旋转 ---------------------------------------------------------
@@ -109,7 +109,7 @@ void main() {
     // B‑样条权重核（中心 1.0, 十字 0.66667）
     float hw[2] = float[](1.0, 0.66667);
 
-    SH sample_sh;
+    AliceEncoding sample_alice;
     vec3 sample_world_pos, sample_normal;
     ivec2 sample_coord;
 
@@ -135,13 +135,13 @@ void main() {
             float w_kernel = hw[abs(i)] * hw[abs(j)];
 
             float sample_var_est;
-            unpackLightSample(sample_coord, sample_world_pos, sample_normal, sample_sh, sample_var_est);
+            unpackLightSample(sample_coord, sample_world_pos, sample_normal, sample_alice, sample_var_est);
 
             // 天空检查 — 方差被 swap2 复用作天空 mask (负值 = 天空)
             if (sample_var_est < 0.0) continue;
 
             // 曲率标记: 仅中心点决定几何权重有效性
-            sample_sh.shY.w = abs(sample_sh.shY.w);
+            sample_alice.aliceY.w = abs(sample_alice.aliceY.w);
 
             vec3 delta = (sample_world_pos - center_pos) * inv_pixel_footprint;
             float depthTerm = abs(dot(delta, center_normal));
@@ -153,14 +153,14 @@ void main() {
             // 但是在使用了方差预滤波后，sample_var_est 的修正作用已经减弱，并且会带来极其严重的频闪副作用，因此这里直接使用 center_var_est 作为亮度权重的方差估计值
             // float sigma2 = max(center_var_est + sample_var_est, 1e-8);
 
-            float delta_energy = length(center_sh.shY.xyz - sample_sh.shY.xyz);
+            float delta_energy = length(center_alice.aliceY.xyz - sample_alice.aliceY.xyz);
             float w_luma = delta_energy * inv_sqrt_sigma2;
 
             // ---- 组合权重 -------------------------------------------------
             float w0 = w_kernel * (1 + w_luma) * exp2(-(w_geometry + w_luma) * LOG2_E);
 
             // ---- 累积加权样本 ---------------------------------------------
-            accumulate_SH(accumulatedSH, sample_sh, w0);
+            accumulate_alice(accumAlice, sample_alice, w0);
             sumWeight += w0;
             // 方差传播
             sumVarEnergy += w0 * w0 * sample_var_est;
@@ -170,18 +170,18 @@ void main() {
     float inv_sumWeight = 1.0 / sumWeight;
 
     // ---- 归一化并输出 ----------------------------------------------------
-    accumulatedSH = scaleSH(accumulatedSH, inv_sumWeight);
+    accumAlice = scale_alice(accumAlice, inv_sumWeight);
     // 传递几何有效性 mask 到下一级 à-trous (最终 pass 不传递)
     #if ENABLE_GAUSSIAN_FILTER == 1
     #ifndef FINAL_DENOISE_PASS
-    accumulatedSH.shY.w *= (2.0 * geomValid - 1.0);
+    accumAlice.aliceY.w *= (2.0 * geomValid - 1.0);
     #endif
     #endif
     float varEnergyOut = sumVarEnergy * inv_sumWeight * inv_sumWeight;
-    out_light_sample = vec4(packSH(accumulatedSH), varEnergyOut);
+    out_light_sample = vec4(packAlice(accumAlice), varEnergyOut);
 
     #if STEP == 6
     // --- 输出模糊后的结果（仅在最后一步） ------------------------------------
-    out_light_sample_blurred = vec4(packSH(accumulatedSH), 0.0);
+    out_light_sample_blurred = vec4(packAlice(accumAlice), 0.0);
     #endif
 }

@@ -6,7 +6,7 @@
 // 16x16 workgroups + 2px halo = 20x20 shared memory tile
 // Precomputed raw ALICE variance loaded into shared memory
 // 5x5 geometry-aware bilateral variance filter
-// imageStore output to colorimg3 (geometry) and colorimg4 (SH+variance)
+// imageStore output to colorimg3 (geometry) and colorimg4 (AliceEncoding+variance)
 
 layout(local_size_x = 16, local_size_y = 16) in;
 #define DIFFUSE_BUFFER
@@ -44,16 +44,16 @@ struct TileSample {
     float px, py, pz;
     float oct_n;
     float rawVar;
-    float omega; // shY.w = total ALICE energy, for 3-sigma clamping
+    float omega; // aliceY.w = total ALICE energy, for 3-sigma clamping
 };
 shared TileSample sm_tile[SM_H][SM_W];
 
 // --- Helpers ---
 
-SH sanitizeSH(SH sh) {
-    if (any(isnan(sh.shY)) || any(isinf(sh.shY))) sh.shY = vec4(0.0);
-    if (any(isnan(sh.CoCg)) || any(isinf(sh.CoCg))) sh.CoCg = vec2(0.0);
-    return sh;
+AliceEncoding sanitizeAlice(AliceEncoding encoded) {
+    if (any(isnan(encoded.aliceY)) || any(isinf(encoded.aliceY))) encoded.aliceY = vec4(0.0);
+    if (any(isnan(encoded.CoCg)) || any(isinf(encoded.CoCg))) encoded.CoCg = vec2(0.0);
+    return encoded;
 }
 
 float sanitizeVariance(float v) {
@@ -61,21 +61,21 @@ float sanitizeVariance(float v) {
     return max(v, 0.0);
 }
 
-// Unpack swap SH + weight from unified SSBO, return raw ALICE variance and omega.
+// Unpack swap AliceEncoding + weight from unified SSBO, return raw ALICE variance and omega.
 float computeRawVariance(uint idx, out float outOmega) {
     UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[idx];
 
-    mediump vec2 shY_xy = unpackHalf2x16(floatBitsToUint(e.swap_shY_xy));
-    mediump vec2 shY_zw = unpackHalf2x16(floatBitsToUint(e.swap_shY_zw));
+    mediump vec2 aliceY_xy = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_xy));
+    mediump vec2 aliceY_zw = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_zw));
 
-    vec4 shY = clamp(vec4(shY_xy, shY_zw), vec4(-10000), vec4(10000));
+    vec4 aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-10000), vec4(10000));
     float weight = e.swap_weight;
 
-    if (any(isnan(shY)) || any(isinf(shY))) shY = vec4(0.0);
+    if (any(isnan(aliceY)) || any(isinf(aliceY))) aliceY = vec4(0.0);
     if (isnan(weight) || isinf(weight)) weight = 0.0;
 
-    outOmega = shY.w;
-    return sanitizeVariance(alice_estimator_variance(shY, max(weight, 1.0)));
+    outOmega = aliceY.w;
+    return sanitizeVariance(alice_estimator_variance(aliceY, max(weight, 1.0)));
 }
 
 float varianceGeometryWeight(
@@ -151,22 +151,22 @@ void main() {
     }
 
     // =========================================================================
-    // Phase 3: Unpack center SH, apply 3-sigma energy clamp on outSH
+    // Phase 3: Unpack center AliceEncoding, apply 3-sigma energy clamp on outAlice
     // =========================================================================
     uint idx = getIndex(uvec2(clamp(ivec2(gid), ivec2(0), texSize - ivec2(1))));
     UnifiedDiffuseElement ce = diffuseIlluminationBuffer.data[idx];
-    mediump vec2 c_shY_xy = unpackHalf2x16(floatBitsToUint(ce.swap_shY_xy));
-    mediump vec2 c_shY_zw = unpackHalf2x16(floatBitsToUint(ce.swap_shY_zw));
+    mediump vec2 c_aliceY_xy = unpackHalf2x16(floatBitsToUint(ce.swap_aliceY_xy));
+    mediump vec2 c_aliceY_zw = unpackHalf2x16(floatBitsToUint(ce.swap_aliceY_zw));
     mediump vec2 c_CoCg = unpackHalf2x16(floatBitsToUint(ce.swap_CoCg));
     float cWeight = ce.swap_weight;
 
-    SH outSH;
-    outSH.shY = vec4(c_shY_xy, c_shY_zw);
-    outSH.CoCg = c_CoCg;
-    outSH = sanitizeSH(outSH);
+    AliceEncoding outAlice;
+    outAlice.aliceY = vec4(c_aliceY_xy, c_aliceY_zw);
+    outAlice.CoCg = c_CoCg;
+    outAlice = sanitizeAlice(outAlice);
 
-    // --- 3-sigma energy clamp on output SH ---
-    // Compute neighborhood mean & sigma of ω, clamp center outSH if outlier.
+    // --- 3-sigma energy clamp on output AliceEncoding ---
+    // Compute neighborhood mean & sigma of ω, clamp center outAlice if outlier.
     vec3 centerPos = vec3(centerTile.px, centerTile.py, centerTile.pz);
     vec3 centerNormal = decodeNormal(centerTile.oct_n);
 
@@ -198,16 +198,16 @@ void main() {
     float varOmega = (sumStatW > 1e-8) ? max(sumOmega2 / sumStatW - meanOmega * meanOmega, 0.0) : 0.0;
     float sigmaOmega = sqrt(varOmega);
 
-    // Clamp center SH energy to [μ-3σ, μ+3σ]; scale full shY + CoCg by r.
+    // Clamp center AliceEncoding energy to [μ-3σ, μ+3σ]; scale full aliceY + CoCg by r.
     // Preserves ρ=|v|/ω and cone constraint ω≥|v|.
-    float centerOmega = outSH.shY.w;
+    float centerOmega = outAlice.aliceY.w;
     float omegaClamped = clamp(centerOmega, meanOmega - 3.0 * sigmaOmega, meanOmega + 3.0 * sigmaOmega);
-    float shY_scale = omegaClamped / max(centerOmega, 1e-8);
-    outSH.shY *= shY_scale;
-    outSH.CoCg *= shY_scale;
+    float aliceY_scale = omegaClamped / max(centerOmega, 1e-8);
+    outAlice.aliceY *= aliceY_scale;
+    outAlice.CoCg *= aliceY_scale;
 
     float centerVariance = sanitizeVariance(
-            alice_estimator_variance(outSH.shY, max(cWeight, 1.0))
+            alice_estimator_variance(outAlice.aliceY, max(cWeight, 1.0))
         );
 
     // =========================================================================
@@ -277,7 +277,7 @@ void main() {
 
         // 分支无关: 曲率超阈值 → omega 取负 (标记跳过几何权重)
         float kMask = float(abs(K) > CURVATURE_THRESHOLD);
-        outSH.shY.w = abs(outSH.shY.w) * (1.0 - 2.0 * kMask);
+        outAlice.aliceY.w = abs(outAlice.aliceY.w) * (1.0 - 2.0 * kMask);
     }
     #endif // ENABLE_GAUSSIAN_FILTER
 
@@ -286,6 +286,6 @@ void main() {
     // =========================================================================
     // colortex3: pos.xyz + oct-encoded normal (matches old swap2 geometry layout)
     imageStore(colorimg3, ivec2(gid), vec4(centerPos, centerTile.oct_n));
-    // colortex4: packed SH + filtered variance (matches old swap2 light_sample layout)
-    imageStore(colorimg4, ivec2(gid), vec4(packSH(outSH), filteredVariance));
+    // colortex4: packed AliceEncoding + filtered variance (matches old swap2 light_sample layout)
+    imageStore(colorimg4, ivec2(gid), vec4(packAlice(outAlice), filteredVariance));
 }
