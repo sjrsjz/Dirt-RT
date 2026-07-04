@@ -11,7 +11,7 @@
 #include "/lib/rt/payload.glsl"
 #include "/lib/constants.glsl"
 #include "/lib/settings.glsl"
-#include "/lib/sky_color.glsl"
+#include "/lib/sky.glsl"
 #include "/lib/colors.glsl"
 #include "/lib/quaternions.glsl"
 #include "/lib/buffers/denoise.glsl"
@@ -32,20 +32,15 @@ layout(binding = 3) uniform sampler2D blockTex;
 layout(binding = 6) writeonly uniform image2D RayTraceData;
 layout(location = 6) rayPayloadEXT Payload payload;
 
-vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir);
+void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir);
 
 #include "/lib/common.glsl"
 
 bool isDarkened = false;
-vec3 SunLight = vec3(0);
-vec3 MoonLight = vec3(0);
 
 void main() {
     vec2 px = vec2(gl_LaunchIDEXT.xy);
-    if (px.x >= gl_LaunchSizeEXT.x || px.y >= gl_LaunchSizeEXT.y) return;
     vec2 p = px / vec2(gl_LaunchSizeEXT.xy);
-
-    world_type_global = int(cam.world_type);
 
     vec3 origin = cam.viewInverse[3].xyz;
     vec3 target = mix(mix(cam.corners[0], cam.corners[2], p.y), mix(cam.corners[1], cam.corners[3], p.y), p.x);
@@ -53,14 +48,11 @@ void main() {
 
     iFrame = cam.frameId;
     isDarkened = world_type_global != WORLD_OVERWORLD && world_type_global != WORLD_THE_END && world_type_global != WORLD_THE_NETHER;
-    SunLight = isDarkened ? vec3(0) : vec3(SunDivMoon * (1 - 0.975 * rainStrength_global));
-    SunLight = mix(SunLight, vec3(0.125 * SunDivMoon), float(world_type_global == WORLD_THE_END));
-    MoonLight = isDarkened ? vec3(0) : vec3(0.2);
 
     vec4 celestialQuat = quatAxisAngle(vec3(1, 0, 0), radians(sunPathRotation));
     vec3 sunDir = quatRotate(normalize(mat3(cam.viewInverse) * cam.sunPosition.xyz), celestialQuat);
 
-    wseed = floatBitsToUint(rand(origin + direction * iFrame));
+    wseed = floatBitsToUint(rand(direction * iFrame));
 
     vec3 seed0 = vec3(randcore4(), randcore4(), randcore4());
     wseed3.x = floatBitsToUint(seed0.x);
@@ -68,12 +60,10 @@ void main() {
     wseed3.z = floatBitsToUint(seed0.z);
 
     setSkyVars();
-    vec4 color = Trace(uvec2(gl_LaunchIDEXT.xy), origin, direction, -sunDir);
+    Trace(uvec2(gl_LaunchIDEXT.xy), origin, direction, -sunDir);
 
-    imageStore(RayTraceData, ivec2(gl_LaunchIDEXT), max(color, vec4(0)));
     if (gl_LaunchIDEXT.xy == vec2(0)) {
-        SunLight_global = SunLight;
-        MoonLight_global = MoonLight;
+        world_type_global = int(cam.world_type);
         lightDir_global = sunDir;
         frame_id = int(cam.frameId);
         camPos = origin;
@@ -149,7 +139,8 @@ material buildSurfaceMaterial(vec3 pos, vec3 nor) {
     albedo = water ? vec3(1) : albedo;
     tmp_Payload.material.emission = tmp_Payload.material.block_id.x == 1002 ? albedo * (1 - trans) : tmp_Payload.material.emission;
     // S.x = specular lobe selector: dielectrics use trans, metals force 1.0 (pure specular)
-    float specSelector = mix(trans, 1.0, tmp_Payload.material.metallic);
+    // Water is a pure specular dielectric — always enable specular lobe for Fresnel reflections
+    float specSelector = water ? 1.0 : mix(trans, 1.0, tmp_Payload.material.metallic);
     return newMaterial(clamp(tmp_Payload.material.F0, 0, 1), albedo, vec2(specSelector, 1 - trans), vec4(roughness > 0.01 ? max(roughness, 0.0125) : 0, trans, water, tmp_Payload.material.subsurface_scattering), tmp_Payload.material.emission);
 }
 
@@ -158,40 +149,6 @@ vec3 reproject(vec3 worldPos) {
     vec4 clipPos = rtPrevProjection * rtPrevModelView * vec4(prevPlayerPos, 1.0);
     vec3 ndc = clipPos.xyz / clipPos.w;
     return ndc * 0.5 + 0.5;
-}
-
-vec4 sampleGodRay(vec3 b_Sun, vec3 b_Moon, vec3 ro, vec3 rd, float far, vec3 lightDir, bool hitFace, bool inside) {
-    vec3 X, Y, Z;
-    XYZ(lightDir, X, Y, Z);
-    float r1 = getRandom();
-    float alpha = getRandom() * 2 * PI;
-    float cosbeta = (1 - r1 * (1 - cosD_S));
-    vec3 sampleDir = cosbeta * Y + sqrt(1 - cosbeta * cosbeta) * (cos(alpha) * X + sin(alpha) * Z);
-
-    if (isDarkened || sampleDir.y > 0) return vec4(0, 0, 0, 1e10);
-    float rnd = getRandom();
-    float h = b_P.x - ro.y;
-    vec3 q = vec3(0.00000025);
-    vec3 log_rnd = 2 * log(rnd) / q;
-    float sampleX = luma(abs(log_rnd / (h + sqrt(max(vec3(0), h * h + log_rnd * rd.y)))));
-    vec3 c = vec3(0);
-    float s = min(far - 0.01, sampleX);
-    vec3 samplePos = ro + s * rd;
-    float t = 1;
-    if (sampleX > far) {
-        c = float(!hitFace) * getSkyColor(b_Sun, b_Moon, samplePos, rd, -lightDir);
-    } else {
-        vec3 rd1, ro1;
-        t = raycast(samplePos, -sampleDir, ro1, rd1, inside, i16vec2(1001, 0), 1u);
-        float dot_rd_lightDir = dot(rd, lightDir);
-        vec3 b_g0_2 = b_g0 * b_g0;
-        vec3 tmp_0 = 1. + b_g0_2 + 2. * b_g0 * dot_rd_lightDir;
-        tmp_0 *= tmp_0 * tmp_0;
-        vec3 g = 3. / (8. * PI) * (1. + dot_rd_lightDir * dot_rd_lightDir) * (1. - b_g0_2) / (2. + b_g0_2) * inversesqrt(tmp_0);
-        c = float(t < -0.5) * g * SampleSky(-sampleDir);
-    }
-    c *= 0 * tmp_Payload.shadowTransmission * max(0.5 * sqrt(1 - cosD_S * cosD_S) * 0.25 * (1 - 0.5 * clamp(-lightDir.y * 2, 0, 1)), rainStrength_global * 0.125) * exp(-b_Q * h * sampleX + 0.5 * b_Q * sampleX * sampleX * sampleDir.y);
-    return vec4(clamp(c, 0, 10), t < -0.5 ? s : -1);
 }
 
 // -----------------------------------------------------------------------------------
@@ -211,24 +168,28 @@ vec3 sampleSunlight(vec3 ro, vec3 normal, vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S, v
     float t = raycast(ro, -sampleDir, ro_o, rd_o, !inside, i16vec2(1001, 0), 1u); // POM skipped for shadow rays
     if (t > -0.5) return vec3(0.0);
 
-    vec3 sunlight = SampleSky(-sampleDir).xyz * tmp_Payload.shadowTransmission * (1.0 - cosD_S) * PI;
+    vec3 wi = -sampleDir;
+    vec3 Li = sampleSky(ro.y, wi, lightDir).xyz * tmp_Payload.shadowTransmission;
 
     float IoN = abs(dot(rd_i, normal));
-    float OoN = dot(sampleDir, normal);
-
-    vec3 sampleColor = vec3(0.0);
+    float OiN = dot(wi, normal);
+    if (OiN <= 0.0) return vec3(0.0);
 
     if (type == DIFFUSION) {
-        sampleColor = Cd;
-    } else if (type == REFLECTION) {
-        // Specular 直接光采用原版安全公式
-        float IoH_sun = abs(dot(normalize(sampleDir + rd_i), rd_i)) + 1e-6;
-        vec4 rC_sun = reflectanceColor(Cs, IoH_sun);
-        float weightA = GGXpdf(clamp(dot(normalize(sampleDir + rd_i), Y), 0.0, 1.0), 0.0, max(R.x, 1e-6)) * GGX_G2(IoN, abs(OoN), max(R.x, 1e-6));
-        sampleColor = weightA * Cs * rC_sun.xyz * S.x / IoH_sun;
+        return max(vec3(0.0), Cd * Li * (2.0 * OiN * (1.0 - cosD_S)));
     }
 
-    return max(vec3(0.0), sampleColor * sunlight);
+    if (type == REFLECTION) {
+        float a = max(R.x, 1e-6);
+        vec3 H = normalize(wi - rd_i);
+        float cosThetaH = clamp(dot(H, normal), 0.0, 1.0);
+        float D = GGXpdf(cosThetaH, 0.0, a) / max(cosThetaH, 1e-6);
+        float G2 = GGX_G2(IoN, OiN, a);
+        vec3 F = reflectanceColor(Cs, abs(dot(rd_i, H))).xyz;
+        return max(vec3(0.0), D * G2 * F * Li * (PI * 0.5 * (1.0 - cosD_S) / max(IoN, 1e-6)) * S.x);
+    }
+
+    return vec3(0.0);
 }
 
 vec3 GetSpecularDominantDirection(vec3 N, vec3 V, float R) {
@@ -269,7 +230,7 @@ vec3 SampleAliceGuiding(vec3 axis, float kappa, vec2 xi)
 // -----------------------------------------------------------------------------------
 // 核心：前向路径追踪 (Forward Path Tracing)
 // -----------------------------------------------------------------------------------
-vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
+void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     uint isEyeInWater = cam.flags & 3u;
     uint idx = getIndex(coord);
 
@@ -329,7 +290,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
             bool skipFirstBounceSky = false;
             if (!skipFirstBounceSky) {
-                vec3 sky = SampleSky(rd_i).xyz;
+                vec3 sky = sampleSkyNoSun(ro_i.y, rd_i, lightDir).xyz;
                 vec3 sky_contrib = throughput * sky * current_absorption;
 
                 if (depth >= 2) {
@@ -347,13 +308,6 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         vec3 normal = faceforward(tmp_Payload.material.normal, tmp_Payload.material.normal, rd_i);
         vec3 macroNormal = faceforward(tmp_Payload.geometryNormal, tmp_Payload.geometryNormal, rd_i);
         material surface = buildSurfaceMaterial(ro_o, normal);
-
-        if (surface.R.z > 0.5) {
-            vec3 offset = fbm3D(ro_o * 0.125 + time_global * 0.125, 5).yzw * 0.25;
-            vec3 dH = normalize(vec3(offset.x, 1, offset.z));
-            dH = faceforward(dH, dH, normal);
-            normal = normalize(mix(normal, dH, max(0.125 * abs(normal.y), 0.0)));
-        }
 
         vec3 microNormal = GGXNormal(normal, surface.R.x, ro_o);
         float n_i = inverse_0 ? REFRACTIVE_INDEX : 1.0;
@@ -635,7 +589,7 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         }
 
         case REFLECTION:
-        refl_color = clamp(total_illumination, 0.0, 1000.0 * div_avgExposure);
+        refl_color = clamp(total_illumination, 0.0, 200.0 * div_avgExposure);
         break;
 
         case REFRACTION:
@@ -664,6 +618,4 @@ vec4 Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     refractIlluminationBuffer.data[idx].color_b  = pack2HalfClamped(refr_color.b, 0.0);
 
     denoiseBuffer.data[idx].emission = first_emission_val;
-
-    return vec4(total_illumination, first_t);
 }

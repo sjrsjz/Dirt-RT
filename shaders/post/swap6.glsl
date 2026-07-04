@@ -4,7 +4,7 @@
 // Pass swap6: 折射缓冲打包 + 镜面方差预计算 (Compute, 共享内存加速)
 // ===========================================================================
 // 折射对应 swap4 (反射). 读 SSBO (refractIlluminationBuffer) + image (折射累积颜色)
-// + denoiseBuffer, LDS 5×5 方差, H = normalize(V+R), 打包 colortex3/4 供 301 降噪.
+// + denoiseBuffer, LDS 5×5 方差, H = 实际几何法线 (macroNormal), 打包 colortex3/4 供 301 降噪.
 // TileSample 紧凑打包为 3 个 vec4 (48B).
 // ===========================================================================
 
@@ -75,8 +75,9 @@ void main() {
             if (any(isnan(color)) || any(isinf(color))) color = vec3(0.0);
             vec3 R = decodeNormal(e.oct_dir);
             vec3 epos = vec3(e.px, e.py, e.pz);
-            vec3 H = normalize(-normalize(epos) + R);
-            if (any(isnan(H)) || any(isinf(H))) H = R;
+            // Store the actual surface geometry normal (not the reconstructed V+R)
+            // for use as surface geometry weight in 301 edge-stopping
+            vec3 H = denoiseBuffer.data[idx].macroNormal;
             s.pos_oct = vec4(epos, e.oct_dir);
             s.color_vproj = vec4(color, e.virtualProjDist);
             s.H_dist = vec4(H, dist);
@@ -125,10 +126,10 @@ void main() {
     float mean = (sumW > 1e-8) ? sumL / sumW : luma(cColor);
     float variance = (sumW > 1e-8) ? max(sumL2 / sumW - mean * mean, 0.0) : 0.0;
 
-    // ---- 3-sigma 压制 ----
+    // ---- 2-sigma 压制 (比 3σ 更激进地压制 specular firefly) ----
     float cLuma = luma(cColor);
     float sigma = sqrt(max(variance, 0.0));
-    float clampedLuma = clamp(cLuma, mean - 3.0 * sigma, mean + 3.0 * sigma);
+    float clampedLuma = clamp(cLuma, mean - 2.0 * sigma, mean + 2.0 * sigma);
     cColor *= clampedLuma / max(cLuma, 1e-8);
 
     PackedLightSample ps = packSpecularSample(cPos, cR, cColor, cRough, variance, cVproj, cH);

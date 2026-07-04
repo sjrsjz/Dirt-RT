@@ -15,7 +15,6 @@ layout(local_size_x = 16, local_size_y = 16) in;
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
 #include "/lib/buffers/denoise.glsl"
-#include "/lib/sky_color.glsl"
 
 uniform vec2 resolution;
 
@@ -251,6 +250,7 @@ void main() {
     // =========================================================================
     // |K| > threshold → 几何边缘不可靠(棱/角) → 标记 omega 为负
     // 300 降噪 pass 检测到负 omega 时跳过几何权重
+    #if ENABLE_GAUSSIAN_FILTER == 1
     {
         // 中心 + 邻域位置 (复用 Phase 1 加载的 sm_tile 2D 数组)
         int scx = int(cx), scy = int(cy);
@@ -280,6 +280,7 @@ void main() {
         float kMask = float(abs(K) > CURVATURE_THRESHOLD);
         outSH.shY.w = abs(outSH.shY.w) * (1.0 - 2.0 * kMask);
     }
+    #endif // ENABLE_GAUSSIAN_FILTER
 
     // =========================================================================
     // Phase 6: Write outputs

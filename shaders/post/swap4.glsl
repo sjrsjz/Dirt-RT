@@ -5,11 +5,11 @@
 // ===========================================================================
 // 镜像 swap2 (漫反射). 读 SSBO (SpecularRTElement: pos/oct_dir/virtualProjDist) +
 // image (累积颜色 *_color_swap_Sampler.xyz) + denoiseBuffer (roughness/distance),
-// 用 LDS 做 5×5 几何感知双边方差滤波, 计算 H = normalize(V+R) (GGX 主半向量),
+// 用 LDS 做 5×5 几何感知双边方差滤波, H = 实际几何法线 (macroNormal),
 // 打包写入 colortex3/4 供 301 降噪.
 //
 //   colortex3 = (pos.xyz, oct(R))
-//   colortex4 = (f16(R,G) | f16(B,roughness) | f16(variance, virtualProjDist) | oct(H))
+//   colortex4 = (f16(R,G) | f16(B,roughness) | f16(variance, virtualProjDist) | oct(surfaceNormal))
 //   variance < 0 = 主天空 mask; weight 不写入 (由 101 直接写 image)
 //
 // TileSample 紧凑打包为 3 个 vec4 (48B), 避免 vec3 在 std140 shared 内存中的对齐填充.
@@ -84,8 +84,9 @@ void main() {
             if (any(isnan(color)) || any(isinf(color))) color = vec3(0.0);
             vec3 R = decodeNormal(e.oct_dir);
             vec3 epos = vec3(e.px, e.py, e.pz);
-            vec3 H = normalize(-normalize(epos) + R);
-            if (any(isnan(H)) || any(isinf(H))) H = R;
+            // Store the actual surface geometry normal (not the reconstructed V+R)
+            // for use as surface geometry weight in 301 edge-stopping
+            vec3 H = denoiseBuffer.data[idx].macroNormal;
             s.pos_oct = vec4(epos, e.oct_dir);
             s.color_vproj = vec4(color, e.virtualProjDist);
             s.H_dist = vec4(H, dist);
@@ -142,10 +143,10 @@ void main() {
     float mean = (sumW > 1e-8) ? sumL / sumW : luma(cColor);
     float variance = (sumW > 1e-8) ? max(sumL2 / sumW - mean * mean, 0.0) : 0.0;
 
-    // ---- 3-sigma 压制: 钳制中心像素亮度到邻域 [μ-3σ, μ+3σ] ----
+    // ---- 2-sigma 压制: 钳制中心像素亮度到邻域 [μ-2σ, μ+2σ] (比 3σ 更激进地压制 specular firefly) ----
     float cLuma = luma(cColor);
     float sigma = sqrt(max(variance, 0.0));
-    float clampedLuma = clamp(cLuma, mean - 3.0 * sigma, mean + 3.0 * sigma);
+    float clampedLuma = clamp(cLuma, mean - 2.0 * sigma, mean + 2.0 * sigma);
     cColor *= clampedLuma / max(cLuma, 1e-8);
 
     // 时域权重引导的方差加速: 低累积权重(初始帧/遮挡)→放大方差→301 自动加强模糊

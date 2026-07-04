@@ -298,7 +298,27 @@ void clampHistoryToAABB(inout SH histSH,
 }
 
 // ===========================================================================
-// 时域累积核心逻辑 (AABB 钳制 + EMA 混合)
+// 3×3 最近邻几何采样 (用于重投影置信度)
+//
+// 直接从 SSBO 读取整数坐标处的历史几何数据 (pos + normal),
+// 避免双线性插值在亚像素几何抖动时引入的虚假不匹配。
+// 返回 false 表示该像素无有效几何 (天空/越界)。
+// ===========================================================================
+
+bool fetchHistoryGeometry(ivec2 p, out vec3 pos, out vec3 normal) {
+    ivec2 clamped_p = clamp(p, ivec2(0), ivec2(resolution_global) - 1);
+    uint n_idx = getIndex(uvec2(clamped_p));
+
+    if (denoiseBuffer.data[n_idx].distance < -0.5) return false;
+
+    UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[n_idx];
+    pos    = vec3(e.hist_px, e.hist_py, e.hist_pz);
+    normal = decodeNormal(e.hist_oct_n);
+    return true;
+}
+
+// ===========================================================================
+// 时域累积核心逻辑 (NN 几何搜索 + AABB 钳制 + EMA 混合)
 // ===========================================================================
 
 void MixDiffuse() {
@@ -315,59 +335,71 @@ void MixDiffuse() {
     }
 
     // -----------------------------------------------------------------------
-    // 情况 2: 正常重投影，采样历史
+    // 情况 2: 2×2 双线性历史采样 + 逐样本置信度 (参考 TAA 模式)
+    //
+    // 用 2×2 双线性插值直接读历史数据, 每样本计算几何置信度;
+    // 颜色与置信度在同一循环中加权累积, 避免分离的 sampleDiffuse +
+    // 3×3 NN 搜索造成的失配.
     // -----------------------------------------------------------------------
-    vec2 prev_screen =
-        prevScreenPos.xy * vec2(textureSize(colortex0, 0));
+    vec2 prevTexelcoord = prevScreenPos.xy * vec2(resolution_global);
+    ivec2 prevTexel = ivec2(floor(prevTexelcoord));
 
-    diffuseIlluminationData histData = sampleDiffuse(prev_screen);
+    SH accumSH = init_SH();
+    float sumWeight = 0.0;
+    float maxTapConf = 0.0;
+    float accumHistWeight = 0.0;
 
-    // 历史权重
-    float histWeight = sanitizeWeight(histData.prev_weight);
+    for (int i = 0; i < 4; i++) {
+        ivec2 sampleTexel = prevTexel + ivec2(i & 1, i >> 1);
+        vec2 sampleCoord = vec2(sampleTexel);
 
-    // -----------------------------------------------------------------------
-    // 重投影置信度
-    // -----------------------------------------------------------------------
-    vec3 histPosCur = histData.pos - cameraDelta;
-    float pos_weight = svgfPositionWeight(
-        histPosCur,
-        current_data.pos,
-        current_data.normal,
-        info_distance
-    );
+        float bilinearWeight = (1.0 - abs(prevTexelcoord.x - sampleCoord.x))
+                             * (1.0 - abs(prevTexelcoord.y - sampleCoord.y));
 
-    float normal_weight = svgfNormalWeight(
-        histData.normal,
-        current_data.normal,
-        info_distance
-    );
+        diffuseIlluminationData tap = fetchDiffuse(sampleTexel);
+        vec3 tapPos, tapNormal;
+        if (!fetchHistoryGeometry(sampleTexel, tapPos, tapNormal)) continue;
 
-    float confidence =
-        float(info_distance > -0.5) *
-        pos_weight *
-        normal_weight;
+        float tapW = sanitizeWeight(tap.prev_weight);
+        if (tapW < TEMPORAL_HISTORY_MIN_WEIGHT) continue;
 
-    confidence = pow(
-        clamp(confidence, 0.0, 1.0),
-        TEMPORAL_CONFIDENCE_POWER
-    );
+        // 几何权重: 历史 pos 转当前相机帧后比较
+        vec3 tapPosCur = tapPos - cameraDelta;
+        float posW = svgfPositionWeight(tapPosCur, current_data.pos,
+                                        current_data.normal, info_distance);
+        float normW = svgfNormalWeight(tapNormal, current_data.normal, info_distance);
+        float conf = posW * normW;
+
+        maxTapConf = max(maxTapConf, conf);
+        float w = bilinearWeight * conf + 1e-10;
+
+        accumulate_SH(accumSH, tap.data, w);
+        sumWeight += w;
+        accumHistWeight += w * tapW;
+    }
+
+    if (sumWeight < 1e-8) {
+        output_weight = curWeight;
+        out_data.data_swap = current_data.data_swap;
+        return;
+    }
+
+    SH histSH = scaleSH(accumSH, 1.0 / sumWeight);
+    float histWeight = accumHistWeight / max(sumWeight, 1e-6);
+
+    float confidence = float(info_distance > -0.5) * maxTapConf;
+    confidence = pow(clamp(confidence, 0.0, 1.0), TEMPORAL_CONFIDENCE_POWER);
 
     // -----------------------------------------------------------------------
     // AABB 钳制 (omega + CoCg) → EMA 混合
-    // Wh = 历史有效权重, Wc = 当前权重 (=1)
     // -----------------------------------------------------------------------
     float Wh = histWeight * confidence;
-
-    // 历史无效，直接重置到当前帧
     if (Wh <= TEMPORAL_HISTORY_MIN_WEIGHT) {
         output_weight = min(curWeight, max_history);
         out_data.data_swap = current_data.data_swap;
         return;
     }
 
-    // -----------------------------------------------------------------------
-    // AABB 钳制: 6D 线性缩放 (v.xyz + omega + CoCg 统一等比)
-    // -----------------------------------------------------------------------
     #if TEMPORAL_AABB_ENABLE
     {
         vec4 min_shY, max_shY;
@@ -377,11 +409,8 @@ void MixDiffuse() {
                     min_shY, max_shY,
                     min_CoCg, max_CoCg,
                     validNeighborCount);
-
         if (validNeighborCount >= TEMPORAL_AABB_MIN_VALID_NEIGHBORS) {
-            clampHistoryToAABB(histData.data,
-                              min_shY, max_shY,
-                              min_CoCg, max_CoCg);
+            clampHistoryToAABB(histSH, min_shY, max_shY, min_CoCg, max_CoCg);
         }
     }
     #endif
@@ -391,21 +420,12 @@ void MixDiffuse() {
     // -----------------------------------------------------------------------
     float W = Wh + curWeight;
     float currentAlpha = curWeight / max(W, 1e-6);
-
-    // 限制历史权重
     output_weight = min(W, max_history);
 
-    // -----------------------------------------------------------------------
-    // 混合完整 SH / ALICE 数据 (历史可能已被 AABB 钳制)
-    // -----------------------------------------------------------------------
     if (currentAlpha >= 0.9999) {
         out_data.data_swap = current_data.data_swap;
     } else {
-        out_data.data_swap = mix_SH(
-            histData.data,
-            current_data.data_swap,
-            currentAlpha
-        );
+        out_data.data_swap = mix_SH(histSH, current_data.data_swap, currentAlpha);
     }
 }
 

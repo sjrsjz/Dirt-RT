@@ -1,1 +1,0 @@
-#include "/post/init_sky.glsl"

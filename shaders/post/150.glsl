@@ -22,7 +22,7 @@
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
 #include "/lib/buffers/denoise.glsl"
-#include "/lib/sky_color.glsl"
+#include "/lib/sky.glsl"
 
 // ---------------------------------------------------------------------------
 // Uniform 输入

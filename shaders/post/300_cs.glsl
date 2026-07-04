@@ -138,8 +138,12 @@ void main() {
     float center_var_est;
     unpackLightSampleSM(center_idx, center_pos, center_normal, center_sh, center_var_est);
 
+    #if ENABLE_GAUSSIAN_FILTER == 1
     float geomValid = float(center_sh.shY.w >= 0.0);
     center_sh.shY.w = abs(center_sh.shY.w);
+    #else
+    float geomValid = 1.0;
+    #endif
 
     // 像素的世界空间 footprint, 用于距离无关的深度边缘停止
     float dist_to_cam = max(length(center_pos), 0.001);
@@ -154,7 +158,7 @@ void main() {
     float hw[2] = float[](1.0, 0.66667);
 
     // 方差预滤波使得 sigma2 不再导致降噪器崩溃
-    float sigma2 = max(center_var_est, 1e-8);
+    float sigma2 = max(center_var_est, 1e-9);
     float inv_sqrt_sigma2 = SVGF_PHI_L * inversesqrt(sigma2);
 
     // =========================================================================
@@ -208,8 +212,10 @@ void main() {
 
     float inv_sumWeight = 1.0 / sumWeight;
     accumulatedSH = scaleSH(accumulatedSH, inv_sumWeight);
+    #if ENABLE_GAUSSIAN_FILTER == 1
     #ifndef FINAL_DENOISE_PASS
     accumulatedSH.shY.w *= (2.0 * geomValid - 1.0);
+    #endif
     #endif
     float varEnergyOut = sumVarEnergy * inv_sumWeight * inv_sumWeight;
 

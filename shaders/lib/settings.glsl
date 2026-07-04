@@ -22,6 +22,9 @@
 #define SVGF_PHI_L 0.0325 // Luminance edge-stopping sensitivity (phi_l). Higher = preserves more texture detail. [0.005 0.01 0.02 0.03 0.04 0.05 0.06 0.07 0.08 0.09 0.1 0.125 0.15 0.175 0.2 0.25 0.3 0.4]
 #define SVGF_POSITION_PARAM 0.0025 // Depth edge-stopping sensitivity. Higher = sharper depth edges. [0.00075 0.00125 0.0025 0.005 0.01 0.02 0.04 0.08]
 
+// Denoiser — Gaussian curvature geometry skip (swap2 → 300)
+#define ENABLE_GAUSSIAN_FILTER 0 // Gaussian curvature-guided geometry weight mask. OFF = fast path (no curvature computation). [0 1]
+
 // Bloom — 多级降采样-上采样金字塔
 #define BLOOM_MIX 0.15 // Bloom 与场景的混合比例 (0=关, 1=全 bloom)。 [0.0 0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5 0.6 0.8 1.0]
 //#define BLOOM_DEBUG_ATLAS // [DEBUG] 取消注释以直接输出 bloomAtlas 图集到屏幕

@@ -578,6 +578,17 @@ vec3IlluminationData blendReflect(vec3IlluminationData A, vec3IlluminationData B
     return t;
 }
 
+// 最近邻读取反射历史几何 (避免双线性插值破坏方向向量 R×vproj)
+bool fetchReflectHistoryGeometry(ivec2 p, out vec3 pos, out vec3 normal) {
+    ivec2 clamped_p = clamp(p, ivec2(0), ivec2(resolution_global) - 1);
+    uint i = getIndex(uvec2(clamped_p));
+    SpecularRTElement e = reflectIlluminationBuffer.data[i];
+    if (denoiseBuffer.data[i].distance < -0.5) return false;
+    pos    = vec3(e.hist_px, e.hist_py, e.hist_pz);
+    normal = decodeNormal(e.hist_oct_dir) * e.hist_vprojdist;
+    return true;
+}
+
 vec3IlluminationData sampleReflect(vec2 p) {
     ivec2 p1 = ivec2(p);
     vec2 p2 = fract(p);

@@ -7,7 +7,7 @@
 // ===========================================================================
 // Pass 301 CS: 镜面 NRD 风格降噪 (计算着色器变体, 前 3 级 à-trous R0=1,2,4)
 // ===========================================================================
-// NRD 虚拟追踪权重 (同 301.glsl). R0≤4 轴对齐, HALO=R0, LDS 缓存 tile.
+// 混合权重 (同 301.glsl): NRD 虚拟追踪 + 表面几何边缘停止. R0≤4 轴对齐, HALO=R0.
 // ===========================================================================
 
 layout(local_size_x = 16, local_size_y = 16) in;
@@ -81,9 +81,6 @@ void main() {
     // 天空: 早退, 保留 swap4 写入的 mask
     if (cVar < 0.0) return;
 
-    vec3 V = -normalize(cPos);
-    vec3 macroNormal = normalize(V + cR);
-
     float alpha = max(cRough * cRough, SPEC_MIN_ALPHA);
     float alpha2 = alpha * alpha;
     float lobe_param2 = SPEC_BLUR_BOOST / (alpha2 * SPEC_LOBE_DIVISOR) * LOG2_E;
@@ -92,6 +89,10 @@ void main() {
 
     float luma_phi2 = SPEC_BLUR_BOOST * SVGF_PHI_L * LOG2_E * inversesqrt(max(cVar, 1e-8)) / (1.0 + cRough * SPEC_LUMA_ROUGH_SOFT);
     float cLuma = luma(cRad);
+
+    // Surface geometry edge-stop (uses actual geometry normal H, not reconstructed V+R)
+    float cDistToCam = max(length(cPos), 0.01);
+    float cPixelFootprint = max(cDistToCam / float(texSize.y), 1e-4);
 
     vec3 A = cRad;          // 中心像素 (权重 = 1)
     float w = 1.0;
@@ -113,19 +114,30 @@ void main() {
 
             float rW = GetRoughnessWeight(cRough, sRough);
 
-            float surfDist = abs(dot(cPos - sPos, macroNormal));
+            float surfDist = abs(dot(cPos - sPos, cH));
             float w_surf = exp2(-surf_pos_param2 * surfDist);
 
             float R_dot_R = max(dot(cR, sR), 0.0);
             float w_lobe = exp2(-(1.0 - R_dot_R) * lobe_param2);
 
+            // NRD hardening: amplify sensitivity when hitDist → 0
+            // Small hitDist (reflection near surface): hardFactor > 1 → selective → sharp
+            // Large hitDist (distant reflection): hardFactor → 0 → permissive → blur
             float hitDistDiff = abs(cVproj - sVproj);
             float hitDistSum = cVproj + sVproj + 1e-5;
-            float w_hitDist = exp2(-(hitDistDiff / hitDistSum) * hit_dist_param2);
+            float hardFactor = 1.0 + SPEC_HIT_DIST_HARDEN / max(max(cVproj, sVproj), 1e-5);
+            float w_hitDist = exp2(-(hitDistDiff / hitDistSum) * hit_dist_param2 * hardFactor);
 
             float w_luma = exp2(-luma_phi2 * abs(cLuma - luma(sRad)));
 
-            float w0 = rW * w_surf * w_lobe * w_hitDist * w_luma;
+            // ---- 表面几何权重 (使用实际几何法线 H, 防止跨几何边缘泄漏) ----
+            float nd = clamp(dot(cH, sH), 0.0, 1.0);
+            float normalTerm = SPEC_GEOM_NORMAL_POWER * (1.0 - nd);
+            float planeDist = abs(dot(sPos - cPos, cH));
+            float depthTerm = planeDist / max(SPEC_GEOM_DEPTH_PARAM * cPixelFootprint, 1e-6);
+            float w_geom = exp2(-(normalTerm + depthTerm) * LOG2_E);
+
+            float w0 = rW * w_surf * w_lobe * w_hitDist * w_luma * w_geom;
 
             A += sRad * w0;
             w += w0;

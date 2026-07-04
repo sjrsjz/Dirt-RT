@@ -3,9 +3,9 @@
 // ===========================================================================
 // Pass 301: 镜面反射/折射 NRD 风格屏幕空间降噪 (à-trous, fragment 变体 R0≥8)
 // ===========================================================================
-// NRD 虚拟追踪权重: 比较反射方向(R)的 GGX lobe 相似度 + 虚拟击中距离(virtualProjDist),
-// 而非屏幕空间表面位置/H 向量. 平整镜面上表面属性一致但反射深度可差千米,
-// 必须追踪"镜子里的虚像"而非镜子表面.
+// 混合权重: NRD 虚拟追踪 (R lobe 相似度 + virtualProjDist) + 表面几何边缘停止
+// (实际法线相似度 + 深度不连续检测). NRD 部分追踪反射空间中的虚像一致性,
+// 几何部分防止跨表面边缘的泄漏 (与虚拟深度无关, 由实际表面法线/位置决定).
 // ===========================================================================
 
 #include "/lib/constants.glsl"
@@ -48,9 +48,6 @@ void main() {
     // 核心思想: 追踪反射光线的虚拟击中点, 而非镜子表面本身.
     // 平整镜面上相邻像素的表面坐标/法线几乎一致, 但反射内容可能深度差异极大.
     // 因此位置/法线权重必须基于反射后的虚拟世界, 而非屏幕空间表面.
-    vec3 V = -normalize(cPos);
-    vec3 macroNormal = normalize(V + cR);  // 宏观几何法线 (V+R ∥ surface normal)
-
     // GGX 波瓣宽度: α² = roughness⁴, 控制 R 向量可接受的偏差范围
     float alpha = max(cRough * cRough, SPEC_MIN_ALPHA);
     float alpha2 = alpha * alpha;
@@ -61,6 +58,10 @@ void main() {
     // 亮度权重: 粗糙表面放宽拒绝
     float luma_phi2 = SPEC_BLUR_BOOST * SVGF_PHI_L * LOG2_E * inversesqrt(max(cVar, 1e-8)) / (1.0 + cRough * SPEC_LUMA_ROUGH_SOFT);
     float cLuma = luma(cRad);
+
+    // Surface geometry edge-stop (uses actual geometry normal H, not reconstructed V+R)
+    float cDistToCam = max(length(cPos), 0.01);
+    float cPixelFootprint = max(cDistToCam / float(texSize.y), 1e-4);
 
     #if STEP >= 4
     float theta = 2.0 * PI * rand(vec2(pix + R0));
@@ -98,8 +99,8 @@ void main() {
             float rW = GetRoughnessWeight(cRough, sRough);
 
             // ---- NRD 镜面专属权重 ----
-            // 1. 表面连续性 (辅助, 仅防跨物体泄漏)
-            float surfDist = abs(dot(cPos - sPos, macroNormal));
+            // 1. 表面连续性 (使用实际几何法线 H, 防跨物体泄漏)
+            float surfDist = abs(dot(cPos - sPos, cH));
             float w_surf = exp2(-surf_pos_param2 * surfDist);
 
             // 2. 高光波瓣余弦相似度: cR 与 sR 的夹角必须在 GGX lobe 宽度内
@@ -107,14 +108,28 @@ void main() {
             float w_lobe = exp2(-(1.0 - R_dot_R) * lobe_param2);
 
             // 3. 虚拟击中距离: 相对误差 (abs(a-b))/(a+b+eps), 尺度无关
+            // NRD hardening: amplify sensitivity when hitDist → 0
+            // Small hitDist (reflection near surface): hardFactor > 1 → selective → sharp
+            // Large hitDist (distant reflection): hardFactor → 0 → permissive → blur
             float hitDistDiff = abs(cVproj - sVproj);
             float hitDistSum = cVproj + sVproj + 1e-5;
-            float w_hitDist = exp2(-(hitDistDiff / hitDistSum) * hit_dist_param2);
+            float hardFactor = 1.0 + SPEC_HIT_DIST_HARDEN / max(max(cVproj, sVproj), 1e-5);
+            float w_hitDist = exp2(-(hitDistDiff / hitDistSum) * hit_dist_param2 * hardFactor);
 
             // 4. 亮度方差引导
             float w_luma = exp2(-luma_phi2 * abs(cLuma - luma(sRad)));
 
-            float w0 = rW * w_surf * w_lobe * w_hitDist * w_luma;
+            // ---- 表面几何权重 (使用实际几何法线 H, 防止跨几何边缘泄漏) ----
+            // 法线相似度
+            float nd = clamp(dot(cH, sH), 0.0, 1.0);
+            float normalTerm = SPEC_GEOM_NORMAL_POWER * (1.0 - nd);
+
+            // 深度边缘停止: 沿实际表面法线方向的平面距离
+            float planeDist = abs(dot(sPos - cPos, cH));
+            float depthTerm = planeDist / max(SPEC_GEOM_DEPTH_PARAM * cPixelFootprint, 1e-6);
+            float w_geom = exp2(-(normalTerm + depthTerm) * LOG2_E);
+
+            float w0 = rW * w_surf * w_lobe * w_hitDist * w_luma * w_geom;
 
             A += sRad * w0;
             w += w0;

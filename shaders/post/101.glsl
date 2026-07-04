@@ -85,30 +85,67 @@ void MixReflect() {
         return;
     }
 
-    vec3IlluminationData data = sampleReflect(prevScreenPos.xy * textureSize(colortex0, 0));
+    // 2×2 双线性历史采样 + 逐样本置信度 (参考 TAA 模式)
+    vec2 prevTexelcoord = prevScreenPos.xy * vec2(resolution_global);
+    ivec2 prevTexel = ivec2(floor(prevTexelcoord));
 
-    // ---- GGX 方向相容性权重 ----
     float roughness = denoiseBuffer.data[idx].roughness;
-    float alpha = roughness * roughness; // GGX α
-    float cosTheta = abs(dot(normalize(data.normal), normalize(data2.normal))); // H_prev · H_curr
-    float tanThetaSq = max((0.999999 - cosTheta * cosTheta) / (1e-9 + cosTheta * cosTheta), 0.0);
-    float ggxWeight = exp2(-0.00014426950 * tanThetaSq / (alpha * alpha)); // GGX 分布形状
-
-    // req 6: 虚拟击中点 (pos + R*virtualProjDist) 重建后用于重投影+权重
-    // 归一化到 virtualProjDist — 权重由相对位移驱动, 与击中距离无关
+    float alpha = roughness * roughness;
     vec3 curVirtual = data2.pos + data2.normal;
-    vec3 histVirtualCur = (data.pos - cameraDelta) + data.normal;
-    float posWeight = exp2(-POSITION_PARAM * LOG2_E * length(histVirtualCur - curVirtual)
-                         / max(length(data2.normal), 0.1));
+    float curVproj = max(length(data2.normal), 0.001);
 
-    // 综合置信度
-    float s = float(denoiseBuffer.data[idx].distance > -0.5)
-            * ggxWeight * posWeight;
+    vec3 accumColor = vec3(0.0);
+    float sumWeight = 0.0;
+    float maxTapConf = 0.0;
+    float accumPrevWeight = 0.0;
 
-    float prevW = data.prev_weight;
+    for (int i = 0; i < 4; i++) {
+        ivec2 sampleTexel = prevTexel + ivec2(i & 1, i >> 1);
+        vec3 samplePos, sampleNormal;
+
+        vec3IlluminationData tap = fetchReflect(sampleTexel);
+        if (!fetchReflectHistoryGeometry(sampleTexel, samplePos, sampleNormal)) continue;
+        if (tap.prev_weight < 1e-4) continue;
+        if (tap.weight < 0.0) continue; // sky
+
+        vec2 sampleCoord = vec2(sampleTexel);
+        float bw = (1.0 - abs(prevTexelcoord.x - sampleCoord.x))
+                 * (1.0 - abs(prevTexelcoord.y - sampleCoord.y));
+
+        // GGX 方向相容性
+        float cosTheta = abs(dot(normalize(sampleNormal), normalize(data2.normal)));
+        float tanThetaSq = max((0.999999 - cosTheta * cosTheta) / (1e-9 + cosTheta * cosTheta), 0.0);
+        float ggxConf = exp2(-0.00014426950 * tanThetaSq / (alpha * alpha));
+
+        // 虚拟击中点位置权重
+        vec3 samplePosCur = samplePos - cameraDelta;
+        vec3 sampleVirtual = samplePosCur + sampleNormal;
+        float posConf = exp2(-POSITION_PARAM * LOG2_E * length(sampleVirtual - curVirtual) / curVproj);
+
+        float conf = ggxConf * posConf;
+        maxTapConf = max(maxTapConf, conf);
+        float w = bw * conf + 1e-10;
+
+        vec3 tc = tap.data;
+        if (any(isnan(tc)) || any(isinf(tc))) continue;
+        accumColor += tc * w;
+        sumWeight += w;
+        accumPrevWeight += w * tap.prev_weight;
+    }
+
+    if (sumWeight < 1e-8) {
+        data2.weight = 1.0;
+        return;
+    }
+
+    vec3 blendColor = accumColor / sumWeight;
+    float prevW = accumPrevWeight / max(sumWeight, 1e-6);
+    float s = float(denoiseBuffer.data[idx].distance > -0.5) * maxTapConf;
+
     prevW = min(prevW * s + 1.0, ACCUMULATION_LENGTH);
 
-    data2.data_swap = data.data + (data2.data_swap - data.data) / prevW;
+    data2.data_swap = blendColor + (data2.data_swap - blendColor) / prevW;
+    if (any(isnan(data2.data_swap))) data2.data_swap = vec3(0.0);
     data2.weight = prevW;
 }
 

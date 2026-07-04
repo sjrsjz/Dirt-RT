@@ -14,6 +14,9 @@ option.VARIANCE_SCALE = Variance scale
 option.SVGF_NORMAL_POWER = SVGF normal power
 option.SVGF_PHI_L = SVGF luminance stop
 option.SVGF_POSITION_PARAM = SVGF depth sensitivity
+option.ENABLE_GAUSSIAN_FILTER = Gaussian curvature skip
+value.ENABLE_GAUSSIAN_FILTER.1 = On
+value.ENABLE_GAUSSIAN_FILTER.0 = Off
 
 # ReSTIR
 option.RESTIR_SPATIAL_SAMPLES = ReSTIR spatial samples

@@ -14,7 +14,7 @@
 //   - absorption 大气透射率 → × 整体颜色
 //
 // 天空:
-//   - distance < -0.5 → 使用 SampleSky() 计算大气散射颜色
+//   - distance < -0.5 → 使用 sampleSky() 计算大气散射颜色
 //   - 时域历史已随统一 diffuseIlluminationBuffer (binding 2) 流转，无需额外写回
 // ===========================================================================
 
@@ -25,7 +25,7 @@
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/tonemap.glsl"
 #include "/lib/buffers/denoise.glsl"
-#include "/lib/sky_color.glsl"
+#include "/lib/sky.glsl"
 #include "/lib/lighting/alice.glsl"
 
 in vec2 texCoord;
@@ -41,13 +41,14 @@ void main() {
     // 分支 1: 天空像素 (无几何体命中)
     // =========================================================================
     if (data.distance < -0.5) {
+        setSkyVars(); // 初始化天空散射参数 (原由 init_sky 预计算, 现改为分析式)
         // 天空颜色 = 大气散射 × 透射率 + 发光项
-        fragColor.xyz = data.absorption * SampleSky(data.rd) + data.emission;
+        fragColor.xyz = data.absorption * sampleSky(camPos.y, data.rd, -lightDir_global) + data.emission;
 
         // 重置漫反射历史 (避免天空像素使用上一帧地面数据)
         diffuseIlluminationBuffer.data[idx].rt_shY_xy = 0.0;
         diffuseIlluminationBuffer.data[idx].rt_shY_zw = 0.0;
-        diffuseIlluminationBuffer.data[idx].rt_CoCg   = 0.0;
+        diffuseIlluminationBuffer.data[idx].rt_CoCg = 0.0;
     }
     // =========================================================================
     // 分支 2: 表面像素 — 组合所有光照分量
@@ -56,9 +57,9 @@ void main() {
         ivec2 pix = ivec2(gl_FragCoord.xy);
 
         // 读取各光照类型的数据
-        diffuseIlluminationData tmp   = fetchDiffuse(pix);
-        vec3IlluminationData tmp2     = fetchReflect(pix);
-        vec3IlluminationData tmp3     = fetchRefract(pix);
+        diffuseIlluminationData tmp = fetchDiffuse(pix);
+        vec3IlluminationData tmp2 = fetchReflect(pix);
+        vec3IlluminationData tmp3 = fetchRefract(pix);
 
         // 保存当前漫反射数据到历史缓冲区 (供下一帧 100.glsl 使用)
         // Temporal history now lives in unified diffuseIlluminationBuffer (binding 2).
@@ -76,11 +77,11 @@ void main() {
         // albedo2: 漫反射/折射反照率 (非金属分量)
         // albedo:  镜面反射反照率 (金属/镜面分量)
         fragColor.xyz = data.absorption
-                      * ((project_SH_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2))
-                          + tmp3.data_swap) * data.albedo2
-                         + tmp2.data_swap * data.albedo
-                         + data.light)
-                      + data.emission;
+                * ((project_SH_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2))
+                    + tmp3.data_swap) * data.albedo2
+                    + tmp2.data_swap
+                    + data.light)
+                + data.emission;
         // // 调试输出: 直接输出各分量的线性组合，验证时域累积效果
         // fragColor.xyz = project_SH_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2));
         // fragColor.xyz = tmp2.data_swap * data.albedo;
