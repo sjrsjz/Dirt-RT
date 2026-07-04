@@ -82,7 +82,7 @@ void main() {
                     + data.light)
                 + data.emission;
         // // 调试输出: 直接输出各分量的线性组合，验证时域累积效果
-        fragColor.xyz = project_alice_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2));
+        // fragColor.xyz = project_alice_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2));
         // fragColor.xyz = tmp2.data_swap * data.albedo;
         // fragColor.xyz = normalize(abs(tmp.data_swap.aliceY.xyz));
         // fragColor.xyz = vec3(alice_estimator_variance(tmp.data_swap.aliceY, tmp.weight));
