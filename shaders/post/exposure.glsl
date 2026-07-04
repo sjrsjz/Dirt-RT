@@ -4,7 +4,7 @@ layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 const ivec3 workGroups = ivec3(1, 1, 1);
 
 #include "/lib/buffers/frame_data.glsl"
-#include "/lib/colors.glsl"
+#include "/lib/common.glsl"
 #include "/lib/settings.glsl"
 #include "/lib/constants.glsl"
 
@@ -17,6 +17,10 @@ uniform float viewWidth;
 uniform float viewHeight;
 
 const int NUM_SAMPLES = 33;
+
+float calculateExposure(float avgLuminance) {
+    return 10.0 / (9.6 * avgLuminance);
+}
 
 void main() {
     // --- Delta time & state updates ---
@@ -38,7 +42,7 @@ void main() {
         vec2 uv = vec2(0.5) + vec2(cos(theta), sin(theta)) * r * 0.45; 
         
         vec3 c = texture(colortex1, uv).rgb * EXPOSURE_S;
-        float luma = max(luminance(c), 1e-4);
+        float luma = max(luma(c), 1e-4);
         float logL = log2(luma);
         
         logLumas[i] = logL;

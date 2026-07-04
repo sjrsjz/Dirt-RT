@@ -4,6 +4,10 @@
 
 uint iFrame = 0;
 
+void setFrame(uint frame) {
+    iFrame = frame;
+}
+
 struct material {
     vec3 Cs;
     vec3 Cd;

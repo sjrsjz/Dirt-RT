@@ -15,7 +15,7 @@
 
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/constants.glsl"
-#include "/lib/tonemap.glsl"
+#include "/lib/post_processing/tonemap.glsl"
 
 in vec2 texCoord;
 

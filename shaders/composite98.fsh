@@ -1,7 +1,7 @@
 #version 430
 // 最终合成: bloom(colortex1) + scene(colortex0) -> mix + tonemap + gamma
-#include "/lib/bloom.glsl"
-#include "/lib/tonemap.glsl"
+#include "/lib/post_processing/bloom.glsl"
+#include "/lib/post_processing/tonemap.glsl"
 in vec2 texCoord;
 uniform sampler2D colortex0;
 uniform sampler2D colortex1;

@@ -12,7 +12,7 @@
 //   colortex4 = (f16(R,G) | f16(B,roughness) | f16(variance, virtualProjDist) | oct(surfaceNormal))
 //   variance < 0 = 主天空 mask; weight 不写入 (由 101 直接写 image)
 //
-// TileSample 紧凑打包为 3 个 vec4 (48B), 避免 vec3 在 std140 shared 内存中的对齐填充.
+// TileSample 紧凑打包为 3 个 vec4 (48B), 避免 vec3 在 std430 shared 内存中的对齐填充.
 // ===========================================================================
 
 layout(local_size_x = 16, local_size_y = 16) in;

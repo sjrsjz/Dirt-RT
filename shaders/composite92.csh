@@ -2,7 +2,7 @@
 // 级联下采样 L0 -> L1+L2+L3
 layout(local_size_x=16,local_size_y=16) in;
 layout(rgba16f) uniform image2D bloomAtlas;
-#include "/lib/bloom.glsl"
+#include "/lib/post_processing/bloom.glsl"
 void main(){
     ivec2 localPix=ivec2(gl_GlobalInvocationID.xy);
     ivec2 atlasSize=imageSize(bloomAtlas);

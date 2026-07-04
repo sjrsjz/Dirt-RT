@@ -7,6 +7,7 @@
 #extension GL_EXT_shader_8bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types : require
 #extension GL_ARB_shader_texture_lod : enable
+#extension GL_EXT_scalar_block_layout : require
 
 #include "/lib/rt/data.glsl"
 #include "/lib/rt/payload.glsl"
@@ -16,7 +17,7 @@ layout(location = 6) rayPayloadInEXT Payload payload;
 
 hitAttributeEXT vec2 baryCoord;
 
-layout(std140, binding = 0) uniform CameraInfo {
+layout(std430, binding = 0) uniform CameraInfo {
     vec3 corners[4];
     mat4 viewInverse;
     vec3 sunAngle;

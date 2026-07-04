@@ -4,7 +4,7 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : enable
 #extension GL_EXT_ray_tracing : enable
 #extension GL_ARB_shader_texture_lod : enable
-#define IN_VULKANITE
+#extension GL_EXT_scalar_block_layout : require
 
 #define PREV_DIFFUSE_BUFFER
 
@@ -12,12 +12,13 @@
 #include "/lib/constants.glsl"
 #include "/lib/settings.glsl"
 #include "/lib/sky.glsl"
-#include "/lib/colors.glsl"
-#include "/lib/quaternions.glsl"
+#include "/lib/math/quaternions.glsl"
 #include "/lib/buffers/denoise.glsl"
 #include "/lib/buffers/frame_data.glsl"
+#include "/lib/common.glsl"
 
-layout(std140, binding = 0) uniform CameraInfo {
+
+layout(std430, binding = 0) uniform CameraInfo {
     vec3 corners[4];
     mat4 viewInverse;
     vec4 sunPosition;
@@ -34,8 +35,6 @@ layout(location = 6) rayPayloadEXT Payload payload;
 
 void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir);
 
-#include "/lib/common.glsl"
-
 bool isDarkened = false;
 
 void main() {
@@ -46,13 +45,13 @@ void main() {
     vec3 target = mix(mix(cam.corners[0], cam.corners[2], p.y), mix(cam.corners[1], cam.corners[3], p.y), p.x);
     vec3 direction = normalize((cam.viewInverse * vec4(target.xyz, 0.0)).xyz);
 
-    iFrame = cam.frameId;
+    setFrame(cam.frameId);
     isDarkened = world_type_global != WORLD_OVERWORLD && world_type_global != WORLD_THE_END && world_type_global != WORLD_THE_NETHER;
 
     vec4 celestialQuat = quatAxisAngle(vec3(1, 0, 0), radians(sunPathRotation));
     vec3 sunDir = quatRotate(normalize(mat3(cam.viewInverse) * cam.sunPosition.xyz), celestialQuat);
 
-    wseed = floatBitsToUint(rand(direction * iFrame));
+    wseed = floatBitsToUint(rand(direction * cam.frameId));
 
     vec3 seed0 = vec3(randcore4(), randcore4(), randcore4());
     wseed3.x = floatBitsToUint(seed0.x);

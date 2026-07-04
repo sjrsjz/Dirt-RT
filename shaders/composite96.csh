@@ -4,7 +4,7 @@ layout(local_size_x = 1, local_size_y = 256) in;
 layout(rgba16f) uniform image2D bloomBlur;
 layout(rgba16f) uniform writeonly image2D bloomAtlas;
 
-#include "/lib/bloom.glsl"
+#include "/lib/post_processing/bloom.glsl"
 
 const uint GROUP_SIZE = 256u;
 const int  RADIUS  = 16;

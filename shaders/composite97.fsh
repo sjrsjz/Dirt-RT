@@ -1,6 +1,6 @@
 #version 430
 // 上采样合成: bloomAtlas L0..L8 -> colortex1 (双三次 Catmull-Rom, C1 连续)
-#include "/lib/bloom.glsl"
+#include "/lib/post_processing/bloom.glsl"
 in vec2 texCoord;
 uniform sampler2D bloomAtlas_Sampler;
 uniform vec2 resolution;

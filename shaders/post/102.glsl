@@ -21,7 +21,6 @@
 
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
-#include "/lib/tonemap.glsl"
 #include "/lib/buffers/denoise.glsl"
 
 // ---------------------------------------------------------------------------
