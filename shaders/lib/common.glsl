@@ -102,7 +102,13 @@ uvec3 whash3(uvec3 seed)
 
 float getRandom() {
     wseed3 = whash3(wseed3.yzx);
-    return fract(float(wseed3.x) * (1.0 / 4294967296.0));
+    // 1. 右移 9 位，提取 wseed3.x 中高 23 位具有随机性的比特作为浮点数尾数 (Mantissa)
+    // 2. 与 0x3F800000u 进行位或。
+    //    在 IEEE 754 格式中，该操作将符号位置为 0，指数位设为 127，构造出 [1.0, 2.0) 之间的浮点数
+    uint m = (wseed3.x >> 9) | 0x3F800000u;
+    
+    // 3. 将其解释为浮点数，然后减去 1.0，得到严格在 [0.0, 1.0) 之间无损、均匀的随机数
+    return uintBitsToFloat(m) - 1.0;
 }
 
 vec3 randomDirection(vec3 pos) {

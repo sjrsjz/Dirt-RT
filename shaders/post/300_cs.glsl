@@ -136,6 +136,8 @@ void main() {
     AliceEncoding center_alice;
     float center_var_est;
     unpackLightSampleSM(center_idx, center_pos, center_normal, center_alice, center_var_est);
+    center_var_est = max(center_var_est, 1e-9); // 方差预滤波, 避免降噪器崩溃
+    float inv_sqrt_sigma2 = SVGF_PHI_L * inversesqrt(center_var_est);
 
     #if ENABLE_GAUSSIAN_FILTER == 1
     float geomValid = float(center_alice.aliceY.w >= 0.0);
@@ -156,9 +158,6 @@ void main() {
     // B‑样条权重核 (中心 1.0, 十字 0.66667)
     float hw[2] = float[](1.0, 0.66667);
 
-    // 方差预滤波使得 sigma2 不再导致降噪器崩溃
-    float sigma2 = max(center_var_est, 1e-9);
-    float inv_sqrt_sigma2 = SVGF_PHI_L * inversesqrt(sigma2);
 
     // =========================================================================
     // Phase 3: 3×3 à‑trous 采样循环 — 全部从共享内存读取

@@ -90,7 +90,7 @@ void MixReflect() {
     ivec2 prevTexel = ivec2(floor(prevTexelcoord));
 
     float roughness = denoiseBuffer.data[idx].roughness;
-    float alpha = roughness * roughness;
+    float alpha = roughness * roughness + 1e-6;
     vec3 curVirtual = data2.pos + data2.normal;
     float curVproj = max(length(data2.normal), 0.001);
 

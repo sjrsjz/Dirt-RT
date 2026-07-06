@@ -544,8 +544,6 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
         case DIFFUSION:
         {
-            L_indirect = clamp(L_indirect, 0.0, 10000.0 * div_avgExposure);
-
             AliceEncoding indAlice = irradiance_to_alice(L_indirect / (first_albedo2 + 1e-3), first_rd_o);
             AliceEncoding dirAlice = irradiance_to_alice(L_direct_0 / (first_albedo2 + 1e-3), -lightDir);
 

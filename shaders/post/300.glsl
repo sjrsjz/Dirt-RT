@@ -83,6 +83,9 @@ void main() {
     // 跳过天空像素 — 方差被 swap2 复用作天空 mask
     if (center_var_est < 0.0) return;
 
+    center_var_est = max(center_var_est, 1e-9); // 方差预滤波, 避免降噪器崩溃
+    float inv_sqrt_sigma2 = SVGF_PHI_L * inversesqrt(center_var_est);
+
     // 高斯曲率标记: omega < 0 → 几何不可靠, geomValid=0 跳过几何权重
     #if ENABLE_GAUSSIAN_FILTER == 1
     float geomValid = float(center_alice.aliceY.w >= 0.0);
@@ -112,10 +115,6 @@ void main() {
     AliceEncoding sample_alice;
     vec3 sample_world_pos, sample_normal;
     ivec2 sample_coord;
-
-    // 方差预滤波使得下面的 sigma2 不再会导致降噪器彻底崩溃
-    float sigma2 = max(center_var_est, 1e-9);
-    float inv_sqrt_sigma2 = SVGF_PHI_L * inversesqrt(sigma2);
 
     // ---- 主采样循环 --------------------------------------------------------
     for (int i = -1; i <= 1; i++) {
