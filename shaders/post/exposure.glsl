@@ -16,10 +16,15 @@ uniform float wetness;
 uniform float viewWidth;
 uniform float viewHeight;
 
-const int NUM_SAMPLES = 33;
+const int NUM_SAMPLES = 128;
+
 
 float calculateExposure(float avgLuminance) {
-    return 10.0 / (9.6 * avgLuminance);
+    // 1. 针对标准 100 nits 屏幕的基础曝光值
+    float baseExposure = 0.249 / max(avgLuminance, 1e-20);    
+    // 指数 0.7 代表了 Stevens' Power Law 在暗/暗过渡环境下的感知折中
+    float exposureCorrection = pow(100.0 / DISPLAY_MAX_LUMINANCE, 0.7);
+    return baseExposure * exposureCorrection;
 }
 
 void main() {
@@ -41,7 +46,7 @@ void main() {
         float r = sqrt(float(i) + 0.5) / sqrt(float(NUM_SAMPLES));
         vec2 uv = vec2(0.5) + vec2(cos(theta), sin(theta)) * r * 0.45; 
         
-        vec3 c = texture(colortex1, uv).rgb * EXPOSURE_S;
+        vec3 c = texture(colortex1, uv).rgb;
         float luma = max(luma(c), 1e-4);
         float logL = log2(luma);
         
@@ -71,17 +76,17 @@ void main() {
     
     float currentLuma = exp2(final_log_luma);
 
-    float targetExposure = clamp(calculateExposure(currentLuma), 0.00025, 25.0);
+    float targetExposure = clamp(calculateExposure(currentLuma), 1e-10, 10.0);
 
     if (frameCounter <= 1) {
         avgExposure = targetExposure;
     } else {
         float adaptSpeed = (targetExposure < avgExposure) ? 3.0 : 0.8;
         avgExposure = exp2(mix(
-            log(avgExposure),
-            log(targetExposure),
+            log2(avgExposure),
+            log2(targetExposure),
             1.0 - exp2(-dTime_global * adaptSpeed * LOG2_E)
-        ) * LOG2_E);
+        ));
     }
     div_avgExposure = 1.0 / max(avgExposure, 1e-6);
 

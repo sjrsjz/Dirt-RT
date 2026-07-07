@@ -85,7 +85,7 @@ float sampleHeight(sampler2D tex, vec2 coord, vec4 atlas) {
 
 // 计算高度图偏导数
 vec2 computeDerivatives(vec2 coord, vec4 atlas) {
-    const float offset = 0.0005;
+    const float offset = 0.00025;
     float x_h_L = sampleHeight(blockTexNormal, coord + vec2(-offset * 2, 0), atlas);
     float x_h_R = sampleHeight(blockTexNormal, coord + vec2(offset * 2, 0), atlas);
     float y_h_L = sampleHeight(blockTexNormal, coord + vec2(0, -offset), atlas);

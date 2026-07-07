@@ -87,12 +87,12 @@ uniform sampler2D colortex0;
 // AABB 最小绝对范围 — 暗区保护的最后防线
 // 即使 extent≈0 且 σ≈0，也保证这么多绝对扩展，防止暗部信号被钳死
 #ifndef TEMPORAL_AABB_MIN_EXTENT
-#define TEMPORAL_AABB_MIN_EXTENT 0.25
+#define TEMPORAL_AABB_MIN_EXTENT 1.0
 #endif
 
 // AABB 全局缩放: 觉得整体偏激进/偏保守时优先调此项
 #ifndef TEMPORAL_AABB_BOX_SCALE
-#define TEMPORAL_AABB_BOX_SCALE 0.75
+#define TEMPORAL_AABB_BOX_SCALE 1.0
 #endif
 
 // AABB 有效邻域像素最低数量，低于此值则跳过钳制

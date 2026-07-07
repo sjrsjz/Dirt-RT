@@ -1,38 +1,53 @@
-option.useReSTIR = Use ReSTIR
-value.useReSTIR.1 = On
-value.useReSTIR.0 = Off
+# -- Ray Tracing --
+option.ACCUMULATION_LENGTH = Accumulation Length
+option.RAY_BOUNCES = Ray Bounces
 
-# Denoiser — Temporal accumulation
-option.TEMPORAL_NORMAL_PARAM = Temporal normal strictness
-option.TEMPORAL_POSITION_PARAM = Temporal position sensitivity
+# -- Material --
+option.REFRACTIVE_INDEX = Water IOR
+option.MAX_WETNESS = Max Wetness
 
-# Denoiser — Variance pre-filter
-option.VAR_FILTER_RADIUS = Variance filter radius
-option.VARIANCE_SCALE = Variance scale
+# -- Volumetric Light --
+option.SHARP_VOLUMETRIC_LIGHT = Volumetric Light Quality
+value.SHARP_VOLUMETRIC_LIGHT.1 = Sharp
+value.SHARP_VOLUMETRIC_LIGHT.0 = Soft
+option.VOLUMETRIC_LIGHT_SAMPLES = Volumetric Light Samples
 
-# Denoiser — SVGF spatial filter
-option.SVGF_NORMAL_POWER = SVGF normal power
-option.SVGF_PHI_L = SVGF luminance stop
-option.SVGF_POSITION_PARAM = SVGF depth sensitivity
-option.ENABLE_GAUSSIAN_FILTER = Gaussian curvature skip
+# -- Exposure & Display --
+option.DISPLAY_MAX_LUMINANCE = Display Peak Luminance
+option.EXPOSURE_CURVE_K = Exposure Curve
+
+# -- Bloom --
+option.BLOOM_MIX = Bloom Strength
+
+# -- Temporal Filter --
+option.TEMPORAL_NORMAL_PARAM = History Normal Rejection
+option.TEMPORAL_POSITION_PARAM = History Position Rejection
+
+# -- SVGF Denoiser --
+option.VAR_FILTER_RADIUS = Variance Filter Radius
+option.VARIANCE_SCALE = Variance Scale
+option.SVGF_NORMAL_POWER = SVGF Normal Edge Sensitivity
+option.SVGF_PHI_L = SVGF Luminance Edge Sensitivity
+option.SVGF_POSITION_PARAM = SVGF Depth Edge Sensitivity
+option.ENABLE_GAUSSIAN_FILTER = Geometry-Guided Filter
 value.ENABLE_GAUSSIAN_FILTER.1 = On
 value.ENABLE_GAUSSIAN_FILTER.0 = Off
 
-# ReSTIR
-option.RESTIR_SPATIAL_SAMPLES = ReSTIR spatial samples
-option.RESTIR_SPATIAL_RADIUS = ReSTIR spatial radius
-option.RESTIR_M_CAP = ReSTIR M-cap
+# -- Debug --
+option.DEBUG_VIEW = Debug View
+value.DEBUG_VIEW.0 = Normal
+value.DEBUG_VIEW.1 = Diffuse
+value.DEBUG_VIEW.2 = Refract
+value.DEBUG_VIEW.3 = Reflect
+value.DEBUG_VIEW.4 = White Model
+value.DEBUG_VIEW.5 = Light Field
+value.DEBUG_VIEW.6 = Normals
+value.DEBUG_VIEW.7 = Absorption
 
-option.RAY_BOUNCES = Bounce count
-option.REFRACTIVE_INDEX = Refractive index
-option.ACCUMULATION_LENGTH = Accumulation length
-option.MAX_WETNESS = Max wetness
-option.EXPOSURE_S = Exposure factor
-
-# Bloom
-option.BLOOM_MIX = Bloom amount
-
-option.SHARP_VOLUMETRIC_LIGHT = Sharp volumetric light
-option.VOLUMETRIC_LIGHT_SAMPLES = Volumetric light samples
-value.SHARP_VOLUMETRIC_LIGHT.1 = Sharp
-value.SHARP_VOLUMETRIC_LIGHT.0 = Real
+# -- ReSTIR --
+option.useReSTIR = Use ReSTIR
+value.useReSTIR.1 = On
+value.useReSTIR.0 = Off
+option.RESTIR_SPATIAL_SAMPLES = ReSTIR Spatial Samples
+option.RESTIR_SPATIAL_RADIUS = ReSTIR Spatial Radius
+option.RESTIR_M_CAP = ReSTIR M-Cap

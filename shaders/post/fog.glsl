@@ -65,27 +65,50 @@ void main() {
         // swap3 already wrote the final filtered AliceEncoding + weight to the swap fields;
         // ray0.rgen reads from there via samplePrevDiffuse. No additional write needed.
 
-        // ---- 最终颜色合成 --------------------------------------------------
-        // 公式:
+        // ---- Debug view selector ----
+        #if DEBUG_VIEW == 0
+        // Normal: full composition
         //   color = absorption × [
         //       (diffuse_irradiance + refract_color) × albedo2
         //     + reflect_color × albedo
         //     + direct_light
         //   ] + emission
-        //
-        // albedo2: 漫反射/折射反照率 (非金属分量)
-        // albedo:  镜面反射反照率 (金属/镜面分量)
         fragColor.xyz = data.absorption
                 * ((project_alice_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2))
                     + tmp3.data_swap) * data.albedo2
-                    + tmp2.data_swap
+                    //+ tmp2.data_swap
                     + data.light)
                 + data.emission;
-        // // 调试输出: 直接输出各分量的线性组合，验证时域累积效果
-        // fragColor.xyz = project_alice_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2));
-        // fragColor.xyz = tmp2.data_swap * data.albedo;
-        // fragColor.xyz = normalize(abs(tmp.data_swap.aliceY.xyz));
-        // fragColor.xyz = vec3(alice_estimator_variance(tmp.data_swap.aliceY, tmp.weight));
-        // fragColor.xyz = vec3(tmp.weight);
+
+        #elif DEBUG_VIEW == 1
+        // Diffuse only: irradiance × albedo2
+        fragColor.xyz = project_alice_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2)) * data.albedo2;
+
+        #elif DEBUG_VIEW == 2
+        // Refract only
+        fragColor.xyz = tmp3.data_swap * data.albedo2;
+
+        #elif DEBUG_VIEW == 3
+        // Reflect only
+        fragColor.xyz = tmp2.data_swap * data.albedo;
+
+        #elif DEBUG_VIEW == 4
+        // White model: diffuse irradiance only, no albedo
+        fragColor.xyz = project_alice_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2));
+
+        #elif DEBUG_VIEW == 5
+        // Light field: ALICE normalized dominant direction × energy
+        fragColor.xyz = 2.0 * abs(tmp.data_swap.aliceY.xyz / max(tmp.data_swap.aliceY.w, 1e-6));
+
+        #elif DEBUG_VIEW == 6
+        // Normals: world-space normal as RGB
+        vec3 dbg_n = decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2);
+        fragColor.xyz = dbg_n * 0.5 + 0.5;
+
+        #elif DEBUG_VIEW == 7
+        // Absorption / atmospheric transmission
+        fragColor.xyz = data.absorption;
+
+        #endif
     }
 }
