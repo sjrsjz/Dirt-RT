@@ -44,7 +44,11 @@
     #set align(left)
     #text(size: 10pt, fill: luma(80))[
       *开源声明 (License)* \
-      本文档提出的 ALICE 光照编码理论及配套的 GLSL / HLSL 着色器实现代码均采用 *MIT License* 开源。允许任何个人和企业免费用于学术研究、商业游戏引擎及离线渲染器开发。在分发或使用本算法的核心代码时，请保留原作者署名及本声明。
+      *文档本体*（文字内容、插图与理论阐述）采用 *知识共享 署名 4.0 国际（CC BY 4.0）* 协议 \
+      （#link("https://creativecommons.org/licenses/by/4.0/")[https://creativecommons.org/licenses/by/4.0/]）： \
+      任何人均可在署名作者的前提下自由复制、修改、再分发与商业使用本文档本体；再分发或改编时须保留本署名及许可声明，并注明是否对原文档作出修改。\
+      *配套代码*（GLSL / HLSL 着色器实现）仍采用 *MIT License* 开源，允许任何个人与企业免费用于学术研究、商业游戏引擎及离线渲染器开发；分发或使用核心算法代码时请保留原作者署名及本声明。\
+      *署名 (Attribution)*：作者 sjrsjz（#link("https://github.com/sjrsjz")[GitHub: sjrsjz] / sjrsjz\@gmail.com），标题《Asymmetric Laplace Isomorphic Conic Encoding 技术文档》。
     ]
   ]
 ]

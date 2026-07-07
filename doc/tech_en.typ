@@ -44,7 +44,12 @@
     #set align(left)
     #text(size: 10pt, fill: luma(80))[
       *Open Source License* \
-      The ALICE lighting encoding theory and accompanying GLSL / HLSL shader implementation code presented in this document are released under the *MIT License*. Any individual or enterprise is permitted to use them free of charge for academic research, commercial game engine development, and offline renderer development. When distributing or using the core algorithm code, please retain the original author attribution and this notice.
+      *Document body* (text, figures and theoretical exposition): licensed under \
+      *Creative Commons Attribution 4.0 International (CC BY 4.0)* \
+      (#link("https://creativecommons.org/licenses/by/4.0/")[https://creativecommons.org/licenses/by/4.0/]). \
+      Anyone is free to copy, modify, redistribute and use this document commercially, provided the author is attributed; when redistributing or adapting, retain this attribution and license notice and indicate if the original document was modified.\
+      *Accompanying code* (GLSL / HLSL shader implementation): remains under the *MIT License*, free of charge for academic research, commercial game engine development and offline renderer development; retain the original author attribution and this notice when distributing or using the core algorithm code.\
+      *Attribution*: Author sjrsjz (#link("https://github.com/sjrsjz")[GitHub: sjrsjz] / sjrsjz\@gmail.com), title "Asymmetric Laplace Isomorphic Conic Encoding — Technical Document".
     ]
   ]
 ]
