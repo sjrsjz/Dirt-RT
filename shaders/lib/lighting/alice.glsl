@@ -41,29 +41,13 @@
 // ============================================================
 
 // ------------------------------------------------------------
-// 编码/解码
+// MC 样本编码
 // ------------------------------------------------------------
-
-// 将原始光照样本编码为线性嵌入表示
-vec4 alice_encode(vec3 v, float I) {
-    // ω = |v| + I
-    float omega = length(v) + I;
-    return vec4(v, omega);
-}
 
 // 编码 1spp 蒙特卡洛样本 (direction, radiance) 为嵌入表示
 vec4 alice_encode_sample(vec3 direction, float radiance) {
     // 直接使用方向向量和辐照度作为输入，编码为嵌入表示
     return vec4(normalize(direction) * radiance, radiance);
-}
-
-// 从嵌入表示中提取方向向量 v 和各向同性强度 I
-// 注意: 可能因数值误差 ω < |v|, 此时将 I 钳制为 0
-void alice_decode(vec4 encoded, out vec3 v, out float I) {
-    v = encoded.xyz;
-    float len_v = length(v);
-    // I = ω - |v|, 强制非负
-    I = max(0.0, encoded.w - len_v);
 }
 
 // ------------------------------------------------------------

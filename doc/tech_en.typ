@@ -68,88 +68,137 @@ This document aims to introduce a novel lighting encoding scheme along with its 
 = Modeling
 
 == First Principles
-We define the lighting state space as $S = RR^n times RR_(>=0)$.
-An arbitrary lighting encoding is represented as a 2-tuple $L = (arrow(v), I) in S$, where $arrow(v) in RR^n$ and $I in RR_(>=0)$.
+We define the lighting state space directly as the augmented cone:
 
-Define the energy metric function $omega(L) : S -> RR_(>=0)$ satisfying:
-$ omega(L) := abs(arrow(v)) + I $
+$ cal(C) = {(bold(v), omega) in RR^n times RR_(>=0) | omega >= |bold(v)|} $
 
-Define the component functions $ v(L) := bold(v), quad I(L) := I $.
+An arbitrary lighting encoding is represented as a 2-tuple $L = (bold(v), omega) in cal(C)$, where $bold(v) in RR^n$ is the directional moment and $omega in RR_(>=0)$ is the total irradiance. The lighting synthesis operator $T: "List"(cal(C)) -> cal(C)$ maps a set of signal samples to a synthesized lighting state, where $cal(L) in "List"(RR^n)$ is the input list of Monte Carlo samples.
 
-This modeling proceeds entirely from algebraic first principles (excluding additional physical assumptions) to derive the analytic form of the lighting synthesis operator $T: "List"(S) -> S$ (where $cal(L) in "List"(S)$ is the input list of lighting samples).
+#text(size: 10pt, fill: luma(100))[
+  *Design rationale:* the choice of state space $cal(C)$ is not an arbitrary stipulation, but a natural consequence jointly determined by the signal structure and probability theory (see the "Probabilistic Origin of the Cone Constraint" section for details).
+]
 
-The operator satisfies the following algebraic first-principle axioms:
+This modeling proceeds entirely from algebraic first principles and a signal-processing perspective (excluding additional physical assumptions) to derive the analytic form of the lighting synthesis operator $T$.
 
-+ *Associativity & Commutativity* \
+The operator satisfies the following algebraic axioms:
+
++ *Axiom 1 — Associativity & Commutativity (signal order-independence)* \
   The synthesis result is independent of the input order of samples and computational grouping. For any sample list $cal(L)$ and any disjoint partition $cal(L) = union.big_k cal(L)_k$, the operator satisfies:
   $ T(cal(L)) = T({ T(cal(L)_k) }) $
 
-+ *Energy Conservation* \
-  The total energy of the system is strictly conserved before and after synthesis. For any sample list $cal(L)$:
-  $ omega(T(cal(L))) = sum_(L_i in cal(L)) omega(L_i) $
+  #text(size: 10pt, fill: luma(100))[
+    *Signal perspective:* Monte Carlo samples form an unordered data stream; statistical extracted quantities should not depend on sample arrival order. Mathematically, this axiom provides Lie group symmetry guarantees for the underlying topology of the accumulation operation.
+  ]
 
-+ *Positive Homogeneity* \
++ *Axiom 2 — Irradiance Conservation (L1 amplitude additivity)* \
+  The total irradiance of the system is strictly conserved before and after synthesis. Irradiance is defined as the L1 norm of the signal. For any sample list $cal(L) = {bold(x)_i}$:
+  $ omega(T(cal(L))) = sum_(bold(x)_i in cal(L)) |bold(x)_i| $
+
+  #text(size: 10pt, fill: luma(100))[
+    *Signal perspective:* this is L1-norm additivity — the most fundamental amplitude conservation law in signal processing. In the Monte Carlo context, the total irradiance of the synthesized lighting equals the sum of irradiances from all sampled rays.
+  ]
+
++ *Axiom 3 — Directional Moment Fidelity (first-moment additivity)* \
+  The combined directional moment equals the vector superposition of the directional moments of each sample. For any sample list $cal(L) = {bold(x)_i}$:
+  $ bold(v)(T(cal(L))) = sum_(bold(x)_i in cal(L)) bold(x)_i $
+
+  Equivalent formulation: for any linear probe direction $bold(a) in RR^n$, its linear response to the synthesized lighting equals the superposition of the responses to all individual input samples:
+  $ bold(a) dot bold(v)(T(cal(L))) = sum_(bold(x)_i in cal(L)) bold(a) dot bold(x)_i $
+
+  #text(size: 10pt, fill: luma(100))[
+    *Signal perspective:* this is the additivity of the signal first moment (mean). The directional moment $bold(v)$ is the vector mean of the signal in $RR^n$ multiplied by the number of samples; its linear additivity is a fundamental structural property of signal space.
+  ]
+
++ *Axiom 4 — Positive Homogeneity* \
   When all inputs are scaled uniformly, the synthesized result is scaled by the same factor. For any non-negative scalar $lambda >= 0$:
-  $ T({lambda L_i}) = lambda T({L_i}) $
+  $ T({lambda bold(x)_i}) = lambda T({bold(x)_i}) $
 
-+ *Directional Response Additivity / First-Moment Conservation* \
-  For any directional detector (i.e., any linear projection direction $bold(a) in RR^n$), its linear response to the synthesized lighting must equal the superposition of the responses to all individual input samples:
-  $ bold(a) dot v(T(cal(L))) = sum_(L_i in cal(L)) bold(a) dot v_i $
+  #text(size: 10pt, fill: luma(100))[
+    *Signal perspective:* when the signal is uniformly amplified by factor $lambda$, all statistical extracted quantities scale proportionally — the scale-covariance axiom in signal processing.
+  ]
 
 We define the auxiliary mean operator $ T_"avg" (cal(L)) = 1/(|cal(L)|) T(cal(L)) $ to represent the average lighting synthesis result of the input samples.
 
 == Operator Derivation
 
-=== Algebraic Isomorphism and Formal Deconstruction
-We map the lighting state space $S = RR^n times RR_(>=0)$ via the bijection $phi: S -> C$ into the more tractable convex cone $C subset RR^(n+1)$:
-$C = { (bold(x), y) in RR^(n+1) | y >= |bold(x)| }$.
+=== Direct Derivation
 
-The mapping and inverse mapping are defined as:
-$
-  phi(bold(v), I) := (bold(v), |bold(v)| + I) \
-  phi^(-1)(bold(x), y) := (bold(x), y - |bold(x)|)
-$
+From Axiom 2 (Irradiance Conservation) and Axiom 3 (Directional Moment Fidelity), the analytic form of the synthesis operator $T$ is *directly and uniquely determined*:
 
-In the isomorphic space $C$, the induced synthesis operator $T_C$ must satisfy the corresponding forms of the original axioms:
-- *Energy Conservation* directly locks the second coordinate (i.e., the vertical energy component) to be ordinary summation: $Omega_"res" = sum (|bold(v)_i| + I_i)$;
-- The newly introduced *Directional Response Additivity*, since the axiom holds for all probe directions $bold(a)$, the necessary and sufficient condition for equality strictly constrains the vector component synthesis on the base manifold to be ordinary vector addition: $bold(V)_"res" = sum bold(v)_i$.
-
-This summation result naturally satisfies the closure of the cone (the triangle inequality guarantees $|sum bold(v)_i| <= sum |bold(v)_i| <= Omega_"res"$).
-
-Pulling the result of $T_C$ back to $S$ via $phi^(-1)$ yields the unique analytic form of the lighting synthesis operator:
-#set math.equation(numbering: none)
-$
-  T(cal(L)) = ( sum_(L_i in cal(L)) bold(v)_i, sum_(L_i in cal(L)) I_i + sum_(L_i in cal(L)) |bold(v)_i| - |sum_(L_i in cal(L)) bold(v)_i| )
-$
+$ T(cal(L)) = (sum_(bold(x)_i in cal(L)) bold(x)_i, sum_(bold(x)_i in cal(L)) |bold(x)_i|) in cal(C) $
 
 Its corresponding mean operator is:
-$ T_"avg"(cal(L)) = ( E[bold(v)], E[I] + E[ |bold(v)| ] - |E[bold(v)]| ) $
+
+$ T_"avg"(cal(L)) = (E[bold(x)], E[ |bold(x)| ]) $
+
+=== Cone Closure Proof
+
+We must verify $T(cal(L)) in cal(C)$, i.e., prove $omega >= |bold(v)|$:
+
+$ omega = sum_i |bold(x)_i| >= |sum_i bold(x)_i| = |bold(v)| $
+
+This follows directly from the triangle inequality. $square$
+
+=== Linearity
+
+Introducing the augmented signal representation $tilde(bold(x)) = (bold(x), |bold(x)|) in RR^(n+1)$, the synthesis operator reduces to pure vector addition:
+
+$ T(cal(L)) = sum_(bold(x)_i in cal(L)) tilde(bold(x))_i $
+
+The mean operator is simply the mathematical expectation of the augmented signal:
+
+$ T_"avg"(cal(L)) = E[tilde(bold(x))] $
 
 === Uniqueness Proof
-The uniqueness of the synthesis operator is strictly guaranteed jointly by the bijective isomorphism $phi$ and the first-principle axioms:
-"Energy Conservation" independently and completely determines the closure characteristics of the scalar component (the total measure space dimension), thereby locking down the scalar product; "Directional Response Additivity" on top of the measure basis explicitly eliminates non-identity isotropic rescaling solutions (e.g., preventing nonlinear bias from amplifying or suppressing directional vector intensity). Furthermore, Associativity & Commutativity mathematically provides Lie group symmetry guarantees for the underlying topology of the accumulation operation. After the pull-back to $S$, the analytic form of $T$ must be unique — no other operator can violate this explicit form while simultaneously satisfying all the above axioms.
 
-== Linear Embedding of the Operator and Algorithmic Introduction
+The uniqueness of the synthesis operator is *independently and completely* guaranteed by Axiom 2 and Axiom 3:
 
-To strip away the nonlinear coupling introduced by the absolute norm in the original operator $T$, we follow the isomorphism idea from above and introduce, at the algorithmic level, the Isomorphism-induced Linear Operator $T^*: "List"(S) -> S$.
+- *Axiom 2* independently and completely locks the scalar component: $omega(T(cal(L))) = sum |bold(x)_i|$ is the unique scalar assignment satisfying Irradiance Conservation.
+- *Axiom 3* independently and completely locks the vector component: $bold(v)(T(cal(L))) = sum bold(x)_i$ is the unique vector assignment satisfying Directional Moment Fidelity.
+- Axiom 1 (Associativity \& Commutativity) provides Lie group symmetry guarantees for the accumulation operation, ruling out any non-commutative or non-associative synthesis schemes.
+- Axiom 4 (Positive Homogeneity) rules out any nonlinear dependence on sample count or magnitude.
 
-We map each lighting sample to its Linear Embedded Representation $cal(S)[L]$, reparameterizing it as the joint "vector–total energy" form:
-$ cal(S)[L] := (bold(v), omega(L)) = (bold(v), I + |bold(v)|) $
+The two core axioms (2 and 3) each independently and uniquely determine one component of the output state; no other operator can simultaneously satisfy both axioms. Hence the analytic form of $T$ is unique. $square$
 
-In this embedding space, the induced operator $T^*$ degenerates into elegant pure linear accumulation:
-$ T^*(cal(L)) = sum_(L_i in cal(L)) cal(S)[L_i] $
+== Probabilistic Origin of the Cone Constraint
 
-The corresponding induced mean operator is simply the linear mathematical expectation over the joint samples:
-$ T^*_"avg"(cal(L)) = E[cal(S)[L]] $
+This section explains why the cone constraint $omega >= |bold(v)|$ on state space $cal(C)$ is not an arbitrary stipulation but an inevitable consequence of probability theory.
 
-Based on the embedding and deconstruction of the above algebraic structure, the original mean operator $T_"avg"(cal(L))$ — which necessarily contains complex nonlinear terms — can be rigorously and uniquely decoupled into the difference of the "linear representation expectation" and a "post-hoc energy pull-back compensation":
-$
-  T_"avg"(cal(L)) = ( E[bold(v)], E[omega(L)] - |E[bold(v)]| ) = T^*_"avg"(cal(L)) - (bold(0), |bold(v)(T^*_"avg"(cal(L)))|)
-$
+=== Jensen's Inequality Guarantee
 
-*Algorithmic Significance:*
-This algebraic decoupling property exhibits penetrating engineering value. In computer graphics and real-time rendering, spatial filtering and denoising algorithms (such as SVGF and its derivative architectures) inherently rely heavily on various linear or convex combination operations (weighted summation, convolution, etc.).
-Our mathematical derivation provides a powerful proof: at the microscopic filtering loop level, the algorithm has absolutely no need to handle complex nonlinear lighting synthesis. In a real-world pipeline, we only need to perform extremely low-cost ordinary linear blending of samples in the embedding space $cal(S)$ (computing $T^*_"avg"$), and perform a single $O(1)$-complexity global norm correction at the final shading output stage. This architecture rigorously guarantees that the final filtered result absolutely conforms to all algebraic distribution axioms and the physical law of energy conservation invariance. This lays a solid theoretical foundation for designing lighting denoising pipelines that achieve both "mathematically rigorous unbiasedness" and "extremely high shading execution efficiency."
+For any probability measure $mu$ defined on $RR^n$ (with finite first moment and finite first absolute moment), by Jensen's inequality:
+
+$ E_mu[ |bold(x)| ] >= |E_mu[bold(x)]| $
+
+i.e., $omega >= |bold(v)|$. Therefore, any lighting state parameterized by $(bold(v), omega) = (E[bold(x)], E[ |bold(x)| ])$ *automatically falls within the cone* $cal(C)$.
+
+=== Reinterpretation of Boundary States
+
+The cone boundary $omega = |bold(v)|$ corresponds to Jensen's inequality taking equality, which occurs if and only if the distribution degenerates to a Dirac $delta$ function — i.e., all signal samples point in the same direction. This precisely corresponds to the raw single-sample ray state in the Monte Carlo pipeline before any spatial filtering:
+
+$ "single-sample:" quad (bold(v), omega) = (bold(x)_i, |bold(x)_i|), quad omega = |bold(v)| quad "(cone boundary)" $
+
+After spatial filtering and accumulation of multiple samples, due to the dispersion of the empirical distribution, Jensen's inequality holds strictly:
+
+$ "multi-sample:" quad omega = E[ |bold(x)| ] > |E[bold(x)]| = |bold(v)| quad "(cone interior)" $
+
+=== Physical Meaning of the Jensen Gap
+
+Define the Jensen gap:
+
+$ I = omega - |bold(v)| = E[ |bold(x)| ] - |E[bold(x)]| >= 0 $
+
+$I$ measures the degree to which the signal distribution deviates from the Dirac state (perfectly directional). In the physical correspondence, $I$ is equivalent to the "thermal energy" of the photon gas — $I = 0$ corresponds to absolute zero (purely directional light), $I > 0$ corresponds to finite temperature (an isotropic diffuse scattering component is present).
+
+== Algorithmic Significance
+
+This section elaborates the engineering value of the above algebraic structure for real-time rendering pipelines.
+
+In computer graphics and real-time rendering, spatial filtering and denoising algorithms (such as SVGF and its derivative architectures) inherently rely heavily on various linear or convex combination operations (weighted summation, convolution, etc.).
+
+The mathematical derivation above provides a powerful proof: *the synthesis operator $T$ is pure vector addition in the augmented signal space*. In a real-world pipeline, we only need to perform extremely low-cost ordinary linear blending of samples in the augmented representation $tilde(bold(x)) = (bold(x), |bold(x)|)$ (computing $T_"avg"$), and the final filtered result will rigorously conform to all algebraic axioms and the Irradiance Conservation law.
+
+Because $T$ is inherently linear, *no post-hoc nonlinear correction is needed* — every operation in the filtering loop is a strict linear combination, and irradiance reconstruction $E(hat(arrow(n)))$ is deferred to a single pass at the shading output stage. This lays a solid theoretical foundation for designing lighting denoising pipelines that achieve both "mathematically rigorous unbiasedness" and "extremely high shading execution efficiency."
 
 = Statistical Model
 
@@ -157,9 +206,9 @@ Our mathematical derivation provides a powerful proof: at the microscopic filter
 
 The first principles of the synthesis operator $T$ only constrain the algebraic structure and contain no statistical semantics themselves. However, a real-world denoising pipeline inherently needs to process random signals based on Monte Carlo (MC) sampling. In order to connect it to the denoising pipeline while introducing the minimum amount of ad-hoc prior bias at the statistical level, we adopt the Maximum Entropy Principle @jaynes1957information from information theory to construct, for a single lighting state $L$, the probability distribution that it implicitly encodes.
 
-In a real-world MC sampling pipeline, the pure raw radiance carried by a single cast ray is the boundary-end state $L_("raw") = (bold(x), 0)$ containing no isotropic low-frequency energy. Its linear embedded representation equals $phi(L_("raw")) = (bold(x), |bold(x)|)$, lying strictly on the boundary of the isomorphic cone. After operator filtering (accumulation), the resulting internal local lighting state $L = (bold(v), I)$ has total energy $omega = |bold(v)| + I$ (where typically $omega > |bold(v)|$).
+In a real-world MC sampling pipeline, the output $bold(x)_i = hat(bold(d))_i dot E_i$ of a single ray bounce corresponds to the lighting state $(bold(x)_i, |bold(x)_i|)$, lying strictly on the boundary of the cone $cal(C)$ — because the empirical distribution of a single sample is a Dirac $delta$ function, Jensen's inequality takes equality. After operator filtering (accumulation), the resulting internal local lighting state $(bold(v), omega)$ has $omega > |bold(v)|$ due to the dispersion of the multi-sample empirical distribution, with Jensen's inequality holding strictly.
 
-We treat $cal(S)[L] = (bold(v), omega)$ as a sufficient observational constraint on the local lighting field. Based on the Maximum Entropy Principle, we seek a maximum-entropy probability density distribution $p(bold(x))$ defined on the continuous momentum space $bold(x) in RR^n$, satisfying:
+We treat $(bold(v), omega) = (E[bold(x)], E[ |bold(x)| ])$ as a sufficient observational constraint on the local lighting field. Based on the Maximum Entropy Principle, we seek a maximum-entropy probability density distribution $p(bold(x))$ defined on the continuous momentum space $bold(x) in RR^n$, satisfying:
 
 $
     "Maximize" quad & H[p] = - integral_(RR^n) p(bold(x)) log p(bold(x)) d bold(x) \
@@ -218,9 +267,9 @@ $ "Var"_("scalar")(bold(X)) = (2omega^2 + omega sqrt(4omega^2 - 3|bold(v)|^2)) /
 
 In a Shader, considering the amortization effect, if the expected effective temporal accumulation frame count of a sample is $N_("eff")$, then the residual variance of the current pixel's estimator is $"Var"_("estimator") = "Var"_("scalar")(bold(X)) / N_("eff")$. This term can directly serve as the adaptive dynamic bandwidth $sigma_c^2$ equivalently implemented by a bilateral filter.
 
-=== Joint Variance in the $T^*$ Embedding Space $(bold(X), |bold(X)|)$
+=== Joint Variance in the Augmented Signal Space $(bold(X), |bold(X)|)$
 
-Since the algorithmic carrier of lighting synthesis actually operates in the linear embedding space $bold(Y) = (bold(X), R) = (bold(X), |bold(X)|)$, its complete joint covariance block matrix is crucial for the spatiotemporal filter (it supports more complex covariance evaluation via the $delta$-method):
+Since the algorithmic carrier of lighting synthesis actually operates in the augmented signal space $bold(Y) = (bold(X), R) = (bold(X), |bold(X)|)$, its complete joint covariance block matrix is crucial for the spatiotemporal filter (it supports more complex covariance evaluation via the $delta$-method):
 
 $ op("Cov")(bold(Y)) = mat(op("Cov")(bold(X)), op("Cov")(bold(X), R); op("Cov")(R, bold(X)), op("Var")(R)) $
 
@@ -364,7 +413,7 @@ The above algebraically restructured formula contains only basic arithmetic inst
 // High-precision O(1) diffuse irradiance reconstruction based on maximum entropy distribution
 // Parameters:
 //   v     - direction vector of the lighting after spatial filtering (v = L.v)
-//   omega - joint total energy after spatial filtering (omega = L.I + |L.v|)
+//   omega - total irradiance after spatial filtering
 //   N     - surface unit normal vector of the current pixel
 float ReconstructDiffuseLighting(float3 v, float omega, float3 N)
 {
@@ -424,7 +473,7 @@ The ALICE denoising pipeline adopts a multi-pass architecture, performing progre
     #table(
       columns: (auto, auto, auto),
       [*Pass*], [*Shader*], [*Function*],
-      [100], [fragment], [Temporal accumulation: reprojects history frames using motion vectors, performs temporal recursive filtering in ALICE embedding space],
+      [100], [fragment], [Temporal accumulation: reprojects history frames using motion vectors, performs temporal recursive filtering in ALICE augmented space],
       [swap2], [compute], [Variance pre-filtering: $5 times 5$ geometry-aware bilateral filter smooths raw ALICE variance; $3 sigma$ energy clamping],
       [300_cs], [compute], [Spatial filtering L1—L3: à-trous wavelet decomposition $R_0 in {1, 2, 4}$, accelerated via shared memory],
       [300], [fragment], [Spatial filtering L4—L6: à-trous wavelet decomposition $R_0 in {8, 16, 32}$, rotation jitter decorrelation],
@@ -433,7 +482,7 @@ The ALICE denoising pipeline adopts a multi-pass architecture, performing progre
   ]
 ]
 
-Pass 100 (Temporal Accumulation) uses motion vectors to reproject the history frame's ALICE encoding to the current frame, performing exponential moving average in the embedding space. The details of this pass are beyond the scope of this section, which focuses on the three core passes of spatial-domain denoising: swap2 (variance pre-filtering), 300/300_cs (spatial filtering), and swap3 (buffer swap).
+Pass 100 (Temporal Accumulation) uses motion vectors to reproject the history frame's ALICE encoding to the current frame, performing exponential moving average in the augmented space. The details of this pass are beyond the scope of this section, which focuses on the three core passes of spatial-domain denoising: swap2 (variance pre-filtering), 300/300_cs (spatial filtering), and swap3 (buffer swap).
 
 #text(size: 11pt, fill: rgb("#8B0000"))[
   *⚠ Critical Note:* Although this denoiser references the à-trous wavelet decomposition framework of SVGF @schied2017svgf in its architecture, it differs fundamentally from standard SVGF in key dimensions including *signal domain, weight functions, variance estimation, and preprocessing strategy*. The following sections explicitly mark these differences at the relevant positions. A summary of the core differences is provided in the table below.
@@ -446,11 +495,11 @@ Pass 100 (Temporal Accumulation) uses motion vectors to reproject the history fr
       [*Dimension*], [*Standard SVGF*], [*This Denoiser*],
       [*Signal Domain*],
       [RGB 3-channel color (radiometric space)],
-      [ALICE embedded representation $cal(S)[L] = (bold(v), omega)$ (4D linear space), chrominance $("Co", "Cg")$ filtered independently],
+      [ALICE augmented representation $(bold(v), omega)$ (4D linear space), chrominance $("Co", "Cg")$ filtered independently],
 
       [*Synthesis Operator*],
       [Nonlinear (must handle nonlinear combinations in color space)],
-      [Purely linear $T^*$ operator — sample accumulation in embedding space is simply vector addition, guaranteed by the ALICE algebraic structure],
+      [Purely linear $T$ operator — sample accumulation in augmented space is simply vector addition, guaranteed by the ALICE algebraic structure],
 
       [*Variance Estimation*],
       [Local empirical variance over color channels],
@@ -461,7 +510,7 @@ Pass 100 (Temporal Accumulation) uses motion vectors to reproject the history fr
       [ALICE vector space distance $|bold(v)_"center" - bold(v)_"sample"|$ + pre-filtered variance normalization],
 
       [*Energy Clamping*], [None], [$3 sigma$ energy clamping (swap2), preserving $rho = (|bold(v)|)/omega$ unchanged],
-      [*Temporal Accumulation*], [Exponential moving average in RGB color space], [Direct linear accumulation in ALICE embedding space, $w$ is exactly the effective frame count $N_"eff"$],
+      [*Temporal Accumulation*], [Exponential moving average in RGB color space], [Direct linear accumulation in ALICE augmented space, $w$ is exactly the effective frame count $N_"eff"$],
       [*Output Signal*],
       [Filtered RGB color],
       [Filtered $(bold(v), omega) + ("Co", "Cg")$, irradiance reconstruction ($E(arrow(n))$) deferred to a single shading stage],
@@ -485,7 +534,7 @@ The ALICE denoising pipeline uses a unified SSBO (Shader Storage Buffer Object) 
 + *Temporal History Domain (14B)*: The previous frame's accumulated ALICE encoding and accumulation weight, written by swap3, read by Pass 100.
 + *Swap Buffer Domain (14B)*: The current frame's to-be-filtered / already-filtered ALICE encoding and weight, serving as the data bus between Pass 100 → swap2 → 300 → swap3.
 
-ALICE encodings are stored using half-precision floating-point (float16) compression: each lighting state $cal(S)[L] = (bold(v), omega)$ as a `vec4` is packed into two `float`s (via `packHalf2x16` / `unpackHalf2x16`), and the chrominance component `CoCg` is packed into one `float`, making a total of 3 `float`s to fully represent a single ALICE lighting state. The compression/decompression interface is as follows:
+ALICE encodings are stored using half-precision floating-point (float16) compression: each lighting state $(bold(v), omega)$ as a `vec4` is packed into two `float`s (via `packHalf2x16` / `unpackHalf2x16`), and the chrominance component `CoCg` is packed into one `float`, making a total of 3 `float`s to fully represent a single ALICE lighting state. The compression/decompression interface is as follows:
 
 ```hlsl
 vec3 packAlice(AliceEncoding encoded) {
@@ -637,7 +686,7 @@ where:
 *Luminance Weight*:
 
 #text(fill: rgb("#8B0000"))[
-  *Difference from standard SVGF:* Standard SVGF's luminance weight is based on the RGB color space gradient $|L_i - L_j|$ (where $L_i$ is the pixel luminance). This denoiser measures differences in the ALICE embedding space — using the Euclidean distance of the direction vector $|bold(v)_"center" - bold(v)_"sample"|$. The mathematical justification for this choice is: $bold(v)$ is precisely the linearly additive signal component in the embedding space $cal(S)$, and its Euclidean distance directly measures the difference in the joint direction-energy space of the lighting, without going through an irradiance reconstruction step. Furthermore, since the variance pre-filter (swap2) has already smoothed $sigma^2$, the center pixel's pre-filtered variance is used directly as the normalization baseline (standard SVGF uses locally computed $sigma_"center"^2 + sigma_"sample"^2$ at each à-trous level):
+  *Difference from standard SVGF:* Standard SVGF's luminance weight is based on the RGB color space gradient $|L_i - L_j|$ (where $L_i$ is the pixel luminance). This denoiser measures differences in the ALICE augmented space — using the Euclidean distance of the direction vector $|bold(v)_"center" - bold(v)_"sample"|$. The mathematical justification for this choice is: $bold(v)$ is precisely the linearly additive signal component in the augmented space $cal(C)$, and its Euclidean distance directly measures the difference in the joint direction-energy space of the lighting, without going through an irradiance reconstruction step. Furthermore, since the variance pre-filter (swap2) has already smoothed $sigma^2$, the center pixel's pre-filtered variance is used directly as the normalization baseline (standard SVGF uses locally computed $sigma_"center"^2 + sigma_"sample"^2$ at each à-trous level):
 ]
 
 $ w_"luma" = (|bold(v)_"center" - bold(v)_"sample"|) / sqrt(sigma_"center"^2) dot phi_l $
@@ -679,16 +728,16 @@ $epsilon$ controls the upper bound of $1/sqrt(sigma^2)$ — since $1/sqrt(sigma^
 $ w_0 = w_"kernel" dot (1 + w_"luma") dot exp(-(w_"geom" + w_"luma")) $
 
 #text(fill: rgb("#8B0000"))[
-  *Difference from standard SVGF:* Standard SVGF's composite weight is $w_"kernel" dot exp(-(w_"geom" + w_"luma"))$, i.e., relying solely on exponential decay. The $(1 + w_"luma")$ prefactor introduced by this denoiser additionally provides first-order luminance-adaptive enhancement, delivering faster convergence and stronger denoising capability in high-variance regions (where $w_"luma"$ is large). This modification is particular to the ALICE embedding space — because $w_"luma"$ is based on the Euclidean distance of $bold(v)$ rather than an RGB gradient, its numerical range and statistical properties differ from standard SVGF.
+  *Difference from standard SVGF:* Standard SVGF's composite weight is $w_"kernel" dot exp(-(w_"geom" + w_"luma"))$, i.e., relying solely on exponential decay. The $(1 + w_"luma")$ prefactor introduced by this denoiser additionally provides first-order luminance-adaptive enhancement, delivering faster convergence and stronger denoising capability in high-variance regions (where $w_"luma"$ is large). This modification is particular to the ALICE augmented space — because $w_"luma"$ is based on the Euclidean distance of $bold(v)$ rather than an RGB gradient, its numerical range and statistical properties differ from standard SVGF.
 ]
 
-=== Sample Accumulation in ALICE Embedding Space
+=== Sample Accumulation in ALICE Augmented Space
 
 #text(fill: rgb("#8B0000"))[
-  *Fundamental difference from standard SVGF:* This is the most fundamental point of divergence between this denoiser and standard SVGF. Standard SVGF accumulates weighted color values $sum_i w_i bold(c)_i$ in RGB color space — linear combinations in color space do not correspond to physical lighting synthesis. This denoiser accumulates in the ALICE embedding space $cal(S)$ — guaranteed by the ALICE first principles, the $T^*$ operator in the embedding space is pure vector addition, so $sum_i w_i cal(S)[L_i]$ is mathematically strictly equivalent to the physical synthesis of lighting. The denoiser never needs to handle nonlinear synthesis logic at any step. This is the core advantage of ALICE encoding over traditional RGB denoising.
+  *Fundamental difference from standard SVGF:* This is the most fundamental point of divergence between this denoiser and standard SVGF. Standard SVGF accumulates weighted color values $sum_i w_i bold(c)_i$ in RGB color space — linear combinations in color space do not correspond to physical lighting synthesis. This denoiser accumulates in the ALICE augmented space $cal(C)$ — guaranteed by the ALICE first principles, the $T$ operator in the augmented space is pure vector addition, so $sum_i w_i tilde(bold(x))_i$ is mathematically strictly equivalent to the physical synthesis of lighting. The denoiser never needs to handle nonlinear synthesis logic at any step. This is the core advantage of ALICE encoding over traditional RGB denoising.
 ]
 
-Neighborhood samples are synthesized through pure linear accumulation in the ALICE embedding space (corresponding to the linearity of the $T^*$ operator derived earlier):
+Neighborhood samples are synthesized through pure linear accumulation in the ALICE augmented space (corresponding to the linearity of the $T$ operator derived earlier):
 
 $
   bold(v)_"accum" = sum_i w_i bold(v)_i, quad omega_"accum" = sum_i w_i omega_i, quad ("Co", "Cg")_"accum" = sum_i w_i ("Co", "Cg")_i
@@ -740,7 +789,7 @@ This operation provides additional convergence acceleration during cold starts, 
 
 Integrating the three passes above, the complete data flow of the ALICE denoising pipeline is as follows:
 
-1. *Pass 100 (Temporal Accumulation)*: Reads the historical ALICE encoding $arrow(L)_"hist"$ from the SSBO, performs weighted averaging with the current frame's RT output $arrow(L)_"curr"$ in the embedding space, and outputs $arrow(L)_"temp"$ along with the accumulation weight $w$.
+1. *Pass 100 (Temporal Accumulation)*: Reads the historical ALICE encoding $arrow(L)_"hist"$ from the SSBO, performs weighted averaging with the current frame's RT output $arrow(L)_"curr"$ in the augmented space, and outputs $arrow(L)_"temp"$ along with the accumulation weight $w$.
 2. *swap2 (Variance Pre-Filtering)*: Reads $arrow(L)_"temp"$ and $w$, computes the raw variance $sigma_"raw"^2$, performs $5 times 5$ bilateral smoothing + $3 sigma$ clamping + Gaussian curvature marking, and pushes the data to colortex3 (geometry) and colortex4 (ALICE + variance).
 3. *300_cs (Spatial Filtering L1—L3)*: Cooperatively loads from colortex3/4 into LDS, performs à-trous filtering with $R_0 in {1, 2, 4}$, and writes the result back to colortex4.
 4. *300 (Spatial Filtering L4—L6)*: Directly texelFetch from colortex3/4, performs à-trous filtering with $R_0 in {8, 16, 32}$ (including rotation jitter), and additionally outputs the final level to colortex5.
@@ -749,7 +798,11 @@ Integrating the three passes above, the complete data flow of the ALICE denoisin
 In compressed representation, the spatial filtering stage of the ALICE denoiser requires only two $"vec4"$s (32 bytes total) to fully represent all necessary geometric information (one $"vec4"$) and lighting information (one $"vec4"$).
 
 = Naming
-Following AI recommendations, this lighting encoding scheme is temporarily named `Asymmetric Laplace Isomorphic Conic Encoding` (abbreviated as `ALICE`). The name reflects its core mathematical structure: the cone-encoding characteristics of an asymmetric Laplace distribution (Asymmetric Laplace) in an isomorphic space, derived from the maximum entropy principle.
+This lighting encoding scheme is named Asymmetric Laplace Isomorphic Conic Encoding (abbreviated as ALICE). The name reflects its core mathematical and physical structure:
+
+- *Asymmetric Laplace*: the probability distribution derived from the maximum entropy principle belongs to the asymmetric Laplace distribution family;
+- *Isomorphic*: the encoding space $cal(C)$ is strictly isomorphic to the thermodynamic state space of a drifting massless photon gas in natural units ($c = 1$) — ALICE's directional moment is the photon gas's collective momentum, irradiance is the photon gas's total energy, and the maximum entropy distribution is the Maxwell-Jüttner distribution;
+- *Conic*: the state space is the convex cone $cal(C) = {(bold(v), omega) | omega >= |bold(v)|}$, whose cone constraint is naturally guaranteed by Jensen's inequality $E[ |bold(x)| ] >= |E[bold(x)]|$.
 
 = Physical Correspondence
 Although ALICE is derived entirely from first principles, it is strictly equivalent to the *Relativistic Statistical Mechanics* model in physics. Specifically, the maximum entropy distribution of ALICE corresponds exactly, in physical terms, to a *Drifting Massless Gas* (i.e., a drifting photon gas) in local thermodynamic equilibrium.
@@ -775,10 +828,10 @@ Within ALICE's mathematical formulas, there exists an extremely rigorous and ele
 Through this physical mapping, various complex macroscopic lighting phenomena encountered in real-time rendering can be endowed with intuitive and rigorous microscopic thermodynamic interpretations:
 
 - *Perfectly Diffuse Ambient Light ($rho = 0, kappa = 0$)* \
-  The drift velocity is zero, and the system is in a globally thermally equilibrated, isotropic state. Photons only possess random "thermal motion", corresponding to the pure scalar base light intensity $I$ in the ALICE encoding. This is equivalent to directionless uniform skylight or extremely well-converged multi-bounce low-frequency GI.
+  The drift velocity is zero, and the system is in a globally thermally equilibrated, isotropic state. Here $bold(v) = E[bold(x)] = bold(0)$, the Jensen gap reaches its maximum $I = omega$, and all energy manifests as random thermal motion. This is equivalent to directionless uniform skylight or extremely well-converged multi-bounce low-frequency GI.
 
 - *Perfectly Directional Light ($rho arrow.r 1, kappa arrow.r 1$)* \
-  The collective drift velocity of the photon gas approaches the speed of light. At this point, the system's relative temperature contracts toward absolute zero, and all random thermal motion (the isotropic component $I$) is entirely frozen out, converted into uniform directional kinetic energy. Macroscopically, this manifests as an absolutely parallel, intense direct beam of light (such as a high-frequency solar beam or laser).
+  The collective drift velocity of the photon gas approaches the speed of light. Here the Jensen gap $I = omega - |bold(v)| arrow.r 0$, the system temperature contracts toward absolute zero, the distribution degenerates into a Dirac $delta$ function along the drift direction, and all energy is converted into uniform directional kinetic energy. Macroscopically, this manifests as an absolutely parallel, intense direct beam of light (such as a high-frequency solar beam or laser).
 
 - *Soft Shadows and Penumbra Transitions ($0 < kappa < 1$)* \
   At the edges of soft shadows in practical scenes, the light field is in an intermediate non-equilibrium state between directional flow and thermal scattering. ALICE, through the parameter $kappa$, can extremely smoothly bridge these two extreme regimes, achieving physically self-consistent Contact Hardening and smooth soft-shadow gradients.
@@ -796,7 +849,7 @@ Through this physical mapping, various complex macroscopic lighting phenomena en
 
 In real-time path tracing, although Next Event Estimation (NEE) can effectively reduce the variance of direct lighting, for complex secondary bounces (such as deep corridors or room interiors with tiny windows), blind cosine-weighted sampling has extreme difficulty hitting effective light sources, causing indirect lighting to produce destructively high-frequency, long-tail noise (Fireflies).
 
-Since we have already extracted and reconstructed the maximum entropy distribution state $cal(S)[L] = (bold(v), omega)$ of the light field in the spatiotemporal domain using ALICE encoding within the denoising pipeline, we can naturally use it as *prior knowledge (Prior)* to perform Path Guiding over the hemispherical space when casting rays in the next frame.
+Since we have already extracted and reconstructed the maximum entropy distribution state $(bold(v), omega)$ of the light field in the spatiotemporal domain using ALICE encoding within the denoising pipeline, we can naturally use it as *prior knowledge (Prior)* to perform Path Guiding over the hemispherical space when casting rays in the next frame.
 
 Based on the maximum entropy angular energy density, we construct a guiding probability density function (PDF) defined on the full unit sphere $S^2$:
 $ p_"ALICE" (arrow(u)) = C / ((1 - kappa hat(bold(v)) dot arrow(u))^4) $

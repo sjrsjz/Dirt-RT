@@ -66,89 +66,149 @@
 
 = 建模
 
+== 信号视角的出发点
+
+在实时蒙特卡洛路径追踪管线中，单次射线弹射返回的原始信号为方向辐照度乘积：
+
+$ bold(x)_i = hat(bold(d))_i dot E_i in RR^n $
+
+其中 $hat(bold(d))_i$ 为射线方向的单位向量，$E_i$ 为该方向承载的辐照度标量。该信号的天然结构为：
+
+- *方向信息*：$hat(bold(d))_i = bold(x)_i / |bold(x)_i|$（信号朝向）
+- *辐照度幅度*：$E_i = |bold(x)_i|$（信号 L1 范数）
+
+我们将光照状态空间直接定义为增广锥：
+
+$ cal(C) = {(bold(v), omega) in RR^n times RR_(>=0) | omega >= |bold(v)|} $
+
+任意光照编码表示为二元组 $L = (bold(v), omega) in cal(C)$，其中 $bold(v) in RR^n$ 为方向矩，$omega in RR_(>=0)$ 为总辐照度。光照合成算子 $T: "List"(cal(C)) -> cal(C)$ 将一组信号样本映射为合成光照状态，其中 $cal(L) in "List"(RR^n)$ 为输入的蒙特卡洛样本列表。
+
+#text(size: 10pt, fill: luma(100))[
+  *设计依据：* 状态空间 $cal(C)$ 的选择并非人为规定，而是由信号结构与概率论共同决定的自然结果（详见「锥约束的概率论来源」一节）。
+]
+
 == 第一性原理
-我们将光照状态空间定义为 $S = RR^n times RR_(>=0)$。
-任意光照编码表示为二元组 $L = (arrow(v), I) in S$，其中 $arrow(v) in RR^n$，$I in RR_(>=0)$。
 
-定义能量度量函数 $omega(L) : S -> RR_(>=0)$ 满足：
-$ omega(L) := abs(arrow(v)) + I $
+本建模完全从代数第一性原理与信号处理视角出发（排除额外物理假设），推导光照合成算子 $T$ 的解析形式。其满足的代数公理如下：
 
-定义分量函数 $ v(L) := bold(v), quad I(L) := I $。
-
-本建模完全从代数第一性原理出发（排除额外物理假设），推导光照合成算子 $T: "List"(S) -> S$ 的解析形式（其中 $cal(L) in "List"(S)$ 为输入的光照样本列表）。
-
-其满足的代数第一性原理公理如下：
-
-+ *结合与交换不变性 (Associativity & Commutativity)* \
++ *公理 1 — 交换结合不变性（信号无序性）* \
   光照的合成结果与样本的输入顺序及计算分包无关。对于任意样本列表 $cal(L)$ 及其任意无交划分（Partition）$cal(L) = union.big_k cal(L)_k$，算子满足：
   $ T(cal(L)) = T({ T(cal(L)_k) }) $
 
-+ *能量守恒性 (Energy Conservation)* \
-  合成前后系统的总能量严格守恒。对于任意样本列表 $cal(L)$，满足：
-  $ omega(T(cal(L))) = sum_(L_i in cal(L)) omega(L_i) $
+  #text(size: 10pt, fill: luma(100))[
+    *信号视角：* 蒙特卡洛样本是一条无序数据流，统计提取量不应依赖样本到达顺序。该公理在数学上提供了累加操作底层拓扑的李群对称性保障。
+  ]
 
-+ *正一阶齐次性 (Positive Homogeneity)* \
++ *公理 2 — 辐照度守恒（L1 幅度可加性）* \
+  合成前后系统的总辐照度严格守恒。辐照度定义为信号的 L1 范数，对于任意样本列表 $cal(L) = {bold(x)_i}$，满足：
+  $ omega(T(cal(L))) = sum_(bold(x)_i in cal(L)) |bold(x)_i| $
+
+  #text(size: 10pt, fill: luma(100))[
+    *信号视角：* 这是 L1 范数的可加性——信号处理中最基本的幅度守恒律。在蒙特卡洛语境下，这意味着合成光照的总辐照度等于所有采样射线的辐照度之和。
+  ]
+
++ *公理 3 — 方向矩保真（一阶矩可加性）* \
+  组合后的方向矩等于各样本方向矩的向量叠加。对于任意样本列表 $cal(L) = {bold(x)_i}$，满足：
+  $ bold(v)(T(cal(L))) = sum_(bold(x)_i in cal(L)) bold(x)_i $
+
+  等价表述：对于任意线性探针方向 $bold(a) in RR^n$，其对合成光照的线性响应量等于对所有输入样本响应量的叠加：
+  $ bold(a) dot bold(v)(T(cal(L))) = sum_(bold(x)_i in cal(L)) bold(a) dot bold(x)_i $
+
+  #text(size: 10pt, fill: luma(100))[
+    *信号视角：* 这是信号一阶矩（均值）的可加性。方向矩 $bold(v)$ 即信号在 $RR^n$ 中的向量均值乘以样本数，其线性可加性是信号空间的基本结构性质。
+  ]
+
++ *公理 4 — 正一阶齐次性* \
   当所有输入等比例缩放时，合成后的结果亦等比例缩放。对于任意非负标量 $lambda >= 0$，满足：
-  $ T({lambda L_i}) = lambda T({L_i}) $
+  $ T({lambda bold(x)_i}) = lambda T({bold(x)_i}) $
 
-+ *方向响应可加性 / 一阶矩守恒 (Directional Response Additivity)* \
-  对于任意方向探测器（即任意线性投射方向 $bold(a) in RR^n$），其对合成光照的线性响应量必须等于对所有输入局部样本响应量的叠加。即：
-  $ bold(a) dot v(T(cal(L))) = sum_(L_i in cal(L)) bold(a) dot v_i $
+  #text(size: 10pt, fill: luma(100))[
+    *信号视角：* 信号整体放大 $lambda$ 倍，所有统计提取量等比例放大。这是信号处理中的尺度协变性公理。
+  ]
 
 我们辅助定义 $ T_"avg" (cal(L)) = 1/(|cal(L)|) T(cal(L)) $ 以表示输入样本的平均光照合成结果。
 
 == 算子的导出
 
-=== 代数同构与形式解构
-我们将光照状态空间 $S = RR^n times RR_(>=0)$ 通过双射 $phi: S -> C$ 映射到更易处理的凸锥 $C subset RR^(n+1)$ 中：
-$C = { (bold(x), y) in RR^(n+1) | y >= |bold(x)| }$。
+=== 直接推导
 
-映射与逆映射分别定义为：
-$
-  phi(bold(v), I) := (bold(v), |bold(v)| + I) \
-  phi^(-1)(bold(x), y) := (bold(x), y - |bold(x)|)
-$
+由公理 2（辐照度守恒）与公理 3（方向矩保真），合成算子 $T$ 的解析形式被*直接且唯一地确定*：
 
-在同构空间 $C$ 中，诱导的合成算子 $T_C$ 需要满足原始公理的对应形式：
-- 由 *能量守恒性* 直接锁定第二个坐标（即纵轴能量分量）为常规累加：$Omega_"res" = sum (|bold(v)_i| + I_i)$；
-- 由新引入的 *方向响应可加性* ，由于公理对所有探测方向 $bold(a)$ 均成立，故等式成立的充要条件严格限定了其底流形上的向量分量合成必须为普通向量求和：$bold(V)_"res" = sum bold(v)_i$。
-
-该求和结果自然满足锥的封闭性（三角不等式保证了 $|sum bold(v)_i| <= sum |bold(v)_i| <= Omega_"res"$）。
-
-将 $T_C$ 的结果经 $phi^(-1)$ 还原回 $S$，即得光照合成算子的唯一解析形式：
-#set math.equation(numbering: none)
-$
-  T(cal(L)) = ( sum_(L_i in cal(L)) bold(v)_i, sum_(L_i in cal(L)) I_i + sum_(L_i in cal(L)) |bold(v)_i| - |sum_(L_i in cal(L)) bold(v)_i| )
-$
+$ T(cal(L)) = (sum_(bold(x)_i in cal(L)) bold(x)_i, sum_(bold(x)_i in cal(L)) |bold(x)_i|) in cal(C) $
 
 其对应的均值算子为：
-$ T_"avg"(cal(L)) = ( E[bold(v)], E[I] + E[ |bold(v)| ] - |E[bold(v)]| ) $
+
+$ T_"avg"(cal(L)) = (E[bold(x)], E[ |bold(x)| ]) $
+
+=== 锥封闭性证明
+
+需验证 $T(cal(L)) in cal(C)$，即证明 $omega >= |bold(v)|$：
+
+$ omega = sum_i |bold(x)_i| >= |sum_i bold(x)_i| = |bold(v)| $
+
+上式由三角不等式直接保证。$square$
+
+=== 线性性
+
+引入增广信号表示 $tilde(bold(x)) = (bold(x), |bold(x)|) in RR^(n+1)$，则合成算子退化为纯向量加法：
+
+$ T(cal(L)) = sum_(bold(x)_i in cal(L)) tilde(bold(x))_i $
+
+均值算子即为增广信号的数学期望：
+
+$ T_"avg"(cal(L)) = E[tilde(bold(x))] $
 
 === 唯一性证明
-合成算子的唯一性严格由双射同构 $phi$ 与第一性公理共同保证：
-“能量守恒性”独立且完全决定了标量分量（总测度空间维度）的封闭特征，从而锁死标量积；“方向响应可加性”在测度基础上显式消除了非恒等的各向同性重放缩解（例如避免了对方向矢量强度的凸显或抑制造成的非线性偏置）。此外，结合与交换不变性在数学上提供了累加操作底层拓扑的李群对称性保障。反向拉回到 $S$ 后，$T$ 解析形式必须唯一，不可能存在违背该显式而又同时满足上述公理的其他算子。
 
-== 算子的线性嵌入与算法引入
+合成算子的唯一性由公理 2 与公理 3 *独立且完全地*保证：
 
-为剥离原始算子 $T$ 中由绝对泛数带来的非线性耦合，我们沿用前文的同构思想，在算法层面上引入算子 $T$ 的同构诱导线性表示（Isomorphism-induced Linear Operator）$T^*: "List"(S) -> S$。
+- *公理 2* 独立且完全地锁定了标量分量：$omega(T(cal(L))) = sum |bold(x)_i|$ 是唯一满足辐照度守恒的标量赋值。
+- *公理 3* 独立且完全地锁定了向量分量：$bold(v)(T(cal(L))) = sum bold(x)_i$ 是唯一满足方向矩保真的向量赋值。
+- 公理 1（交换结合不变性）提供了累加操作的李群对称性保障，排除了任何非交换或非结合的合成方案。
+- 公理 4（正齐次性）排除了任何对样本数量或幅度的非线性依赖。
 
-我们将光照样本映射为其线性嵌入表示（Linear Embedded Representation）$cal(S)[L]$，将其重新参数化为“向量-总能量”的联合形式：
-$ cal(S)[L] := (bold(v), omega(L)) = (bold(v), I + |bold(v)|) $
+两条核心公理（2 与 3）各自独立地唯一确定了输出状态的一个分量，不存在任何其他算子能同时满足这两条公理。因此 $T$ 的解析形式唯一。$square$
 
-在此嵌入空间下，诱导算子 $T^*$ 退化为优雅的纯线性累加：
-$ T^*(cal(L)) = sum_(L_i in cal(L)) cal(S)[L_i] $
+== 锥约束的概率论来源
 
-相对应的诱导平均算子即为对联合样本的线性数学期望：
-$ T^*_"avg"(cal(L)) = E[cal(S)[L]] $
+本节阐述状态空间 $cal(C)$ 的锥约束 $omega >= |bold(v)|$ 为何不是人为规定，而是概率论的必然结果。
 
-基于上述代数结构的嵌入与解构，原始必定包含复杂非线性项的平均算子 $T_"avg"(cal(L))$，可被严格且唯一地解耦为“线性表示期望”与“后置能量回拉（Pull-back）补偿”的差值形式：
-$
-  T_"avg"(cal(L)) = ( E[bold(v)], E[omega(L)] - |E[bold(v)]| ) = T^*_"avg"(cal(L)) - (bold(0), |bold(v)(T^*_"avg"(cal(L)))|)
-$
+=== Jensen 不等式保证
 
-*算法意义（Algorithmic Significance）：*
-这一代数解耦特性展现了极具穿透力的工程价值。在计算机图形学与实时渲染中，空间滤波与降噪算法（如 SVGF 及其衍生架构）本质上高频依赖各种线性或凸组合操作（加权求和、卷积等）。
-我们的数学推导给出了强有力的证明：算法在微观的滤波循环中，完全无需处理复杂的非线性光照合成。在实机管线中，我们仅需在嵌入空间 $cal(S)$ 中对样本执行极低成本的常规线性混合（求取 $T^*_"avg"$），最后在着色输出阶段仅进行一次 $O(1)$ 复杂度的整体泛数修正。此架构即可严格保证最终的滤波结果绝对吻合所有的代数分布公理与物理能量守恒不变律。这为设计兼顾“数学严格无偏性”与“极高着色执行效率”的光照降噪管线奠定了坚实的理论基石。
+对于任意定义在 $RR^n$ 上的概率测度 $mu$（具有有限一阶矩与一阶绝对矩），由 Jensen 不等式：
+
+$ E_mu[ |bold(x)| ] >= |E_mu[bold(x)]| $
+
+即 $omega >= |bold(v)|$。因此，任何由 $(bold(v), omega) = (E[bold(x)], E[ |bold(x)| ])$ 参数化的光照状态*自动落入锥* $cal(C)$ 中。
+
+=== 边界态的重新解释
+
+锥边界 $omega = |bold(v)|$ 对应 Jensen 不等式取等，当且仅当分布退化为 Dirac $delta$ 函数——即所有信号样本指向同一方向。这精确对应蒙特卡洛管线中单样本未经任何空间融合的原始射线态：
+
+$ "单样本: " quad (bold(v), omega) = (bold(x)_i, |bold(x)_i|), quad omega = |bold(v)| quad "（锥边界）" $
+
+而经过空间滤波累汇后的多样本状态，由于经验分布的弥散性，Jensen 不等式严格成立：
+
+$ "多样本: " quad omega = E[ |bold(x)| ] > |E[bold(x)]| = |bold(v)| quad "（锥内部）" $
+
+=== Jensen 差的物理含义
+
+定义 Jensen 差：
+
+$ I = omega - |bold(v)| = E[ |bold(x)| ] - |E[bold(x)]| >= 0 $
+
+$I$ 度量了信号分布偏离 Dirac 态（完全定向）的弥散程度。在物理对应中，$I$ 等价于光子气的”热运动能量”——$I = 0$ 对应绝对零度（纯定向光），$I > 0$ 对应有限温度（存在各向同性漫散射分量）。
+
+
+== 算法意义
+
+本节阐述上述代数结构对实机渲染管线的工程价值。
+
+在计算机图形学与实时渲染中，空间滤波与降噪算法（如 SVGF 及其衍生架构）本质上高频依赖各种线性或凸组合操作（加权求和、卷积等）。
+
+本建模的数学推导给出了强有力的证明：*合成算子 $T$ 在增广信号空间中即为纯向量加法*。在实机管线中，我们仅需在增广表示 $tilde(bold(x)) = (bold(x), |bold(x)|)$ 下对样本执行极低成本的常规线性混合（求取 $T_"avg"$），即可严格保证最终的滤波结果绝对吻合所有的代数公理与辐照度守恒律。
+
+由于 $T$ 本身就是线性的，*无需任何后置非线性修正*——滤波循环中的每一步操作都是严格的线性组合，辐照度重建 $E(hat(arrow(n)))$ 延迟至着色输出阶段一次性完成。这为设计兼顾”数学严格无偏性”与”极高着色执行效率”的光照降噪管线奠定了坚实的理论基石。
 
 = 统计模型
 
@@ -156,9 +216,9 @@ $
 
 合成算子 $T$ 的第一性原理只约束代数结构，本身不包含任何统计学语义。然而，实机降噪管线在本质上需要处理基于蒙特卡洛（Monte Carlo, MC）采样的随机信号，为了将其接入降噪管线，并在统计层面最少地引入人为偏见先验（Ad-hoc），我们从信息论角度采用最大熵原理（Maximum Entropy Principle）@jaynes1957information 为单个光照状态 $L$ 构造其所隐式编码的概率分布。
 
-在实机 MC 采样管线中，单次发射射线所携带的纯原始辐射度是不包含各向同性低频能量的界端状态 $L_("raw") = (bold(x), 0)$，其线性嵌入表示等于 $phi(L_("raw")) = (bold(x), |bold(x)|)$，严格位于同构锥的边界上。而在经过算子滤波（累汇）后得到的内部局部光照状态 $L = (bold(v), I)$，对应总能量 $omega = |bold(v)| + I$（此时通常 $omega > |bold(v)|$）。
+在实机 MC 采样管线中，单次射线弹射的输出 $bold(x)_i = hat(bold(d))_i dot E_i$ 对应光照状态 $(bold(x)_i, |bold(x)_i|)$，严格位于锥 $cal(C)$ 的边界上——这是因为单样本的经验分布为 Dirac $delta$ 函数，Jensen 不等式取等。而在经过算子滤波（累汇）后得到的内部局部光照状态 $(bold(v), omega)$，由于多样本经验分布的弥散性，Jensen 不等式严格成立，$omega > |bold(v)|$。
 
-我们将 $cal(S)[L] = (bold(v), omega)$ 视作对局部光照场的充分观测约束。基于最大熵原理，我们寻找一个定义在连续动量空间 $bold(x) in RR^n$ 上的最高熵概率密度分布 $p(bold(x))$，使其满足：
+我们将 $(bold(v), omega) = (E[bold(x)], E[ |bold(x)| ])$ 视作对局部光照场的充分观测约束。基于最大熵原理，我们寻找一个定义在连续动量空间 $bold(x) in RR^n$ 上的最高熵概率密度分布 $p(bold(x))$，使其满足：
 
 $
     "Maximize" quad & H[p] = - integral_(RR^n) p(bold(x)) log p(bold(x)) d bold(x) \
@@ -190,7 +250,7 @@ $
 *边界极限行为的数值保障*：自然物理下会出现以上连续分布的退化极限：
 1. *零向量无偏衰减（$bold(v) = bold(0)$）*：此时 $rho = 0, kappa = 0$，分布退化为各向同性的拉普拉斯衰减场 $p(bold(x)) prop exp(-beta |bold(x)|)$。
 2. *绝对黑暗态（$omega = 0$）*：系统处于严格能量断绝态，方差彻底收缩为点质量分布（即狄拉克 $delta(bold(x))$ 函数），在 Shader 实现时以 `omega` 防除零机制直接越过评估。
-3. *未被降噪的原始射线态（$omega = |bold(v)|$）*：此时连通流形边界 $rho=1, kappa=1$ 导致 $beta$ 趋向无穷，使得分布成为沿 $hat(bold(v))$ 轴线的极度窄分布（狄拉克异化）。这精确反映了单样本未经任何空间融合时极度缺乏低频信息的事实。在实机应用中可硬性阈值截断使其始终落在非奇异测度域内：$rho < 1 - epsilon$。
+3. *未被降噪的原始射线态（$omega = |bold(v)|$）*：此时 Jensen 不等式取等，经验分布退化为 Dirac $delta$ 函数，对应 $rho = 1$, $kappa = 1$, $beta arrow.r oo$。这精确反映了单样本未经任何空间融合时极度缺乏低频信息的事实。在实机应用中可硬性阈值截断使其始终落在非奇异测度域内：$rho < 1 - epsilon$。
 
 === 原始样本空间 $RR^n$ 的方差结构
 
@@ -217,9 +277,9 @@ $ "Var"_("scalar")(bold(X)) = (2omega^2 + omega sqrt(4omega^2 - 3|bold(v)|^2)) /
 
 在 Shader 中，考虑平摊效应后，若样本的时域有效累积期望帧数为 $N_("eff")$，则当前像素 Estimator 的残留方差为 $"Var"_("estimator") = "Var"_("scalar")(bold(X)) / N_("eff")$。此项可直接作为双边滤波器（Bilateral Filter）等价执行的自适应动态带宽 $sigma_c^2$。
 
-=== $T^*$ 嵌入空间 $(bold(X), |bold(X)|)$ 的联合方差
+=== 增广信号空间 $(bold(X), |bold(X)|)$ 的联合方差
 
-由于光照合成的算法载体实际在线性嵌入空间 $bold(Y) = (bold(X), R) = (bold(X), |bold(X)|)$ 中执行运算，其完整的联合协方差块矩阵对时空滤波器至关重要（其通过 $delta$-method 支持更复杂的协方差评估）：
+由于光照合成的算法载体实际在增广信号空间 $bold(Y) = (bold(X), R) = (bold(X), |bold(X)|)$ 中执行运算，其完整的联合协方差块矩阵对时空滤波器至关重要（其通过 $delta$-method 支持更复杂的协方差评估）：
 
 $ op("Cov")(bold(Y)) = mat(op("Cov")(bold(X)), op("Cov")(bold(X), R); op("Cov")(R, bold(X)), op("Var")(R)) $
 
@@ -363,7 +423,7 @@ $
 // 基于最大熵分布的高精度 O(1) 漫反射光照重建 (Irradiance Reconstruction)
 // 参数说明:
 //   v     - 空间滤波后得到的光照方向向量 (v = L.v)
-//   omega - 空间滤波后得到的联合总能量 (omega = L.I + |L.v|)
+//   omega - 空间滤波后得到的总辐照度
 //   N     - 当前像素的表面单位法向量
 float ReconstructDiffuseLighting(float3 v, float omega, float3 N)
 {
@@ -423,7 +483,7 @@ ALICE 降噪管线采用多 Pass 架构，在时空域上对漫反射光照信�
     #table(
       columns: (auto, auto, auto),
       [*Pass*], [*着色器*], [*功能*],
-      [100], [fragment], [时域累积：利用运动矢量重投影历史帧，执行 ALICE 嵌入空间的时域递归滤波],
+      [100], [fragment], [时域累积：利用运动矢量重投影历史帧，执行 ALICE 增广空间的时域递归滤波],
       [swap2], [compute], [方差预滤波：$5 times 5$ 几何双边滤波器平滑原始 ALICE 方差；$3 sigma$ 能量钳位],
       [300_cs], [compute], [空间滤波 L1—L3：à-trous 小波分解 $R_0 in {1, 2, 4}$，利用共享内存加速],
       [300], [fragment], [空间滤波 L4—L6：à-trous 小波分解 $R_0 in {8, 16, 32}$，旋转抖动去相关],
@@ -432,7 +492,7 @@ ALICE 降噪管线采用多 Pass 架构，在时空域上对漫反射光照信�
   ]
 ]
 
-其中 Pass 100（时域累积）利用运动矢量将历史帧的 ALICE 编码重投影至当前帧，在嵌入空间中执行指数滑动平均。该 Pass 的详细内容超出本节范围，本节重点阐述空间域降噪的三个核心 Pass：swap2（方差预滤波）、300/300_cs（空间滤波）与 swap3（缓冲交换）。
+其中 Pass 100（时域累积）利用运动矢量将历史帧的 ALICE 编码重投影至当前帧，在增广空间中执行指数滑动平均。该 Pass 的详细内容超出本节范围，本节重点阐述空间域降噪的三个核心 Pass：swap2（方差预滤波）、300/300_cs（空间滤波）与 swap3（缓冲交换）。
 
 #text(size: 11pt, fill: rgb("#8B0000"))[
   *⚠ 关键提示：* 尽管本降噪器在架构上参考了 SVGF @schied2017svgf 的 à-trous 小波分解框架，但其在*信号域、权重函数、方差估计与预处理策略*等关键维度上与标准 SVGF 存在本质性差异。以下各节将在相应位置显式标明这些差异。核心差异概览见下表。
@@ -445,11 +505,11 @@ ALICE 降噪管线采用多 Pass 架构，在时空域上对漫反射光照信�
       [*维度*], [*标准 SVGF*], [*本降噪器*],
       [*信号域*],
       [RGB 三通道颜色（辐射度量空间）],
-      [ALICE 嵌入表示 $cal(S)[L] = (bold(v), omega)$（四维线性空间），色度 $("Co", "Cg")$ 独立滤波],
+      [ALICE 增广表示 $(bold(v), omega)$（四维线性空间），色度 $("Co", "Cg")$ 独立滤波],
 
       [*合成算子*],
       [非线性（需处理颜色空间的非线性组合）],
-      [纯线性 $T^*$ 算子——嵌入空间中样本累加即为向量加法，由 ALICE 代数结构保证],
+      [纯线性 $T$ 算子——增广空间中样本累加即为向量加法，由 ALICE 代数结构保证],
 
       [*方差估计*],
       [基于颜色通道的局部经验方差],
@@ -460,7 +520,7 @@ ALICE 降噪管线采用多 Pass 架构，在时空域上对漫反射光照信�
       [ALICE 向量空间距离 $|bold(v)_"center" - bold(v)_"sample"|$ + 预滤波方差归一化],
 
       [*能量钳位*], [无], [$3 sigma$ 能量钳位（swap2），保留 $rho = (|bold(v)|)/omega$ 不变],
-      [*时域累积*], [RGB 颜色空间的指数滑动平均], [ALICE 嵌入空间的直接线性累加，$w$ 即有效帧数 $N_"eff"$],
+      [*时域累积*], [RGB 颜色空间的指数滑动平均], [ALICE 增广空间的直接线性累加，$w$ 即有效帧数 $N_"eff"$],
       [*输出信号*],
       [滤波后 RGB 颜色],
       [滤波后 $(bold(v), omega) + ("Co", "Cg")$，辐照度重建（$E(arrow(n))$）延迟至着色阶段一次性完成],
@@ -484,7 +544,7 @@ ALICE 降噪管线在宿主端（Host-side）采用统一 SSBO（Shader Storage 
 + *时域历史域 (14B)*：上一帧累积的 ALICE 编码与累积权重，由 swap3 写入，Pass 100 读取。
 + *交换缓冲域 (14B)*：当前帧待滤波/已滤波的 ALICE 编码与权重，作为 Pass 100 → swap2 → 300 → swap3 之间的数据总线。
 
-ALICE 编码采用半精度浮点（float16）压缩存储：每个光照状态 $cal(S)[L] = (bold(v), omega)$ 的 `vec4` 打包为两个 `float`（通过 `packHalf2x16`/`unpackHalf2x16`），色度分量 `CoCg` 打包为一个 `float`，总计 3 个 `float` 即可完整表示一个 ALICE 光照状态。压缩/解压接口如下：
+ALICE 编码采用半精度浮点（float16）压缩存储：每个光照状态 $(bold(v), omega)$ 的 `vec4` 打包为两个 `float`（通过 `packHalf2x16`/`unpackHalf2x16`），色度分量 `CoCg` 打包为一个 `float`，总计 3 个 `float` 即可完整表示一个 ALICE 光照状态。压缩/解压接口如下：
 
 ```hlsl
 vec3 packAlice(AliceEncoding encoded) {
@@ -636,7 +696,7 @@ $
 *亮度权重 (Luminance Weight)*：
 
 #text(fill: rgb("#8B0000"))[
-  *与标准 SVGF 的差异：* 标准 SVGF 的亮度权重基于 RGB 颜色空间的梯度 $|L_i - L_j|$（$L_i$ 为像素亮度）。本降噪器则在 ALICE 嵌入空间中度量差异——使用方向向量 $bold(v)$ 的欧氏距离 $|bold(v)_"center" - bold(v)_"sample"|$。这一选择的数学依据是：$bold(v)$ 在嵌入空间 $cal(S)$ 中即为线性可加的信号分量，其欧氏距离直接度量了光照在方向-能量联合空间中的差异，无需经过辐照度重建步骤。此外，由于方差预滤波（swap2）已对 $sigma^2$ 进行了平滑，此处直接使用中心像素的预滤波方差作为归一化基准（标准 SVGF 在每级 à-trous 中使用局部计算的 $sigma_"center"^2 + sigma_"sample"^2$）：
+  *与标准 SVGF 的差异：* 标准 SVGF 的亮度权重基于 RGB 颜色空间的梯度 $|L_i - L_j|$（$L_i$ 为像素亮度）。本降噪器则在 ALICE 增广空间中度量差异——使用方向向量 $bold(v)$ 的欧氏距离 $|bold(v)_"center" - bold(v)_"sample"|$。这一选择的数学依据是：$bold(v)$ 在增广空间 $cal(C)$ 中即为线性可加的信号分量，其欧氏距离直接度量了光照在方向-能量联合空间中的差异，无需经过辐照度重建步骤。此外，由于方差预滤波（swap2）已对 $sigma^2$ 进行了平滑，此处直接使用中心像素的预滤波方差作为归一化基准（标准 SVGF 在每级 à-trous 中使用局部计算的 $sigma_"center"^2 + sigma_"sample"^2$）：
 ]
 
 $ w_"luma" = (|bold(v)_"center" - bold(v)_"sample"|) / sqrt(sigma_"center"^2) dot phi_l $
@@ -678,16 +738,16 @@ $epsilon$ 控制的是 $1/sqrt(sigma^2)$ 的上界——因为 $1/sqrt(sigma^2) 
 $ w_0 = w_"kernel" dot (1 + w_"luma") dot exp(-(w_"geom" + w_"luma")) $
 
 #text(fill: rgb("#8B0000"))[
-  *与标准 SVGF 的差异：* 标准 SVGF 的组合权重为 $w_"kernel" dot exp(-(w_"geom" + w_"luma"))$，即仅依赖指数衰减。本降噪器引入的 $(1 + w_"luma")$ 前置因子额外提供了一阶亮度自适应增强，在高方差区域（$w_"luma"$ 大）提供更快的收敛速度与更强的去噪能力。这一修改是 ALICE 嵌入空间下特有的设计——因为 $w_"luma"$ 基于 $bold(v)$ 的欧氏距离而非 RGB 梯度，其数值范围与统计特性不同于标准 SVGF。
+  *与标准 SVGF 的差异：* 标准 SVGF 的组合权重为 $w_"kernel" dot exp(-(w_"geom" + w_"luma"))$，即仅依赖指数衰减。本降噪器引入的 $(1 + w_"luma")$ 前置因子额外提供了一阶亮度自适应增强，在高方差区域（$w_"luma"$ 大）提供更快的收敛速度与更强的去噪能力。这一修改是 ALICE 增广空间下特有的设计——因为 $w_"luma"$ 基于 $bold(v)$ 的欧氏距离而非 RGB 梯度，其数值范围与统计特性不同于标准 SVGF。
 ]
 
-=== ALICE 嵌入空间的样本累积
+=== ALICE 增广空间的样本累积
 
 #text(fill: rgb("#8B0000"))[
-  *与标准 SVGF 的本质差异：* 这是本降噪器与标准 SVGF 最根本的分歧点。标准 SVGF 在 RGB 颜色空间中累积加权颜色值 $sum_i w_i bold(c)_i$——颜色空间中的线性组合并不对应物理上的光照合成。本降噪器则在 ALICE 嵌入空间 $cal(S)$ 中累积——由 ALICE 第一性原理保证，$T^*$ 算子在嵌入空间中即为纯向量加法，因此 $sum_i w_i cal(S)[L_i]$ 在数学上严格等价于光照的物理合成。降噪器无需在每步处理非线性合成逻辑，这是 ALICE 编码相对于传统 RGB 降噪的核心优势。
+  *与标准 SVGF 的本质差异：* 这是本降噪器与标准 SVGF 最根本的分歧点。标准 SVGF 在 RGB 颜色空间中累积加权颜色值 $sum_i w_i bold(c)_i$——颜色空间中的线性组合并不对应物理上的光照合成。本降噪器则在 ALICE 增广空间 $cal(C)$ 中累积——由 ALICE 第一性原理保证，$T$ 算子在增广空间中即为纯向量加法，因此 $sum_i w_i tilde(bold(x))_i$ 在数学上严格等价于光照的物理合成。降噪器无需在每步处理非线性合成逻辑，这是 ALICE 编码相对于传统 RGB 降噪的核心优势。
 ]
 
-邻域样本通过 ALICE 嵌入空间的纯线性累加进行合成（对应前文 $T^*$ 算子的线性性质）：
+邻域样本通过 ALICE 增广空间的纯线性累加进行合成（对应前文 $T$ 算子的线性性质）：
 
 $
   bold(v)_"accum" = sum_i w_i bold(v)_i, quad omega_"accum" = sum_i w_i omega_i, quad ("Co", "Cg")_"accum" = sum_i w_i ("Co", "Cg")_i
@@ -739,7 +799,7 @@ $ "data" = "mix"("data", "blurred_alice", "clamp"(1 / max(w, 1.0), 0, 1)) $
 
 综合上述三个 Pass，ALICE 降噪管线的完整数据流如下：
 
-1. *Pass 100 (时域累积)*：从 SSBO 读取历史 ALICE 编码 $arrow(L)_"hist"$，与当前帧 RT 输出 $arrow(L)_"curr"$ 在嵌入空间中执行加权平均，输出 $arrow(L)_"temp"$ 及累积权重 $w$。
+1. *Pass 100 (时域累积)*：从 SSBO 读取历史 ALICE 编码 $arrow(L)_"hist"$，与当前帧 RT 输出 $arrow(L)_"curr"$ 在增广空间中执行加权平均，输出 $arrow(L)_"temp"$ 及累积权重 $w$。
 2. *swap2 (方差预滤波)*：读取 $arrow(L)_"temp"$ 及 $w$，计算原始方差 $sigma_"raw"^2$，执行 $5 times 5$ 双边平滑 + $3 sigma$ 钳位 + 高斯曲率标记，推送至 colortex3（几何）与 colortex4（ALICE + 方差）。
 3. *300_cs (空间滤波 L1—L3)*：从 colortex3/4 协作加载至 LDS，执行 $R_0 in {1, 2, 4}$ 的 à-trous 滤波，结果写回 colortex4。
 4. *300 (空间滤波 L4—L6)*：从 colortex3/4 直接 texelFetch，执行 $R_0 in {8, 16, 32}$ 的 à-trous 滤波（含旋转抖动），最终级额外输出至 colortex5。
@@ -748,7 +808,11 @@ $ "data" = "mix"("data", "blurred_alice", "clamp"(1 / max(w, 1.0), 0, 1)) $
 在压缩表示下，ALICE 降噪器的空间滤波阶段仅需要两个 $"vec4"$（共 32 字节）即可完整表示所有必要的几何信息（一个 $"vec4"$）与光照信息（一个 $"vec4"$）
 
 = 命名
-根据 AI 的建议，暂时将该光照编码方案命名为 `Asymmetric Laplace Isomorphic Conic Encoding`（简称 `ALICE`）。该名称反映了其核心数学结构：基于最大熵原理的非对称拉普拉斯分布（Asymmetric Laplace）在同构空间中的锥形编码特征。
+该光照编码方案命名为 Asymmetric Laplace Isomorphic Conic Encoding（简称 ALICE）。该名称反映了其核心数学与物理结构：
+
+- *Asymmetric Laplace*：最大熵原理导出的概率分布属于非对称拉普拉斯分布族；
+- *Isomorphic*：编码空间 $cal(C)$ 与自然单位制（$c = 1$）下无静止质量漂移光子气的热力学状态空间严格同构——ALICE 的方向矩即光子气集体动量，辐照度即光子气总能量，最大熵分布即 Maxwell-Jüttner 分布；
+- *Conic*：状态空间为凸锥 $cal(C) = {(bold(v), omega) | omega >= |bold(v)|}$，其锥约束由 Jensen 不等式 $E[ |bold(x)| ] >= |E[bold(x)]|$ 自然保证。
 
 = 物理对应
 虽然 ALICE 完全由第一性原理推导而来，但其严格等效于物理学中的*相对论统计力学*（Relativistic Statistical Mechanics）模型。具体而言，ALICE 的极大熵分布在物理上精确对应于处于局部热力学平衡态的*无静止质量漂移气体*（Drifting Massless Gas，即漂移光子气）。
@@ -774,10 +838,10 @@ $ "data" = "mix"("data", "blurred_alice", "clamp"(1 / max(w, 1.0), 0, 1)) $
 通过这套物理映射，实机渲染中各种复杂的宏观光照现象，都可以被赋予直观且严密的微观热力学解释：
 
 - *完全漫反射环境光 ($rho = 0, kappa = 0$)* \
-  此时漂移速度为零，系统处于全局热平衡的各向同性状态。光子仅有无规则的“热运动”，对应 ALICE 编码中的纯标量底光强度 $I$。这等价于无向的均匀天光或极其充分的多次反弹低频 GI。
+  此时漂移速度为零，系统处于全局热平衡的各向同性状态。此时 $bold(v) = E[bold(x)] = bold(0)$，Jensen 差达到最大值 $I = omega$，全部能量均表现为无规则热运动。这等价于无向的均匀天光或极其充分的多次反弹低频 GI。
 
 - *完全定向光 ($rho arrow.r 1, kappa arrow.r 1$)* \
-  光子气的集体漂移速度趋近于光速。此时系统的相对温度向绝对零度收缩，所有的无规则热运动（各向同性分量 $I$）被全部冻结，转化为一致的定向动能。这在宏观上表现为一束绝对平行的强直射光（如高频太阳光束或激光）。
+  光子气的集体漂移速度趋近于光速。此时 Jensen 差 $I = omega - |bold(v)| arrow.r 0$，系统温度向绝对零度收缩，分布退化为沿漂移方向的 Dirac $delta$ 函数，全部能量转化为一致的定向动能。这在宏观上表现为一束绝对平行的强直射光（如高频太阳光束或激光）。
 
 - *软阴影与半影过渡 ($0 < kappa < 1$)* \
   在实际场景的软阴影边缘，光场处于定向流动与热散射的中间非平衡态。ALICE 能够通过参数 $kappa$ 极其平滑地桥接这两种极端状态，实现物理自洽的接触硬化（Contact Hardening）与软阴影平滑渐变。
@@ -795,7 +859,7 @@ $ "data" = "mix"("data", "blurred_alice", "clamp"(1 / max(w, 1.0), 0, 1)) $
 
 在实时路径追踪（Real-time Path Tracing）中，尽管通过下一次事件估计（Next Event Estimation, NEE）可以有效降低直接光照的方差，但对于复杂的次级反弹（如长廊深处、极小窗口的室内），盲目的余弦重要性采样（Cosine-weighted Sampling）极难命中有效光源，导致间接光照产生极具破坏性的高频长尾噪声（Fireflies）。
 
-既然我们在降噪管线中已经利用 ALICE 编码在时空域上提取并重构了光场的最大熵分布状态 $cal(S)[L] = (bold(v), omega)$，我们自然可以将其作为*先验知识（Prior）*，在下一帧发射光线时对半球空间进行路径引导（Path Guiding）。
+既然我们在降噪管线中已经利用 ALICE 编码在时空域上提取并重构了光场的最大熵分布状态 $(bold(v), omega)$，我们自然可以将其作为*先验知识（Prior）*，在下一帧发射光线时对半球空间进行路径引导（Path Guiding）。
 
 基于极大熵的角向能量密度，我们构造定义在完整单位球面 $S^2$ 上的引导概率密度函数（PDF）：
 $ p_"ALICE" (arrow(u)) = C / ((1 - kappa hat(bold(v)) dot arrow(u))^4) $
