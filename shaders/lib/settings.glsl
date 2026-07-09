@@ -51,7 +51,7 @@
 #define PATH_GUIDING_STRENGTH 0.975 // Mix probability weight for ALICE-guided importance sampling vs cosine-weighted sampling. Higher = more samples steered toward the prior, lower = more uniform. [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.925 0.95 0.975 0.99 0.999]
 
 // -- Debug view --
-#define DEBUG_VIEW 0 // Debug output mode. 0=Normal 1=Diffuse 2=Refract 3=Reflect 4=WhiteModel 5=LightField 6=Normals 7=Absorption [0 1 2 3 4 5 6 7]
+#define DEBUG_VIEW 0 // Debug output mode. 0=Normal 1=Diffuse 2=Refract 3=Reflect 4=WhiteModel 5=LightField 6=Normals 7=Absorption 8=ReflDir 9=ReflDist 10=SpecAlbedo 11=Roughness 12=ReflRaw [0 1 2 3 4 5 6 7 8 9 10 11 12]
 
 const float sunPathRotation = 0.0;
 

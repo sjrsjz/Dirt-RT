@@ -59,6 +59,11 @@ value.DEBUG_VIEW.4 = White Model
 value.DEBUG_VIEW.5 = Light Field
 value.DEBUG_VIEW.6 = Normals
 value.DEBUG_VIEW.7 = Absorption
+value.DEBUG_VIEW.8 = Refl. Direction
+value.DEBUG_VIEW.9 = Refl. VirtDist
+value.DEBUG_VIEW.10 = Specular Albedo
+value.DEBUG_VIEW.11 = Roughness
+value.DEBUG_VIEW.12 = Refl. Incident
 
 # -- ReSTIR --
 option.useReSTIR = Use ReSTIR

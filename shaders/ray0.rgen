@@ -1,1 +1,8 @@
+#version 460 core
+// First-bounce DIFFUSE path-tracing pass.
+// Vulkanite auto-discovers shaders/rayN.rgen and runs each as a separate RT pass in index order.
+// ray0/ray1/ray2 always take their dedicated first-bounce lobe (diffuse/reflect/refract), so every
+// illumination buffer receives a full sample every frame (denser temporal sampling for denoising).
+#define FIRST_LOBE_DIFFUSE
+#define FIRST_LOBE_VAL 2
 #include "/lib/rt/raytrace_rgen.glsl"

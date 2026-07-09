@@ -66,31 +66,37 @@ void main() {
         // ray0.rgen reads from there via samplePrevDiffuse. No additional write needed.
 
         // ---- Debug view selector ----
+        // Full disentanglement: each denoised buffer holds a material-independent incident
+        // light field (divided by stable per-lobe albedo in rgen using normal, not microNormal).
+        // Composite multiplies each back by its stable material multiplier from denoiseBuffer.
+        // Stable divisor = no temporal noise amplification (unlike microNormal-based division).
         #if DEBUG_VIEW == 0
         // Normal: full composition
         //   color = absorption × [
-        //       (diffuse_irradiance + refract_color) × albedo2
-        //     + reflect_color × albedo
+        //       diffuse_irradiance × diffuseAlbedo
+        //     + refract_incident   × transmissionAlbedo
+        //     + reflect_incident   × specularAlbedo
         //     + direct_light
         //   ] + emission
         fragColor.xyz = data.absorption
-                * ((project_alice_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2))
-                    + tmp3.data_swap) * data.albedo2
-                    + tmp2.data_swap
+                * (project_alice_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2))
+                    * data.diffuseAlbedo
+                    + tmp3.data_swap * data.transmissionAlbedo
+                    + tmp2.data_swap * data.specularAlbedo
                     + data.light)
                 + data.emission;
 
         #elif DEBUG_VIEW == 1
-        // Diffuse only: irradiance × albedo2
-        fragColor.xyz = project_alice_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2)) * data.albedo2;
+        // Diffuse only: irradiance × diffuseAlbedo
+        fragColor.xyz = project_alice_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2)) * data.diffuseAlbedo;
 
         #elif DEBUG_VIEW == 2
         // Refract only
-        fragColor.xyz = tmp3.data_swap * data.albedo2;
+        fragColor.xyz = tmp3.data_swap * data.transmissionAlbedo;
 
         #elif DEBUG_VIEW == 3
         // Reflect only
-        fragColor.xyz = tmp2.data_swap * data.albedo;
+        fragColor.xyz = tmp2.data_swap * data.specularAlbedo;
 
         #elif DEBUG_VIEW == 4
         // White model: diffuse irradiance only, no albedo
@@ -108,6 +114,47 @@ void main() {
         #elif DEBUG_VIEW == 7
         // Absorption / atmospheric transmission
         fragColor.xyz = data.absorption;
+
+        #elif DEBUG_VIEW == 8
+        // Reflection dominant direction R as RGB (oct-decoded)
+        {
+            SpecularRTElement re = reflectIlluminationBuffer.data[getIndex(uvec2(gl_FragCoord.xy))];
+            vec3 R = decodeNormal(re.oct_dir);
+            fragColor.xyz = R * 0.5 + 0.5;
+        }
+
+        #elif DEBUG_VIEW == 9
+        // Reflection virtual projection distance (rainbow colormap, log scale)
+        //   blue → cyan → green → yellow → red → white(sky)
+        //   near 0              20              60      VPROJDIST_SKY
+        {
+            SpecularRTElement re = reflectIlluminationBuffer.data[getIndex(uvec2(gl_FragCoord.xy))];
+            float d = re.virtualProjDist;
+            if (d >= VPROJDIST_SKY * 0.99) {
+                fragColor.xyz = vec3(1.0, 1.0, 1.0);  // sky / no hit → white
+            } else {
+                // log-scale normalize: 0.01 .. 100m → [0, 1]
+                float t = clamp(log2(max(d, 0.01) * 100.0 + 1.0) / 14.0, 0.0, 1.0);
+                // Jet / rainbow colormap
+                float r = clamp(min(4.0 * t - 1.5, -4.0 * t + 4.5), 0.0, 1.0);
+                float g = clamp(min(4.0 * t - 0.5, -4.0 * t + 3.5), 0.0, 1.0);
+                float b = clamp(min(4.0 * t + 0.5, -4.0 * t + 2.5), 0.0, 1.0);
+                fragColor.xyz = vec3(r, g, b);
+            }
+        }
+
+        #elif DEBUG_VIEW == 10
+        // Specular albedo (rC.rgb * S.x) — the reflection material multiplier
+        fragColor.xyz = data.specularAlbedo;
+
+        #elif DEBUG_VIEW == 11
+        // Roughness as grayscale
+        fragColor.xyz = vec3(data.roughness);
+
+        #elif DEBUG_VIEW == 12
+        // Raw reflection incident (before specularAlbedo modulation)
+        // The denoised signal before composite multiplications — pure light field
+        fragColor.xyz = tmp2.data_swap;
 
         #endif
     }

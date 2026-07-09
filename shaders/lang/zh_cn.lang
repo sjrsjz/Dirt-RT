@@ -59,6 +59,11 @@ value.DEBUG_VIEW.4 = 白模
 value.DEBUG_VIEW.5 = 光场
 value.DEBUG_VIEW.6 = 法线
 value.DEBUG_VIEW.7 = 吸收
+value.DEBUG_VIEW.8 = 反射方向
+value.DEBUG_VIEW.9 = 反射虚拟距离
+value.DEBUG_VIEW.10 = 镜面反照率
+value.DEBUG_VIEW.11 = 粗糙度
+value.DEBUG_VIEW.12 = 反射入射光
 
 # -- ReSTIR --
 option.useReSTIR = 使用 ReSTIR

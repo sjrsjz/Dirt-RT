@@ -5,23 +5,27 @@ uint getIndex(uvec2 xy) {
     //return xy.y * 1024u + clamp(xy.x, 0, 1023u);
     return xy.y * resolution_global.x + clamp(xy.x, 0, resolution_global.x - 1);
 }
-// 布局优化: scalar 填入 vec3 的 4B 尾部 padding (align 16 gap), 128B → 112B
+// 逐 lobe 材质乘数 + G-Buffer: 128B/元素, scalar 填入 vec3 尾部 4B padding.
+// specularAlbedo / diffuseAlbedo / transmissionAlbedo 由 ray0.rgen 写入,
+// 供 fog.glsl 合成时与各自 denoised 光照相乘 (每个 buffer 存材质无关光场信号)。
 struct bufferData {
-    vec3 macroNormal;        // offset  0 (12B)
-    float distance;          // offset 12 (4B, 填入 gap)
-    vec3 light;              // offset 16 (12B)
-    float roughness;         // offset 28 (4B, 填入 gap)
-    vec3 albedo;             // offset 32 (12B)
-    float reflectWeight;     // offset 44 (4B, 填入 gap)
-    vec3 albedo2;            // offset 48 (12B)
-    float refractWeight;     // offset 60 (4B, 填入 gap)
-    vec3 absorption;         // offset 64 (12B)
-    int illuminationType;    // offset 76 (4B, 填入 gap)
-    vec3 emission;           // offset 80 (12B)
+    vec3 macroNormal;        // offset   0 (12B)
+    float distance;          // offset  12 (4B)
+    vec3 light;              // offset  16 (12B)
+    float roughness;         // offset  28 (4B)
+    vec3 specularAlbedo;     // offset  32 (12B) — rC.rgb * S.x
+    float reflectWeight;     // offset  44 (4B)
+    vec3 diffuseAlbedo;      // offset  48 (12B) — nonSpecColor * diffuseSelector
+    float refractWeight;     // offset  60 (4B)
+    vec3 transmissionAlbedo; // offset  64 (12B) — nonSpecColor * transmissionSelector
+    int illuminationType;    // offset  76 (4B)
+    vec3 emission;           // offset  80 (12B)
     // [4B pad to 96]
-    vec3 rd;                 // offset 96 (12B)
+    vec3 absorption;         // offset  96 (12B) — primary-segment atmospheric transmission
     // [4B pad to 112]
-};                           // 112B total (was 128B, -12.5%)
+    vec3 rd;                 // offset 112 (12B) — primary ray direction (sky branch)
+    // [4B pad to 128]
+};                           // 128B total
 
 layout(std430, set = 3, binding = 0) buffer DenoiseBuffer {
     bufferData data[];

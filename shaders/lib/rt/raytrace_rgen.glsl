@@ -1,4 +1,6 @@
-#version 460 core
+// #version 460 core — declared by each enclosing rayN.rgen entry, which must #define exactly one
+// of FIRST_LOBE_DIFFUSE / FIRST_LOBE_REFLECTION / FIRST_LOBE_REFRACTION (and FIRST_LOBE_VAL).
+// This file is never compiled alone.
 #extension GL_EXT_ray_query : enable
 #extension GL_EXT_buffer_reference : enable
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : enable
@@ -17,6 +19,14 @@
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/common.glsl"
 
+// First-bounce lobe forced by the enclosing rayN.rgen entry.
+// Each entry #defines exactly one of FIRST_LOBE_DIFFUSE / FIRST_LOBE_REFLECTION / FIRST_LOBE_REFRACTION
+// and #defines FIRST_LOBE_VAL to the corresponding int (DIFFUSION=2 / REFLECTION=1 / REFRACTION=3).
+// The body uses #if defined() to produce three distinct compiled passes with zero dead code.
+#if !defined(FIRST_LOBE_DIFFUSE) && !defined(FIRST_LOBE_REFLECTION) && !defined(FIRST_LOBE_REFRACTION)
+#define FIRST_LOBE_DIFFUSE
+#define FIRST_LOBE_VAL 2
+#endif
 
 layout(std430, binding = 0) uniform CameraInfo {
     vec3 corners[4];
@@ -61,6 +71,10 @@ void main() {
     setSkyVars();
     Trace(uvec2(gl_LaunchIDEXT.xy), origin, direction, -sunDir);
 
+    // Per-frame-once global state: only diffuse pass (ray0) pixel (0,0).
+    // rtPrev=rtModelView is non-idempotent — if all 3 passes run it,
+    // rtPrev gets overwritten to the current frame's matrix → reprojection failure → ghosting.
+#if defined(FIRST_LOBE_DIFFUSE)
     if (gl_LaunchIDEXT.xy == vec2(0)) {
         world_type_global = int(cam.world_type);
         lightDir_global = sunDir;
@@ -69,14 +83,14 @@ void main() {
         camY_global = (cam.viewInverse * vec4(normalize(cam.corners[0] - cam.corners[2]), 0)).xyz;
         camX_global = (cam.viewInverse * vec4(normalize(cam.corners[0] - cam.corners[1]), 0)).xyz;
 
-        // 保存当前帧矩阵为"前帧" (供下一帧时域重投影)
+        // Save current frame matrices as "previous" (for next frame's temporal reprojection)
         rtPrevModelView = rtModelView;
         rtPrevProjection = rtProjection;
 
-        // ModelView: 纯旋转 (transpose of viewInverse), 无平移 — 输入已是相机相对坐标
+        // ModelView: pure rotation (transpose of viewInverse), no translation
         rtModelView = mat4(transpose(mat3(cam.viewInverse)));
 
-        // Projection: 非对称视锥矩阵 (含 TAA jitter 偏移)
+        // Projection: asymmetric frustum (with TAA jitter offset)
         float zNear = -cam.corners[0].z;
         float w = cam.corners[1].x - cam.corners[0].x;
         float h = cam.corners[2].y - cam.corners[0].y;
@@ -90,6 +104,7 @@ void main() {
         rtProjection[2][3] = -1.0;
         rtProjection[3][2] = -(2.0 * farD * zNear) / (farD - zNear);
     }
+#endif
 }
 
 Payload tmp_Payload;
@@ -151,7 +166,7 @@ vec3 reproject(vec3 worldPos) {
 }
 
 // -----------------------------------------------------------------------------------
-// 极度安全的次表面散射直接光采样（NEE）
+// Subsurface-scatter direct-lighting sample (NEE)
 // -----------------------------------------------------------------------------------
 vec3 sampleSunlight(vec3 ro, vec3 normal, vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S, vec4 R, vec3 lightDir, bool night, int type, vec3 macroNormal, bool inside) {
     ro += (dot(lightDir, macroNormal) > 0.15 ? lightDir : macroNormal) * 0.001;
@@ -198,7 +213,7 @@ vec3 GetSpecularDominantDirection(vec3 N, vec3 V, float R) {
 }
 
 // -----------------------------------------------------------------------------------
-// 核心：前向路径追踪 (Forward Path Tracing)
+// Core: Forward Path Tracing
 // -----------------------------------------------------------------------------------
 void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     uint isEyeInWater = cam.flags & 3u;
@@ -224,8 +239,9 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     vec3 first_p = ro;
     vec3 first_n = -rd;
     vec3 first_macro_n = -rd;
-    vec3 first_albedo = vec3(1.0);
-    vec3 first_albedo2 = vec3(1.0);
+    vec3 first_specularAlbedo = vec3(0.0);
+    vec3 first_diffuseAlbedo = vec3(0.0);
+    vec3 first_transmissionAlbedo = vec3(0.0);
     vec3 first_rd_o = rd;
     float first_t = -1.0;
     float first_roughness = 1.0;
@@ -247,7 +263,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
         float t = raycast(ro_i, rd_i, ro_o, rd_o, !inverse_0, i16vec2(0), uint(depth));
 
-        // --- 1. 未命中：天空/背景 ---
+        // --- 1. Miss: sky / background ---
         if (t < -0.5) {
             if (depth == 0) {
                 hit_sky_first = true;
@@ -274,7 +290,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             break;
         }
 
-        // --- 2. 几何与材质信息提取 ---
+        // --- 2. Geometry & material extraction ---
         vec3 normal = faceforward(tmp_Payload.material.normal, tmp_Payload.material.normal, rd_i);
         vec3 macroNormal = faceforward(tmp_Payload.geometryNormal, tmp_Payload.geometryNormal, rd_i);
         material surface = buildSurfaceMaterial(ro_o, normal);
@@ -284,7 +300,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         float n_o = inverse_0 ? 1.0 : REFRACTIVE_INDEX;
         float rs = n_i / n_o;
 
-        // --- 3. 介质吸收与发光 ---
+        // --- 3. Medium absorption & emission ---
         vec3 segment_absorption = exp2(-(inverse_0 ? t * fogA.yzw : max(b_Q * (b_P.x - ro_i.y) * t - 0.5 * b_Q * t * t * rd_i.y, 0.0)) * LOG2_E);
         current_absorption *= segment_absorption;
 
@@ -300,7 +316,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         }
         L_indirect += bounce_emission;
 
-        // --- 4. BSDF Lobe 概率与权重 ---
+        // --- 4. BSDF lobe probabilities & weights ---
         float F = clamp(fresnel(-rd_i, microNormal, rs), 0.0, 1.0);
         vec4 rC = reflectanceColor(surface.Cs, dot(rd_i, microNormal));
 
@@ -315,89 +331,126 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         vec3 refrLobeWeight = nonSpecColor * transmissionSelector / max(P_refr, 1e-5);
         vec3 diffLobeWeight = nonSpecColor * diffuseSelector / max(P_diff, 1e-5);
 
-        float rnd_lobe = getRandom();
         int current_type = -1;
         vec3 next_rd = rd_i;
         vec3 bsdf_weight = vec3(0.0);
 
-        if (rnd_lobe < P_spec) {
-            // [反射 Lobe]
+        if (depth == 0) {
+            // --- First bounce: compile-time forced lobe (#if defined) ---
+            // Weight = P_lobe * <lobeWeight>: removes single-pass mixture /P_lobe compensation,
+            // making each buffer an unbiased per-lobe estimate (E = L_lobe) every frame.
+            // P_lobe=0 → weight=0 → path ends cleanly.
+#if defined(FIRST_LOBE_REFLECTION)
+            // [Reflection: P_spec GGX (F0-based) + dielectric Fresnel reflection (TIR, from P_refr·F)]
+            // Both mechanisms → reflect buffer.  G2 only on P_spec (original BRDF convention).
             current_type = REFLECTION;
             next_rd = reflect(rd_i, microNormal);
-
             if (dot(next_rd, normal) > 0.0) {
                 float IoN = abs(dot(rd_i, normal));
                 float OoN = dot(next_rd, normal);
-                bsdf_weight = specLobeWeight * GGX_G2(IoN, OoN, surface.R.x);
+                bsdf_weight = P_spec * specLobeWeight * GGX_G2(IoN, OoN, surface.R.x)   // F0 GGX
+                            + P_refr * refrLobeWeight * F;                               // dielectric Fresnel
             }
-        } else if (rnd_lobe < P_spec + P_refr) {
-            // [折射/透射 Lobe，Fresnel 子事件在条件概率中抵消]
+#elif defined(FIRST_LOBE_REFRACTION)
+            // [Refraction: transmission only, no Fresnel sub-event]
+            // TIR (total internal reflection) → bsdf_weight=0 — that energy is covered by the
+            // reflection pass's F term.  Transmission direction driven by GGX microNormal.
             current_type = REFRACTION;
-
-            bool chooseTransmission = getRandom() < (1.0 - F);
-            if (chooseTransmission) {
-                vec3 refract_dir = refract(rd_i, microNormal, rs);
-                if (dot(refract_dir, refract_dir) > 0.0) {
-                    next_rd = refract_dir;
-                    inverse_0 = !inverse_0;
-                } else {
-                    next_rd = reflect(rd_i, microNormal);
-                    current_type = REFLECTION;
-                }
+            vec3 refract_dir = refract(rd_i, microNormal, rs);
+            if (dot(refract_dir, refract_dir) > 0.0) {
+                next_rd = refract_dir;
+                inverse_0 = !inverse_0;
+                bsdf_weight = P_refr * refrLobeWeight * (1.0 - F);
             } else {
+                // TIR — transmission impossible, zero contribution; pick valid next_rd
                 next_rd = reflect(rd_i, microNormal);
-                current_type = REFLECTION;
             }
-
-            bsdf_weight = refrLobeWeight;
-        } else {
-            // [漫反射 Lobe + ALICE 屏幕空间路径引导]
+#else
+            // [Diffuse + ALICE screen-space path guiding]
             current_type = DIFFUSION;
-
             float guideWeight = 1.0;
             float guideProb = 0.0;
             float kappa = 0.0;
             vec3 axis = macroNormal;
 
-            if (depth == 0) {
-                vec2 prev_coord = reproject(ro_o).xy;
-                bool validPrev = all(greaterThanEqual(prev_coord, vec2(0.0))) &&
-                        all(lessThanEqual(prev_coord, vec2(1.0)));
-
-                if (validPrev) {
-                    DiffuseIlluminationWriteData data0 =
-                        samplePrevDiffuse(prev_coord * resolution_global);
-
-                    vec3 x = data0.data_swap.aliceY.xyz;
-                    float omega = data0.data_swap.aliceY.w;
-
-                    float length_x = max(length(x), 1e-20);
-                    omega = max(omega, length_x);
-                    axis = x / length_x;
-                    float rho = clamp(length_x / omega, 0.0, 1.0);
-                    kappa = alice_kappa(length_x, omega);
-                    // 判定 length_x 是否过小，过小则不使用引导采样，这是因为极小值会导致 axis 方向不稳定甚至崩溃，造成后续的采样方向出现 NaN。
-                    guideProb = length_x > 1e-8 ? PATH_GUIDING_STRENGTH * rho : 0.0;
-                }
-                bool useGuide = getRandom() < guideProb;
-                if (useGuide) {
-                    next_rd = sample_alice_guiding(axis, kappa, vec2(getRandom(), getRandom()));
-                } else {
-                    next_rd = DiffuseNormal(macroNormal, ro_o);
-                }
-                float NoL = max(0.0, dot(macroNormal, next_rd));
-                float pdfCos = NoL / PI;
-                float pdfAlice = guideProb > 0.0 ? alice_guiding_pdf(next_rd, axis, kappa) : 0.0;
-                float pdfMix = (1.0 - guideProb) * pdfCos + guideProb * pdfAlice;
-                guideWeight = (NoL > 0.0 && pdfMix > 1e-8) ? (pdfCos / pdfMix) : 0.0;
+            vec2 prev_coord = reproject(ro_o).xy;
+            bool validPrev = all(greaterThanEqual(prev_coord, vec2(0.0))) &&
+                    all(lessThanEqual(prev_coord, vec2(1.0)));
+            if (validPrev) {
+                DiffuseIlluminationWriteData data0 =
+                    samplePrevDiffuse(prev_coord * resolution_global);
+                vec3 x = data0.data_swap.aliceY.xyz;
+                float omega = data0.data_swap.aliceY.w;
+                float length_x = max(length(x), 1e-20);
+                omega = max(omega, length_x);
+                axis = x / length_x;
+                float rho = clamp(length_x / omega, 0.0, 1.0);
+                kappa = alice_kappa(length_x, omega);
+                // If length_x is too small, skip guiding — tiny values destabilize axis → NaN.
+                guideProb = length_x > 1e-8 ? PATH_GUIDING_STRENGTH * rho : 0.0;
+            }
+            bool useGuide = getRandom() < guideProb;
+            if (useGuide) {
+                next_rd = sample_alice_guiding(axis, kappa, vec2(getRandom(), getRandom()));
             } else {
                 next_rd = DiffuseNormal(macroNormal, ro_o);
             }
-            bsdf_weight = diffLobeWeight * guideWeight;
+            float NoL = max(0.0, dot(macroNormal, next_rd));
+            float pdfCos = NoL / PI;
+            float pdfAlice = guideProb > 0.0 ? alice_guiding_pdf(next_rd, axis, kappa) : 0.0;
+            float pdfMix = (1.0 - guideProb) * pdfCos + guideProb * pdfAlice;
+            guideWeight = (NoL > 0.0 && pdfMix > 1e-8) ? (pdfCos / pdfMix) : 0.0;
+            bsdf_weight = P_diff * diffLobeWeight * guideWeight;
+#endif
+        } else {
+            // --- Secondary bounces: preserve original stochastic mixture (with /P_lobe weights) ---
+            float rnd_lobe = getRandom();
+            if (rnd_lobe < P_spec) {
+                current_type = REFLECTION;
+                next_rd = reflect(rd_i, microNormal);
+                if (dot(next_rd, normal) > 0.0) {
+                    float IoN = abs(dot(rd_i, normal));
+                    float OoN = dot(next_rd, normal);
+                    bsdf_weight = specLobeWeight * GGX_G2(IoN, OoN, surface.R.x);
+                }
+            } else if (rnd_lobe < P_spec + P_refr) {
+                current_type = REFRACTION;
+                bool chooseTransmission = getRandom() < (1.0 - F);
+                if (chooseTransmission) {
+                    vec3 refract_dir = refract(rd_i, microNormal, rs);
+                    if (dot(refract_dir, refract_dir) > 0.0) {
+                        next_rd = refract_dir;
+                        inverse_0 = !inverse_0;
+                    } else {
+                        next_rd = reflect(rd_i, microNormal);
+                        current_type = REFLECTION;
+                    }
+                } else {
+                    next_rd = reflect(rd_i, microNormal);
+                    current_type = REFLECTION;
+                }
+                bsdf_weight = refrLobeWeight;
+            } else {
+                current_type = DIFFUSION;
+                next_rd = DiffuseNormal(macroNormal, ro_o);
+                bsdf_weight = diffLobeWeight;
+            }
         }
 
-        // --- 5. NEE：直接阳光 ---
-        if (current_type >= 0 && dot(macroNormal, lightDir) < 0.0 && !isDarkened) {
+        // --- 5. NEE: direct sunlight ---
+        // At depth 0, guard with P_first>0: inactive forced lobes must not inject spurious
+        // direct sun (never chosen in single-pass, weight=0 → path ends before NEE).
+        // Reflection pass: P_spec + P_refr*F (both reflection mechanisms).
+        // Refraction pass: P_refr (transmission only; TIR→weight=0 in pass itself).
+        #if defined(FIRST_LOBE_REFLECTION)
+        float P_first = P_spec + P_refr * F;
+        #elif defined(FIRST_LOBE_REFRACTION)
+        float P_first = P_refr;
+        #else
+        float P_first = P_diff;
+        #endif
+        if (current_type >= 0 && dot(macroNormal, lightDir) < 0.0 && !isDarkened
+                && (depth > 0 || P_first > 0.0)) {
             vec3 sunL = sampleSunlight(
                     ro_o,
                     normal,
@@ -425,15 +478,27 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             }
         }
 
-        // --- 6. 记录 G-Buffer 与 ReSTIR ---
+        // --- 6. Record G-Buffer ---
         if (depth == 0) {
             first_p = ro_o;
             first_n = normal;
             first_macro_n = macroNormal;
             first_t = t;
-            first_type = current_type;
-            first_albedo = surface.Cs;
-            first_albedo2 = surface.Cd;
+#if defined(FIRST_LOBE_REFLECTION)
+            first_type = REFLECTION;
+#elif defined(FIRST_LOBE_REFRACTION)
+            first_type = REFRACTION;
+#else
+            first_type = DIFFUSION;
+#endif
+            // G-Buffer material multipliers: use normal (texture detail normal) for stability.
+            // microNormal (GGX-perturbed) is noisy per-frame; macroNormal (block face) loses detail.
+            // normal captures the normal-map spatial variation while staying deterministic each frame.
+            vec4 rC_stable = reflectanceColor(surface.Cs, abs(dot(rd_i, normal)));
+            vec3 nonSpecColor_stable = surface.Cd * max(vec3(0.0), vec3(1.0) - rC_stable.rgb * surface.S.x);
+            first_specularAlbedo = rC_stable.rgb * surface.S.x;
+            first_diffuseAlbedo = nonSpecColor_stable * diffuseSelector;
+            first_transmissionAlbedo = nonSpecColor_stable * transmissionSelector;
             first_roughness = surface.R.x;
             first_rd_o = next_rd;
             first_n_i = n_i;
@@ -448,7 +513,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             mixWeight = vec2(reflectWeight, refractWeight);
         }
 
-        // --- 7. 更新吞吐量 ---
+        // --- 7. Update throughput ---
         throughput *= bsdf_weight;
 
         if (any(isnan(throughput))) {
@@ -472,118 +537,111 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     }
 
     // -----------------------------------------------------------------------------------
-    // 最终 G-Buffer 与降噪 Buffer 写入逻辑
+    // Final G-Buffer & denoising buffer write
     // -----------------------------------------------------------------------------------
 
     vec3 total_illumination = L_indirect + L_direct_0;
     if (any(isnan(total_illumination))) total_illumination = vec3(0.0);
     total_illumination = clamp(total_illumination, 0.0, 10000.0);
 
+    // Shared G-Buffer (denoiseBuffer): only written by diffuse pass (ray0).
+    // All three passes hit the same first surface → fields are fully deterministic.
+#if defined(FIRST_LOBE_DIFFUSE)
     denoiseBuffer.data[idx].reflectWeight = mixWeight.x;
     denoiseBuffer.data[idx].refractWeight = mixWeight.y;
-    denoiseBuffer.data[idx].albedo = first_albedo;
-    denoiseBuffer.data[idx].albedo2 = first_albedo2;
+    denoiseBuffer.data[idx].specularAlbedo = first_specularAlbedo;
+    denoiseBuffer.data[idx].diffuseAlbedo = first_diffuseAlbedo;
+    denoiseBuffer.data[idx].transmissionAlbedo = first_transmissionAlbedo;
     denoiseBuffer.data[idx].distance = first_t;
     denoiseBuffer.data[idx].light = first_light_surf;
     denoiseBuffer.data[idx].macroNormal = first_macro_n;
     denoiseBuffer.data[idx].illuminationType = first_type;
     denoiseBuffer.data[idx].roughness = first_roughness;
-    denoiseBuffer.data[idx].absorption = current_absorption;
+    denoiseBuffer.data[idx].absorption = first_absorption;
     denoiseBuffer.data[idx].rd = first_rd_i;
+#endif
 
-    // RT output: zero-initialize diffuse AliceEncoding
-    diffuseIlluminationBuffer.data[idx].rt_aliceY_xy = 0.0;
-    diffuseIlluminationBuffer.data[idx].rt_aliceY_zw = 0.0;
-    diffuseIlluminationBuffer.data[idx].rt_CoCg = 0.0;
-
+    // Each pass writes only its own illumination buffer.
+    // Sky pixels (hit_sky_first / first_t < -0.5): color=0 + default geometry,
+    // matching single-pass behaviour (fog sky branch, 100/101/102 reset on distance<-0.5).
     vec3 pos_rel = first_p - ro;
-    diffuseIlluminationBuffer.data[idx].px = pos_rel.x;
-    diffuseIlluminationBuffer.data[idx].py = pos_rel.y;
-    diffuseIlluminationBuffer.data[idx].pz = pos_rel.z;
-    diffuseIlluminationBuffer.data[idx].oct_n = encodeNormal(first_macro_n);
-    diffuseIlluminationBuffer.data[idx].oct_n2 = encodeNormal(faceforward(first_n, first_n, -first_macro_n));
 
-    // 镜面 RT 输出 (SpecularRTElement) 局部累积: pos=主命中点, R=主导方向, virtualProjDist=虚拟投射距离.
-    // 默认 virtualProjDist=0 → normal=R*0=0 → 虚拟击中点=pos (非镜面像素的安全默认, 与旧 .normal=0 等价).
-    vec3 refl_R = first_rd_i;
-    float refl_vprojdist = 0.0;
-    vec3 refl_color = vec3(0.0);
-    vec3 refr_R = first_rd_i;
-    float refr_vprojdist = 0.0;
-    vec3 refr_color = vec3(0.0);
-
-    if (!hit_sky_first && first_t > -0.5) {
-        // 反射虚拟投射距离: 沿 GGX 主导方向 (最大概率半向量对应的反射方向) 做一次额外求交
-        vec3 r_rd, r_ro;
-        vec3 r_n = normalize(mix(first_n, first_macro_n, 1.0 - exp2(-0.07213475 * first_t)));
-        vec3 r_rd_i = GetSpecularDominantDirection(r_n, first_rd_i, first_roughness);
-        float t_refl = raycast(first_p + first_macro_n * 0.0001, r_rd_i, r_ro, r_rd, false, i16vec2(0), 1u);
-        refl_R = r_rd_i;
-        refl_vprojdist = (t_refl > -0.5) ? t_refl : VPROJDIST_SKY;
-
-        // 折射虚拟投射距离 (有折射概率时; 镜面退化不再特殊处理, 统一走镜面降噪)
-        if (mixWeight.y > 0.001) {
-            float rs_refract = first_n_i == REFRACTIVE_INDEX ? REFRACTIVE_INDEX : 1.0 / REFRACTIVE_INDEX;
-            vec3 refract_rd = refract(first_rd_i, first_n, rs_refract);
-            bool is_refract = dot(refract_rd, refract_rd) > 0.0;
-            if (!is_refract) refract_rd = reflect(first_rd_i, first_n);
-
-            float t_refr = raycast(
-                    first_p + (is_refract ? -1.0 : 1.0) * first_macro_n * 0.0001,
-                    refract_rd, r_ro, r_rd, false, i16vec2(0), 1u);
-            refr_R = refract_rd;
-            refr_vprojdist = (t_refr > -0.5) ? t_refr : VPROJDIST_SKY;
-        }
-    }
-
-    // 分配光照到对应的降噪 Buffer
-    switch (first_type) {
-        case 0:
-        refl_color = total_illumination;
-        break;
-
-        case DIFFUSION:
-        {
-            AliceEncoding indAlice = irradiance_to_alice(L_indirect / (first_albedo2 + 1e-3), first_rd_o);
-            AliceEncoding dirAlice = irradiance_to_alice(L_direct_0 / (first_albedo2 + 1e-3), -lightDir);
-
+#if defined(FIRST_LOBE_DIFFUSE)
+    {
+        // --- Diffuse pass: write diffuseIlluminationBuffer (Alice encoding + geometry) ---
+        diffuseIlluminationBuffer.data[idx].rt_aliceY_xy = 0.0;
+        diffuseIlluminationBuffer.data[idx].rt_aliceY_zw = 0.0;
+        diffuseIlluminationBuffer.data[idx].rt_CoCg = 0.0;
+        if (!hit_sky_first && first_t > -0.5) {
+            AliceEncoding indAlice = irradiance_to_alice(L_indirect / (first_diffuseAlbedo + 1e-3), first_rd_o);
+            AliceEncoding dirAlice = irradiance_to_alice(L_direct_0 / (first_diffuseAlbedo + 1e-3), -lightDir);
             indAlice.CoCg += dirAlice.CoCg;
             indAlice.aliceY += dirAlice.aliceY;
-
             diffuseIlluminationBuffer.data[idx].rt_aliceY_xy = uintBitsToFloat(packHalf2x16(indAlice.aliceY.xy));
             diffuseIlluminationBuffer.data[idx].rt_aliceY_zw = uintBitsToFloat(packHalf2x16(indAlice.aliceY.zw));
             diffuseIlluminationBuffer.data[idx].rt_CoCg = uintBitsToFloat(packHalf2x16(indAlice.CoCg));
-            break;
         }
-
-        case REFLECTION:
-        refl_color = clamp(total_illumination, 0.0, 200.0 * div_avgExposure);
-        break;
-
-        case REFRACTION:
-        refr_color = total_illumination;
-        break;
-
-        default:
-        break;
+        diffuseIlluminationBuffer.data[idx].px = pos_rel.x;
+        diffuseIlluminationBuffer.data[idx].py = pos_rel.y;
+        diffuseIlluminationBuffer.data[idx].pz = pos_rel.z;
+        diffuseIlluminationBuffer.data[idx].oct_n = encodeNormal(first_macro_n);
+        diffuseIlluminationBuffer.data[idx].oct_n2 = encodeNormal(faceforward(first_n, first_n, -first_macro_n));
     }
+#elif defined(FIRST_LOBE_REFLECTION)
+    {
+        // --- Reflection pass: write reflectIlluminationBuffer ---
+        // virtualProjDist: one extra raycast along the GGX dominant direction
+        vec3 refl_R = first_rd_i;
+        float refl_vprojdist = 0.0;
+        vec3 refl_color = vec3(0.0);
+        if (!hit_sky_first && first_t > -0.5) {
+            vec3 r_rd, r_ro;
+            vec3 r_rd_i = GetSpecularDominantDirection(first_n, first_rd_i, first_roughness);
+            float t_refl = raycast(first_p + first_macro_n * 0.0001, r_rd_i, r_ro, r_rd, false, i16vec2(0), 1u);
+            refl_R = r_rd_i;
+            refl_vprojdist = (t_refl > -0.5) ? t_refl : VPROJDIST_SKY;
+            refl_color = clamp(total_illumination / max(first_specularAlbedo, vec3(1e-6)), 0.0, 200.0 * div_avgExposure);
+        }
+        reflectIlluminationBuffer.data[idx].px = pos_rel.x;
+        reflectIlluminationBuffer.data[idx].py = pos_rel.y;
+        reflectIlluminationBuffer.data[idx].pz = pos_rel.z;
+        reflectIlluminationBuffer.data[idx].oct_dir = encodeNormal(refl_R);
+        reflectIlluminationBuffer.data[idx].virtualProjDist = refl_vprojdist;
+        reflectIlluminationBuffer.data[idx].color_rg = pack2HalfClamped(refl_color.r, refl_color.g);
+        reflectIlluminationBuffer.data[idx].color_b = pack2HalfClamped(refl_color.b, 0.0);
+    }
+#else
+    {
+        // --- Refraction pass: write refractIlluminationBuffer (transmission only; TIR → reflection pass) ---
+        vec3 refr_R = first_rd_i;
+        float refr_vprojdist = 0.0;
+        vec3 refr_color = vec3(0.0);
+        if (!hit_sky_first && first_t > -0.5) {
+            if (mixWeight.y > 0.001) {
+                vec3 r_rd, r_ro;
+                float rs_refract = first_n_i == REFRACTIVE_INDEX ? REFRACTIVE_INDEX : 1.0 / REFRACTIVE_INDEX;
+                vec3 refract_rd = refract(first_rd_i, first_n, rs_refract);
+                bool is_refract = dot(refract_rd, refract_rd) > 0.0;
+                if (!is_refract) refract_rd = reflect(first_rd_i, first_n);
+                float t_refr = raycast(
+                        first_p + (is_refract ? -1.0 : 1.0) * first_macro_n * 0.0001,
+                        refract_rd, r_ro, r_rd, false, i16vec2(0), 1u);
+                refr_R = refract_rd;
+                refr_vprojdist = (t_refr > -0.5) ? t_refr : VPROJDIST_SKY;
+            }
+            refr_color = total_illumination / max(first_transmissionAlbedo, vec3(1e-6));
+        }
+        refractIlluminationBuffer.data[idx].px = pos_rel.x;
+        refractIlluminationBuffer.data[idx].py = pos_rel.y;
+        refractIlluminationBuffer.data[idx].pz = pos_rel.z;
+        refractIlluminationBuffer.data[idx].oct_dir = encodeNormal(refr_R);
+        refractIlluminationBuffer.data[idx].virtualProjDist = refr_vprojdist;
+        refractIlluminationBuffer.data[idx].color_rg = pack2HalfClamped(refr_color.r, refr_color.g);
+        refractIlluminationBuffer.data[idx].color_b = pack2HalfClamped(refr_color.b, 0.0);
+    }
+#endif
 
-    // 写入镜面 RT 输出 — 仅写当前帧字段, hist_* 保留供 101 读取
-    reflectIlluminationBuffer.data[idx].px = pos_rel.x;
-    reflectIlluminationBuffer.data[idx].py = pos_rel.y;
-    reflectIlluminationBuffer.data[idx].pz = pos_rel.z;
-    reflectIlluminationBuffer.data[idx].oct_dir = encodeNormal(refl_R);
-    reflectIlluminationBuffer.data[idx].virtualProjDist = refl_vprojdist;
-    reflectIlluminationBuffer.data[idx].color_rg = pack2HalfClamped(refl_color.r, refl_color.g);
-    reflectIlluminationBuffer.data[idx].color_b  = pack2HalfClamped(refl_color.b, 0.0);
-
-    refractIlluminationBuffer.data[idx].px = pos_rel.x;
-    refractIlluminationBuffer.data[idx].py = pos_rel.y;
-    refractIlluminationBuffer.data[idx].pz = pos_rel.z;
-    refractIlluminationBuffer.data[idx].oct_dir = encodeNormal(refr_R);
-    refractIlluminationBuffer.data[idx].virtualProjDist = refr_vprojdist;
-    refractIlluminationBuffer.data[idx].color_rg = pack2HalfClamped(refr_color.r, refr_color.g);
-    refractIlluminationBuffer.data[idx].color_b  = pack2HalfClamped(refr_color.b, 0.0);
-
+#if defined(FIRST_LOBE_DIFFUSE)
     denoiseBuffer.data[idx].emission = first_emission_val;
+#endif
 }
