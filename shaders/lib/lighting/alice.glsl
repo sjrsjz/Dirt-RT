@@ -118,6 +118,56 @@ float alice_radial_estimator_variance(vec4 encoded, float N) {
     return alice_radial_variance(encoded) / max(N, 1e-6);
 }
 
+// ------------------------------------------------------------
+// 本征方向标准差 (n=3, 总体)
+// σ_⊥ = 2ω√(1-κ²)/(3+κ²),  σ_∥ = 2ω√(1+κ²)/(3+κ²)
+// 返回 vec2(σ_⊥, σ_∥)
+// ------------------------------------------------------------
+vec2 alice_eigen_std(float omega, float kappa) {
+    float k2 = kappa * kappa;
+    float denom = 3.0 + k2;
+    return vec2(
+        2.0 * omega * sqrt(max(0.0, 1.0 - k2)),
+        2.0 * omega * sqrt(1.0 + k2)
+    ) / denom;
+}
+
+// ------------------------------------------------------------
+// 从已存储的标量估计量方差提取径向估计量方差
+// stored_var 为 swap2 预滤波后的 Var_scalar/N_eff
+// Var(|X|)/N_eff = stored_var × [3+6κ²-κ⁴] / [4(3-κ²)]
+// ------------------------------------------------------------
+float alice_radial_est_var_from_scalar(float stored_scalar_var, float kappa) {
+    float k2 = kappa * kappa;
+    float ratio = (3.0 + 6.0 * k2 - k2 * k2) / max(4.0 * (3.0 - k2), 1e-8);
+    return stored_scalar_var * ratio;
+}
+
+// ------------------------------------------------------------
+// Bures 距离平方 (同轴近似, n=3)
+//
+// d_B² = |Δv|² + (n-1)(σ_⊥,₁ - σ_⊥,₂)² + (σ_∥,₁ - σ_∥,₂)²
+//
+// 同轴近似: 假设两分布主轴方向接近 (由几何权重保证)
+//
+// 与 Jeffreys 散度的关键区别:
+//   Jeffreys: β ∝ 1/(1-κ²) → κ→1 时指数爆炸
+//   Bures:    σ_⊥ ∝ √(1-κ²) → κ→1 时多项式收敛到 0
+// 两个同向尖锐分布的 Bures 距离趋零 (正确), Jeffreys 趋无穷 (错误)
+// ------------------------------------------------------------
+float alice_bures_distance_sq(vec4 enc1, float kappa1, vec4 enc2, float kappa2) {
+    vec2 std1 = alice_eigen_std(enc1.w, kappa1);
+    vec2 std2 = alice_eigen_std(enc2.w, kappa2);
+
+    vec3 delta_v = enc1.xyz - enc2.xyz;
+    float d_perp = std1.x - std2.x;
+    float d_para = std1.y - std2.y;
+
+    // n=3: 2 个垂直方向 + 1 个平行方向
+    return dot(delta_v, delta_v) + 2.0 * d_perp * d_perp + d_para * d_para;
+}
+
+
 // 计算最大熵分布的自然参数 (θ, β) 用于散度计算
 // 返回 vec4(theta.xyz, beta), 其中 θ = ( (3+κ²)² / (4 ω² (1-κ²)) ) * v
 // 如果 ω 太小或 κ 趋近 1 会导致 β 发散, 调用方需注意上限
@@ -246,9 +296,7 @@ float alice_irradiance(vec4 encoded, vec3 N) {
     vec3 v_hat = encoded.xyz / len_v;
 
     // 计算 kappa
-    float rho = min(len_v / omega, 0.999999);
-    float sqrt_term = sqrt(max(0.0, 16.0 - 12.0 * rho * rho));
-    float kappa = (6.0 * rho) / (4.0 + sqrt_term);
+    float kappa = alice_kappa(len_v, omega);
 
     // 余弦投影
     float mu_0 = dot(v_hat, N);
@@ -302,7 +350,8 @@ float alice_guiding_pdf(vec3 wi, vec3 axis, float kappa)
     float d = 1.0 - kappa * dot(axis, wi);
     float norm = 3.0 * pow(max(0.0, 1.0 - k2), 3.0)
             / (4.0 * PI * (3.0 + k2));
-    return norm / max(1e-6, d * d * d * d);
+    float d2 = d * d;
+    return norm / max(1e-6, d2 * d2);
 }
 
 // ------------------------------------------------------------

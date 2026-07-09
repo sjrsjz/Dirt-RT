@@ -59,6 +59,6 @@ void main() {
 
     // 在低权重的时候传播滤波结果
     // 这受到 NRD 的启发，实际上移除后对降噪质量不产生明显影响
-    tmp.data = mix_alice(tmp.data, blurred_alice, clamp(1.0 / max(tmp.weight, 1.0), 0.0, 1.0));
+    tmp.data = mix_alice(tmp.data, blurred_alice, clamp(NRD_BLEND_STRENGTH / max(tmp.weight, 1.0), 0.0, 1.0));
     WriteDiffuse(tmp, pix);
 }

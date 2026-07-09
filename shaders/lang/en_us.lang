@@ -1,29 +1,45 @@
-# -- Ray Tracing --
+screen.RAY_TRACING = Ray Tracing
 option.ACCUMULATION_LENGTH = Accumulation Length
 option.RAY_BOUNCES = Ray Bounces
+option.PATH_GUIDING_STRENGTH = Path Guiding Strength
 
-# -- Material --
+screen.MATERIAL = Material
 option.REFRACTIVE_INDEX = Water IOR
 option.MAX_WETNESS = Max Wetness
 
-# -- Volumetric Light --
+screen.VOLUMETRIC_LIGHT = Volumetric Light
 option.SHARP_VOLUMETRIC_LIGHT = Volumetric Light Quality
 value.SHARP_VOLUMETRIC_LIGHT.1 = Sharp
 value.SHARP_VOLUMETRIC_LIGHT.0 = Soft
 option.VOLUMETRIC_LIGHT_SAMPLES = Volumetric Light Samples
 
-# -- Exposure & Display --
+screen.EXPOSURE_DISPLAY = Exposure & Display
 option.DISPLAY_MAX_LUMINANCE = Display Peak Luminance
 option.EXPOSURE_CURVE_K = Exposure Curve
 
-# -- Bloom --
+screen.BLOOM = Bloom
 option.BLOOM_MIX = Bloom Strength
 
-# -- Temporal Filter --
+screen.TEMPORAL_FILTER = Temporal Filter
 option.TEMPORAL_NORMAL_PARAM = History Normal Rejection
 option.TEMPORAL_POSITION_PARAM = History Position Rejection
+option.NRD_BLEND_STRENGTH = Low-Confidence Blend
 
-# -- SVGF Denoiser --
+screen.TEMPORAL_ACCUMULATION = Diffuse Temporal Accumulation
+option.TEMPORAL_MAX_HISTORY = Max History Frames
+option.TEMPORAL_CONFIDENCE_POWER = Confidence Power
+option.TEMPORAL_HISTORY_MIN_WEIGHT = Min History Weight
+option.TEMPORAL_AABB_ENABLE = AABB Clamp
+value.TEMPORAL_AABB_ENABLE.1 = On
+value.TEMPORAL_AABB_ENABLE.0 = Off
+option.TEMPORAL_AABB_NEIGHBOR_RADIUS = AABB Neighbor Radius
+option.TEMPORAL_AABB_EXPAND = AABB Expand
+option.TEMPORAL_AABB_SIGMA_SCALE = AABB Sigma Scale
+option.TEMPORAL_AABB_MIN_EXTENT = AABB Min Extent
+option.TEMPORAL_AABB_BOX_SCALE = AABB Box Scale
+option.TEMPORAL_AABB_MIN_VALID_NEIGHBORS = AABB Min Valid Neighbors
+
+screen.SVGF_DENOISER = SVGF Denoiser
 option.VAR_FILTER_RADIUS = Variance Filter Radius
 option.VARIANCE_SCALE = Variance Scale
 option.SVGF_NORMAL_POWER = SVGF Normal Edge Sensitivity
@@ -33,7 +49,7 @@ option.ENABLE_GAUSSIAN_FILTER = Geometry-Guided Filter
 value.ENABLE_GAUSSIAN_FILTER.1 = On
 value.ENABLE_GAUSSIAN_FILTER.0 = Off
 
-# -- Debug --
+screen.DEBUG = Debug
 option.DEBUG_VIEW = Debug View
 value.DEBUG_VIEW.0 = Normal
 value.DEBUG_VIEW.1 = Diffuse

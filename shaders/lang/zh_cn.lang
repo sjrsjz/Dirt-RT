@@ -1,0 +1,69 @@
+screen.RAY_TRACING = 光线追踪
+option.ACCUMULATION_LENGTH = 累积帧数
+option.RAY_BOUNCES = 光线弹射次数
+option.PATH_GUIDING_STRENGTH = 路径引导强度
+
+screen.MATERIAL = 材质
+option.REFRACTIVE_INDEX = 水折射率
+option.MAX_WETNESS = 最大湿度
+
+screen.VOLUMETRIC_LIGHT = 体积光
+option.SHARP_VOLUMETRIC_LIGHT = 体积光质量
+value.SHARP_VOLUMETRIC_LIGHT.1 = 锐利
+value.SHARP_VOLUMETRIC_LIGHT.0 = 柔和
+option.VOLUMETRIC_LIGHT_SAMPLES = 体积光采样数
+
+screen.EXPOSURE_DISPLAY = 曝光与显示
+option.DISPLAY_MAX_LUMINANCE = 显示器峰值亮度
+option.EXPOSURE_CURVE_K = 曝光曲线
+
+screen.BLOOM = 泛光
+option.BLOOM_MIX = 泛光强度
+
+screen.TEMPORAL_FILTER = 时域滤波
+option.TEMPORAL_NORMAL_PARAM = 历史法线拒绝阈值
+option.TEMPORAL_POSITION_PARAM = 历史位置拒绝阈值
+option.NRD_BLEND_STRENGTH = 低置信度混合
+
+screen.TEMPORAL_ACCUMULATION = 漫反射时域累积
+option.TEMPORAL_MAX_HISTORY = 最大历史帧数
+option.TEMPORAL_CONFIDENCE_POWER = 置信度幂
+option.TEMPORAL_HISTORY_MIN_WEIGHT = 最小历史权重
+option.TEMPORAL_AABB_ENABLE = AABB 钳制
+value.TEMPORAL_AABB_ENABLE.1 = 开启
+value.TEMPORAL_AABB_ENABLE.0 = 关闭
+option.TEMPORAL_AABB_NEIGHBOR_RADIUS = AABB 邻域半径
+option.TEMPORAL_AABB_EXPAND = AABB 扩展系数
+option.TEMPORAL_AABB_SIGMA_SCALE = AABB Sigma 缩放
+option.TEMPORAL_AABB_MIN_EXTENT = AABB 最小范围
+option.TEMPORAL_AABB_BOX_SCALE = AABB 全局缩放
+option.TEMPORAL_AABB_MIN_VALID_NEIGHBORS = AABB 最小有效邻域
+
+screen.SVGF_DENOISER = SVGF 降噪
+option.VAR_FILTER_RADIUS = 方差滤波半径
+option.VARIANCE_SCALE = 方差缩放
+option.SVGF_NORMAL_POWER = SVGF 法线边缘灵敏度
+option.SVGF_PHI_L = SVGF 亮度边缘灵敏度
+option.SVGF_POSITION_PARAM = SVGF 深度边缘灵敏度
+option.ENABLE_GAUSSIAN_FILTER = 几何引导滤波
+value.ENABLE_GAUSSIAN_FILTER.1 = 开启
+value.ENABLE_GAUSSIAN_FILTER.0 = 关闭
+
+screen.DEBUG = 调试
+option.DEBUG_VIEW = 调试视图
+value.DEBUG_VIEW.0 = 正常
+value.DEBUG_VIEW.1 = 漫反射
+value.DEBUG_VIEW.2 = 折射
+value.DEBUG_VIEW.3 = 反射
+value.DEBUG_VIEW.4 = 白模
+value.DEBUG_VIEW.5 = 光场
+value.DEBUG_VIEW.6 = 法线
+value.DEBUG_VIEW.7 = 吸收
+
+# -- ReSTIR --
+option.useReSTIR = 使用 ReSTIR
+value.useReSTIR.1 = 开启
+value.useReSTIR.0 = 关闭
+option.RESTIR_SPATIAL_SAMPLES = ReSTIR 空间采样数
+option.RESTIR_SPATIAL_RADIUS = ReSTIR 空间半径
+option.RESTIR_M_CAP = ReSTIR M 上限

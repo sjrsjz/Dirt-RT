@@ -76,7 +76,7 @@ void main() {
         fragColor.xyz = data.absorption
                 * ((project_alice_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2))
                     + tmp3.data_swap) * data.albedo2
-                    //+ tmp2.data_swap
+                    + tmp2.data_swap
                     + data.light)
                 + data.emission;
 

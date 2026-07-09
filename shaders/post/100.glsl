@@ -43,7 +43,7 @@ uniform sampler2D colortex0;
 
 // 历史最大有效样本数。
 #ifndef TEMPORAL_MAX_HISTORY
-#define TEMPORAL_MAX_HISTORY 64.0
+#define TEMPORAL_MAX_HISTORY 32.0
 #endif
 
 // 重投影置信度幂。
