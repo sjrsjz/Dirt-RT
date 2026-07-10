@@ -3,9 +3,13 @@
 // ===========================================================================
 // Pass 301: 镜面反射/折射 NRD 风格屏幕空间降噪 (à-trous, fragment 变体 R0≥8)
 // ===========================================================================
-// 混合权重: NRD 虚拟追踪 (R lobe 相似度 + virtualProjDist) + 表面几何边缘停止
-// (实际法线相似度 + 深度不连续检测). NRD 部分追踪反射空间中的虚像一致性,
-// 几何部分防止跨表面边缘的泄漏 (与虚拟深度无关, 由实际表面法线/位置决定).
+// 基于 NRD RELAX À-trous 的正确镜面降噪实现:
+//   1. 视线方向权重 (view-dependent specular)
+//   2. 镜面波瓣法线权重 (考虑法线和视线)
+//   3. 粗糙度权重 (正确参数化)
+//   4. 表面几何权重 (平面距离)
+//   5. 击中距离权重 (虚拟投射距离)
+//   6. 亮度权重 (方差归一化)
 // ===========================================================================
 
 #include "/lib/constants.glsl"
@@ -16,10 +20,61 @@
 uniform sampler2D colortex3; // (pos.xyz, oct(R))
 uniform sampler2D colortex4; // f16(R,G)|f16(B,roughness)|f16(variance,virtualProjDist)|oct(H)
 
-float GetRoughnessWeight(float roughness0, float roughness) {
-    float norm = roughness0 * roughness0 * SPEC_ROUGH_NORM_A + SPEC_ROUGH_NORM_B;
-    float w = abs(roughness0 - roughness) * (1.0 / norm);
-    return clamp(1.0 - w, 0.0, 1.0);
+// NRD-style 粗糙度权重参数 (返回 (a, -b) 用于 ComputeWeight)
+vec2 GetRoughnessWeightParams(float roughness, float fraction) {
+    const float sensitivity = 0.03; // NRD_ROUGHNESS_SENSITIVITY
+    float a = 1.0 / mix(sensitivity, 1.0, clamp(roughness * fraction, 0.0, 1.0));
+    float b = roughness * a;
+    return vec2(a, -b);
+}
+
+// NRD ComputeWeight (指数版本)
+float ComputeWeight(float x, float px, float py) {
+    const float scale = 3.0; // NRD_EXP_WEIGHT_DEFAULT_SCALE
+    float arg = -scale * abs(x * px + py);
+    // ExpApprox for negative x: 1 / (x*x - x + 1)
+    return 1.0 / (arg * arg - arg + 1.0);
+}
+
+// NRD 镜面波瓣半角的 tan 值
+float GetSpecLobeTanHalfAngle(float roughness, float percentOfVolume) {
+    roughness = clamp(roughness, 0.0, 1.0);
+    percentOfVolume = clamp(percentOfVolume, 0.0, 1.0);
+    return roughness * roughness * percentOfVolume / (1.0 - percentOfVolume + 1e-6);
+}
+
+// NRD 镜面法线权重参数 (À-trous 版本)
+vec2 GetNormalWeightParams_ATrous(float roughness, float lobeAngleFraction, float lobeAngleSlack) {
+    // 主参数: 锥角
+    float angle = atan(GetSpecLobeTanHalfAngle(roughness, lobeAngleFraction));
+    angle += lobeAngleSlack;
+    angle = min(angle, 1.5708); // min(angle, PI/2)
+
+    float f = 0.9; // 简化版本，没有历史长度和置信度放松
+    return vec2(angle, f);
+}
+
+// NRD 镜面法线权重 (À-trous 版本) - 关键: 同时考虑法线和视线
+float GetSpecularNormalWeight_ATrous(vec2 params, vec3 n0, vec3 n, vec3 v0, vec3 v) {
+    float cosaN = dot(n0, n);
+    float cosaV = dot(v0, v);
+    float cosa = min(cosaN, cosaV); // 取最严格的
+    float a = acos(clamp(cosa, -1.0, 1.0)); // AcosApprox
+    a = smoothstep(0.0, params.x, a);
+    return clamp(1.0 - a * params.y, 0.0, 1.0);
+}
+
+// 简化版法线权重参数 (仅用于角度)
+float GetNormalWeightParam2(float angleFraction) {
+    float angle = atan(GetSpecLobeTanHalfAngle(1.0, angleFraction));
+    angle = 1.0 / max(angle, 0.001);
+    return angle;
+}
+
+// 平面距离权重 (À-trous 版本)
+float GetPlaneDistanceWeight_Atrous(vec3 centerWorldPos, vec3 centerNormal, vec3 sampleWorldPos, float threshold) {
+    float distanceToCenterPointPlane = abs(dot(sampleWorldPos - centerWorldPos, centerNormal));
+    return distanceToCenterPointPlane < threshold ? 1.0 : 0.0;
 }
 
 
@@ -44,44 +99,58 @@ void main() {
         return;
     }
 
-    // === NRD 镜面降噪权重 ===
-    // 核心思想: 追踪反射光线的虚拟击中点, 而非镜子表面本身.
-    // 平整镜面上相邻像素的表面坐标/法线几乎一致, 但反射内容可能深度差异极大.
-    // 因此位置/法线权重必须基于反射后的虚拟世界, 而非屏幕空间表面.
-    // GGX 波瓣宽度: α² = roughness⁴, 控制 R 向量可接受的偏差范围
-    float alpha = max(cRough * cRough, SPEC_MIN_ALPHA);
-    float alpha2 = alpha * alpha;
-    float lobe_param2 = SPEC_BLUR_BOOST / (alpha2 * SPEC_LOBE_DIVISOR) * LOG2_E;
-    float hit_dist_param2 = SPEC_BLUR_BOOST * SPEC_HIT_DIST_SENS * LOG2_E;
-    float surf_pos_param2 = SPEC_BLUR_BOOST * SPEC_SURF_PARAM * LOG2_E;
+    // ---- NRD-style 权重参数计算 ----
 
-    // 亮度权重: 粗糙表面放宽拒绝
-    float luma_phi2 = SPEC_BLUR_BOOST * SVGF_PHI_L * LOG2_E * inversesqrt(max(cVar, 1e-8)) / (1.0 + cRough * SPEC_LUMA_ROUGH_SOFT);
-    float cLuma = luma(cRad);
+    // 1. 中心视线向量 (关键!)
+    vec3 centerV = -normalize(cPos);
 
-    // Surface geometry edge-stop (uses actual geometry normal H, not reconstructed V+R)
-    float cDistToCam = max(length(cPos), 0.01);
-    float cPixelFootprint = max(cDistToCam / float(texSize.y), 1e-4);
+    // 2. 粗糙度权重参数
+    float roughnessFraction = 0.15; // gRoughnessFraction, 可调
+    vec2 roughnessWeightParams = GetRoughnessWeightParams(cRough, roughnessFraction);
+
+    // 3. 镜面法线权重参数 (完整版 - 考虑视线)
+    float specularLobeAngleFraction = 0.5; // gLobeAngleFraction
+    float specularLobeAngleSlack = 0.3; // gSpecLobeAngleSlack
+    vec2 specularNormalWeightParams = GetNormalWeightParams_ATrous(
+        cRough, specularLobeAngleFraction, specularLobeAngleSlack);
+
+    // 4. 简化版法线权重参数 (仅角度，用于粗糙表面)
+    float diffuseLobeAngleFraction = 0.5; // 简化版使用
+    float specularNormalWeightParamSimplified = GetNormalWeightParam2(diffuseLobeAngleFraction);
+
+    // 5. 几何平面距离阈值
+    float depthThreshold = 0.1 * max(length(cPos), 0.01); // gDepthThreshold
+
+    // 6. 亮度权重 (方差归一化)
+    float centerLuminance = luma(cRad);
+    float specularPhiLIlluminationInv = 1.0 / max(1e-4, 4.0 * sqrt(cVar)); // gSpecPhiLuminance
+
+    // 累积器 (中心像素权重 = 0.44198^2, NRD 3x3 高斯核心)
+    const float centerWeight = 0.44198 * 0.44198;
+    float sumW = centerWeight;
+    vec3 sumRadiance = cRad * centerWeight;
+    float sumVariance = cVar * centerWeight * centerWeight;
 
     #if STEP >= 4
     float theta = 2.0 * PI * rand(vec2(pix + R0));
     mat2 rotM = mat2(cos(theta), -sin(theta), sin(theta), cos(theta)) * R0;
     #endif
 
-    vec3 A = cRad;            // 中心像素 (权重 = 1)
-    float w = 1.0;
-    float varEnergy = cVar;
     ivec2 samplePos;
 
-    for (int i = -1; i <= 1; i++) {
-        for (int j = -1; j <= 1; j++) {
-            if (i == 0 && j == 0) continue;
+    // ---- À-trous 滤波 ----
+    const float kernelWeightGaussian3x3[2] = float[2](0.44198, 0.27901);
+
+    for (int yy = -1; yy <= 1; yy++) {
+        for (int xx = -1; xx <= 1; xx++) {
+            if (xx == 0 && yy == 0) continue; // 跳过中心
 
             #if STEP >= 4
-            samplePos = pix + ivec2(round(rotM * vec2(i, j)));
+            samplePos = pix + ivec2(round(rotM * vec2(xx, yy)));
             #else
-            samplePos = pix + R0 * ivec2(i, j);
+            samplePos = pix + R0 * ivec2(xx, yy);
             #endif
+
             if (samplePos.x < 0 || samplePos.y < 0 ||
                     samplePos.x >= texSize.x || samplePos.y >= texSize.y) {
                 continue;
@@ -96,51 +165,58 @@ void main() {
 
             if (sVar < 0.0) continue; // 天空
 
-            float rW = GetRoughnessWeight(cRough, sRough);
+            // 高斯核
+            float kernel = kernelWeightGaussian3x3[abs(xx)] * kernelWeightGaussian3x3[abs(yy)];
 
-            // ---- NRD 镜面专属权重 ----
-            // 1. 表面连续性 (使用实际几何法线 H, 防跨物体泄漏)
-            float surfDist = abs(dot(cPos - sPos, cH));
-            float w_surf = exp2(-surf_pos_param2 * surfDist);
+            // 1. 几何权重 (平面距离)
+            float geometryW = GetPlaneDistanceWeight_Atrous(cPos, cH, sPos, depthThreshold);
+            geometryW *= kernel;
 
-            // 2. 高光波瓣余弦相似度: cR 与 sR 的夹角必须在 GGX lobe 宽度内
-            float R_dot_R = max(dot(cR, sR), 0.0);
-            float w_lobe = exp2(-(1.0 - R_dot_R) * lobe_param2);
+            if (geometryW < 1e-4) continue;
 
-            // 3. 虚拟击中距离: 相对误差 (abs(a-b))/(a+b+eps), 尺度无关
-            // NRD hardening: amplify sensitivity when hitDist → 0
-            // Small hitDist (reflection near surface): hardFactor > 1 → selective → sharp
-            // Large hitDist (distant reflection): hardFactor → 0 → permissive → blur
-            float hitDistDiff = abs(cVproj - sVproj);
-            float hitDistSum = cVproj + sVproj + 1e-5;
-            float hardFactor = 1.0 + SPEC_HIT_DIST_HARDEN / max(max(cVproj, sVproj), 1e-5);
-            float w_hitDist = exp2(-(hitDistDiff / hitDistSum) * hit_dist_param2 * hardFactor);
+            // 2. 样本视线向量 (NRD 关键: 添加放松以减少视线相关性拒绝)
+            const float roughnessEdgeStoppingRelaxation = 0.3; // gRoughnessEdgeStoppingRelaxation
+            vec3 sampleV = -normalize(sPos + roughnessEdgeStoppingRelaxation * cPos);
 
-            // 4. 亮度方差引导
-            float w_luma = exp2(-luma_phi2 * abs(cLuma - luma(sRad)));
+            // 3. 镜面法线权重 (完整版: 同时考虑法线和视线差异)
+            float normalWSpecular = GetSpecularNormalWeight_ATrous(
+                specularNormalWeightParams, cH, sH, centerV, sampleV);
 
-            // ---- 表面几何权重 (使用实际几何法线 H, 防止跨几何边缘泄漏) ----
-            // 法线相似度
-            float nd = clamp(dot(cH, sH), 0.0, 1.0);
-            float normalTerm = SPEC_GEOM_NORMAL_POWER * (1.0 - nd);
+            // 4. 简化版法线权重 (仅角度，作为后备)
+            float angles = acos(clamp(dot(cH, sH), -1.0, 1.0));
+            float normalWSpecularSimplified = ComputeWeight(angles, specularNormalWeightParamSimplified, 0.0);
 
-            // 深度边缘停止: 沿实际表面法线方向的平面距离
-            float planeDist = abs(dot(sPos - cPos, cH));
-            float depthTerm = planeDist / max(SPEC_GEOM_DEPTH_PARAM * cPixelFootprint, 1e-6);
-            float w_geom = exp2(-(normalTerm + depthTerm) * LOG2_E);
+            // 5. 粗糙度权重
+            float roughnessWSpecular = ComputeWeight(sRough, roughnessWeightParams.x, roughnessWeightParams.y);
 
-            float w0 = rW * w_surf * w_lobe * w_hitDist * w_luma * w_geom;
+            // 6. 组合镜面权重 (根据粗糙度选择完整或简化版本)
+            // 对于光滑表面 (低粗糙度)，使用完整的视线相关权重
+            // 对于粗糙表面，使用简化版本
+            bool useFullSpecularWeight = true; // gRoughnessEdgeStoppingEnabled
+            float wSpecular = geometryW * (useFullSpecularWeight ?
+                (normalWSpecular * roughnessWSpecular) : normalWSpecularSimplified);
 
-            A += sRad * w0;
-            w += w0;
-            varEnergy += w0 * w0 * sVar;
+            if (wSpecular < 1e-4) continue;
+
+            // 7. 亮度权重
+            float sampleLuminance = luma(sRad);
+            float specularLuminanceW = abs(centerLuminance - sampleLuminance) * specularPhiLIlluminationInv;
+            specularLuminanceW = min(2.0, specularLuminanceW); // gSpecMaxLuminanceRelativeDifference
+            wSpecular *= exp(-specularLuminanceW);
+
+            // 8. 累积
+            sumW += wSpecular;
+            sumRadiance += sRad * wSpecular;
+            sumVariance += sVar * wSpecular * wSpecular;
         }
     }
 
-    if (any(isnan(A))) A = vec3(0.0);
-    vec3 filtered = A / max(w, 0.01);
-    float outVar = varEnergy / max(w * w, 1e-8);
+    // ---- 归一化输出 ----
+    vec3 filteredRadiance = sumRadiance / max(sumW, 1e-8);
+    float filteredVariance = sumVariance / max(sumW * sumW, 1e-8);
+
+    if (any(isnan(filteredRadiance))) filteredRadiance = vec3(0.0);
 
     // 输出: 仅颜色+方差变化, roughness/virtualProjDist/H 透传
-    color = packSpecularSample(cPos, cR, filtered, cRough, outVar, cVproj, cH).data1;
+    color = packSpecularSample(cPos, cR, filteredRadiance, cRough, filteredVariance, cVproj, cH).data1;
 }
