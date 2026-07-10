@@ -43,6 +43,27 @@ float GetSpecLobeTanHalfAngle(float roughness, float percentOfVolume) {
     return roughness * roughness * percentOfVolume / (1.0 - percentOfVolume + 1e-6);
 }
 
+// NRD GetSpecMagicCurve: 镜面→0, 粗糙→1
+float GetSpecMagicCurve(float roughness) {
+    return 1.0 - exp2(-30.0 * roughness * roughness);
+}
+
+// NRD ComputeExponentialWeight: exp2(-scale * |x·a + b|)
+float ComputeExponentialWeight(float x, float a, float b) {
+    return exp2(-3.0 * abs(x * a + b));
+}
+
+// NRD 击中距离权重参数 (返回 (a, -b) 用于 ComputeExponentialWeight):
+// 未收敛 (低 accumSpeed) → 极严格 (保护信号形状);
+// 已收敛 (高 accumSpeed, 低粗糙度) → 严格 (防止亮物体泄漏到反射中)
+vec2 GetHitDistanceWeightParams(float hitDist, float nonLinearAccumSpeed, float roughness) {
+    float smc = GetSpecMagicCurve(roughness);
+    float norm = mix(0.0005, 1.0, min(nonLinearAccumSpeed, smc));
+    float a = 1.0 / max(norm, 1e-8);
+    float b = hitDist * a;
+    return vec2(a, -b);
+}
+
 // NRD 镜面法线权重参数 (À-trous 版本)
 vec2 GetNormalWeightParams_ATrous(float roughness, float lobeAngleFraction, float lobeAngleSlack) {
     // 主参数: 锥角
@@ -125,6 +146,13 @@ void main() {
     float centerLuminance = luma(cRad);
     float specularPhiLIlluminationInv = 1.0 / max(1e-4, 4.0 * sqrt(cVar)); // gSpecPhiLuminance
 
+    // 7. 击中距离权重 (NRD): 防止不同深度的反射内容相互泄漏
+    //    未收敛 → 极严格 (保护信号形状); 已收敛镜面 → 严格 (防止亮物体泄漏)
+    float nonLinearAccumSpeed = 0.2; // 中等收敛估计
+    vec2 hitDistanceWeightParams = GetHitDistanceWeightParams(cVproj, nonLinearAccumSpeed, cRough);
+    float smc = GetSpecMagicCurve(cRough);
+    float minHitDistWeight = 0.1 * smc; // NRD: gMinHitDistanceWeight * smc
+
     // 累积器 (中心像素权重 = 0.44198^2, NRD 3x3 高斯核心)
     const float centerWeight = 0.44198 * 0.44198;
     float sumW = centerWeight;
@@ -204,7 +232,12 @@ void main() {
             specularLuminanceW = min(2.0, specularLuminanceW); // gSpecMaxLuminanceRelativeDifference
             wSpecular *= exp(-specularLuminanceW);
 
-            // 8. 累积
+            // 8. 击中距离权重 (NRD): 不同反射深度的样本不混合
+            float hitDistW = mix(minHitDistWeight, 1.0,
+                ComputeExponentialWeight(sVproj, hitDistanceWeightParams.x, hitDistanceWeightParams.y));
+            wSpecular *= hitDistW;
+
+            // 9. 累积
             sumW += wSpecular;
             sumRadiance += sRad * wSpecular;
             sumVariance += sVar * wSpecular * wSpecular;
