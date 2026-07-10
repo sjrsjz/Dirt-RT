@@ -1,6 +1,7 @@
 #ifndef COMMON_GLSL
 #define COMMON_GLSL
 #include "/lib/constants.glsl"
+#include "/lib/math/hash.glsl"
 
 uint iFrame = 0;
 
@@ -16,25 +17,6 @@ struct material {
     vec3 light;
 };
 
-//----------------------------------------------------------------------------------------
-//  1 out, 1 in...
-float hash11(float p)
-{
-    p = fract(p * .1031);
-    p *= p + 33.33;
-    p *= p + p;
-    return fract(p);
-}
-
-//----------------------------------------------------------------------------------------
-//  1 out, 3 in...
-float hash13(vec3 p3)
-{
-    p3 = fract(p3 * .1031);
-    p3 = fract(tan(dot(p3, p3) * 20 * atan(p3)));
-    p3 += dot(p3, p3.zyx + 31.32);
-    return fract((p3.x + p3.y) * p3.z);
-}
 
 vec2 rot(vec2 a, float theta) {
     return a.xx * vec2(cos(theta), sin(theta)) + a.yy * vec2(-sin(theta), cos(theta));
@@ -70,23 +52,57 @@ void XYZ(vec3 n, out vec3 X, out vec3 Y, out vec3 Z) {
     Z = cross(n, X);
 }
 
-float rand_i = 0.;
+// Weyl sequence — low-discrepancy quasi-random generator
+// α = golden-ratio conjugate ≈ 0.618… for frame offset
+// β = √2 − 1          ≈ 0.414… for sample offset
+// w_n = (frame × α + sample_index × β) mod 1
+const float WEYL_FRAME = 0.6180339887498949;
+const float WEYL_SAMPLE = 0.4142135623730951;
+
+float weyl_idx = 0.0;
+
+float weyl() {
+    weyl_idx += 1.0;
+    return fract(float(iFrame) * WEYL_FRAME + weyl_idx * WEYL_SAMPLE);
+}
+
 float rand(vec3 p3)
 {
-    p3 *= 31;
-    rand_i += 0.4;
-    p3 += rand_i + iFrame;
+    p3 += weyl();
     p3 = fract(p3 * .1031);
     p3 += dot(p3, p3.zyx + 31.32);
     return fract((p3.x + p3.y) * p3.z);
 }
 float rand(vec2 p)
 {
-    rand_i += 0.4;
-    p += rand_i + iFrame;
+    p += weyl();
     vec3 p3 = fract(vec3(p.xyx) * .1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return fract((p3.x + p3.y) * p3.z);
+}
+
+// -----------------------------------------------------------
+// 2D Weyl sequence — dedicated for importance sampling
+// -----------------------------------------------------------
+// Each output dimension uses an independent irrational step,
+// guaranteeing low-discrepancy 2D stratification.
+// Frame: φ⁻¹ and 1/π.  Step: √2−1 and √3−1.
+const vec2 WEYL2_FRAME = vec2(0.6180339887498949, 0.3183098861837907);
+const vec2 WEYL2_STEP  = vec2(0.4142135623730951, 0.7320508075688772);
+
+float weyl2_idx = 0.0;
+
+vec2 weyl2() {
+    weyl2_idx += 1.0;
+    return fract(float(iFrame) * WEYL2_FRAME + weyl2_idx * WEYL2_STEP);
+}
+
+// Dedicated 2D quasi-random sampler for importance sampling.
+// Returns vec2 in [0,1)² with good 2D low-discrepancy properties,
+// independent from the 1D rand() stream.
+vec2 rand2(vec3 p) {
+    vec2 offset = hash23(p * 32.);
+    return fract(offset + weyl2());
 }
 
 uvec3 wseed3;
@@ -141,9 +157,9 @@ vec3 GGXNormal(vec3 normal, float roughness, vec3 pos) {
     else
         randN0.xz = normal.xz * normal.y * inversesqrt(1 - normal.y * normal.y);
     vec3 randN1 = cross(normal, randN0);
-    float alpha = rand(pos) * 2 * PI;
-    float tmp = rand(pos);
-    float cosbeta = min(sqrt(max(0., (1. - tmp) / (1. + tmp * (roughness * roughness - 1.)))), 1.);
+    vec2 xi = rand2(pos);
+    float alpha = xi.x * 2 * PI;
+    float cosbeta = min(sqrt(max(0., (1. - xi.y) / (1. + xi.y * (roughness * roughness - 1.)))), 1.);
 
     return cosbeta * normal + sqrt(1 - cosbeta * cosbeta) * (cos(alpha) * randN0 + sin(alpha) * randN1);
 }
@@ -156,9 +172,9 @@ vec3 DiffuseNormal(vec3 normal, vec3 pos) {
     else
         randN0.xz = normal.xz * normal.y * inversesqrt(1 - normal.y * normal.y);
     vec3 randN1 = cross(normal, randN0);
-    float alpha = rand(pos) * 2 * PI;
-    float tmp = rand(pos);
-    return sqrt(1 - tmp) * normal + sqrt(tmp) * (cos(alpha) * randN0 + sin(alpha) * randN1);
+    vec2 xi = rand2(pos);
+    float alpha = xi.x * 2 * PI;
+    return sqrt(1 - xi.y) * normal + sqrt(xi.y) * (cos(alpha) * randN0 + sin(alpha) * randN1);
 }
 
 float GGXpdf(float costheta, float fai, float a) {

@@ -573,8 +573,9 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         diffuseIlluminationBuffer.data[idx].rt_aliceY_zw = 0.0;
         diffuseIlluminationBuffer.data[idx].rt_CoCg = 0.0;
         if (!hit_sky_first && first_t > -0.5) {
-            AliceEncoding indAlice = irradiance_to_alice(L_indirect / (first_diffuseAlbedo + 1e-3), first_rd_o);
-            AliceEncoding dirAlice = irradiance_to_alice(L_direct_0 / (first_diffuseAlbedo + 1e-3), -lightDir);
+            vec3 inv_albedo = 1.0 / max(first_diffuseAlbedo, vec3(1e-6));
+            AliceEncoding indAlice = irradiance_to_alice(L_indirect * inv_albedo, first_rd_o);
+            AliceEncoding dirAlice = irradiance_to_alice(L_direct_0 * inv_albedo, -lightDir);
             indAlice.CoCg += dirAlice.CoCg;
             indAlice.aliceY += dirAlice.aliceY;
             diffuseIlluminationBuffer.data[idx].rt_aliceY_xy = uintBitsToFloat(packHalf2x16(indAlice.aliceY.xy));
@@ -597,7 +598,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         if (!hit_sky_first && first_t > -0.5) {
             vec3 r_rd, r_ro;
             vec3 r_rd_i = GetSpecularDominantDirection(first_n, first_rd_i, first_roughness);
-            float t_refl = raycast(first_p + first_macro_n * 0.0001, r_rd_i, r_ro, r_rd, false, i16vec2(0), 1u);
+            float t_refl = raycast(first_p + first_macro_n * 0.00025, r_rd_i, r_ro, r_rd, false, i16vec2(0), 1u);
             refl_R = r_rd_i;
             refl_vprojdist = (t_refl > -0.5) ? t_refl : VPROJDIST_SKY;
             refl_color = clamp(total_illumination / max(first_specularAlbedo, vec3(1e-6)), 0.0, 200.0 * div_avgExposure);

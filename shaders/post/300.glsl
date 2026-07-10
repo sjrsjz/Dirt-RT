@@ -63,7 +63,7 @@ void main() {
     // 天空像素跳过 (方差被 swap2 复用作天空 mask)
     if (center_var_est < 0.0) return;
 
-    center_var_est = max(center_var_est, 1e-10);
+    center_var_est = max(center_var_est, 1e-9);
 
     // ---- 预计算中心像素的统计特征 -----------------------------------------
     // 中心 ALICE 编码: aliceY = vec4(v, ω)

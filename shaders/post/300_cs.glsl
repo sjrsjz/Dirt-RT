@@ -100,7 +100,7 @@ void main() {
     float center_var_est;
     unpackLightSampleSM(center_idx, center_pos, center_normal, center_alice, center_var_est);
 
-    center_var_est = max(center_var_est, 1e-10);
+    center_var_est = max(center_var_est, 1e-9);
 
     // ---- 预计算中心像素的统计特征 -----------------------------------------
     vec4 c_enc = center_alice.aliceY;
