@@ -496,7 +496,17 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             // normal captures the normal-map spatial variation while staying deterministic each frame.
             vec4 rC_stable = reflectanceColor(surface.Cs, abs(dot(rd_i, normal)));
             vec3 nonSpecColor_stable = surface.Cd * max(vec3(0.0), vec3(1.0) - rC_stable.rgb * surface.S.x);
-            first_specularAlbedo = rC_stable.rgb * surface.S.x;
+            {
+                vec3 F0 = surface.Cs * surface.S.x;
+                float NoV = clamp(abs(dot(rd_i, normal)), 0.0, 1.0);
+                float rough = surface.R.x;
+                vec4 c0 = vec4(-1.0, -0.0275, -0.572,  0.022);
+                vec4 c1 = vec4( 1.0,  0.0425,  1.040, -0.040);
+                vec4 r  = rough * c0 + c1;
+                float a004 = min(r.x * r.x, exp2(-9.28 * NoV)) * r.x + r.y;
+                vec2 AB   = vec2(-1.04, 1.04) * a004 + r.zw;
+                first_specularAlbedo = F0 * AB.x + vec3(AB.y * surface.S.x);
+            }
             first_diffuseAlbedo = nonSpecColor_stable * diffuseSelector;
             first_transmissionAlbedo = nonSpecColor_stable * transmissionSelector;
             first_roughness = surface.R.x;
