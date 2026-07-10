@@ -8,14 +8,14 @@
 #define SHARP_VOLUMETRIC_LIGHT 1 // Volumetric light quality. ON = sharp analytic falloff. OFF = realistic soft scattering. [0 1]
 #define VOLUMETRIC_LIGHT_SAMPLES 8 // Samples per volumetric light ray. Higher = less noise, lower FPS. [1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 18 20 22 24 28 32]
 
-// -- Temporal history rejection (100.glsl) --
+// -- Temporal history rejection (temporal_diffuse.glsl) --
 #define TEMPORAL_NORMAL_PARAM 4.0 // How strictly normal differences reject history. Higher = less ghosting on curved surfaces, more noise. [0.5 1 2 4 8 16 32 64]
 #define TEMPORAL_POSITION_PARAM 64.0 // How strictly position/depth differences reject history. Higher = less ghosting, more disocclusion noise. [1 2 4 8 16 32 64 128 256]
 
-// -- NRD-inspired low-weight blend (swap3.glsl) --
+// -- NRD-inspired low-weight blend (buffer_swap_diffuse.glsl) --
 #define NRD_BLEND_STRENGTH 0.0 // Spatial filter blend strength at low temporal confidence. Blends the large-radius spatial result back into history when frame accumulation is insufficient. 0 = off. [0.0 0.1 0.25 0.5 0.75 1.0]
 
-// -- Diffuse temporal accumulation (100.glsl) --
+// -- Diffuse temporal accumulation (temporal_diffuse.glsl) --
 #define TEMPORAL_MAX_HISTORY 32.0 // Maximum effective sample count clamped per pixel. Higher = smoother but more ghosting. [1 2 4 8 16 32 64 128]
 #define TEMPORAL_CONFIDENCE_POWER 1.0 // Reprojection confidence exponent. Higher = more aggressive rejection of mismatched history. [0.1 0.25 0.5 1.0 2.0 4.0]
 #define TEMPORAL_HISTORY_MIN_WEIGHT 0.0001 // Weight threshold below which history is discarded and reset. [0.000001 0.00001 0.0001 0.001 0.01]
@@ -27,11 +27,11 @@
 #define TEMPORAL_AABB_BOX_SCALE 1.0 // AABB global scale. Tweak this first when overall clamp feels too aggressive or too conservative. [0.25 0.5 0.75 1.0 1.5 2.0]
 #define TEMPORAL_AABB_MIN_VALID_NEIGHBORS 2 // Minimum valid neighbor count below which AABB clamp is skipped. [1 2 3 4 5 6 7 8]
 
-// -- Variance pre-filter (swap2.glsl) --
+// -- Variance pre-filter (variance_prefilter_diffuse.glsl) --
 #define VAR_FILTER_RADIUS 1 // Variance pre-filter radius. 1=3×3, 2=5×5, 3=7×7. Larger = more stable variance, slower. [1 2 3]
 #define VARIANCE_SCALE 1.0 // Global variance scale before SVGF. Higher = more aggressive denoising. [0.125 0.25 0.5 1 2 4 6 8 10 15 20 30]
 
-// -- SVGF spatial filter (300.glsl) --
+// -- SVGF spatial filter (atrous_denoise_diffuse.glsl) --
 #define SVGF_NORMAL_POWER 32.0 // Normal edge-stopping sensitivity in à-trous wavelet filter. Higher = sharper normal edges preserved. [1 2 4 8 16 32 64 128]
 #define SVGF_PHI_L 0.0075 // Luminance edge-stopping sensitivity. Higher = preserves more fine shadow detail. [0.001 0.0025 0.005 0.075 0.01 0.015 0.02 0.03 0.04 0.05]
 #define SVGF_POSITION_PARAM 0.0025 // Depth edge-stopping sensitivity. Higher = sharper depth boundaries preserved. [0.00075 0.00125 0.0025 0.005 0.01 0.02 0.04 0.08]

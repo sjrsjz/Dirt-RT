@@ -15,7 +15,7 @@ layout(std430, set = 3, binding = 1) buffer FrameData {
     float time_global;
     vec3 camY_global;
     float dTime_global;
-    vec3 prevRaytracingCamPos;   // 光线追踪相机位置 (上一帧: exposure.glsl 写, 供时域 cameraDelta)
+    vec3 prevRaytracingCamPos;   // 光线追踪相机位置 (上一帧: auto_exposure.glsl 写, 供时域 cameraDelta)
     float rainStrength_global;
     uvec2 resolution_global;
     int world_type_global;

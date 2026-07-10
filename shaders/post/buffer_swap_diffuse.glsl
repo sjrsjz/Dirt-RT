@@ -3,7 +3,7 @@
 // ===========================================================================
 // Pass swap3: 漫反射缓冲交换 (Diffuse Buffer Swap — Compute)
 // ===========================================================================
-// 管线位置: 在空间滤波 (300.glsl) 之后，将滤波结果交换回主缓冲区
+// 管线位置: 在空间滤波 (atrous_denoise_diffuse.glsl) 之后，将滤波结果交换回主缓冲区
 //
 // 功能:
 //   1. 从 colortex5/6 读取滤波后的 AliceEncoding 数据 → 写入 data_swap
@@ -11,7 +11,7 @@
 //   3. 保存 prev_weight / prev_variance (为下一帧时域累积做准备)
 //   4. 更新法线与位置 (从 colortex3/4)
 //
-// 这是 Compute Shader 版本 (local_size_x=16)，与 swap2.glsl 的 fragment
+// 这是 Compute Shader 版本 (local_size_x=16)，与 variance_prefilter_diffuse.glsl 的 fragment
 // shader 版本输出到同一缓冲区集合。
 // ===========================================================================
 

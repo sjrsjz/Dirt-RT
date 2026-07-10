@@ -4,7 +4,7 @@
   [GitHub: sjrsjz],
 ))
 #set document(
-  date: datetime(year: 2026, month: 7, day: 4),
+  date: datetime.today(),
   author: (
     "https://github.com/sjrsjz",
     "sjrsjz@gmail.com",
@@ -749,7 +749,7 @@ $ sigma_"out"^2 = (sum_i w_i^2 sigma_i^2) / ((sum_i w_i)^2) $
 
 === Rotation Jitter
 
-At $R_0 >= 8$ (STEP ≥ 4) levels, the fixed axis-aligned sampling pattern can produce structured grid artifacts. To eliminate these artifacts, 300.glsl introduces random rotation (Rotation Jitter) at each level:
+At $R_0 >= 8$ (STEP ≥ 4) levels, the fixed axis-aligned sampling pattern can produce structured grid artifacts. To eliminate these artifacts, atrous_denoise_diffuse.glsl introduces random rotation (Rotation Jitter) at each level:
 
 $ bold(d)_"rotated" = R(theta) dot bold(d)_"aligned", quad theta = 2 pi dot "rand"("pix" + R_0) $
 

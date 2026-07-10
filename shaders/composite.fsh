@@ -1,1 +1,1 @@
-#include "/post/100.glsl"
+#include "/post/temporal_diffuse.glsl"

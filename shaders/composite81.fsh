@@ -1,1 +1,1 @@
-#include "/post/fog.glsl"
+#include "/post/composite_lighting.glsl"

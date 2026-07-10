@@ -2,4 +2,4 @@
 #define STEP 6
 #define FINAL_DENOISE_PASS
 
-#include "/post/300.glsl"
+#include "/post/atrous_denoise_diffuse.glsl"

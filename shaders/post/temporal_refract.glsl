@@ -5,7 +5,7 @@
 // ===========================================================================
 // 管线位置: 在光线追踪生成折射样本后，与上一帧历史混合
 //
-// 与 100.glsl (漫反射) / 101.glsl (反射) 的关键区别:
+// 与 temporal_diffuse.glsl (漫反射) / temporal_reflect.glsl (反射) 的关键区别:
 //   - 折射的 mixWeight 用于追踪折射率变化 (穿过不同材质)
 //   - 附加 refractWeight 一致性检查 (来自 denoiseBuffer)
 //   - 使用 svgfPositionWeight 辅助验证位置一致性

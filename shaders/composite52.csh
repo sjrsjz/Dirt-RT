@@ -1,3 +1,3 @@
 #define R0 2
 #define STEP 2
-#include "/post/300_cs.glsl"
+#include "/post/atrous_denoise_diffuse_cs.glsl"

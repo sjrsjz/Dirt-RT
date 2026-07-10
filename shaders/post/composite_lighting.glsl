@@ -60,7 +60,7 @@ void main() {
         vec3IlluminationData tmp2 = fetchReflect(pix);
         vec3IlluminationData tmp3 = fetchRefract(pix);
 
-        // 保存当前漫反射数据到历史缓冲区 (供下一帧 100.glsl 使用)
+        // 保存当前漫反射数据到历史缓冲区 (供下一帧 temporal_diffuse.glsl 使用)
         // Temporal history now lives in unified diffuseIlluminationBuffer (binding 2).
         // swap3 already wrote the final filtered AliceEncoding + weight to the swap fields;
         // ray0.rgen reads from there via samplePrevDiffuse. No additional write needed.

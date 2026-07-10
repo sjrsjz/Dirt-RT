@@ -1,1 +1,1 @@
-#include "/post/exposure.glsl"
+#include "/post/auto_exposure.glsl"

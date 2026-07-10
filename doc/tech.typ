@@ -4,7 +4,7 @@
   [GitHub: sjrsjz],
 ))
 #set document(
-  date: datetime(year: 2026, month: 7, day: 4),
+  date: datetime.today(),
   author: (
     "https://github.com/sjrsjz",
     "sjrsjz@gmail.com",
@@ -759,7 +759,7 @@ $ sigma_"out"^2 = (sum_i w_i^2 sigma_i^2) / ((sum_i w_i)^2) $
 
 === 旋转抖动
 
-在 $R_0 >= 8$（STEP ≥ 4）的级别中，固定的轴对齐采样模式会产生结构化的栅格伪影（Grid Artifacts）。为消除此伪影，300.glsl 在每级引入随机旋转（Rotation Jitter）：
+在 $R_0 >= 8$（STEP ≥ 4）的级别中，固定的轴对齐采样模式会产生结构化的栅格伪影（Grid Artifacts）。为消除此伪影，atrous_denoise_diffuse.glsl 在每级引入随机旋转（Rotation Jitter）：
 
 $ bold(d)_"rotated" = R(theta) dot bold(d)_"aligned", quad theta = 2 pi dot "rand"("pix" + R_0) $
 

@@ -1,4 +1,4 @@
 #define R0 16
 #define STEP 5
 
-#include "/post/300.glsl"
+#include "/post/atrous_denoise_diffuse.glsl"

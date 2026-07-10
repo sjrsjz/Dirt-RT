@@ -1,1 +1,1 @@
-#include "/post/swap3.glsl"
+#include "/post/buffer_swap_diffuse.glsl"

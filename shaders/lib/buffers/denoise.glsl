@@ -7,7 +7,7 @@ uint getIndex(uvec2 xy) {
 }
 // 逐 lobe 材质乘数 + G-Buffer: 128B/元素, scalar 填入 vec3 尾部 4B padding.
 // specularAlbedo / diffuseAlbedo / transmissionAlbedo 由 ray0.rgen 写入,
-// 供 fog.glsl 合成时与各自 denoised 光照相乘 (每个 buffer 存材质无关光场信号)。
+// 供 composite_lighting.glsl 合成时与各自 denoised 光照相乘 (每个 buffer 存材质无关光场信号)。
 struct bufferData {
     vec3 macroNormal;        // offset   0 (12B)
     float distance;          // offset  12 (4B)
@@ -271,24 +271,24 @@ struct diffuseIlluminationData {
 // 20 floats = 80 bytes, normals oct-encoded into 1 float each and packed with positions.
 //
 // Layout rationale:
-//   - rt_* fields: ray0.rgen writes current frame RT output; 100.glsl reads via loadDiffuseInput
+//   - rt_* fields: ray0.rgen writes current frame RT output; temporal_diffuse.glsl reads via loadDiffuseInput
 //   - px/py/pz + oct_n: current geometry + oct-encoded normal packed together
 //   - oct_n2: oct-encoded normal2 (no position to pair with; 1 float vs old 3)
 //   - hist_px/hist_py/hist_pz + hist_oct_n: history geometry from swap3,
-//     read by 100.glsl via fetchDiffuse for reprojection edge-stopping.
+//     read by temporal_diffuse.glsl via fetchDiffuse for reprojection edge-stopping.
 //     MUST be separate from px/py/pz because ray0.rgen overwrites those each frame.
 // ===========================================================================
 struct UnifiedDiffuseElement {
-    // --- RT output (ray0.rgen writes, 100.glsl reads) — half-packed AliceEncoding: 12B ---
+    // --- RT output (ray0.rgen writes, temporal_diffuse.glsl reads) — half-packed AliceEncoding: 12B ---
     float rt_aliceY_xy, rt_aliceY_zw, rt_CoCg;
     // --- Current geometry: pos.xyz + oct(normal) + oct(normal2) — 20B ---
     float px, py, pz, oct_n;    // position + oct-encoded current normal
     float oct_n2;                // oct-encoded normal2
     // --- History geometry: pos.xyz + oct(normal) — 16B ---
     float hist_px, hist_py, hist_pz, hist_oct_n;
-    // --- Temporal history prev frame (swap3 writes, 100.glsl reads): 14B ---
+    // --- Temporal history prev frame (swap3 writes, temporal_diffuse.glsl reads): 14B ---
     float hist_aliceY_xy, hist_aliceY_zw, hist_CoCg, hist_weight;
-    // --- Temporal history swap frame (100.glsl/swap3 write, swap2/fog read): 14B ---
+    // --- Temporal history swap frame (temporal_diffuse.glsl/swap3 write, swap2/fog read): 14B ---
     float swap_aliceY_xy, swap_aliceY_zw, swap_CoCg, swap_weight;
 };  // 18 floats = 72 bytes (was 80 with variance)
 
@@ -307,7 +307,7 @@ struct DiffuseIlluminationWriteData {
 };
 
 // Helper: unpack RT output from unified SSBO into full-precision struct.
-// Used by 100.glsl to read the current frame's ray-traced input.
+// Used by temporal_diffuse.glsl to read the current frame's ray-traced input.
 DiffuseIlluminationWriteData loadDiffuseInput(uint idx) {
     UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[idx];
     DiffuseIlluminationWriteData t;
