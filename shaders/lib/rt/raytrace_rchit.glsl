@@ -61,18 +61,15 @@ float sampleHeight(sampler2D tex, vec2 coord, vec4 atlas) {
     vec2 i = floor(pixel);
     vec2 f = (pixel - i);
 
-    // 计算实际采样坐标
     vec2 base_uv = localUV(i / res, atlas);
     vec2 dx = vec2(1.0 / (res.x * atlas.z), 0.0);
     vec2 dy = vec2(0.0, 1.0 / (res.y * atlas.w));
 
-    // 采样四个角
     float h00 = texture(tex, getTexCoord(base_uv, atlas)).a;
     float h10 = texture(tex, getTexCoord(base_uv + dx, atlas)).a;
     float h01 = texture(tex, getTexCoord(base_uv + dy, atlas)).a;
     float h11 = texture(tex, getTexCoord(base_uv + dx + dy, atlas)).a;
 
-    // 双线性插值
     return mix(
         mix(h00, h10, f.x),
         mix(h01, h11, f.x),
@@ -83,7 +80,6 @@ float sampleHeight(sampler2D tex, vec2 coord, vec4 atlas) {
     #endif
 }
 
-// 计算高度图偏导数
 vec2 computeDerivatives(vec2 coord, vec4 atlas) {
     const float offset = 0.00025;
     float x_h_L = sampleHeight(blockTexNormal, coord + vec2(-offset * 2, 0), atlas);
@@ -98,12 +94,10 @@ vec2 computeDerivatives(vec2 coord, vec4 atlas) {
 }
 
 vec4 getParallaxOffset(vec2 texCoord, vec3 viewDir, mat3 tbn, vec4 atlas) {
-    //return vec4(texCoord, 0, 0);
     vec3 V = normalize(transpose(tbn) * viewDir);
 
     vec2 currentTexCoord = localUV(texCoord, atlas);
 
-    // 视线方向朝下则提前退出
     if (V.z >= 0.0) {
         vec2 realCoord = getTexCoord(currentTexCoord, atlas);
         vec2 derivatives = computeDerivatives(currentTexCoord, atlas);
@@ -114,7 +108,6 @@ vec4 getParallaxOffset(vec2 texCoord, vec3 viewDir, mat3 tbn, vec4 atlas) {
     float currentHeight = 0;
     float stepSize = POM_DEPTH / POM_STEPS;
 
-    // Ray marching
     float heightFromTexture = sampleHeight(blockTexNormal, currentTexCoord, atlas);
     int steps = 0;
 
@@ -125,7 +118,6 @@ vec4 getParallaxOffset(vec2 texCoord, vec3 viewDir, mat3 tbn, vec4 atlas) {
         steps++;
     }
 
-    // 二分查找细化
     vec2 prevTexCoord = currentTexCoord - dtex;
     float prevHeight = currentHeight + stepSize;
 
@@ -165,22 +157,22 @@ void main() {
 
     vec4 atlas = getTextureAtlasBox(quad);
 
+    bool inside; bool metal; uint bounce;
+    payload_unpackFlags(payload.data, inside, metal, bounce);
+
     vec2 parallaxTexCoord;
     vec2 derivatives;
-    if (payload.bounce_depth == 0u) {
-        // 仅主光线做完整 POM (32步线性 + 6步二分); 次级弹射跳过
+    if (bounce == 0u) {
         vec4 pom = getParallaxOffset(fragInfo.uv, gl_WorldRayDirectionEXT, tbn, atlas);
         parallaxTexCoord = pom.xy;
         derivatives = pom.zw;
     } else {
-        // 次级弹射: 无 POM 位移, 仍计算高度导数用于法线扰动
         vec2 localTC = localUV(fragInfo.uv, atlas);
         parallaxTexCoord = getTexCoord(localTC, atlas);
         derivatives = computeDerivatives(localTC, atlas);
     }
 
     vec4 specular = texture(blockTexSpecular, parallaxTexCoord);
-    //vec4 normal = texture(blockTexNormal, parallaxTexCoord);
 
     vec3 normal3 = normalize(vec3(derivatives, 1));
     vec4 normal = vec4(normal3 * 0.5 + 0.5, texture(blockTexNormal, parallaxTexCoord).a);
@@ -206,17 +198,48 @@ void main() {
         D = quad.vertices[2].light_texture.xy;
     }
 
-    payload.material.light_texture = vec3(mix(mix(A, B, fragInfo.uv.y), mix(D, C, fragInfo.uv.y), fragInfo.uv.x), 0);
+    // Compute skylight locally (was stored in material.light_texture.y)
+    float skylight = mix(mix(A, B, fragInfo.uv.y), mix(D, C, fragInfo.uv.y), fragInfo.uv.x).y;
 
-    payload.hitData = vec4(worldPos, gl_HitTEXT);
-    payload.geometryNormal = fragInfo.normal;
-    payload.material = getMaterial(albedo, normal, specular, tbn, payload.wetStrength_global, payload.wetness_global, payload.material.light_texture.y, fragInfo.normal);
-    if (payload.inside_block) {
+    // Pack hit position
+    payload_packHitPos(payload.data, worldPos, gl_HitTEXT);
+
+    // Unpack wetness params for getMaterial
+    vec2 wet = payload_unpackWetness(payload.data);
+
+    // Compute f0Channel (same as getMaterial internally) and material
+    int f0Channel = int(specular.g * 255.0 + 0.5);
+    Material mat = getMaterial(albedo, normal, specular, tbn, wet.x, wet.y, skylight, fragInfo.normal);
+
+    // Pack material fields
+    // Store ORIGINAL albedo.rgb (getMaterial zeros it for metals; rgen needs
+    // it for custom-metal F0 reconstruction via f0Channel≥238)
+    payload_packAlbedo(payload.data, albedo.rgb, mat.translucent);
+    payload_setF0(payload.data, f0Channel);
+    payload_packBSDF(payload.data, mat.roughness, mat.subsurface_scattering);
+    payload_packMatNormal(payload.data, mat.normal);
+    payload_packEmissionAO(payload.data, mat.emission, mat.ambientOcclusion);
+    payload_packGeomNormal(payload.data, fragInfo.normal);
+    // Preserve ignore_block_id set by rgen (update only block type)
+    int curBlock, curIgnore;
+    payload_unpackBlockIDs(payload.data, curBlock, curIgnore);
+    payload_packBlockIDs(payload.data, quad.vertices[0].block_id.x, curIgnore);
+
+    // Volume handling
+    vec3 shadowTrans = payload_unpackShadow(payload.data);
+    float prevDist = payload_unpackFlags(payload.data, inside, metal, bounce);
+
+    if (inside) {
         if (quad.vertices[0].block_id.x == 1000) {
-            payload.shadowTransmission *= exp2(-clamp(gl_HitTEXT - payload.prev_distance, 0, 100) * vec3(0.14426950, 0.04328085, 0.05770780));
+            shadowTrans *= exp2(-clamp(gl_HitTEXT - prevDist, 0, 100) * vec3(0.14426950, 0.04328085, 0.05770780));
         } else {
-            payload.shadowTransmission *= exp2(-14.42695 * clamp(gl_HitTEXT - payload.prev_distance, 0, 10) * (1.05 - albedo.rgb) * albedo.a);
+            shadowTrans *= exp2(-14.42695 * clamp(gl_HitTEXT - prevDist, 0, 10) * (1.05 - albedo.rgb) * albedo.a);
         }
     }
-    payload.material.block_id = quad.vertices[0].block_id;
+
+    // metallic flag for BSDF
+    metal = mat.metallic > 0.5;
+
+    payload_packShadow(payload.data, shadowTrans);
+    payload_packFlags(payload.data, prevDist, inside, metal, bounce);
 }

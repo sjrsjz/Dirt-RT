@@ -109,28 +109,25 @@ void main() {
 
 Payload tmp_Payload;
 
-float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse_0, i16vec2 ignore_block_id, uint bounce_depth) {
-    payload.wetStrength_global = wetStrength_global;
-    payload.wetness_global = wetness_global;
-    payload.ignore_block_id = ignore_block_id;
-    payload.bounce_depth = bounce_depth;
+float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse_0, int ignore_block_id, uint bounce_depth) {
+    payload_packWetness(payload.data, wetStrength_global, wetness_global);
+    payload_packBlockIDs(payload.data, 0, ignore_block_id);
+    payload_packFlags(payload.data, 0.0, !inverse_0, false, bounce_depth);
+    payload_packShadow(payload.data, vec3(1.0));
     float tMin = 0;
     float tMax = 2048.0;
     uint rayFlags = inverse_0 ? gl_RayFlagsCullBackFacingTrianglesEXT : 0u;
-    payload.inside_block = !inverse_0;
-    payload.shadowTransmission = vec3(1);
-    payload.prev_distance = 0;
     traceRayEXT(acc, rayFlags, 0xFF, 0, 0, 0, ro, tMin, rd, tMax, 6);
     Payload hitPayload = payload;
-    float t = hitPayload.hitData.w;
-    ro_o = hitPayload.hitData.xyz;
+    float t;
+    ro_o = payload_unpackHitPos(hitPayload.data, t);
     rd_o = rd;
     tmp_Payload = hitPayload;
     return t;
 }
 
 float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse_0) {
-    return raycast(ro, rd, ro_o, rd_o, inverse_0, i16vec2(0), 0u);
+    return raycast(ro, rd, ro_o, rd_o, inverse_0, 0, 0u);
 }
 
 material newMaterial(vec3 Cs, vec3 Cd, vec2 S, vec4 R, vec3 light) {
@@ -144,18 +141,51 @@ material newMaterial(vec3 Cs, vec3 Cd, vec2 S, vec4 R, vec3 light) {
 }
 
 material buildSurfaceMaterial(vec3 pos, vec3 nor) {
-    vec3 albedo = tmp_Payload.material.albedo * (1 - tmp_Payload.material.ambientOcclusion);
-    bool water = tmp_Payload.material.block_id.x == 1000;
-    float trans = float(!water && 0.9 < tmp_Payload.material.translucent && tmp_Payload.material.block_id.x != 1001);
-    trans = tmp_Payload.material.block_id.x == 1002 ? 0.25 : trans;
-    float roughness = water ? 0 : tmp_Payload.material.roughness;
-    roughness = tmp_Payload.material.block_id.x == 1002 ? 0 : roughness;
-    albedo = water ? vec3(1) : albedo;
-    tmp_Payload.material.emission = tmp_Payload.material.block_id.x == 1002 ? albedo * (1 - trans) : tmp_Payload.material.emission;
-    // S.x = specular lobe selector: dielectrics use trans, metals force 1.0 (pure specular)
-    // Water is a pure specular dielectric — always enable specular lobe for Fresnel reflections
-    float specSelector = water ? 1.0 : mix(trans, 1.0, tmp_Payload.material.metallic);
-    return newMaterial(clamp(tmp_Payload.material.F0, 0, 1), albedo, vec2(specSelector, 1 - trans), vec4(roughness > 0.01 ? max(roughness, 0.0125) : 0, trans, water, tmp_Payload.material.subsurface_scattering), tmp_Payload.material.emission);
+    // Unpack from packed payload
+    vec4 albedoRGBA = payload_unpackAlbedo(tmp_Payload.data);
+    int f0Channel = payload_getF0(tmp_Payload.data);
+    vec2 bsdf = payload_unpackBSDF(tmp_Payload.data);
+    vec3 em; float ao;
+    payload_unpackEmissionAO(tmp_Payload.data, em, ao);
+    int blockID, ignoreID;
+    payload_unpackBlockIDs(tmp_Payload.data, blockID, ignoreID);
+    bool inside, metalFlag; uint bounce;
+    payload_unpackFlags(tmp_Payload.data, inside, metalFlag, bounce);
+
+    float metallic = metalFlag ? 1.0 : 0.0;
+
+    vec3 albedo = albedoRGBA.rgb * (1.0 - ao);
+    bool water = blockID == 1000;
+    float trans = float(!water && 0.9 < albedoRGBA.a && blockID != 1001);
+    trans = blockID == 1002 ? 0.25 : trans;
+    float roughness = water ? 0.0 : bsdf.x;
+    roughness = blockID == 1002 ? 0.0 : roughness;
+    albedo = water ? vec3(1.0) : albedo;
+
+    // Emission override for frosted glass
+    vec3 emission = blockID == 1002 ? albedo * (1.0 - trans) : em;
+
+    // Reconstruct F0 from f0Channel (mirrors getMaterial logic)
+    vec3 F0;
+    if (f0Channel < 230) {
+        F0 = vec3(float(f0Channel) / 255.0);
+        albedo = albedoRGBA.rgb * (1.0 - ao); // dielectric albedo unchanged
+        albedo = water ? vec3(1.0) : albedo;
+    } else if (f0Channel <= 235) {
+        F0 = getHardcodedMetalF0(f0Channel);
+        metallic = 1.0;
+        albedo = vec3(0.0);
+    } else {
+        // Custom metal (238+): F0 = original albedo (stored in payload)
+        F0 = albedoRGBA.rgb;
+        metallic = 1.0;
+        albedo = vec3(0.0);
+    }
+
+    float specSelector = water ? 1.0 : mix(trans, 1.0, metallic);
+    return newMaterial(clamp(F0, 0.0, 1.0), albedo, vec2(specSelector, 1.0 - trans),
+        vec4(roughness > 0.01 ? max(roughness, 0.0125) : 0.0, trans, water, bsdf.y),
+        emission);
 }
 
 vec3 reproject(vec3 worldPos) {
@@ -179,11 +209,11 @@ vec3 sampleSunlight(vec3 ro, vec3 normal, vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S, v
     vec3 sampleDir = cosbeta * Y + sqrt(1.0 - cosbeta * cosbeta) * (cos(alpha) * X + sin(alpha) * Z);
 
     vec3 ro_o, rd_o;
-    float t = raycast(ro, -sampleDir, ro_o, rd_o, !inside, i16vec2(1001, 0), 1u); // POM skipped for shadow rays
+    float t = raycast(ro, -sampleDir, ro_o, rd_o, !inside, 1001, 1u); // POM skipped for shadow rays
     if (t > -0.5) return vec3(0.0);
 
     vec3 wi = -sampleDir;
-    vec3 Li = sampleSky(ro.y, wi, lightDir).xyz * tmp_Payload.shadowTransmission;
+    vec3 Li = sampleSky(ro.y, wi, lightDir).xyz * payload_unpackShadow(tmp_Payload.data);
 
     float IoN = abs(dot(rd_i, normal));
     float OiN = dot(wi, normal);
@@ -261,7 +291,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         vec4 fogA = float(inverse_0) * fogColor;
         vec3 emissionA = float(inverse_0) * global_emission;
 
-        float t = raycast(ro_i, rd_i, ro_o, rd_o, !inverse_0, i16vec2(0), uint(depth));
+        float t = raycast(ro_i, rd_i, ro_o, rd_o, !inverse_0, 0, uint(depth));
 
         // --- 1. Miss: sky / background ---
         if (t < -0.5) {
@@ -291,8 +321,10 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         }
 
         // --- 2. Geometry & material extraction ---
-        vec3 normal = faceforward(tmp_Payload.material.normal, tmp_Payload.material.normal, rd_i);
-        vec3 macroNormal = faceforward(tmp_Payload.geometryNormal, tmp_Payload.geometryNormal, rd_i);
+        vec3 matN = payload_unpackMatNormal(tmp_Payload.data);
+        vec3 normal = faceforward(matN, matN, rd_i);
+        vec3 geomN = payload_unpackGeomNormal(tmp_Payload.data);
+        vec3 macroNormal = faceforward(geomN, geomN, rd_i);
         material surface = buildSurfaceMaterial(ro_o, normal);
 
         vec3 microNormal = GGXNormal(normal, surface.R.x, ro_o);
@@ -505,9 +537,9 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                 vec4 r  = rough * c0 + c1;
                 float a004 = min(r.x * r.x, exp2(-9.28 * NoV)) * r.x + r.y;
                 vec2 AB   = vec2(-1.04, 1.04) * a004 + r.zw;
-                first_specularAlbedo = F0 * AB.x + vec3(AB.y * surface.S.x);
+                first_specularAlbedo = max(F0 * AB.x + vec3(AB.y * surface.S.x), vec3(1e-5));
             }
-            first_diffuseAlbedo = nonSpecColor_stable * diffuseSelector;
+            first_diffuseAlbedo = surface.Cd;
             first_transmissionAlbedo = nonSpecColor_stable * transmissionSelector;
             first_roughness = surface.R.x;
             first_rd_o = next_rd;
@@ -583,7 +615,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         diffuseIlluminationBuffer.data[idx].rt_aliceY_zw = 0.0;
         diffuseIlluminationBuffer.data[idx].rt_CoCg = 0.0;
         if (!hit_sky_first && first_t > -0.5) {
-            vec3 inv_albedo = 1.0 / max(first_diffuseAlbedo, vec3(1e-6));
+            vec3 inv_albedo = 1.0 / max(first_diffuseAlbedo, vec3(1e-3));
             AliceEncoding indAlice = irradiance_to_alice(L_indirect * inv_albedo, first_rd_o);
             AliceEncoding dirAlice = irradiance_to_alice(L_direct_0 * inv_albedo, -lightDir);
             indAlice.CoCg += dirAlice.CoCg;
@@ -608,7 +640,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         if (!hit_sky_first && first_t > -0.5) {
             vec3 r_rd, r_ro;
             vec3 r_rd_i = GetSpecularDominantDirection(first_n, first_rd_i, first_roughness);
-            float t_refl = raycast(first_p + first_macro_n * 0.00025, r_rd_i, r_ro, r_rd, false, i16vec2(0), 1u);
+            float t_refl = raycast(first_p + first_macro_n * 0.00025, r_rd_i, r_ro, r_rd, false, 0, 1u);
             refl_R = r_rd_i;
             refl_vprojdist = (t_refl > -0.5) ? t_refl : VPROJDIST_SKY;
             refl_color = clamp(total_illumination / max(first_specularAlbedo, vec3(1e-6)), 0.0, 200.0 * div_avgExposure);
@@ -635,8 +667,8 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                 bool is_refract = dot(refract_rd, refract_rd) > 0.0;
                 if (!is_refract) refract_rd = reflect(first_rd_i, first_n);
                 float t_refr = raycast(
-                        first_p + (is_refract ? -1.0 : 1.0) * first_macro_n * 0.0001,
-                        refract_rd, r_ro, r_rd, false, i16vec2(0), 1u);
+                        first_p + (is_refract ? -1.0 : 1.0) * first_macro_n * 0.00025,
+                        refract_rd, r_ro, r_rd, false, 0, 1u);
                 refr_R = refract_rd;
                 refr_vprojdist = (t_refr > -0.5) ? t_refr : VPROJDIST_SKY;
             }

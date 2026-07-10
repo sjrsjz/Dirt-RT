@@ -5,5 +5,5 @@
 layout(location = 6) rayPayloadInEXT Payload payload;
 
 void main(void) {
-    payload.hitData = vec4(-1);
+    payload_packHitPos(payload.data, vec3(0.0), -1.0);
 }

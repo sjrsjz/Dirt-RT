@@ -31,14 +31,7 @@ layout(std430, set = 3, binding = 0) buffer DenoiseBuffer {
     bufferData data[];
 } denoiseBuffer;
 
-// 辅助函数：安全的非零符号函数
-float sign_not_zero(float v) {
-    return (v >= 0.0 ? 1.0 : -1.0);
-}
-
-vec2 sign_not_zero(vec2 v) {
-    return vec2(sign_not_zero(v.x), sign_not_zero(v.y));
-}
+#include "/lib/common/oct_encode.glsl"
 
 // 打包两个 half 为单个 float
 float pack2Half(float a, float b) {
@@ -59,37 +52,6 @@ const float VPROJDIST_SKY = 60000.0;
 float pack2HalfClamped(float a, float b) {
     return uintBitsToFloat(packHalf2x16(
         vec2(clamp(a, -65504.0, 65504.0), clamp(b, -65504.0, 65504.0))));
-}
-
-// 编码：vec3 -> float
-float encodeNormal(vec3 n) {
-    // 确保输入是单位向量（非零）
-    n = normalize(n);
-    // 八面体映射  (Cigolle, 2014 等标准形式)
-    vec2 p = n.xy / (abs(n.x) + abs(n.y) + abs(n.z));
-    if (n.z < 0.0) {
-        p = (1.0 - abs(p.yx)) * sign_not_zero(p);
-    }
-    // 映射到 [0, 1] 范围以备打包
-    p = p * 0.5 + 0.5;
-    // 打包为 32 位 uint，再按位解释为 float
-    // packed 是保留关键字，因此使用 packed_ 作为变量名
-    uint packed_ = packUnorm2x16(p);
-    return uintBitsToFloat(packed_);
-}
-
-// 解码：float -> vec3
-vec3 decodeNormal(float f) {
-    uint packed_ = floatBitsToUint(f);
-    vec2 p = unpackUnorm2x16(packed_);
-    // 从 [0,1] 映射回 [-1,1]
-    p = p * 2.0 - 1.0;
-    // 逆八面体映射
-    vec3 n = vec3(p.x, p.y, 1.0 - abs(p.x) - abs(p.y));
-    if (n.z < 0.0) {
-        n.xy = (1.0 - abs(n.yx)) * sign_not_zero(n.xy);
-    }
-    return normalize(n);
 }
 
 // ===========================================================================

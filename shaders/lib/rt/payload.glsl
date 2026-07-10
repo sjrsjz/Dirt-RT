@@ -2,19 +2,10 @@
 #define PAYLOAD_GLSL
 
 #include "/lib/pbr/material.glsl"
-#extension GL_EXT_shader_explicit_arithmetic_types_int16 : enable
-#extension GL_EXT_shader_explicit_arithmetic_types_int8 : enable
+#include "/lib/rt/payload_pack.glsl"
+
 struct Payload {
-    vec4 hitData;
-    vec3 geometryNormal;
-    vec3 shadowTransmission;
-    i16vec2 ignore_block_id;
-    Material material;
-    float wetStrength_global;
-    float wetness_global;
-    bool inside_block;
-    float prev_distance;
-    uint bounce_depth;   // 0=primary ray (POM enabled), >0=secondary (POM skipped)
+    uint data[PAYLOAD_SLOTS];
 };
 
 #endif // PAYLOAD_GLSL

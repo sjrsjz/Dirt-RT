@@ -35,16 +35,32 @@ void main() {
     Quad quad = getRayQuad();
     vec2 uv = getFragmentUV(quad, baryCoord);
     vec4 texColor = texture(blockTex, uv);
-    if (payload.inside_block) {
+
+    // Unpack volume state
+    bool inside; bool metal; uint bounce;
+    float prevDist = payload_unpackFlags(payload.data, inside, metal, bounce);
+    vec3 shadowTrans = payload_unpackShadow(payload.data);
+
+    if (inside) {
         if (quad.vertices[0].block_id.x == 1000) {
-            payload.shadowTransmission *= exp(-clamp(gl_HitTEXT - payload.prev_distance, 0, 100) * vec3(0.1, 0.03, 0.04));
+            shadowTrans *= exp(-clamp(gl_HitTEXT - prevDist, 0, 100) * vec3(0.1, 0.03, 0.04));
         } else {
-            payload.shadowTransmission *= exp(-10 * clamp(gl_HitTEXT - payload.prev_distance, 0, 10) * (1.05 - texColor.rgb) * texColor.a);
+            shadowTrans *= exp(-10 * clamp(gl_HitTEXT - prevDist, 0, 10) * (1.05 - texColor.rgb) * texColor.a);
         }
     }
-    if (texColor.a < 0.1 || quad.vertices[0].block_id.x == payload.ignore_block_id.x || quad.vertices[0].block_id.x == 1000 && payload.ignore_block_id.x != 0) {
-        payload.prev_distance = gl_HitTEXT;
-        payload.inside_block = !payload.inside_block;
+
+    int ignoreID;
+    { int blockID; payload_unpackBlockIDs(payload.data, blockID, ignoreID); }
+
+    if (texColor.a < 0.1 || quad.vertices[0].block_id.x == ignoreID || quad.vertices[0].block_id.x == 1000 && ignoreID != 0) {
+        prevDist = gl_HitTEXT;
+        inside = !inside;
+        // Pack back before ignoring to persist volume state for next intersections
+        payload_packShadow(payload.data, shadowTrans);
+        payload_packFlags(payload.data, prevDist, inside, metal, bounce);
         ignoreIntersectionEXT;
     }
+
+    payload_packShadow(payload.data, shadowTrans);
+    payload_packFlags(payload.data, prevDist, inside, metal, bounce);
 }
