@@ -37,30 +37,30 @@ void main() {
     vec4 texColor = texture(blockTex, uv);
 
     // Unpack volume state
-    bool inside; bool metal; uint bounce;
-    float prevDist = payload_unpackFlags(payload.data, inside, metal, bounce);
-    vec3 shadowTrans = payload_unpackShadow(payload.data);
+    bool inside; uint bounce; bool handedness; uint ignoreEnc;
+    float prevDist = payload_unpackFlags(payload.data, inside, bounce, handedness, ignoreEnc);
+    int blockID;
+    vec3 shadowTrans = payload_unpackShadow(payload.data, blockID);
 
     if (inside) {
         if (quad.vertices[0].block_id.x == 1000) {
-            shadowTrans *= exp(-clamp(gl_HitTEXT - prevDist, 0, 100) * vec3(0.1, 0.03, 0.04));
+            shadowTrans *= exp(-clamp(gl_HitTEXT - prevDist, 0.0, 100.0) * vec3(0.1, 0.03, 0.04));
         } else {
-            shadowTrans *= exp(-10 * clamp(gl_HitTEXT - prevDist, 0, 10) * (1.05 - texColor.rgb) * texColor.a);
+            shadowTrans *= exp(-10.0 * clamp(gl_HitTEXT - prevDist, 0.0, 10.0) * (1.05 - texColor.rgb) * texColor.a);
         }
     }
 
-    int ignoreID;
-    { int blockID; payload_unpackBlockIDs(payload.data, blockID, ignoreID); }
+    int ignoreID = payload_decodeIgnoreID(ignoreEnc);
 
-    if (texColor.a < 0.1 || quad.vertices[0].block_id.x == ignoreID || quad.vertices[0].block_id.x == 1000 && ignoreID != 0) {
+    if (texColor.a < 0.1 || quad.vertices[0].block_id.x == ignoreID
+        || (quad.vertices[0].block_id.x == 1000 && ignoreEnc != 0u)) {
         prevDist = gl_HitTEXT;
         inside = !inside;
-        // Pack back before ignoring to persist volume state for next intersections
-        payload_packShadow(payload.data, shadowTrans);
-        payload_packFlags(payload.data, prevDist, inside, metal, bounce);
+        payload_packShadow(payload.data, shadowTrans, quad.vertices[0].block_id.x);
+        payload_packFlags(payload.data, prevDist, inside, bounce, handedness, ignoreEnc);
         ignoreIntersectionEXT;
     }
 
-    payload_packShadow(payload.data, shadowTrans);
-    payload_packFlags(payload.data, prevDist, inside, metal, bounce);
+    payload_packShadow(payload.data, shadowTrans, quad.vertices[0].block_id.x);
+    payload_packFlags(payload.data, prevDist, inside, bounce, handedness, ignoreEnc);
 }

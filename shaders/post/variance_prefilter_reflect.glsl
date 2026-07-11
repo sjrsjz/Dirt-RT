@@ -127,6 +127,7 @@ void main() {
     // roughness 仅中心输出需要, 邻域方差不用 → 直接读 denoiseBuffer (中心)
     uint cidx = getIndex(uvec2(clamp(ivec2(gid), ivec2(0), texSize - 1)));
     float cRough = denoiseBuffer.data[cidx].roughness;
+    cRough = clamp(cRough, 0.1, 1.0);
 
     // ---- Phase 2: 5×5 几何感知双边方差 (亮度矩: var = Σw·L²/Σw − (Σw·L/Σw)²) ----
     float sumW = 0.0, sumL = 0.0, sumL2 = 0.0;

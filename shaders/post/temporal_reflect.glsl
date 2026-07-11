@@ -78,10 +78,10 @@ layout(location = 0) out vec4 fragColor;
 // 全局状态
 // ---------------------------------------------------------------------------
 
-float info_distance;  // 当前像素的主射线距离
-uint idx;             // 当前像素 SSBO 索引
+float info_distance; // 当前像素的主射线距离
+uint idx; // 当前像素 SSBO 索引
 
-vec3 surfaceN;            // 反射表面法线 (G-buffer macroNormal)
+vec3 surfaceN; // 反射表面法线 (G-buffer macroNormal)
 float disocclusionThreshold; // NRD 平面距离阈值 (世界单位)
 
 bool notInRange(vec2 p) {
@@ -98,9 +98,9 @@ vec3IlluminationData data2; // 当前像素的反射光照数据 (来自 SSBO)
 // 输出 found / result / Wnew (EMA 权重) / maxTapConf (最优 tap 置信度)
 // ---------------------------------------------------------------------------
 void evalPath(vec2 prevUV, bool useGgx,
-              vec3 pos, vec3 normal, vec3 N, float roughness,
-              vec3 curVirtual, float vproj, vec3 curColor,
-              out bool found, out vec3 result, out float Wnew, out float maxTapConf) {
+    vec3 pos, vec3 normal, vec3 N, float roughness,
+    vec3 curVirtual, float vproj, vec3 curColor,
+    out bool found, out vec3 result, out float Wnew, out float maxTapConf) {
     found = false;
     result = curColor;
     Wnew = 1.0;
@@ -111,7 +111,7 @@ void evalPath(vec2 prevUV, bool useGgx,
     ivec2 prevTexel = ivec2(floor(prevTexelcoord));
 
     float alpha = roughness * roughness + 1e-6; // GGX α²
-    vec3 R = normalize(normal);                 // 当前反射方向 (ggx 用)
+    vec3 R = normalize(normal); // 当前反射方向 (ggx 用)
 
     vec3 accumColor = vec3(0.0);
     float sumWeight = 0.0;
@@ -134,7 +134,7 @@ void evalPath(vec2 prevUV, bool useGgx,
 
         vec2 sampleCoord = vec2(sampleTexel);
         float bw = (1.0 - abs(prevTexelcoord.x - sampleCoord.x))
-                 * (1.0 - abs(prevTexelcoord.y - sampleCoord.y));
+                * (1.0 - abs(prevTexelcoord.y - sampleCoord.y));
 
         // 反射命中点位移置信度 (SMB 抗拖影 / VMB 内容匹配)
         vec3 sampleVirtual = samplePosCur + sampleNormal; // 历史反射命中点 Q_P
@@ -145,7 +145,7 @@ void evalPath(vec2 prevUV, bool useGgx,
             // GGX 方向相容性 (仅 SMB: 同表面点 R 应一致)
             float cosTheta = abs(dot(normalize(sampleNormal), R));
             float tanThetaSq = max((0.99999 - cosTheta * cosTheta) / (1e-9 + cosTheta * cosTheta), 0.0);
-            float ggxConf = exp2(-0.00014426950 * tanThetaSq / (alpha * alpha));
+            float ggxConf = exp2(-0.0001 * tanThetaSq / (alpha * alpha));
             tapConf *= ggxConf;
         }
 
@@ -197,14 +197,14 @@ void main() {
 
     // ---- 当前像素反射几何 / 材质 -----------------------------------------
     vec3 pos = data2.pos;
-    vec3 normal = data2.normal;        // R · vproj
+    vec3 normal = data2.normal; // R · vproj
     float vproj = max(length(normal), 0.001);
-    vec3 curColor = data2.data_swap;   // 当前帧 raw RT (含噪)
+    vec3 curColor = data2.data_swap; // 当前帧 raw RT (含噪)
     vec3 N = denoiseBuffer.data[idx].macroNormal;
     float roughness = denoiseBuffer.data[idx].roughness;
-    vec3 curVirtual = pos + normal;    // 当前反射命中点 Q_C
+    vec3 curVirtual = pos + normal; // 当前反射命中点 Q_C
     float posLen = max(length(pos), 0.001);
-    vec3 viewDir = pos / posLen;       // eye → surface (相机在原点)
+    vec3 viewDir = pos / posLen; // eye → surface (相机在原点)
 
     surfaceN = N;
     // frustumSize ≈ dist · 2·tan(fovY/2), tan(fovY/2) = 1/rtProjection[1][1] (jitter 不影响 y 缩放)
@@ -212,9 +212,11 @@ void main() {
     disocclusionThreshold = DISOCCLUSION_THRESHOLD * posLen * frustumScale;
 
     // ---- SMB: 重投影反射表面点 -------------------------------------------
-    bool smbFound; vec3 smbResult; float smbWnew, smbConf;
+    bool smbFound;
+    vec3 smbResult;
+    float smbWnew, smbConf;
     evalPath(reproject(pos).xy, true, pos, normal, N, roughness,
-             curVirtual, vproj, curColor, smbFound, smbResult, smbWnew, smbConf);
+        curVirtual, vproj, curColor, smbFound, smbResult, smbWnew, smbConf);
 
     // ---- VMB: 重投影视线方向延长点 (NRD RELAX virtual motion) --------------
     // NRD: prevVirtualWorldPos = prevWorldPos + normalize(currentViewVector)·hitDistFocused
@@ -229,12 +231,12 @@ void main() {
         vec3 vmbUV3 = reproject(pos + viewDir * vproj);
         if (!any(isnan(vmbUV3)) && !any(isinf(vmbUV3))) {
             evalPath(vmbUV3.xy, false, pos, normal, N, roughness,
-                     curVirtual, vproj, curColor, vmbFound, vmbResult, vmbWnew, vmbConf);
+                curVirtual, vproj, curColor, vmbFound, vmbResult, vmbWnew, vmbConf);
         }
     }
 
     // ---- virtualHistoryAmount (SMB ↔ VMB 混合) ---------------------------
-    vec3 V = -viewDir;               // surface → eye (VMB 用了 viewDir=eye→surface)
+    vec3 V = -viewDir; // surface → eye (VMB 用了 viewDir=eye→surface)
     float NoV = abs(dot(N, V));
     float Dfactor = GetSpecularDominantFactor(NoV, roughness);
 

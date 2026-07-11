@@ -26,9 +26,9 @@ layout(local_size_x = 16, local_size_y = 16) in;
 // Uniform 输入
 // ---------------------------------------------------------------------------
 
-uniform sampler2D colortex3;  // 几何信息
-uniform sampler2D colortex4;  // 光照信息
-uniform sampler2D colortex5;  // 滤波后的 AliceEncoding 数据 (Y)
+uniform sampler2D colortex3; // 几何信息
+uniform sampler2D colortex4; // 光照信息
+uniform sampler2D colortex5; // 滤波后的 AliceEncoding 数据 (Y)
 
 void unpackLightSample(ivec2 coord, out vec3 pos, out vec3 normal, out AliceEncoding encoded, out AliceEncoding blurred_alice) {
     vec4 sample_data0 = texelFetch(colortex3, coord, 0); // 几何信息
@@ -45,11 +45,11 @@ void main() {
     diffuseIlluminationData tmp = fetchDiffuse(pix);
 
     // ---- NaN 保护 --------------------------------------------------------
-    if (any(isnan(tmp.data_swap.aliceY)))  tmp.data_swap.aliceY  = vec4(0.0);
+    if (any(isnan(tmp.data_swap.aliceY))) tmp.data_swap.aliceY = vec4(0.0);
     if (any(isnan(tmp.data_swap.CoCg))) tmp.data_swap.CoCg = vec2(0.0);
 
     // ---- 保存历史统计信息 (供下一帧时域累积使用) -------------------------
-    tmp.prev_weight   = tmp.weight;
+    tmp.prev_weight = tmp.weight;
 
     // // ---- 双缓冲 flip: 当前帧 → 历史帧 -----------------------------------
     tmp.data = tmp.data_swap;
@@ -59,6 +59,6 @@ void main() {
 
     // 在低权重的时候传播滤波结果
     // 这受到 NRD 的启发，实际上移除后对降噪质量不产生明显影响
-    tmp.data = mix_alice(tmp.data, blurred_alice, clamp(NRD_BLEND_STRENGTH / max(tmp.weight, 1.0), 0.0, 1.0));
+    tmp.data = mix_alice(tmp.data, blurred_alice, clamp(NRD_BLEND_STRENGTH * exp(-NRD_BLEND_STRENGTH * clamp(tmp.weight, 0.0, 100.0)), 0.0, 1.0));
     WriteDiffuse(tmp, pix);
 }

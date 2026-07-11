@@ -20,6 +20,19 @@
 uniform sampler2D colortex3; // (pos.xyz, oct(R))
 uniform sampler2D colortex4; // f16(R,G)|f16(B,roughness)|f16(variance,virtualProjDist)|oct(H)
 
+// Poisson 圆盘采样表 (NRD) — 预计算采样偏移 + 高斯核权重
+// .xy = 归一化采样偏移, .z = length(.xy), .w = 高斯核权重 exp(-z^2/2)
+const vec4 POISSON_8[8] = {
+    vec4( -0.4706069, -0.4427112, +0.6461146, +0.81170 ),
+    vec4( -0.9057375, +0.3003471, +0.9542373, +0.63422 ),
+    vec4( -0.3487388, +0.4037880, +0.5335386, +0.86734 ),
+    vec4( +0.1023042, +0.6439373, +0.6520134, +0.80847 ),
+    vec4( +0.5699277, +0.3513750, +0.6695386, +0.79925 ),
+    vec4( +0.2939128, -0.1131226, +0.3149309, +0.95161 ),
+    vec4( +0.7836658, -0.4208784, +0.8895339, +0.67328 ),
+    vec4( +0.1564120, -0.8198990, +0.8346850, +0.70589 )
+};
+
 // NRD-style 粗糙度权重参数 (返回 (a, -b) 用于 ComputeWeight)
 vec2 GetRoughnessWeightParams(float roughness, float fraction) {
     const float sensitivity = 0.03; // NRD_ROUGHNESS_SENSITIVITY
@@ -159,46 +172,33 @@ void main() {
     vec3 sumRadiance = cRad * centerWeight;
     float sumVariance = cVar * centerWeight * centerWeight;
 
-    #if STEP >= 4
+    // ---- Poisson 圆盘采样 (NRD, STEP>=4) -----------------------------------
     float theta = 2.0 * PI * rand(vec2(pix + R0));
-    mat2 rotM = mat2(cos(theta), -sin(theta), sin(theta), cos(theta)) * R0;
-    #endif
+    mat2 rotM = mat2(cos(theta), -sin(theta), sin(theta), cos(theta)) * R0 * 1.75;
 
-    ivec2 samplePos;
+    for (int k = 0; k < 8; k++) {
+        vec4 ps = POISSON_8[k];
+        ivec2 samplePos = pix + ivec2(round(rotM * ps.xy));
 
-    // ---- À-trous 滤波 ----
-    const float kernelWeightGaussian3x3[2] = float[2](0.44198, 0.27901);
+        if (samplePos.x < 0 || samplePos.y < 0 ||
+                samplePos.x >= texSize.x || samplePos.y >= texSize.y) {
+            continue;
+        }
 
-    for (int yy = -1; yy <= 1; yy++) {
-        for (int xx = -1; xx <= 1; xx++) {
-            if (xx == 0 && yy == 0) continue; // 跳过中心
+        vec4 sG = texelFetch(colortex3, samplePos, 0);
+        vec4 sL = texelFetch(colortex4, samplePos, 0);
+        vec3 sPos, sR, sRad, sH;
+        float sRough, sVar, sVproj;
+        unpackSpecularSample(PackedLightSample(sG, sL),
+            sPos, sR, sRad, sRough, sVar, sVproj, sH);
 
-            #if STEP >= 4
-            samplePos = pix + ivec2(round(rotM * vec2(xx, yy)));
-            #else
-            samplePos = pix + R0 * ivec2(xx, yy);
-            #endif
+        if (sVar < 0.0) continue; // 天空
 
-            if (samplePos.x < 0 || samplePos.y < 0 ||
-                    samplePos.x >= texSize.x || samplePos.y >= texSize.y) {
-                continue;
-            }
-
-            vec4 sG = texelFetch(colortex3, samplePos, 0);
-            vec4 sL = texelFetch(colortex4, samplePos, 0);
-            vec3 sPos, sR, sRad, sH;
-            float sRough, sVar, sVproj;
-            unpackSpecularSample(PackedLightSample(sG, sL),
-                sPos, sR, sRad, sRough, sVar, sVproj, sH);
-
-            if (sVar < 0.0) continue; // 天空
-
-            // 高斯核
-            float kernel = kernelWeightGaussian3x3[abs(xx)] * kernelWeightGaussian3x3[abs(yy)];
+        float w_kernel = ps.w; // 预计算: exp(-z^2/2)
 
             // 1. 几何权重 (平面距离)
             float geometryW = GetPlaneDistanceWeight_Atrous(cPos, cH, sPos, depthThreshold);
-            geometryW *= kernel;
+            geometryW *= w_kernel;
 
             if (geometryW < 1e-4) continue;
 
@@ -212,17 +212,12 @@ void main() {
 
             // 4. 简化版法线权重 (仅角度，作为后备)
             float angles = acos(clamp(dot(cH, sH), -1.0, 1.0));
-            float normalWSpecularSimplified = ComputeWeight(angles, specularNormalWeightParamSimplified, 0.0);
 
             // 5. 粗糙度权重
             float roughnessWSpecular = ComputeWeight(sRough, roughnessWeightParams.x, roughnessWeightParams.y);
 
-            // 6. 组合镜面权重 (根据粗糙度选择完整或简化版本)
-            // 对于光滑表面 (低粗糙度)，使用完整的视线相关权重
-            // 对于粗糙表面，使用简化版本
-            bool useFullSpecularWeight = true; // gRoughnessEdgeStoppingEnabled
-            float wSpecular = geometryW * (useFullSpecularWeight ?
-                (normalWSpecular * roughnessWSpecular) : normalWSpecularSimplified);
+            // 6. 组合镜面权重
+            float wSpecular = geometryW * normalWSpecular * roughnessWSpecular;
 
             if (wSpecular < 1e-4) continue;
 
@@ -241,7 +236,6 @@ void main() {
             sumW += wSpecular;
             sumRadiance += sRad * wSpecular;
             sumVariance += sVar * wSpecular * wSpecular;
-        }
     }
 
     // ---- 归一化输出 ----

@@ -194,30 +194,33 @@ void main() {
     vec3 sumRadiance = cRad * centerWeight;
     float sumVariance = cVar * centerWeight * centerWeight;
 
-    // ---- Phase 2: 3x3 À-trous 滤波 ----
-    const float kernelWeightGaussian3x3[2] = float[2](0.44198, 0.27901);
+    // ---- Phase 2: 单循环采样 (预计算 3×3 偏移 + 高斯核权重) ----
+    // 权重 = Kernel[|dx|] * Kernel[|dy|]; Kernel[0]=0.44198, Kernel[1]=0.27901
+    const vec3 GRID_3x3[8] = {
+        vec3(-1, -1, 0.07785), vec3(-1, 0, 0.12331), vec3(-1, 1, 0.07785),
+        vec3( 0, -1, 0.12331),                        vec3( 0, 1, 0.12331),
+        vec3( 1, -1, 0.07785), vec3( 1, 0, 0.12331), vec3( 1, 1, 0.07785),
+    };
 
-    for (int yy = -1; yy <= 1; yy++) {
-        for (int xx = -1; xx <= 1; xx++) {
-            if (xx == 0 && yy == 0) continue; // 跳过中心
+    for (int k = 0; k < 8; k++) {
+        int dx = int(GRID_3x3[k].x);
+        int dy = int(GRID_3x3[k].y);
+        float w_kernel = GRID_3x3[k].z;
 
-            int sx = int(cx) + xx * R0;
-            int sy = int(cy) + yy * R0;
-            if (sx < 0 || sy < 0 || sx >= int(TILE_SIZE) || sy >= int(TILE_SIZE)) continue;
-            uint sample_idx = uint(sy) * uint(TILE_SIZE) + uint(sx);
+        int sx = int(cx) + dx * R0;
+        int sy = int(cy) + dy * R0;
+        if (sx < 0 || sy < 0 || sx >= int(TILE_SIZE) || sy >= int(TILE_SIZE)) continue;
+        uint sample_idx = uint(sy) * uint(TILE_SIZE) + uint(sx);
 
-            vec3 sPos, sR, sRad, sH;
-            float sRough, sVar, sVproj;
-            unpackSpecularSampleSM(sample_idx, sPos, sR, sRad, sRough, sVar, sVproj, sH);
+        vec3 sPos, sR, sRad, sH;
+        float sRough, sVar, sVproj;
+        unpackSpecularSampleSM(sample_idx, sPos, sR, sRad, sRough, sVar, sVproj, sH);
 
-            if (sVar < 0.0) continue; // 天空
-
-            // 高斯核
-            float kernel = kernelWeightGaussian3x3[abs(xx)] * kernelWeightGaussian3x3[abs(yy)];
+        if (sVar < 0.0) continue; // 天空
 
             // 1. 几何权重 (平面距离)
             float geometryW = GetPlaneDistanceWeight_Atrous(cPos, cH, sPos, depthThreshold);
-            geometryW *= kernel;
+            geometryW *= w_kernel;
 
             if (geometryW < 1e-4) continue;
 
@@ -231,17 +234,12 @@ void main() {
 
             // 4. 简化版法线权重 (仅角度，作为后备)
             float angles = acos(clamp(dot(cH, sH), -1.0, 1.0));
-            float normalWSpecularSimplified = ComputeWeight(angles, specularNormalWeightParamSimplified, 0.0);
 
             // 5. 粗糙度权重
             float roughnessWSpecular = ComputeWeight(sRough, roughnessWeightParams.x, roughnessWeightParams.y);
 
-            // 6. 组合镜面权重 (根据粗糙度选择完整或简化版本)
-            // 对于光滑表面 (低粗糙度)，使用完整的视线相关权重
-            // 对于粗糙表面，使用简化版本
-            bool useFullSpecularWeight = true; // gRoughnessEdgeStoppingEnabled
-            float wSpecular = geometryW * (useFullSpecularWeight ?
-                (normalWSpecular * roughnessWSpecular) : normalWSpecularSimplified);
+            // 6. 组合镜面权重
+            float wSpecular = geometryW * normalWSpecular * roughnessWSpecular;
 
             if (wSpecular < 1e-4) continue;
 
@@ -260,7 +258,6 @@ void main() {
             sumW += wSpecular;
             sumRadiance += sRad * wSpecular;
             sumVariance += sVar * wSpecular * wSpecular;
-        }
     }
 
     // ---- Phase 3: 归一化输出 ----

@@ -198,10 +198,10 @@ void main() {
     float varOmega = (sumStatW > 1e-8) ? max(sumOmega2 / sumStatW - meanOmega * meanOmega, 0.0) : 0.0;
     float sigmaOmega = sqrt(varOmega);
 
-    // Clamp center AliceEncoding energy to [μ-2σ, μ+2σ]; scale full aliceY + CoCg by r.
+    // Clamp center AliceEncoding energy to [μ-3σ, μ+3σ]; scale full aliceY + CoCg by r.
     // Preserves ρ=|v|/ω and cone constraint ω≥|v|.
     float centerOmega = outAlice.aliceY.w;
-    float omegaClamped = clamp(centerOmega, meanOmega - 2.0 * sigmaOmega, meanOmega + 2.0 * sigmaOmega);
+    float omegaClamped = clamp(centerOmega, meanOmega - 3.0 * sigmaOmega, meanOmega + 3.0 * sigmaOmega);
     float aliceY_scale = omegaClamped / max(centerOmega, 1e-8);
     outAlice.aliceY *= aliceY_scale;
     outAlice.CoCg *= aliceY_scale;

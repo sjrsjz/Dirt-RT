@@ -13,7 +13,7 @@
 #define TEMPORAL_POSITION_PARAM 64.0 // How strictly position/depth differences reject history. Higher = less ghosting, more disocclusion noise. [1 2 4 8 16 32 64 128 256]
 
 // -- NRD-inspired low-weight blend (buffer_swap_diffuse.glsl) --
-#define NRD_BLEND_STRENGTH 0.0 // Spatial filter blend strength at low temporal confidence. Blends the large-radius spatial result back into history when frame accumulation is insufficient. 0 = off. [0.0 0.1 0.25 0.5 0.75 1.0 1.25 1.5 2.0 3.0 4.0 5.0]
+#define NRD_BLEND_STRENGTH 1.0 // Spatial filter blend strength at low temporal confidence. Blends the large-radius spatial result back into history when frame accumulation is insufficient. 0 = off. [0.0 0.1 0.25 0.5 0.75 1.0 1.25 1.5 2.0 3.0 4.0 5.0]
 
 // -- Diffuse temporal accumulation (temporal_diffuse.glsl) --
 #define TEMPORAL_MAX_HISTORY 32.0 // Maximum effective sample count clamped per pixel. Higher = smoother but more ghosting. [1 2 4 8 16 32 64 128]

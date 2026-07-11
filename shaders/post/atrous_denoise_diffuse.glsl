@@ -33,6 +33,26 @@ layout(location = 1) out mediump vec4 out_light_sample_blurred;
 #endif
 
 // ---------------------------------------------------------------------------
+// Poisson 圆盘采样表 (NRD)
+// .z = length(.xy), 用于高斯核权重
+// ---------------------------------------------------------------------------
+
+// samples = 8, min distance = 0.5
+// .xy = 归一化采样偏移, .z = length(.xy), .w = 高斯核权重 exp(-z^2/2)
+const vec4 POISSON_8[8] = {
+    vec4( -0.4706069, -0.4427112, +0.6461146, +0.81170 ),
+    vec4( -0.9057375, +0.3003471, +0.9542373, +0.63422 ),
+    vec4( -0.3487388, +0.4037880, +0.5335386, +0.86734 ),
+    vec4( +0.1023042, +0.6439373, +0.6520134, +0.80847 ),
+    vec4( +0.5699277, +0.3513750, +0.6695386, +0.79925 ),
+    vec4( +0.2939128, -0.1131226, +0.3149309, +0.95161 ),
+    vec4( +0.7836658, -0.4208784, +0.8895339, +0.67328 ),
+    vec4( +0.1564120, -0.8198990, +0.8346850, +0.70589 )
+};
+
+#define POISSON_N 8
+
+// ---------------------------------------------------------------------------
 // 辅助函数
 // ---------------------------------------------------------------------------
 
@@ -63,7 +83,7 @@ void main() {
     // 天空像素跳过 (方差被 swap2 复用作天空 mask)
     if (center_var_est < 0.0) return;
 
-    center_var_est = max(center_var_est, 1e-9);
+    center_var_est = max(center_var_est, 1e-8);
 
     // ---- 预计算中心像素的统计特征 -----------------------------------------
     // 中心 ALICE 编码: aliceY = vec4(v, ω)
@@ -85,7 +105,7 @@ void main() {
     center_alice.aliceY.w = abs(c_omega);
     c_omega = center_alice.aliceY.w;
     #else
-    float geomValid = 1.0;
+    const float geomValid = 1.0;
     #endif
 
     float dist_to_cam = max(length(center_pos), 0.001);
@@ -97,84 +117,57 @@ void main() {
     float sumVarEnergy = center_var_est;
     AliceEncoding accumAlice = center_alice;
 
-    #if STEP >= 4
-    float theta = 2.0 * PI * rand(vec2(pix + R0));
-    mat2 rotM = mat2(cos(theta), -sin(theta), sin(theta), cos(theta)) * R0;
-    #endif
+    // ---- Poisson 圆盘采样 (NRD, STEP>=4) -----------------------------------
+    // 旋转器 + 高斯核权重, 替代 3×3 网格 → 更均匀的圆盘覆盖
+    float theta = 2.0 * PI * rand(vec2(pix + R0 * 0.6180339887498949));
+    mat2 rotM = mat2(cos(theta), -sin(theta), sin(theta), cos(theta)) * R0 * 1.75;
 
-    float hw[2] = float[](1.0, 0.66667);
+    for (int k = 0; k < POISSON_N; k++) {
+        // 选取 8 或 16 采样表
+        vec4 ps = POISSON_8[k];
+        vec2 offset = rotM * ps.xy;
+        ivec2 sample_coord = pix + ivec2(round(offset));
 
-    // ---- 主采样循环 --------------------------------------------------------
-    for (int i = -1; i <= 1; i++) {
-        for (int j = -1; j <= 1; j++) {
-            if (i == 0 && j == 0) continue;
+        if (sample_coord != clamp(sample_coord, ivec2(0), texSize)) continue;
 
-            #if STEP >= 4
-            ivec2 sample_coord = pix + ivec2(round(rotM * vec2(i, j)));
-            #else
-            ivec2 sample_coord = pix + R0 * ivec2(i, j);
-            #endif
+        float w_kernel = ps.w; // 预计算: exp(-z^2/2)
 
-            if (sample_coord != clamp(sample_coord, ivec2(0), texSize)) continue;
+        // ---- 加载邻居样本 ------------------------------------------------
+        vec3 sample_world_pos, sample_normal;
+        AliceEncoding sample_alice;
+        float sample_var_est;
+        unpackLightSample(sample_coord, sample_world_pos, sample_normal,
+                          sample_alice, sample_var_est);
 
-            float w_kernel = hw[abs(i)] * hw[abs(j)];
+        if (sample_var_est < 0.0) continue; // 天空
+        sample_alice.aliceY.w = abs(sample_alice.aliceY.w);
 
-            // ---- 加载邻居样本 ----------------------------------------------
-            vec3 sample_world_pos, sample_normal;
-            AliceEncoding sample_alice;
-            float sample_var_est;
-            unpackLightSample(sample_coord, sample_world_pos, sample_normal,
-                              sample_alice, sample_var_est);
+        // ---- 几何权重 (不变) --------------------------------------------
+        vec3 delta = (sample_world_pos - center_pos) * inv_pixel_footprint;
+        float depthTerm = abs(dot(delta, center_normal));
+        float w_geometry = SVGF_NORMAL_POWER * (1.0 - dot(center_normal, sample_normal))
+                         + depthTerm * geomValid;
 
-            if (sample_var_est < 0.0) continue; // 天空
-            sample_alice.aliceY.w = abs(sample_alice.aliceY.w);
+        // ---- Bures 距离 + 能量感知 -------------------------------------
+        vec4 s_enc = sample_alice.aliceY;
+        float s_len_v = length(s_enc.xyz);
+        float s_kappa = alice_kappa(s_len_v, s_enc.w);
 
-            // ---- 几何权重 (不变) --------------------------------------------
-            vec3 delta = (sample_world_pos - center_pos) * inv_pixel_footprint;
-            float depthTerm = abs(dot(delta, center_normal));
-            float w_geometry = SVGF_NORMAL_POWER * (1.0 - dot(center_normal, sample_normal))
-                             + depthTerm * geomValid;
+        float d_bures_sq = alice_bures_distance_sq(c_enc, c_kappa, s_enc, s_kappa);
+        float z_bures = sqrt(d_bures_sq) * c_inv_sqrt_var;
 
-            // ---- Bures 距离 + 能量感知 -------------------------------------
-            //
-            // 原方案: w_luma = |Δv| / σ_est
-            //   问题 1: 只看均值差, 丢弃分布形状差 (κ, ω 差异)
-            //   问题 2: 不看能量差, 阴影边界处无信号级停止
-            //
-            // 新方案: 联合 z-score = √(z_bures² + z_energy²)
-            //   z_bures:  Bures 距离 (均值差 + 协方差形状差) / 估计量标准差
-            //   z_energy: |Δω| / 径向估计量标准差
-            //
-            // Bures vs Jeffreys (对称 KL):
-            //   Jeffreys: β₁ω₂ + β₂ω₁  →  β ∝ 1/(1-κ²) → κ→1 指数爆炸
-            //   Bures:    (σ_⊥,c - σ_⊥,s)²  →  σ_⊥ ∝ √(1-κ²) → κ→1 多项式收敛
-            //   两个同向尖锐分布: Jeffreys 爆炸 (错误), Bures 趋零 (正确)
+        float delta_omega = c_omega - s_enc.w;
+        float z_energy = abs(delta_omega) * c_inv_sqrt_var_omega * PHI_ENERGY;
 
-            vec4 s_enc = sample_alice.aliceY;
-            float s_len_v = length(s_enc.xyz);
-            float s_kappa = alice_kappa(s_len_v, s_enc.w);
+        float w_luma = SVGF_PHI_L * sqrt(z_bures * z_bures + z_energy * z_energy);
 
-            // Bures 距离 (同轴近似, n=3)
-            float d_bures_sq = alice_bures_distance_sq(c_enc, c_kappa, s_enc, s_kappa);
+        // ---- 组合权重 -----------------------------------------------
+        float w0 = w_kernel * (1.0 + w_luma) * exp2(-(w_geometry + w_luma) * LOG2_E);
 
-            // v-space z-score: 分布差异是否超过估计噪声?
-            float z_bures = sqrt(d_bures_sq) * c_inv_sqrt_var;
-
-            // ω-space z-score: 能量差异是否超过估计噪声?
-            float delta_omega = c_omega - s_enc.w;
-            float z_energy = abs(delta_omega) * c_inv_sqrt_var_omega * PHI_ENERGY;
-
-            // 联合 z-score (欧氏范数, 无额外参数)
-            float w_luma = SVGF_PHI_L * sqrt(z_bures * z_bures + z_energy * z_energy);
-
-            // ---- 组合权重 (形式不变) ---------------------------------------
-            float w0 = w_kernel * (1.0 + w_luma) * exp2(-(w_geometry + w_luma) * LOG2_E);
-
-            // ---- 累积 ------------------------------------------------------
-            accumulate_alice(accumAlice, sample_alice, w0);
-            sumWeight += w0;
-            sumVarEnergy += w0 * w0 * sample_var_est;
-        }
+        // ---- 累积 ----------------------------------------------------
+        accumulate_alice(accumAlice, sample_alice, w0);
+        sumWeight += w0;
+        sumVarEnergy += w0 * w0 * sample_var_est;
     }
 
     float inv_sumWeight = 1.0 / sumWeight;

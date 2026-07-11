@@ -100,7 +100,7 @@ void main() {
     float center_var_est;
     unpackLightSampleSM(center_idx, center_pos, center_normal, center_alice, center_var_est);
 
-    center_var_est = max(center_var_est, 1e-9);
+    center_var_est = max(center_var_est, 1e-12);
 
     // ---- 预计算中心像素的统计特征 -----------------------------------------
     vec4 c_enc = center_alice.aliceY;
@@ -117,7 +117,7 @@ void main() {
     center_alice.aliceY.w = abs(c_omega);
     c_omega = center_alice.aliceY.w;
     #else
-    float geomValid = 1.0;
+    const float geomValid = 1.0;
     #endif
 
     float dist_to_cam = max(length(center_pos), 0.001);
@@ -129,22 +129,27 @@ void main() {
     float sumVarEnergy = center_var_est;
     AliceEncoding accumAlice = center_alice;
 
-    float hw[2] = float[](1.0, 0.66667);
+    // 3×3 网格采样核 (预计算权重, 归一化偏移 → 单循环)
+    // 权重 = hw[|dx|] * hw[|dy|]; hw[0]=1.0, hw[1]=0.66667
+    const vec3 GRID_3x3[8] = {
+        vec3(-1, -1, 0.44445), vec3(-1, 0, 0.66667), vec3(-1, 1, 0.44445),
+        vec3( 0, -1, 0.66667),                        vec3( 0, 1, 0.66667),
+        vec3( 1, -1, 0.44445), vec3( 1, 0, 0.66667), vec3( 1, 1, 0.44445),
+    };
 
     // =========================================================================
-    // Phase 3: 3×3 à‑trous 采样循环 — 全部从共享内存读取
+    // Phase 3: 单循环采样 — 全部从共享内存读取
     // =========================================================================
-    for (int i = -1; i <= 1; i++) {
-        for (int j = -1; j <= 1; j++) {
-            if (i == 0 && j == 0) continue;
+    for (int k = 0; k < 8; k++) {
+        int dx = int(GRID_3x3[k].x);
+        int dy = int(GRID_3x3[k].y);
+        float w_kernel = GRID_3x3[k].z;
 
-            uint sx = cx + uint(i * R0);
-            uint sy = cy + uint(j * R0);
-            uint sample_idx = sy * uint(TILE_SIZE) + sx;
+        uint sx = cx + uint(dx * R0);
+        uint sy = cy + uint(dy * R0);
+        uint sample_idx = sy * uint(TILE_SIZE) + sx;
 
-            if (sm_light[sample_idx].w < 0.0) continue;
-
-            float w_kernel = hw[abs(i)] * hw[abs(j)];
+        if (sm_light[sample_idx].w < 0.0) continue;
 
             // ---- 解包邻域样本 (共享内存读取) ------------------------------
             vec3 sample_world_pos, sample_normal;
@@ -182,7 +187,6 @@ void main() {
             accumulate_alice(accumAlice, sample_alice, w0);
             sumWeight += w0;
             sumVarEnergy += w0 * w0 * sample_var_est;
-        }
     }
 
     float inv_sumWeight = 1.0 / sumWeight;
