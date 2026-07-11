@@ -91,16 +91,13 @@ bool notInRange(vec2 p) {
 vec3IlluminationData data2; // 当前像素的反射光照数据 (来自 SSBO)
 
 // ---------------------------------------------------------------------------
-// 单路径评估: 在 prevUV 处 2×2 双线性采样历史
-//   useGgx = true (SMB): tapConf = posConf × ggxConf (同表面点, R 应一致 → ggx 抗拖影)
-//   useGgx = false (VMB): tapConf = posConf (不同镜面点 R 必然不同, 仅用内容匹配)
-// posConf = 反射命中点位移: SMB 运动→0 (抗拖影); VMB 追踪→~1 (内容匹配)
-// 输出 found / result / Wnew (EMA 权重) / maxTapConf (最优 tap 置信度)
+// 优化后的单路径评估 (基于波瓣相似度与健壮的 EMA 更新)
 // ---------------------------------------------------------------------------
 void evalPath(vec2 prevUV, bool useGgx,
     vec3 pos, vec3 normal, vec3 N, float roughness,
     vec3 curVirtual, float vproj, vec3 curColor,
     out bool found, out vec3 result, out float Wnew, out float maxTapConf) {
+    
     found = false;
     result = curColor;
     Wnew = 1.0;
@@ -110,8 +107,12 @@ void evalPath(vec2 prevUV, bool useGgx,
     vec2 prevTexelcoord = prevUV * vec2(resolution_global);
     ivec2 prevTexel = ivec2(floor(prevTexelcoord));
 
-    float alpha = roughness * roughness + 1e-6; // GGX α²
-    vec3 R = normalize(normal); // 当前反射方向 (ggx 用)
+    // alpha 是粗糙度的平方，代表 GGX NDF 的方差 (Variance)
+    float alpha = roughness * roughness; 
+    vec3 R_cur = normalize(normal); // 当前反射方向
+
+    // 视觉光路总长度 (用于稳健地归一化位置误差)
+    float opticalDepth = max(length(pos) + vproj, 0.2); 
 
     vec3 accumColor = vec3(0.0);
     float sumWeight = 0.0;
@@ -126,47 +127,78 @@ void evalPath(vec2 prevUV, bool useGgx,
         if (tap.prev_weight < 1e-4) continue;
         if (tap.weight < 0.0) continue; // sky
 
-        vec3 samplePosCur = samplePos - cameraDelta; // 历史表面点 → 当前相机系
+        vec3 samplePosCur = samplePos - cameraDelta;
 
-        // NRD 硬反遮挡: 当前表面点与历史表面点需共面 (平面距离)
+        // 1. NRD 硬反遮挡: 当前表面点与历史表面点需共面
         float planeDist = abs(dot(pos - samplePosCur, surfaceN));
         if (planeDist >= disocclusionThreshold) continue;
 
+        // 双线性权重
         vec2 sampleCoord = vec2(sampleTexel);
         float bw = (1.0 - abs(prevTexelcoord.x - sampleCoord.x))
-                * (1.0 - abs(prevTexelcoord.y - sampleCoord.y));
+                 * (1.0 - abs(prevTexelcoord.y - sampleCoord.y));
 
-        // 反射命中点位移置信度 (SMB 抗拖影 / VMB 内容匹配)
-        vec3 sampleVirtual = samplePosCur + sampleNormal; // 历史反射命中点 Q_P
-        float posConf = exp2(-POSITION_PARAM * LOG2_E * length(sampleVirtual - curVirtual) / vproj);
+        // 2. 虚拟位置置信度 (Wasserstein 近似)
+        // 使用整个光路长度进行归一化，防止近距离反射 (vproj极小) 导致置信度暴跌
+        vec3 sampleVirtual = samplePosCur + sampleNormal;
+        float distDiff = length(sampleVirtual - curVirtual);
+        float posConf = exp(-POSITION_PARAM * distDiff / opticalDepth);
 
         float tapConf = posConf;
+
+        // 3. GGX 波瓣相似度 (VNDF Lobe Similarity)
         if (useGgx) {
-            // GGX 方向相容性 (仅 SMB: 同表面点 R 应一致)
-            float cosTheta = abs(dot(normalize(sampleNormal), R));
-            float tanThetaSq = max((0.99999 - cosTheta * cosTheta) / (1e-9 + cosTheta * cosTheta), 0.0);
-            float ggxConf = exp2(-0.0001 * tanThetaSq / (alpha * alpha));
+            vec3 R_prev = normalize(sampleNormal);
+            float R_dot = clamp(dot(R_cur, R_prev), 0.0, 1.0);
+            
+            // 将 alpha 限制在下限，防止高光镜面时的除零/梯度爆炸
+            // 粗糙度越大 (lobe越宽)，容忍度越高；越光滑，要求 R 越一致。
+            float lobeSigma = max(alpha, 0.005); 
+            
+            // 这是一个近似两个 vMF 分布 (球形高斯) 的对数相似度度量
+            float ggxConf = exp(-(1.0 - R_dot) / lobeSigma);
             tapConf *= ggxConf;
         }
 
         maxTapConf = max(maxTapConf, tapConf);
-        float w = bw * tapConf + 1e-10;
+        float w = bw * tapConf + 1e-6; // 防止权重为0
 
         vec3 tc = tap.data;
         if (any(isnan(tc)) || any(isinf(tc))) continue;
+        
         accumColor += tc * w;
         sumWeight += w;
         accumPrevWeight += w * tap.prev_weight;
     }
 
-    if (sumWeight < 1e-8) return; // 无有效 tap
+    if (sumWeight < 1e-8) return;
 
     found = true;
     vec3 blendColor = accumColor / sumWeight;
-    float prevW = accumPrevWeight / max(sumWeight, 1e-6);
-    float s = float(denoiseBuffer.data[idx].distance > -0.5) * maxTapConf;
-    prevW = min(prevW * s + 1.0, ACCUMULATION_LENGTH);
-    result = blendColor + (curColor - blendColor) / prevW;
+    
+    // -------------------------------------------------------------
+    // 4. 重构的 EMA 历史权重更新逻辑
+    // -------------------------------------------------------------
+    float historyW = accumPrevWeight / sumWeight;
+    
+    // 天空判定
+    float validHit = float(denoiseBuffer.data[idx].distance > -0.5);
+    float confidence = validHit * maxTapConf;
+
+    // 正确的做法：用置信度动态限制“当前帧允许的最大历史长度”
+    // 如果 confidence 为 0.9，允许的最大历史就是 32 * 0.9 = 28.8 帧，
+    // 而不是每一帧都对历史做乘法导致指数衰减！
+    float allowedLength = ACCUMULATION_LENGTH * confidence;
+    
+    // 限制历史权重不超标，并 +1 加入当前帧
+    float prevW = min(historyW, allowedLength) + 1.0;
+    
+    // 标准的 EMA 混合公式: 历史权重占比 = (prevW - 1) / prevW
+    // 如果置信度极低，prevW 会变成 1.0，当前帧颜色的权重就会是 1.0
+    float blendAlpha = 1.0 / max(prevW, 1.0);
+    
+    result = mix(blendColor, curColor, blendAlpha);
+    
     if (any(isnan(result))) result = curColor;
     Wnew = prevW;
 }

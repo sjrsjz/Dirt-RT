@@ -33,8 +33,8 @@ void main() {
     time_global = frameTimeCounter;
     float mix0 = exp2(-0.09016844 * dTime_global);
     rainStrength_global = rainStrength;
-    wetStrength_global = wetStrength_global * mix0 + rainStrength * (1.0 - mix0);
-    wetness_global = wetness_global * mix0 + wetness * (1.0 - mix0);
+    wetStrength_global = mix(wetStrength_global, rainStrength, mix0);
+    wetness_global = mix(wetness_global, wetness, mix0);
     resolution_global = uvec2(viewWidth, viewHeight);
 
     float logLumas[NUM_SAMPLES];

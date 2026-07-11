@@ -1,10 +1,43 @@
 
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/lighting/alice.glsl"
+
 uint getIndex(uvec2 xy) {
-    //return xy.y * 1024u + clamp(xy.x, 0, 1023u);
-    return xy.y * resolution_global.x + clamp(xy.x, 0, resolution_global.x - 1);
+    uvec2 p = min(xy, uvec2(resolution_global) - 1u);
+    uint W = uint(resolution_global.x);
+    uint H = uint(resolution_global.y);
+    
+    // 1. 计算最大能被 8 整除的内部安全区域大小
+    uint W_safe = (W >> 3u) << 3u; // (W / 8) * 8
+    uint H_safe = (H >> 3u) << 3u; // (H / 8) * 8
+    
+    if (p.x < W_safe && p.y < H_safe) {
+        // ---- 安全内部区：继续使用极致的 8x8 Morton Tiling ----
+        uint tileX = p.x >> 3u;
+        uint tileY = p.y >> 3u;
+        uint tilesPerRow = W_safe >> 3u; // 安全区域横向有多少个 Tile
+        uint tileIndex = tileY * tilesPerRow + tileX;
+        
+        uint localX = p.x & 7u;
+        uint localY = p.y & 7u;
+        uint mortonLocal = ((localY & 4u) << 3u) | ((localX & 4u) << 2u) | 
+                           ((localY & 2u) << 2u) | ((localX & 2u) << 1u) | 
+                           ((localY & 1u) << 1u) |  (localX & 1u);
+        
+        return (tileIndex << 6u) | mortonLocal;
+    } 
+    else if (p.y >= H_safe) {
+        // ---- 顶部残缺带：线性映射到缓冲区后部 ----
+        uint local_y = p.y - H_safe;
+        return W_safe * H_safe + local_y * W + p.x;
+    } 
+    else {
+        // ---- 右侧残缺带：线性映射到缓冲区最后剩余空间 ----
+        uint local_x = p.x - W_safe;
+        return W_safe * H_safe + W * (H - H_safe) + p.y * (W - W_safe) + local_x;
+    }
 }
+
 // 逐 lobe 材质乘数 + G-Buffer: 128B/元素, scalar 填入 vec3 尾部 4B padding.
 // specularAlbedo / diffuseAlbedo / transmissionAlbedo 由 ray0.rgen 写入,
 // 供 composite_lighting.glsl 合成时与各自 denoised 光照相乘 (每个 buffer 存材质无关光场信号)。
@@ -63,8 +96,8 @@ float pack2HalfClamped(float a, float b) {
 // 辐照度解码使用 ALICE 最大熵半球余弦投影解析逼近，全域误差 < 0.4%
 
 struct AliceEncoding {
-    mediump vec4 aliceY; // ALICE 嵌入: xyz = 方向向量 v, w = 总能量 ω = |v| + I
-    mediump vec2 CoCg; // (Co, Cg)
+    vec4 aliceY; // ALICE 嵌入: xyz = 方向向量 v, w = 总能量 ω = |v| + I
+    vec2 CoCg; // (Co, Cg)
 };
 
 // ---------------------------------------------------------------------------
@@ -224,8 +257,8 @@ struct diffuseIlluminationData {
     vec3 pos;
     lowp vec3 normal;
     lowp vec3 normal2;
-    mediump float weight;
-    mediump float prev_weight;
+    float weight;
+    float prev_weight;
 };
 
 // ===========================================================================
@@ -265,7 +298,7 @@ struct DiffuseIlluminationWriteData {
     vec3 pos;
     lowp vec3 normal;
     lowp vec3 normal2;
-    mediump float weight;
+    float weight;
 };
 
 // Helper: unpack RT output from unified SSBO into full-precision struct.
@@ -273,8 +306,8 @@ struct DiffuseIlluminationWriteData {
 DiffuseIlluminationWriteData loadDiffuseInput(uint idx) {
     UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[idx];
     DiffuseIlluminationWriteData t;
-    mediump vec2 aliceY_xy = unpackHalf2x16(floatBitsToUint(e.rt_aliceY_xy));
-    mediump vec2 aliceY_zw = unpackHalf2x16(floatBitsToUint(e.rt_aliceY_zw));
+    vec2 aliceY_xy = unpackHalf2x16(floatBitsToUint(e.rt_aliceY_xy));
+    vec2 aliceY_zw = unpackHalf2x16(floatBitsToUint(e.rt_aliceY_zw));
     t.data_swap.aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-10000), vec4(10000));
     t.data_swap.CoCg = unpackHalf2x16(floatBitsToUint(e.rt_CoCg));
     t.pos = vec3(e.px, e.py, e.pz);
@@ -285,13 +318,13 @@ DiffuseIlluminationWriteData loadDiffuseInput(uint idx) {
 }
 
 struct vec3IlluminationData {
-    mediump vec3 data;
-    mediump vec3 data_swap;
+    vec3 data;
+    vec3 data_swap;
     vec3 pos;
-    mediump vec3 normal;
-    mediump float weight;
-    mediump float prev_weight;
-    mediump float mixWeight;
+    vec3 normal;
+    float weight;
+    float prev_weight;
+    float mixWeight;
 };
 
 // ---------------------------------------------------------------------------
@@ -370,8 +403,8 @@ layout(std430, set = 3, binding = 4) buffer RefractIlluminationDataBuffer {
 DiffuseIlluminationWriteData fetchPrevDiffuse(ivec2 p) {
     UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[getIndex(p)];
     DiffuseIlluminationWriteData t;
-    mediump vec2 aliceY_xy = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_xy));
-    mediump vec2 aliceY_zw = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_zw));
+    vec2 aliceY_xy = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_xy));
+    vec2 aliceY_zw = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_zw));
     t.data_swap.aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-10000), vec4(10000));
     t.data_swap.CoCg = unpackHalf2x16(floatBitsToUint(e.swap_CoCg));
     t.pos = vec3(e.px, e.py, e.pz);
@@ -419,9 +452,9 @@ diffuseIlluminationData fetchDiffuse(ivec2 p) {
     UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[getIndex(p)];
 
     // Unpack current frame (swap)
-    mediump vec2 aliceY_xy = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_xy));
-    mediump vec2 aliceY_zw = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_zw));
-    tmp.data_swap.aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-10000), vec4(10000));
+    vec2 aliceY_xy = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_xy));
+    vec2 aliceY_zw = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_zw));
+    tmp.data_swap.aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-65504), vec4(65504));
     tmp.data_swap.CoCg = unpackHalf2x16(floatBitsToUint(e.swap_CoCg));
     tmp.weight = e.swap_weight;
 
@@ -429,7 +462,7 @@ diffuseIlluminationData fetchDiffuse(ivec2 p) {
     // Unpack previous frame (hist)
     aliceY_xy = unpackHalf2x16(floatBitsToUint(e.hist_aliceY_xy));
     aliceY_zw = unpackHalf2x16(floatBitsToUint(e.hist_aliceY_zw));
-    tmp.data.aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-10000), vec4(10000));
+    tmp.data.aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-65504), vec4(65504));
     tmp.data.CoCg = unpackHalf2x16(floatBitsToUint(e.hist_CoCg));
     tmp.prev_weight = e.hist_weight;
 
