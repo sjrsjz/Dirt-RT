@@ -1,7 +1,7 @@
 #version 430 compatibility
 
 // ===========================================================================
-// Pass 100: 漫反射时域累积 (Diffuse Temporal Accumulation)
+// Pass 100 CS: 漫反射时域累积 (Diffuse Temporal Accumulation)
 // ===========================================================================
 //
 // 本版本引入 ALICE 时域标量方差：
@@ -19,6 +19,8 @@
 // 不再需要 extInfoBuffer 间接缓冲区。
 // ===========================================================================
 
+layout(local_size_x = 16, local_size_y = 16) in;
+
 #define DIFFUSE_BUFFER_MIN
 #define PREV_DIFFUSE_BUFFER
 
@@ -32,7 +34,7 @@
 // Uniform 输入
 // ---------------------------------------------------------------------------
 
-uniform sampler2D colortex0;
+uniform vec2 resolution;
 
 // ---------------------------------------------------------------------------
 // 可调参数
@@ -101,12 +103,21 @@ uniform sampler2D colortex0;
 #endif
 
 // ---------------------------------------------------------------------------
-// 输出
+// AABB 共享内存 Tile — cooperative load 消除邻域 SSBO 冗余读取
 // ---------------------------------------------------------------------------
+#define TILE_SIZE 16u
+#if TEMPORAL_AABB_ENABLE
+#define AABB_HALO uint(TEMPORAL_AABB_NEIGHBOR_RADIUS)
+#define AABB_SM_W (TILE_SIZE + 2u * AABB_HALO)
+#define AABB_SM_H (TILE_SIZE + 2u * AABB_HALO)
 
-/* RENDERTARGETS: 5 */
-layout(location = 0) out vec4 output_data;
-
+struct AABBTileSample {
+    float dist;
+    vec4 aliceY;
+    vec2 CoCg;
+};
+shared AABBTileSample sm_aabbTile[AABB_SM_H][AABB_SM_W];
+#endif
 
 // ---------------------------------------------------------------------------
 // 全局变量
@@ -115,8 +126,6 @@ layout(location = 0) out vec4 output_data;
 vec3 prevScreenPos;
 float info_distance;
 uint idx;
-
-in vec2 texCoord;
 
 DiffuseIlluminationWriteData current_data;
 diffuseIlluminationData out_data;
@@ -181,32 +190,21 @@ vec3 reproject(vec3 pos_rel) {
 //
 // 策略: 计算完整 6D AABB, 取所有越界通道中最保守的缩放因子,
 //       统一等比缩放整个 aliceY + CoCg, 保持 |v|/omega 不变
+//
+// 使用共享内存 tile: cooperative load 消除邻域 SSBO 冗余读取,
+// 每像素最多 O(N²) SSBO 读 → O(1).
 // ===========================================================================
 
-// 采样邻域像素的完整 ALICE 数据
-bool sampleNeighborAlice(ivec2 pix, out vec4 aliceY, out vec2 CoCg) {
-    ivec2 clamped_pix = clamp(pix, ivec2(0), ivec2(resolution_global) - 1);
-    uint n_idx = getIndex(uvec2(clamped_pix));
+#if TEMPORAL_AABB_ENABLE
 
-    if (denoiseBuffer.data[n_idx].distance < -0.5) {
-        aliceY = vec4(0.0);
-        CoCg = vec2(0.0);
-        return false;
-    }
-
-    UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[n_idx];
-    mediump vec2 aliceY_xy = unpackHalf2x16(floatBitsToUint(e.rt_aliceY_xy));
-    mediump vec2 aliceY_zw = unpackHalf2x16(floatBitsToUint(e.rt_aliceY_zw));
-    aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-10000), vec4(10000));
-    CoCg = unpackHalf2x16(floatBitsToUint(e.rt_CoCg));
-    return true;
-}
-
-// 从当前帧邻域计算 6D AABB
-void computeAABB(ivec2 pix,
+// 从共享内存 tile 中直接读取邻域样本, 计算 6D AABB
+void computeAABB_CS(
                  out vec4 min_aliceY, out vec4 max_aliceY,
                  out vec2 min_CoCg, out vec2 max_CoCg,
                  out int validCount) {
+    uint cx = gl_LocalInvocationID.x + AABB_HALO;
+    uint cy = gl_LocalInvocationID.y + AABB_HALO;
+
     vec4 center_aliceY = current_data.data_swap.aliceY;
     vec2 center_CoCg = current_data.data_swap.CoCg;
 
@@ -225,17 +223,19 @@ void computeAABB(ivec2 pix,
         for (int dx = -radius; dx <= radius; dx++) {
             if (dx == 0 && dy == 0) continue;
 
-            ivec2 neighbor_pix = pix + ivec2(dx, dy);
-            vec4 n_aliceY; vec2 n_CoCg;
-            if (sampleNeighborAlice(neighbor_pix, n_aliceY, n_CoCg)) {
-                min_aliceY = min(min_aliceY, n_aliceY);
-                max_aliceY = max(max_aliceY, n_aliceY);
-                min_CoCg = min(min_CoCg, n_CoCg);
-                max_CoCg = max(max_CoCg, n_CoCg);
-                sum_aliceY    += n_aliceY;
-                sum_sq_aliceY += n_aliceY * n_aliceY;
-                validCount++;
-            }
+            int sx = int(cx) + dx;
+            int sy = int(cy) + dy;
+            AABBTileSample s = sm_aabbTile[sy][sx];
+
+            if (s.dist < -0.5) continue;
+
+            min_aliceY = min(min_aliceY, s.aliceY);
+            max_aliceY = max(max_aliceY, s.aliceY);
+            min_CoCg = min(min_CoCg, s.CoCg);
+            max_CoCg = max(max_CoCg, s.CoCg);
+            sum_aliceY    += s.aliceY;
+            sum_sq_aliceY += s.aliceY * s.aliceY;
+            validCount++;
         }
     }
 
@@ -266,6 +266,8 @@ void computeAABB(ivec2 pix,
     min_CoCg -= expand_CoCg;
     max_CoCg += expand_CoCg;
 }
+
+#endif // TEMPORAL_AABB_ENABLE
 
 // 6 通道统一线性缩放:
 //   对每个越界通道计算 scale = bound / hist,
@@ -335,11 +337,7 @@ void MixDiffuse() {
     }
 
     // -----------------------------------------------------------------------
-    // 情况 2: 2×2 双线性历史采样 + 逐样本置信度 (参考 TAA 模式)
-    //
-    // 用 2×2 双线性插值直接读历史数据, 每样本计算几何置信度;
-    // 颜色与置信度在同一循环中加权累积, 避免分离的 sampleDiffuse +
-    // 3×3 NN 搜索造成的失配.
+    // 情况 2: 2×2 双线性历史采样 + 逐样本置信度 + 距离尺度修正
     // -----------------------------------------------------------------------
     vec2 prevTexelcoord = prevScreenPos.xy * vec2(resolution_global);
     ivec2 prevTexel = ivec2(floor(prevTexelcoord));
@@ -373,9 +371,29 @@ void MixDiffuse() {
         maxTapConf = max(maxTapConf, conf);
         float w = bilinearWeight * conf + 1e-10;
 
+        // ===================================================================
+        // 基于物理尺度的时域累积有效样本数修正
+        // d1 = length(tapPos) (上一帧距离)
+        // d2 = length(tapPosCur) (当前帧距离)
+        // ===================================================================
+        float d1_sq = dot(tapPos, tapPos);
+        float d2_sq = dot(tapPosCur, tapPosCur);
+        
+        // 物理缩放因子: (d2 / d1)^2
+        float scale = d2_sq / max(d1_sq, 1e-4);
+        
+        // 工程钳制保护：
+        // 1. 防止极近处除零导致有效权重溢出
+        // 2. 限制最大放大倍数（如 4.0），防止大跨度镜头拉远时有效历史权重过度膨胀
+        scale = clamp(scale, 0.01, 4.0); 
+
+        // 应用修正后的时域历史有效权重
+        float correctedTapW = sanitizeWeight(tapW * scale);
+        // ===================================================================
+
         accumulate_alice(accumAlice, tap.data, w);
         sumWeight += w;
-        accumHistWeight += w * tapW;
+        accumHistWeight += w * correctedTapW; // 使用修正后的 N_eff 参与均值混合
     }
 
     if (sumWeight < 1e-8) {
@@ -405,7 +423,7 @@ void MixDiffuse() {
         vec4 min_aliceY, max_aliceY;
         vec2 min_CoCg, max_CoCg;
         int validNeighborCount;
-        computeAABB(ivec2(gl_FragCoord.xy),
+        computeAABB_CS(
                     min_aliceY, max_aliceY,
                     min_CoCg, max_CoCg,
                     validNeighborCount);
@@ -434,7 +452,51 @@ void MixDiffuse() {
 // ===========================================================================
 
 void main() {
-    uvec2 pix = uvec2(gl_FragCoord.xy);
+    uvec2 pix = gl_GlobalInvocationID.xy;
+
+    // =========================================================================
+    // Phase 1: Cooperative load AABB tile into shared memory
+    // 所有线程必须到达 barrier — 在 OOB / sky 提前返回之前完成。
+    // =========================================================================
+    #if TEMPORAL_AABB_ENABLE
+    {
+        uint threadIdx = gl_LocalInvocationID.y * TILE_SIZE + gl_LocalInvocationID.x;
+        uint totalThreads = TILE_SIZE * TILE_SIZE;
+        for (uint i = threadIdx; i < AABB_SM_W * AABB_SM_H; i += totalThreads) {
+            uint row = i / AABB_SM_W;
+            uint col = i % AABB_SM_W;
+
+            ivec2 gc = ivec2(gl_WorkGroupID.xy * TILE_SIZE) - ivec2(AABB_HALO) + ivec2(col, row);
+            ivec2 clamped = clamp(gc, ivec2(0), ivec2(resolution) - 1);
+            uint loadIdx = getIndex(uvec2(clamped));
+
+            float d = denoiseBuffer.data[loadIdx].distance;
+
+            AABBTileSample s;
+            s.dist = d;
+            if (d > -0.5) {
+                UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[loadIdx];
+                mediump vec2 aliceY_xy = unpackHalf2x16(floatBitsToUint(e.rt_aliceY_xy));
+                mediump vec2 aliceY_zw = unpackHalf2x16(floatBitsToUint(e.rt_aliceY_zw));
+                s.aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-10000), vec4(10000));
+                s.CoCg = unpackHalf2x16(floatBitsToUint(e.rt_CoCg));
+            } else {
+                s.aliceY = vec4(0.0);
+                s.CoCg = vec2(0.0);
+            }
+
+            sm_aabbTile[row][col] = s;
+        }
+    }
+    barrier();
+    memoryBarrierShared();
+    #endif
+
+    // =========================================================================
+    // Phase 2: 逐像素时域累积
+    // =========================================================================
+    if (any(greaterThanEqual(pix, uvec2(resolution)))) return;
+
     idx = getIndex(pix);
 
 
@@ -455,7 +517,7 @@ void main() {
 
     if (info_distance < -0.5) {
         out_data.weight = 0.0;
-        WriteDiffuse(out_data, ivec2(gl_FragCoord.xy));
+        WriteDiffuse(out_data, ivec2(pix));
         return;
     }
 
@@ -471,5 +533,5 @@ void main() {
     MixDiffuse();
 
     out_data.weight = output_weight;
-    WriteDiffuse(out_data, ivec2(gl_FragCoord.xy));
+    WriteDiffuse(out_data, ivec2(pix));
 }

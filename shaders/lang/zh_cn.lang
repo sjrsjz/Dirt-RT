@@ -24,6 +24,7 @@ screen.TEMPORAL_FILTER = 时域滤波
 option.TEMPORAL_NORMAL_PARAM = 历史法线拒绝阈值
 option.TEMPORAL_POSITION_PARAM = 历史位置拒绝阈值
 option.NRD_BLEND_STRENGTH = 低置信度混合
+option.REFLECT_GGX_CONFIDENCE = 反射GGX置信度
 
 screen.TEMPORAL_ACCUMULATION = 漫反射时域累积
 option.TEMPORAL_MAX_HISTORY = 最大历史帧数

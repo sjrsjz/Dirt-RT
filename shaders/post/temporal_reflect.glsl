@@ -1,7 +1,7 @@
 #version 430 compatibility
 
 // ===========================================================================
-// Pass 101: 镜面反射时域累积 (Reflect Temporal Accumulation) — NRD RELAX 双路径
+// Pass 101 CS: 镜面反射时域累积 (Reflect Temporal Accumulation) — NRD RELAX 双路径
 // ===========================================================================
 // 管线位置: 在光线追踪生成镜面反射样本后，与上一帧历史混合。
 //
@@ -22,7 +22,9 @@
 
 #define REFLECT_BUFFER_MIN
 // 仅写 swap_color (color/lpos/lnormal 由 swap5 写),
-// 避免 fragment 内 sampler 读 + imageStore 写同一纹理的 UB (原 101 已验证可行).
+// 避免 SSBO 读写的潜在冲突 (转为纯计算管线后 UV 边界由 dispatch 保证).
+
+layout(local_size_x = 8, local_size_y = 8) in;
 
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
@@ -32,9 +34,7 @@
 // Uniform 输入
 // ---------------------------------------------------------------------------
 
-in vec2 texCoord;
-
-uniform sampler2D colortex0;
+uniform vec2 resolution;
 
 // ---------------------------------------------------------------------------
 // 可调参数
@@ -71,9 +71,6 @@ vec3 reproject(vec3 pos_rel) {
     return ndc * 0.5 + 0.5;
 }
 
-/* RENDERTARGETS: 0 */
-layout(location = 0) out vec4 fragColor;
-
 // ---------------------------------------------------------------------------
 // 全局状态
 // ---------------------------------------------------------------------------
@@ -97,7 +94,6 @@ void evalPath(vec2 prevUV, bool useGgx,
     vec3 pos, vec3 normal, vec3 N, float roughness,
     vec3 curVirtual, float vproj, vec3 curColor,
     out bool found, out vec3 result, out float Wnew, out float maxTapConf) {
-    
     found = false;
     result = curColor;
     Wnew = 1.0;
@@ -108,11 +104,11 @@ void evalPath(vec2 prevUV, bool useGgx,
     ivec2 prevTexel = ivec2(floor(prevTexelcoord));
 
     // alpha 是粗糙度的平方，代表 GGX NDF 的方差 (Variance)
-    float alpha = roughness * roughness; 
+    float alpha = roughness * roughness;
     vec3 R_cur = normalize(normal); // 当前反射方向
 
     // 视觉光路总长度 (用于稳健地归一化位置误差)
-    float opticalDepth = max(length(pos) + vproj, 0.2); 
+    float opticalDepth = max(length(pos) + vproj, 0.2);
 
     vec3 accumColor = vec3(0.0);
     float sumWeight = 0.0;
@@ -136,13 +132,21 @@ void evalPath(vec2 prevUV, bool useGgx,
         // 双线性权重
         vec2 sampleCoord = vec2(sampleTexel);
         float bw = (1.0 - abs(prevTexelcoord.x - sampleCoord.x))
-                 * (1.0 - abs(prevTexelcoord.y - sampleCoord.y));
+                * (1.0 - abs(prevTexelcoord.y - sampleCoord.y));
 
-        // 2. 虚拟位置置信度 (Wasserstein 近似)
-        // 使用整个光路长度进行归一化，防止近距离反射 (vproj极小) 导致置信度暴跌
+        // 2. 虚拟位置置信度 (基于统计假设检验 p-value 严格推导)
         vec3 sampleVirtual = samplePosCur + sampleNormal;
         float distDiff = length(sampleVirtual - curVirtual);
-        float posConf = exp(-POSITION_PARAM * distDiff / opticalDepth);
+
+        // alpha2 = alpha^2 = roughness^4 (表示反射分布的统计方差尺度)
+        float alpha2 = alpha * alpha; 
+
+        // 引入 2.0 因子 (来自卡方分布自由度为2的推导)
+        // 设定 1e-5 的下限，防止极光滑镜面时分母除零崩溃
+        float varianceScale = 2.0 * opticalDepth * opticalDepth * max(alpha2, 1e-4);
+
+        // 标准的 p-value 概率公式 (2D 高斯差分平方模长在卡方分布下的显著性检验)
+        float posConf = exp(-(distDiff * distDiff) / varianceScale);
 
         float tapConf = posConf;
 
@@ -150,13 +154,13 @@ void evalPath(vec2 prevUV, bool useGgx,
         if (useGgx) {
             vec3 R_prev = normalize(sampleNormal);
             float R_dot = clamp(dot(R_cur, R_prev), 0.0, 1.0);
-            
+
             // 将 alpha 限制在下限，防止高光镜面时的除零/梯度爆炸
             // 粗糙度越大 (lobe越宽)，容忍度越高；越光滑，要求 R 越一致。
-            float lobeSigma = max(alpha, 0.005); 
-            
+            float lobeSigma = max(alpha, 0.01);
+
             // 这是一个近似两个 vMF 分布 (球形高斯) 的对数相似度度量
-            float ggxConf = exp(-(1.0 - R_dot) / lobeSigma);
+            float ggxConf = exp(-REFLECT_GGX_CONFIDENCE * (1.0 - R_dot) / lobeSigma);
             tapConf *= ggxConf;
         }
 
@@ -165,7 +169,7 @@ void evalPath(vec2 prevUV, bool useGgx,
 
         vec3 tc = tap.data;
         if (any(isnan(tc)) || any(isinf(tc))) continue;
-        
+
         accumColor += tc * w;
         sumWeight += w;
         accumPrevWeight += w * tap.prev_weight;
@@ -175,12 +179,12 @@ void evalPath(vec2 prevUV, bool useGgx,
 
     found = true;
     vec3 blendColor = accumColor / sumWeight;
-    
+
     // -------------------------------------------------------------
     // 4. 重构的 EMA 历史权重更新逻辑
     // -------------------------------------------------------------
     float historyW = accumPrevWeight / sumWeight;
-    
+
     // 天空判定
     float validHit = float(denoiseBuffer.data[idx].distance > -0.5);
     float confidence = validHit * maxTapConf;
@@ -189,16 +193,16 @@ void evalPath(vec2 prevUV, bool useGgx,
     // 如果 confidence 为 0.9，允许的最大历史就是 32 * 0.9 = 28.8 帧，
     // 而不是每一帧都对历史做乘法导致指数衰减！
     float allowedLength = ACCUMULATION_LENGTH * confidence;
-    
+
     // 限制历史权重不超标，并 +1 加入当前帧
     float prevW = min(historyW, allowedLength) + 1.0;
-    
+
     // 标准的 EMA 混合公式: 历史权重占比 = (prevW - 1) / prevW
     // 如果置信度极低，prevW 会变成 1.0，当前帧颜色的权重就会是 1.0
     float blendAlpha = 1.0 / max(prevW, 1.0);
-    
+
     result = mix(blendColor, curColor, blendAlpha);
-    
+
     if (any(isnan(result))) result = curColor;
     Wnew = prevW;
 }
@@ -207,7 +211,12 @@ void evalPath(vec2 prevUV, bool useGgx,
 // 主入口
 // ===========================================================================
 void main() {
-    idx = getIndex(uvec2(gl_FragCoord.xy));
+    uvec2 pix = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(pix, uvec2(resolution)))) return;
+
+    vec2 texCoord = (vec2(pix) + 0.5) / vec2(resolution);
+
+    idx = getIndex(pix);
     info_distance = denoiseBuffer.data[idx].distance;
 
     // 从 SSBO (SpecularRTElement) 重建当前帧反射数据: normal = R*virtualProjDist
@@ -221,7 +230,7 @@ void main() {
     if (info_distance < -0.5) {
         data2.weight = 1.0;
         data2.mixWeight = 0.0;
-        WriteReflect(data2, ivec2(gl_FragCoord.xy));
+        WriteReflect(data2, ivec2(pix));
         return;
     }
 
@@ -273,6 +282,9 @@ void main() {
     float Dfactor = GetSpecularDominantFactor(NoV, roughness);
 
     float vha = vmbFound ? (Dfactor * vmbConf) : 0.0;
+    float virtualMotionRoughnessWeight = smoothstep(0.0, 0.3, roughness); 
+    vha *= (1.0 - virtualMotionRoughnessWeight);
+    
     // SMB 回退: SMB 更可信时偏向 SMB
     vha *= (smbConf > 1e-6) ? clamp(vmbConf / smbConf, 0.0, 1.0) : 1.0;
     // 运镜门控: 静止相机 VMB→0 (VMB=SMB 同视线, vha 无关; 但保持干净)
@@ -290,5 +302,5 @@ void main() {
     data2.weight = Wnew;
     // 控制字段通过 swap_color.w 传递; flip / prev_weight / lpos / lnormal 由 swap5 写出.
     data2.mixWeight = denoiseBuffer.data[idx].reflectWeight;
-    WriteReflect(data2, ivec2(gl_FragCoord.xy));
+    WriteReflect(data2, ivec2(pix));
 }

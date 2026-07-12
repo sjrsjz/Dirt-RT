@@ -367,7 +367,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         vec3 geomN = payload_unpackGeomNormal(tmp_Payload.data);
         vec3 macroNormal = faceforward(geomN, geomN, rd_i);
 
-        vec3 normal = faceforward(surfaceMat.normal, surfaceMat.normal, rd_i);
+        vec3 normal = normalize(faceforward(surfaceMat.normal, surfaceMat.normal, rd_i));
         int blockID;
         vec3 _shadow = payload_unpackShadow(tmp_Payload.data, blockID);
         material surface = materialFromEvaluated(surfaceMat, blockID);

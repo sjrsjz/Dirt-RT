@@ -1,7 +1,7 @@
 #version 430 compatibility
 
 // ===========================================================================
-// Pass 102: 折射时域累积 (Refract Temporal Accumulation)
+// Pass 102 CS: 折射时域累积 (Refract Temporal Accumulation)
 // ===========================================================================
 // 管线位置: 在光线追踪生成折射样本后，与上一帧历史混合
 //
@@ -17,7 +17,9 @@
 
 #define REFRACT_BUFFER_MIN
 // 仅写 swap_color (color/lpos/lnormal 由 swap7 写),
-// 避免 fragment 内 sampler 读 + imageStore 写同一纹理的 UB (原 102 已验证可行).
+// 避免 SSBO 读写的潜在冲突 (转为纯计算管线后 UV 边界由 dispatch 保证).
+
+layout(local_size_x = 8, local_size_y = 8) in;
 
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
@@ -27,7 +29,7 @@
 // Uniform 输入
 // ---------------------------------------------------------------------------
 
-uniform sampler2D colortex0;
+uniform vec2 resolution;
 
 // ---------------------------------------------------------------------------
 // 可调参数
@@ -70,9 +72,6 @@ vec3 reproject(vec3 pos_rel) {
     return ndc * 0.5 + 0.5;
 }
 
-/* RENDERTARGETS: 0 */
-layout(location = 0) out vec4 fragColor;
-
 // ---------------------------------------------------------------------------
 // 全局状态
 // ---------------------------------------------------------------------------
@@ -80,7 +79,6 @@ layout(location = 0) out vec4 fragColor;
 vec3 prevScreenPos;
 float info_distance;
 uint idx_l;
-vec2 texSize;
 uint idx;
 
 bool notInRange(vec2 p) {
@@ -99,7 +97,7 @@ void MixRefract() {
         return;
     }
 
-    vec3IlluminationData data = sampleRefract(prevScreenPos.xy * textureSize(colortex0, 0));
+    vec3IlluminationData data = sampleRefract(prevScreenPos.xy * vec2(resolution));
 
     // req 6: 虚拟击中点 (pos + R*virtualProjDist) 用于重投影+权重
     vec3 curVirtual = data3.pos + data3.normal;
@@ -124,7 +122,10 @@ void MixRefract() {
 // 主入口
 // ===========================================================================
 void main() {
-    idx = getIndex(uvec2(gl_FragCoord.xy));
+    uvec2 pix = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(pix, uvec2(resolution)))) return;
+
+    idx = getIndex(pix);
 
     info_distance = denoiseBuffer.data[idx].distance;
 
@@ -138,18 +139,18 @@ void main() {
     // ---- 天空 / 无效几何: 重置权重后直接写出 -----------------------------
     if (info_distance < -0.5) {
         data3.weight = 1.0;
-        WriteRefract(data3, ivec2(gl_FragCoord.xy));
+        WriteRefract(data3, ivec2(pix));
         return;
     }
 
     // ---- 重投影到上一帧 (主命中点: 定位同一折射表面点) ------------------
     cameraDelta = camPos - prevRaytracingCamPos;
     prevScreenPos = reproject(data3.pos);
-    idx_l = getIndex(uvec2(prevScreenPos.xy * textureSize(colortex0, 0)));
+    idx_l = getIndex(uvec2(prevScreenPos.xy * vec2(resolution)));
 
     // ---- 执行时域混合 ----------------------------------------------------
     MixRefract();
 
     // 控制字段由 swap7 写出 (REFRACT_BUFFER_MIN 仅写 swap_color).
-    WriteRefract(data3, ivec2(gl_FragCoord.xy));
+    WriteRefract(data3, ivec2(pix));
 }

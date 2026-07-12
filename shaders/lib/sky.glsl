@@ -1,5 +1,5 @@
-#ifndef LIGHT_COLOR_GLSL
-#define LIGHT_COLOR_GLSL
+#ifndef SKY_GLSL
+#define SKY_GLSL
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/common.glsl"
@@ -19,7 +19,7 @@ const float P = 30000.;
 const float R = 6370000;
 const vec3 Sun = vec3(1000);
 const vec3 Moon = Sun * 0.0001;
-float celestial_strength = 0.0; 
+float celestial_strength = 0.0;
 
 void setSkyVars() {
     switch (world_type_global) {
@@ -34,7 +34,7 @@ void setSkyVars() {
         case WORLD_THE_NETHER:
         S_R = 0.05;
         cosD_S = 1.0 / sqrt(1.0 + S_R * S_R);
-        Rayleigh = 100.0*vec3(5.8e-6, 1.35e-4, 1.35e-4);
+        Rayleigh = 100.0 * vec3(5.8e-6, 1.35e-4, 1.35e-4);
         Mie = vec3(luma(Rayleigh));
         b_P = vec3(30000);
         b_k = 0.5;
@@ -93,7 +93,7 @@ vec3 sampleSky(float pos_y, in vec3 n, in vec3 lightDir) {
     // 太阳散射
     vec3 c_sun = Sun * g_sun;
     c_sun *= abs((exp(-t * n_distance) - exp(-t * s_distance)) / (n.y - lightDir.y)) * max(dot(lightDir, sun_normal), 0.0);
-    
+
     // 日盘
     float disc_core = 1.0 - (1.0 - cosD_S) * 0.25;
     vec3 disc = celestial_strength * exp(-t * n_distance) * smoothstep(cosD_S, disc_core, dot(n0, lightDir));
@@ -102,7 +102,7 @@ vec3 sampleSky(float pos_y, in vec3 n, in vec3 lightDir) {
     // 月亮散射
     vec3 c_moon = Moon * g_moon;
     c_moon *= abs((exp(-t * n_distance) - exp(-t * m_distance)) / (n.y - moonDir.y)) * max(dot(moonDir, moon_normal), 0.0);
-    
+
     // 月盘
     c_moon += Moon * disc;
 

@@ -1,1 +1,1 @@
-#include "/post/antifirefly_specular.glsl"
+#include "/post/temporal_diffuse.glsl"

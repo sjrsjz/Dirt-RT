@@ -24,6 +24,7 @@ screen.TEMPORAL_FILTER = Temporal Filter
 option.TEMPORAL_NORMAL_PARAM = History Normal Rejection
 option.TEMPORAL_POSITION_PARAM = History Position Rejection
 option.NRD_BLEND_STRENGTH = Low-Confidence Blend
+option.REFLECT_GGX_CONFIDENCE = Reflect GGX Confidence
 
 screen.TEMPORAL_ACCUMULATION = Diffuse Temporal Accumulation
 option.TEMPORAL_MAX_HISTORY = Max History Frames

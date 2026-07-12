@@ -15,6 +15,9 @@
 // -- NRD-inspired low-weight blend (buffer_swap_diffuse.glsl) --
 #define NRD_BLEND_STRENGTH 1.0 // Spatial filter blend strength at low temporal confidence. Blends the large-radius spatial result back into history when frame accumulation is insufficient. 0 = off. [0.0 0.1 0.25 0.5 0.75 1.0 1.25 1.5 2.0 3.0 4.0 5.0]
 
+// -- Specular reflection temporal confidence (temporal_reflect.glsl) --
+#define REFLECT_GGX_CONFIDENCE 25.0 // GGX lobe similarity strictness for specular temporal accumulation. Lower = more tolerant of normal/roughness mismatch → smoother but more ghosting. Higher = stricter lobe match → less ghosting but noisier on curved surfaces. [1.0 2.0 5.0 10.0 20.0 25.0 50.0 75.0 100.0]
+
 // -- Diffuse temporal accumulation (temporal_diffuse.glsl) --
 #define TEMPORAL_MAX_HISTORY 32.0 // Maximum effective sample count clamped per pixel. Higher = smoother but more ghosting. [1 2 4 8 16 32 64 128]
 #define TEMPORAL_CONFIDENCE_POWER 1.0 // Reprojection confidence exponent. Higher = more aggressive rejection of mismatched history. [0.1 0.25 0.5 1.0 2.0 4.0]
