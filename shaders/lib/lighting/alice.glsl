@@ -41,13 +41,34 @@
 // ============================================================
 
 // ------------------------------------------------------------
-// MC 样本编码
+// MC 样本编码 (入射辐射率探针)
 // ------------------------------------------------------------
+//
+// 约定变更 (better-denoiser-dev):
+//   漫反射第一跳不再携带 BRDF 权重 (bsdf_weight = guideWeight only),
+//   ALICE 编码接收的是纯入射辐射率 (incident radiance), 而非 BRDF 调制后的
+//   出射辐射率。BSDF 评估延迟至 composite (fog.glsl) 统一施加。
+//
+//   这保证了 ALICE 状态对任意材质 (包括纯金属, S.x=1) 都编码完整的入射光场,
+//   路径引导对全材质有效, 且消除了除以极小 Cd 的数值不稳定性。
+//
+//   对单样本 (1 spp):  v = dir * L,  ω = L  (锥边界, I=0)
+//   其中 L 为入射辐射率标量 (luminance), 不包含任何 BSDF 调制。
 
-// 编码 1spp 蒙特卡洛样本 (direction, radiance) 为嵌入表示
+// 编码单条射线探针的入射辐射率为 ALICE 嵌入表示 (锥边界态)
+// direction: 射线入射方向 (归一化)
+// radiance:  入射辐射率标量 (luminance of incident radiance)
 vec4 alice_encode_sample(vec3 direction, float radiance) {
-    // 直接使用方向向量和辐照度作为输入，编码为嵌入表示
     return vec4(normalize(direction) * radiance, radiance);
+}
+
+// 编码单条射线探针的入射辐射率为 ALICE 嵌入表示 (RGB 输入版本)
+// incident: 入射辐射率 RGB
+// direction: 射线入射方向 (归一化)
+// 返回 (v, ω) = (dir * Y, Y) 其中 Y = luminance(incident)
+vec4 alice_encode_probe_rgb(vec3 incident, vec3 direction) {
+    float Y = dot(incident, vec3(0.2126, 0.7152, 0.0722));
+    return vec4(normalize(direction) * Y, Y);
 }
 
 // ------------------------------------------------------------

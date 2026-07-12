@@ -72,7 +72,9 @@ We define the lighting state space directly as the augmented cone:
 
 $ cal(C) = {(bold(v), omega) in RR^n times RR_(>=0) | omega >= |bold(v)|} $
 
-An arbitrary lighting encoding is represented as a 2-tuple $L = (bold(v), omega) in cal(C)$, where $bold(v) in RR^n$ is the directional moment and $omega in RR_(>=0)$ is the total irradiance. The lighting synthesis operator $T: "List"(cal(C)) -> cal(C)$ maps a set of signal samples to a synthesized lighting state, where $cal(L) in "List"(RR^n)$ is the input list of Monte Carlo samples.
+An arbitrary lighting encoding is represented as a 2-tuple $L = (bold(v), omega) in cal(C)$, where $bold(v) in RR^n$ is the directional moment and $omega in RR_(>=0)$ is the total incident radiance (sum of per-sample scalar magnitudes). The lighting synthesis operator $T: "List"(cal(C)) -> cal(C)$ maps a set of signal samples to a synthesized lighting state, where $cal(L) in "List"(RR^n)$ is the input list of Monte Carlo samples.
+
+Each Monte Carlo sample is a probe ray: its BRDF modulation is deferred to the shading stage, so the raw signal $bold(x)_i = hat(bold(d))_i dot L_i$ encodes the material-independent incident radiance $L_i$ arriving from direction $hat(bold(d))_i$. This probe-based architecture ensures the ALICE encoding captures the full incident light field regardless of surface material (diffuse, metallic, or translucent).
 
 #text(size: 10pt, fill: luma(100))[
   *Design rationale:* the choice of state space $cal(C)$ is not an arbitrary stipulation, but a natural consequence jointly determined by the signal structure and probability theory (see the "Probabilistic Origin of the Cone Constraint" section for details).
@@ -405,6 +407,10 @@ $
 
 #image("./assets/image.png")
 
+#text(size: 10pt, fill: luma(100))[
+  *Normalization note:* the above reconstruction formula outputs irradiance values under the ALICE convention. Because single-sample probe encoding does not incorporate the MC integrator's sampling PDF factor (for cosine-weighted sampling $p(omega) = cos theta / pi$, each sample represents a solid angle of $pi / (N cos theta)$), the isotropic limit yields $E_"ALICE" = omega / 4$ versus the physical irradiance $E_"physical" = pi bar(L)$ — a calibration ratio of $4pi$. In the full rendering pipeline this constant factor is absorbed by tone mapping and exposure control; if physical-unit alignment with the specular reflection channel is desired, the calibration coefficient should be applied at the compositing stage.
+]
+
 == Irradiance Reconstruction — HLSL Implementation
 
 The above algebraically restructured formula contains only basic arithmetic instructions, avoiding expensive transcendental functions (such as $sin, cos$) or numerical integration overhead, making it highly suitable for modern GPU rendering architectures. The following is the core logic executed in the actual Shader:
@@ -520,7 +526,8 @@ Pass 100 (Temporal Accumulation) uses motion vectors to reproject the history fr
 
 #text(size: 12pt, fill: rgb("#1A5276"))[
   *Engineering Characteristics of the ALICE Denoiser:* \
-  A notable engineering advantage of the ALICE denoiser is that — *it achieves excellent joint denoising results without needing to separate Direct Illumination (DI) from Global Illumination (GI)*. This directly simplifies the pipeline architecture: no need for independent DI and GI passes, no need to maintain two separate sets of temporal history and variance estimates — a single ALICE encoding pipeline simultaneously denoises DI's high-frequency contact shadows and GI's low-frequency diffuse ambient lighting. \
+  Within the *diffuse channel*, the ALICE denoiser achieves excellent joint denoising results without needing to separate Direct Illumination (DI) from Global Illumination (GI) — the ALICE probe encodes a material-independent incident light field, where DI (sun contribution) and GI (indirect bounces) accumulate naturally in the augmented space. Specular reflection and refraction channels use independent denoising pipelines (reflectIlluminationBuffer / refractIlluminationBuffer), architecturally decoupled from ALICE. \
+  For purely diffuse or opaque dielectric materials, the diffuse channel handles the vast majority of the denoising load; for pure metals and other materials with negligible diffuse response, the specular reflection channel operates independently. \
   Actual performance: *contact shadows converge to clearly recognizable quality within 5—10 frames* (approximately 80—170 ms at 60 fps), making the convergence process virtually imperceptible to human vision.
 ]
 

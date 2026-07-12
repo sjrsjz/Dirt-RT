@@ -418,16 +418,79 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             // making each buffer an unbiased per-lobe estimate (E = L_lobe) every frame.
             // P_lobe=0 → weight=0 → path ends cleanly.
             #if defined(FIRST_LOBE_REFLECTION)
-            // [Reflection: P_spec GGX (F0-based) + dielectric Fresnel reflection (TIR, from P_refr·F)]
-            // Both mechanisms → reflect buffer.  G2 only on P_spec (original BRDF convention).
             current_type = REFLECTION;
-            next_rd = reflect(rd_i, microNormal);
-            if (dot(next_rd, normal) > 0.0) {
-                float IoN = abs(dot(rd_i, normal));
-                float OoN = dot(next_rd, normal);
-                bsdf_weight = P_spec * specLobeWeight * GGX_G2(IoN, OoN, surface.R.x) // F0 GGX
-                        + P_refr * refrLobeWeight * F; // dielectric Fresnel
+
+            // ---- ALICE 引导概率 (clamp!) ----
+            float reflGuideProb = 0.0;
+            float reflKappa = 0.0;
+            vec3 reflAxis = macroNormal;
+
+            {
+                vec2 prev_coord = reproject(ro_o).xy;
+                bool validPrev = all(greaterThanEqual(prev_coord, vec2(0.0))) &&
+                        all(lessThanEqual(prev_coord, vec2(1.0)));
+                if (validPrev) {
+                    DiffuseIlluminationWriteData data0 =
+                        samplePrevDiffuse(prev_coord * resolution_global);
+                    vec3 x = data0.data_swap.aliceY.xyz;
+                    float omega = data0.data_swap.aliceY.w;
+                    float length_x = max(length(x), 1e-20);
+                    omega = max(omega, length_x);
+                    reflAxis = x / length_x;
+                    float rho = clamp(length_x / omega, 0.0, 1.0);
+                    reflKappa = alice_kappa(length_x, omega);
+                    reflGuideProb = length_x > 1e-8
+                        ? PATH_GUIDING_SPECULAR_STRENGTH * surface.R.x * rho : 0.0;
+                }
             }
+
+            // ---- 采样：NDF 或 ALICE ----
+            vec3 reflGGX_wi = reflect(rd_i, microNormal); // microNormal 由 GGXNormal() 生成
+            bool useReflGuide = surface.R.x > 0.01 && reflGuideProb > 0.0 && getRandom() < reflGuideProb;
+
+            if (useReflGuide) {
+                next_rd = sample_alice_guiding(reflAxis, reflKappa, vec2(getRandom(), getRandom()));
+            } else {
+                next_rd = reflGGX_wi;
+            }
+
+            // ---- 统一 evaluate BRDF 并除以 mixture PDF ----
+            vec3 wo = -rd_i;
+            vec3 wi = next_rd;
+
+            float NoV = dot(normal, wo);
+            float NoL = dot(normal, wi);
+
+            if (NoV > 1e-6 && NoL > 1e-6) {
+                vec3 Hsum = wo + wi;
+                float Hlen2 = dot(Hsum, Hsum);
+
+                if (Hlen2 > 1e-12) {
+                    vec3 H = Hsum * inversesqrt(Hlen2);
+
+                    float NoH = dot(normal, H);
+                    float VoH = dot(wo, H);
+
+                    if (NoH > 1e-6 && VoH > 1e-6) {
+                        float rough = max(surface.R.x, 1e-4);
+
+                        float D_NoH = GGXpdf(NoH, 0.0, rough);
+                        float D = D_NoH / NoH;
+                        float G2 = GGX_G2_standard(NoV, NoL, rough);
+                        vec3 Fh = reflectanceColor(surface.Cs, VoH).rgb;
+
+                        // 标准 microfacet BRDF
+                        vec3 fSpec = Fh * surface.S.x * D * G2 / max(4.0 * NoV * NoL, 1e-8);
+
+                        float pdfNDF = GGX_ndf_pdf(wo, wi, normal, rough);
+                        float pdfAlice = alice_guiding_pdf(wi, reflAxis, reflKappa);
+                        float pdfMix = (1.0 - reflGuideProb) * pdfNDF + reflGuideProb * pdfAlice;
+
+                        bsdf_weight = (pdfMix > 1e-8) ? (fSpec * NoL / pdfMix) : vec3(0.0);
+                    }
+                }
+            }
+
             #elif defined(FIRST_LOBE_REFRACTION)
             // [Refraction: transmission only, no Fresnel sub-event]
             // TIR (total internal reflection) → bsdf_weight=0 — that energy is covered by the
@@ -477,7 +540,11 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             float pdfAlice = guideProb > 0.0 ? alice_guiding_pdf(next_rd, axis, kappa) : 0.0;
             float pdfMix = (1.0 - guideProb) * pdfCos + guideProb * pdfAlice;
             guideWeight = (NoL > 0.0 && pdfMix > 1e-8) ? (pdfCos / pdfMix) : 0.0;
-            bsdf_weight = P_diff * diffLobeWeight * guideWeight;
+            // ALICE probe: first-bounce throughput = MIS weight only (no BRDF).
+            // The diffuse BSDF is deferred to the composite pass so the ALICE
+            // encoding captures the material-independent incident light field.
+            // guideWeight = pdfCos / pdfMix already provides unbiased MIS weighting.
+            bsdf_weight = vec3(guideWeight);
             #endif
         } else {
             // --- Secondary bounces: preserve original stochastic mixture (with /P_lobe weights) ---
@@ -544,7 +611,14 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                 );
 
             if (depth == 0) {
+                #if defined(FIRST_LOBE_DIFFUSE)
+                // sampleSunlight returns Cd * Li * dω_sun; strip Cd so the ALICE
+                // probe encodes pure incident irradiance.  The full diffuse BRDF
+                // (nonSpecColor × diffuseSelector) is applied in fog.glsl.
+                L_direct_0 = sunL / max(surface.Cd, vec3(1e-3));
+                #else
                 L_direct_0 = sunL;
+                #endif
             } else {
                 vec3 nee_contrib = throughput * sunL;
                 if (depth >= 2) {
@@ -584,7 +658,12 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                 vec2 AB = vec2(-1.04, 1.04) * a004 + r.zw;
                 first_specularAlbedo = max(F0 * AB.x + vec3(AB.y * surface.S.x), vec3(1e-5));
             }
-            first_diffuseAlbedo = surface.Cd;
+            // Deferred diffuse BRDF for composite (fog.glsl):
+            //   nonSpecColor × diffuseSelector = Cd × (1−rC.rgb×S.x) × (1−S.y)
+            // The first bounce no longer carries BRDF in throughput; the full
+            // diffuse reflectance factor is applied at composite time instead.
+            // This keeps the ALICE encoding material-independent.
+            first_diffuseAlbedo = nonSpecColor_stable * (1.0 - clamp(surface.S.y, 0.0, 1.0));
             first_transmissionAlbedo = nonSpecColor_stable * transmissionSelector;
             first_roughness = surface.R.x;
             first_rd_o = next_rd;
@@ -660,9 +739,18 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         diffuseIlluminationBuffer.data[idx].rt_aliceY_zw = 0.0;
         diffuseIlluminationBuffer.data[idx].rt_CoCg = 0.0;
         if (!hit_sky_first && first_t > -0.5) {
-            vec3 inv_albedo = 1.0 / max(first_diffuseAlbedo, vec3(1e-3));
-            AliceEncoding indAlice = irradiance_to_alice(L_indirect * inv_albedo, first_rd_o);
-            AliceEncoding dirAlice = irradiance_to_alice(L_direct_0 * inv_albedo, -lightDir);
+            // L_indirect: first-bounce throughput = guideWeight only (no BRDF).
+            //   Pure incident radiance — secondary bounces carry their surface
+            //   BRDFs, which is physically correct for interreflection colouring.
+            //
+            // L_direct_0: already stripped of Cd at the NEE site (depth==0,
+            //   FIRST_LOBE_DIFFUSE).  Pure incident irradiance from the sun.
+            //
+            // Both are encoded directly — no albedo demodulation needed.
+            // The full diffuse BRDF (nonSpecColor × diffuseSelector) is baked
+            // into denoiseBuffer.diffuseAlbedo and applied in fog.glsl.
+            AliceEncoding indAlice = irradiance_to_alice(L_indirect, first_rd_o);
+            AliceEncoding dirAlice = irradiance_to_alice(L_direct_0, -lightDir);
             indAlice.CoCg += dirAlice.CoCg;
             indAlice.aliceY += dirAlice.aliceY;
             diffuseIlluminationBuffer.data[idx].rt_aliceY_xy = uintBitsToFloat(packHalf2x16(indAlice.aliceY.xy));

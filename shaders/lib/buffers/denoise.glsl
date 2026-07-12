@@ -104,6 +104,14 @@ struct AliceEncoding {
 // 编解码与投影核心接口
 // ---------------------------------------------------------------------------
 
+// 将 RGB 入射辐射率 (incident radiance) 编码为 AliceEncoding。
+// 输入约定 (better-denoiser-dev):
+//   color — 入射辐射率 RGB, 不含任何 BSDF 调制 (BRDF 已延迟至 composite)
+//   dir   — 射线入射方向 (归一化)
+// 单样本编码规则:
+//   aliceY = (dir * Y, Y)  锥边界态 (ω = |v|, I=0)
+//   CoCg   = (Co, Cg)      色度分量, 独立于亮度进行降噪
+//   其中 Y = luminance(color), (Co, Cg) = RGB→YCoCg 色度投影
 AliceEncoding irradiance_to_alice(vec3 color, vec3 dir)
 {
     AliceEncoding result;
@@ -114,7 +122,7 @@ AliceEncoding irradiance_to_alice(vec3 color, vec3 dir)
     float Cg = -0.25 * color.r + 0.5 * color.g - 0.25 * color.b;
 
     result.CoCg = vec2(Co, Cg);
-    // ALICE 编码: v = dir*Y, ω = |v| + 0 = Y (单样本 I=0)
+    // ALICE 编码: v = dir*Y, ω = Y (单样本 I=0, 锥边界态)
     result.aliceY = vec4(dir * Y, Y);
 
     return result;

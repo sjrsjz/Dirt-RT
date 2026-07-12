@@ -104,7 +104,7 @@ void main() {
 
         #elif DEBUG_VIEW == 5
         // Light field: ALICE normalized dominant direction × energy
-        fragColor.xyz = 2.0 * abs(tmp.data_swap.aliceY.xyz / max(tmp.data_swap.aliceY.w, 1e-6));
+        fragColor.xyz = 2.0 * abs(tmp.data_swap.aliceY.xyz / max(max(tmp.data_swap.aliceY.w, length(tmp.data_swap.aliceY.xyz)), 1e-6));
 
         #elif DEBUG_VIEW == 6
         // Normals: world-space normal as RGB

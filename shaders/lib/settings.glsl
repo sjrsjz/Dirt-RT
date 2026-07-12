@@ -3,7 +3,7 @@
 
 #define RAY_BOUNCES 5 // Max ray bounces before termination. Higher = better image quality, lower FPS. [2 3 4 5 6 7]
 #define REFRACTIVE_INDEX 1.331 // Water Index of Refraction (IOR). Affects caustics, underwater distortion and specular. [1.30 1.31 1.32 1.33 1.34 1.35 1.36 1.37 1.38 1.39 1.40 1.41 1.42 1.43 1.44 1.45 1.46 1.47 1.48 1.49 1.50]
-#define ACCUMULATION_LENGTH 8 // Frames to accumulate via reprojection. Higher = smoother image, more ghosting on moving lights/camera. [1 2 3 4 5 6 7 8 9 10 20 50 100]
+#define ACCUMULATION_LENGTH 20 // Frames to accumulate via reprojection. Higher = smoother image, more ghosting on moving lights/camera. [1 2 3 4 5 6 7 8 9 10 20 50 100]
 #define MAX_WETNESS 0.4 // Maximum surface wetness from rain or water. Controls specular reflection on wet blocks. [0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
 #define SHARP_VOLUMETRIC_LIGHT 1 // Volumetric light quality. ON = sharp analytic falloff. OFF = realistic soft scattering. [0 1]
 #define VOLUMETRIC_LIGHT_SAMPLES 8 // Samples per volumetric light ray. Higher = less noise, lower FPS. [1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 18 20 22 24 28 32]
@@ -52,6 +52,7 @@
 
 // -- Path guiding --
 #define PATH_GUIDING_STRENGTH 0.975 // Mix probability weight for ALICE-guided importance sampling vs cosine-weighted sampling. Higher = more samples steered toward the prior, lower = more uniform. [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.925 0.95 0.975 0.99 0.999]
+#define PATH_GUIDING_SPECULAR_STRENGTH 0.85 // Base mix probability for ALICE-guided specular reflection. Final probability = STRENGTH × roughness × rho, so smooth surfaces (low roughness) or isotropic fields (low rho) naturally suppress guiding. Guiding is only active when both roughness and rho are meaningful. [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.95 0.99]
 
 // -- Debug view --
 #define DEBUG_VIEW 0 // Debug output mode. 0=Normal 1=Diffuse 2=Refract 3=Reflect 4=WhiteModel 5=LightField 6=Normals 7=Absorption 8=ReflDir 9=ReflDist 10=SpecAlbedo 11=Roughness 12=ReflRaw [0 1 2 3 4 5 6 7 8 9 10 11 12]

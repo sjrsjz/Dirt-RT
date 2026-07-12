@@ -139,14 +139,27 @@ vec4 reflectanceColor(vec3 c, float cosA) {
     return vec4(F0, luma(F0));
 }
 
-float GGX_Lamda(float VoN, float a) {
-    return (-1 + sqrt(1 + a * a * (1. / (VoN * VoN) - 1))) * 0.5;
+float GGX_Lamda(float NoX, float a) {
+    NoX = max(abs(NoX), 1e-6);
+    float a2 = a * a;
+    return 0.5 * (sqrt(1.0 + a2 * (1.0 / (NoX * NoX) - 1.0)) - 1.0);
 }
+
 
 float GGX_G2(float VoN, float LoN, float a) {
     float L1 = GGX_Lamda(VoN, a);
     float L2 = GGX_Lamda(LoN, a);
-    return clamp((1 + L1) / (1.001 + L2 + L1), 0, 1);
+    return clamp((1 + L1) / max(1.0 + L2 + L1, 1e-5), 0, 1);
+}
+
+float GGX_G2_standard(float NoV, float NoL, float a) {
+    NoV = max(NoV, 1e-6);
+    NoL = max(NoL, 1e-6);
+
+    float lambdaV = GGX_Lamda(NoV, a);
+    float lambdaL = GGX_Lamda(NoL, a);
+
+    return 1.0 / (1.0 + lambdaV + lambdaL);
 }
 
 vec3 GGXNormal(vec3 normal, float roughness, vec3 pos) {
@@ -181,6 +194,33 @@ float GGXpdf(float costheta, float fai, float a) {
     float a2 = a * a;
     float b = 1 + (a2 - 1) * costheta * costheta;
     return a2 * costheta / (1e-2 + PI * b * b);
+}
+
+// NDF-sampled reflection direction PDF for GGX.
+// Assumes GGXpdf(NoH, ...) returns D(H) * NoH.
+float GGX_ndf_pdf(vec3 wo, vec3 wi, vec3 n, float roughness) {
+    float NoV = dot(n, wo);
+    float NoL = dot(n, wi);
+
+    if (NoV <= 1e-6 || NoL <= 1e-6)
+        return 0.0;
+
+    vec3 Hsum = wo + wi;
+    float Hlen2 = dot(Hsum, Hsum);
+    if (Hlen2 <= 1e-12)
+        return 0.0;
+
+    vec3 H = Hsum * inversesqrt(Hlen2);
+
+    float NoH = dot(n, H);
+    float VoH = dot(wo, H);
+    if (NoH <= 1e-6 || VoH <= 1e-6)
+        return 0.0;
+
+    float D_NoH = GGXpdf(NoH, 0.0, roughness);
+
+    // p(wi) = D(H) * NoH / (4 * VoH)
+    return D_NoH / (4.0 * VoH);
 }
 
 float mixp(float F, float S) {
