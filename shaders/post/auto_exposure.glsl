@@ -7,6 +7,7 @@ const ivec3 workGroups = ivec3(1, 1, 1);
 #include "/lib/common.glsl"
 #include "/lib/settings.glsl"
 #include "/lib/constants.glsl"
+#include "/lib/post_processing/tonemap.glsl"
 
 uniform sampler2D colortex1;
 uniform int frameCounter;
@@ -18,11 +19,29 @@ uniform float viewHeight;
 
 const int NUM_SAMPLES = 128;
 
+// 使用牛顿迭代从期望的线性亮度计算需要输入的线性亮度基准
+float solveBaseline(float expected) {
+    float x = expected; // 初始猜测
+    for (int i = 0; i < 5; i++) {
+        float f_x = TonyMcMapface_LumaApprox(x) - expected;
+        float f_prime_x = (TonyMcMapface_LumaApprox(x + 1e-5) - TonyMcMapface_LumaApprox(x - 1e-5)) / (2e-5);
+        x = x - f_x / max(f_prime_x, 1e-6); // 避免除以零
+    }
+    return max(x, 0.0); // 确保非负
+}
+
+// 将用户自定义的 sRGB 纸白亮度转换为线性空间
+float convertPaperWhiteToLinear(float sRGB_paperWhite) {
+    if (sRGB_paperWhite <= 0.04045) {
+        return sRGB_paperWhite / 12.92;
+    } else {
+        return pow((sRGB_paperWhite + 0.055) / 1.055, 2.4);
+    }
+}
 
 float calculateExposure(float avgLuminance) {
-    // 1. 针对标准 100 nits 屏幕的基础曝光值
-    float baseExposure = 0.249 / max(avgLuminance, 1e-20);    
-    // 指数 0.7 代表了 Stevens' Power Law 在暗/暗过渡环境下的感知折中
+    float baseline = solveBaseline(convertPaperWhiteToLinear(DISPLAY_PAPER_WHITE_LUMINANCE));
+    float baseExposure = baseline / max(avgLuminance, 1e-20);    
     float exposureCorrection = pow(100.0 / DISPLAY_MAX_LUMINANCE, 0.7);
     return baseExposure * exposureCorrection;
 }

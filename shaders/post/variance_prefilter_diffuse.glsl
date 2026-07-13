@@ -68,7 +68,7 @@ float computeRawVariance(uint idx, out float outOmega) {
     mediump vec2 aliceY_xy = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_xy));
     mediump vec2 aliceY_zw = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_zw));
 
-    vec4 aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-10000), vec4(10000));
+    vec4 aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-65504), vec4(65504));
     float weight = e.swap_weight;
 
     if (any(isnan(aliceY)) || any(isinf(aliceY))) aliceY = vec4(0.0);

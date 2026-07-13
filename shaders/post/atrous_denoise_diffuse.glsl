@@ -83,7 +83,7 @@ void main() {
     // 天空像素跳过 (方差被 swap2 复用作天空 mask)
     if (center_var_est < 0.0) return;
 
-    center_var_est = max(center_var_est, 1e-8);
+    center_var_est = max(center_var_est, 4e-9);
 
     // ---- 预计算中心像素的统计特征 -----------------------------------------
     // 中心 ALICE 编码: aliceY = vec4(v, ω)
@@ -119,7 +119,7 @@ void main() {
 
     // ---- Poisson 圆盘采样 (NRD, STEP>=4) -----------------------------------
     // 旋转器 + 高斯核权重, 替代 3×3 网格 → 更均匀的圆盘覆盖
-    float theta = 2.0 * PI * rand(vec2(pix + R0 * 0.6180339887498949));
+    float theta = 2.0 * PI * fract(rand(vec2(pix)) + R0 * 0.6180339887498949);
     mat2 rotM = mat2(cos(theta), -sin(theta), sin(theta), cos(theta)) * R0 * 1.75;
 
     for (int k = 0; k < POISSON_N; k++) {

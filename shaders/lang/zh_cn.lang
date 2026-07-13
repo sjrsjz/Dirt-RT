@@ -2,6 +2,7 @@ screen.RAY_TRACING = 光线追踪
 option.ACCUMULATION_LENGTH = 累积帧数
 option.RAY_BOUNCES = 光线弹射次数
 option.PATH_GUIDING_STRENGTH = 路径引导强度
+option.PATH_GUIDING_SPECULAR_STRENGTH = 镜面引导强度
 
 screen.MATERIAL = 材质
 option.REFRACTIVE_INDEX = 水折射率
@@ -15,6 +16,7 @@ option.VOLUMETRIC_LIGHT_SAMPLES = 体积光采样数
 
 screen.EXPOSURE_DISPLAY = 曝光与显示
 option.DISPLAY_MAX_LUMINANCE = 显示器峰值亮度
+option.DISPLAY_PAPER_WHITE_LUMINANCE = sRGB 纸白亮度
 option.EXPOSURE_CURVE_K = 曝光曲线
 
 screen.BLOOM = 泛光
@@ -65,6 +67,12 @@ value.DEBUG_VIEW.9 = 反射虚拟距离
 value.DEBUG_VIEW.10 = 镜面反照率
 value.DEBUG_VIEW.11 = 粗糙度
 value.DEBUG_VIEW.12 = 反射入射光
+value.DEBUG_VIEW.13 = 漫反射历史权重
+value.DEBUG_VIEW.14 = 反射历史权重
+value.DEBUG_VIEW.15 = 折射历史权重
+value.DEBUG_VIEW.16 = 直接光照
+value.DEBUG_VIEW.17 = 自发光
+value.DEBUG_VIEW.18 = 漫反射反照率
 
 # -- ReSTIR --
 option.useReSTIR = 使用 ReSTIR

@@ -86,6 +86,16 @@ vec3 TonyMcMapface_Tiny(vec3 hdrColor) {
     return luma_rein * scale;
 }
 
+float TonyMcMapface_LumaApprox(float x) {
+    if (x <= 1e-20) return 0.0;
+    float reinhard = x / (1.0 + x);
+    float lnx = log(x);
+    float diff = lnx - 2.901905;
+    float exponent = -(diff * diff) / 5.355152;
+    float residual = (0.185418 / x) * exp(exponent);
+    return min(reinhard + residual, 1.0);
+}
+
 vec3 linear_to_srgb(vec3 linear_color) {
     // 限制在 0.0 - 1.0 范围内
     vec3 clapped = clamp(linear_color, 0.0, 1.0);

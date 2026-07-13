@@ -1,22 +1,7 @@
 #version 430 compatibility
 
 // ===========================================================================
-// Pass 100 CS: 漫反射时域累积 (Diffuse Temporal Accumulation)
-// ===========================================================================
-//
-// 本版本引入 ALICE 时域标量方差：
-//   variance = tr(Cov(X))
-//
-// 约定:
-//   diffuseIlluminationData.weight = temporal effective weight / N_eff
-//   diffuseIlluminationData.variance = temporal raw trace variance = tr(Cov(X))
-//   estimator variance = variance / max(weight, 1.0)
-//
-// 注意:
-//   这里维护的是 raw variance，不是已经除以 N 的 estimator variance。
-//
-// 统计量直接写入 diffuseIlluminationData，随 WriteDiffuse 一并回写，
-// 不再需要 extInfoBuffer 间接缓冲区。
+// Pass 100 CS: 漫反射时域累积 (当前像素梯形 → 历史空间厚梯形版)
 // ===========================================================================
 
 layout(local_size_x = 16, local_size_y = 16) in;
@@ -27,85 +12,72 @@ layout(local_size_x = 16, local_size_y = 16) in;
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/denoise.glsl"
-
 #include "/lib/lighting/alice.glsl"
 
-// ---------------------------------------------------------------------------
-// Uniform 输入
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// Uniform 输入 & 宏定义
+// ===========================================================================
 
 uniform vec2 resolution;
 
-// ---------------------------------------------------------------------------
-// 可调参数
-// ---------------------------------------------------------------------------
-
-#define NORMAL_PARAM TEMPORAL_NORMAL_PARAM
-#define POSITION_PARAM TEMPORAL_POSITION_PARAM
-
-// 历史最大有效样本数。
 #ifndef TEMPORAL_MAX_HISTORY
 #define TEMPORAL_MAX_HISTORY 32.0
 #endif
 
-// 重投影置信度幂。
-#ifndef TEMPORAL_CONFIDENCE_POWER
-#define TEMPORAL_CONFIDENCE_POWER 1.0
-#endif
-
-// 历史有效权重低于该值时重置
 #ifndef TEMPORAL_HISTORY_MIN_WEIGHT
 #define TEMPORAL_HISTORY_MIN_WEIGHT 1e-4
 #endif
 
-// ---------------------------------------------------------------------------
-// AABB 钳制参数 (Axis-Aligned Bounding Box Clamping)
-// 在 6D ALICE 嵌入空间 (v.xyz + omega + CoCg) 中线性缩放钳制，防止拖影
-// 多通道统一等比缩放: 保持 v/omega 比例 → 无方向伪影
-// ---------------------------------------------------------------------------
+#ifndef TEMPORAL_DEPTH_FOOTPRINT_SCALE
+#define TEMPORAL_DEPTH_FOOTPRINT_SCALE 1.0
+#endif
 
-// 启用 AABB 钳制 (设为 0 则回退到原始 EMA 混合)
+#ifndef TEMPORAL_GEOMETRY_EPSILON
+#define TEMPORAL_GEOMETRY_EPSILON 1e-5
+#endif
+
+#ifndef TEMPORAL_REQUIRE_SAME_NORMAL_HEMISPHERE
+#define TEMPORAL_REQUIRE_SAME_NORMAL_HEMISPHERE 1
+#endif
+
+#ifndef TEMPORAL_USE_KERNEL_COVERAGE
+#define TEMPORAL_USE_KERNEL_COVERAGE 1
+#endif
+
 #ifndef TEMPORAL_AABB_ENABLE
 #define TEMPORAL_AABB_ENABLE 1
 #endif
 
-// AABB 邻域半径: 1 = 3×3, 2 = 5×5
 #ifndef TEMPORAL_AABB_NEIGHBOR_RADIUS
 #define TEMPORAL_AABB_NEIGHBOR_RADIUS 2
 #endif
 
-// AABB 扩展系数: 将邻域 min/max 范围按比例放大
-// 由于仅 8 个 1 SPP 邻域样本，min/max 严重低估真实范围，需要较大值补偿
 #ifndef TEMPORAL_AABB_EXPAND
 #define TEMPORAL_AABB_EXPAND 2.0
 #endif
 
-// AABB 方差引导扩展系数: 乘以 ALICE 理论 σ (sqrt(Var_scalar))
-// 3.0 ≈ 3-sigma，极度宽容，确保统计波动不触发钳制
 #ifndef TEMPORAL_AABB_SIGMA_SCALE
 #define TEMPORAL_AABB_SIGMA_SCALE 3.0
 #endif
 
-// AABB 最小绝对范围 — 暗区保护的最后防线
-// 即使 extent≈0 且 σ≈0，也保证这么多绝对扩展，防止暗部信号被钳死
 #ifndef TEMPORAL_AABB_MIN_EXTENT
 #define TEMPORAL_AABB_MIN_EXTENT 1.0
 #endif
 
-// AABB 全局缩放: 觉得整体偏激进/偏保守时优先调此项
 #ifndef TEMPORAL_AABB_BOX_SCALE
 #define TEMPORAL_AABB_BOX_SCALE 1.0
 #endif
 
-// AABB 有效邻域像素最低数量，低于此值则跳过钳制
 #ifndef TEMPORAL_AABB_MIN_VALID_NEIGHBORS
 #define TEMPORAL_AABB_MIN_VALID_NEIGHBORS 2
 #endif
 
-// ---------------------------------------------------------------------------
-// AABB 共享内存 Tile — cooperative load 消除邻域 SSBO 冗余读取
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// 共享内存 AABB tile
+// ===========================================================================
+
 #define TILE_SIZE 16u
+
 #if TEMPORAL_AABB_ENABLE
 #define AABB_HALO uint(TEMPORAL_AABB_NEIGHBOR_RADIUS)
 #define AABB_SM_W (TILE_SIZE + 2u * AABB_HALO)
@@ -116,335 +88,291 @@ struct AABBTileSample {
     vec4 aliceY;
     vec2 CoCg;
 };
+
 shared AABBTileSample sm_aabbTile[AABB_SM_H][AABB_SM_W];
 #endif
 
-// ---------------------------------------------------------------------------
-// 全局变量
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// 局部数据结构 & 全局变量
+// ===========================================================================
+
+struct TemporalFootprint {
+    vec3 origin;
+    vec3 normal;
+    vec3 tangent;
+    vec3 bitangent;
+    vec2 plane0, plane1, plane2, plane3;
+    float depthHalfExtent;
+    float planeEdgeEpsilon;
+};
 
 vec3 prevScreenPos;
+vec3 cameraDelta;
 float info_distance;
 uint idx;
 
 DiffuseIlluminationWriteData current_data;
 diffuseIlluminationData out_data;
-
 float output_weight = 0.0;
 
 // ===========================================================================
-// 工具函数
+// 基础数学与几何工具
 // ===========================================================================
 
-bool notInRange(vec2 p) {
-    return clamp(p, vec2(0.0), vec2(1.0)) != p;
+float cross2(vec2 a, vec2 b) {
+    return a.x * b.y - a.y * b.x;
 }
 
-bool notInRange3(vec3 p) {
-    return
-        p.x < 0.0 || p.x > 1.0 ||
-        p.y < 0.0 || p.y > 1.0 ||
-        p.z < 0.0 || p.z > 1.0;
+vec3 intersectCorner(vec2 ndc, mat4 invVP, vec3 planeO, vec3 planeN, out bool valid) {
+    vec4 nearH = invVP * vec4(ndc, -1.0, 1.0);
+    vec4 farH = invVP * vec4(ndc, 1.0, 1.0);
+    vec3 ro = nearH.xyz / nearH.w;
+    vec3 rd = farH.xyz / farH.w - ro;
+    float denom = dot(rd, planeN);
+    valid = abs(denom) > 1e-6;
+    return ro + rd * (dot(planeO - ro, planeN) / denom);
 }
 
-float sanitizeFloatNonNegative(float x) {
-    // NaN 情况下 x >= 0.0 为 false
-    if (!(x >= 0.0)) return 0.0;
-    if (x > 1e20) return 0.0;
-    return x;
-}
+bool buildTemporalFootprint(uvec2 pix, vec3 currentPos, vec3 geometricNormal, vec3 camDelta, out TemporalFootprint fp) {
+    float nLenSq = dot(geometricNormal, geometricNormal);
+    if (nLenSq < 1e-8) return false;
 
-float sanitizeWeight(float w) {
-    w = sanitizeFloatNonNegative(w);
-    return min(w, TEMPORAL_MAX_HISTORY);
-}
+    fp.normal = geometricNormal * inversesqrt(nLenSq);
 
-// ---------------------------------------------------------------------------
-// SVGF 风格的边缘停止权重函数
-// ---------------------------------------------------------------------------
-
-float svgfNormalWeight(vec3 centerNormal, vec3 normal, float distance) {
-    return pow(max(dot(centerNormal, normal), 0.0), NORMAL_PARAM);
-}
-
-float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float distance) {
-    return exp2(-POSITION_PARAM * LOG2_E * abs(dot(pixelPos - centerPos, normal)));
-}
-
-// ---------------------------------------------------------------------------
-// 重投影
-// ---------------------------------------------------------------------------
-
-vec3 cameraDelta;
-
-// 重投影: 全光线追踪推导矩阵 (单源一致, 零 Iris 混合)
-vec3 reproject(vec3 pos_rel) {
-    vec3 prevPlayerPos = pos_rel + cameraDelta;
-    vec4 clipPos = rtPrevProjection * rtPrevModelView * vec4(prevPlayerPos, 1.0);
-    vec3 ndc = clipPos.xyz / clipPos.w;
-    return ndc * 0.5 + 0.5;
-}
-
-// ===========================================================================
-// AABB 钳制辅助函数 (6D ALICE 嵌入空间: aliceY.xyzw + CoCg)
-//
-// 策略: 计算完整 6D AABB, 取所有越界通道中最保守的缩放因子,
-//       统一等比缩放整个 aliceY + CoCg, 保持 |v|/omega 不变
-//
-// 使用共享内存 tile: cooperative load 消除邻域 SSBO 冗余读取,
-// 每像素最多 O(N²) SSBO 读 → O(1).
-// ===========================================================================
-
-#if TEMPORAL_AABB_ENABLE
-
-// 从共享内存 tile 中直接读取邻域样本, 计算 6D AABB
-void computeAABB_CS(
-                 out vec4 min_aliceY, out vec4 max_aliceY,
-                 out vec2 min_CoCg, out vec2 max_CoCg,
-                 out int validCount) {
-    uint cx = gl_LocalInvocationID.x + AABB_HALO;
-    uint cy = gl_LocalInvocationID.y + AABB_HALO;
-
-    vec4 center_aliceY = current_data.data_swap.aliceY;
-    vec2 center_CoCg = current_data.data_swap.CoCg;
-
-    min_aliceY = center_aliceY;
-    max_aliceY = center_aliceY;
-    min_CoCg = center_CoCg;
-    max_CoCg = center_CoCg;
-    validCount = 1;
-
-    vec4 sum_aliceY    = center_aliceY;
-    vec4 sum_sq_aliceY = center_aliceY * center_aliceY;
-
-    const int radius = TEMPORAL_AABB_NEIGHBOR_RADIUS;
-
-    for (int dy = -radius; dy <= radius; dy++) {
-        for (int dx = -radius; dx <= radius; dx++) {
-            if (dx == 0 && dy == 0) continue;
-
-            int sx = int(cx) + dx;
-            int sy = int(cy) + dy;
-            AABBTileSample s = sm_aabbTile[sy][sx];
-
-            if (s.dist < -0.5) continue;
-
-            min_aliceY = min(min_aliceY, s.aliceY);
-            max_aliceY = max(max_aliceY, s.aliceY);
-            min_CoCg = min(min_CoCg, s.CoCg);
-            max_CoCg = max(max_CoCg, s.CoCg);
-            sum_aliceY    += s.aliceY;
-            sum_sq_aliceY += s.aliceY * s.aliceY;
-            validCount++;
-        }
+    // Frisvad 标准正交基
+    if (fp.normal.z < -0.999999) {
+        fp.tangent = vec3(0.0, -1.0, 0.0);
+        fp.bitangent = vec3(-1.0, 0.0, 0.0);
+    } else {
+        float a = 1.0 / (1.0 + fp.normal.z);
+        float c = -fp.normal.x * fp.normal.y * a;
+        fp.tangent = vec3(1.0 - fp.normal.x * fp.normal.x * a, c, -fp.normal.x);
+        fp.bitangent = vec3(c, 1.0 - fp.normal.y * fp.normal.y * a, -fp.normal.y);
     }
 
-    // -- 扩张 --
-    vec4 extent_aliceY = max_aliceY - min_aliceY;
-    vec2 extent_CoCg = max_CoCg - min_CoCg;
+    mat4 invVP = inverse(rtProjection * rtModelView);
+    vec2 curRes = vec2(resolution);
+    vec2 uvMin = (vec2(pix) - 1.0) / curRes * 2.0 - 1.0;
+    vec2 uvMax = (vec2(pix) + 1.0) / curRes * 2.0 - 1.0;
 
-    float scalar_variance = alice_variance(center_aliceY);
-    float sigma_alice = sqrt(max(0.0, scalar_variance));
+    bool v0, v1, v2, v3;
+    fp.origin = currentPos + camDelta;
 
-    float inv_n = 1.0 / max(float(validCount), 1.0);
-    vec4 mean_aliceY = sum_aliceY * inv_n;
-    vec4 neighborhood_var = max(vec4(0.0), sum_sq_aliceY * inv_n - mean_aliceY * mean_aliceY);
-    float sigma_neighborhood = sqrt(max(0.0,
-        max(max(neighborhood_var.x, neighborhood_var.y),
-        max(neighborhood_var.z, neighborhood_var.w))));
+    vec3 w0 = intersectCorner(vec2(uvMin.x, uvMin.y), invVP, currentPos, fp.normal, v0) + camDelta;
+    vec3 w1 = intersectCorner(vec2(uvMax.x, uvMin.y), invVP, currentPos, fp.normal, v1) + camDelta;
+    vec3 w2 = intersectCorner(vec2(uvMax.x, uvMax.y), invVP, currentPos, fp.normal, v2) + camDelta;
+    vec3 w3 = intersectCorner(vec2(uvMin.x, uvMax.y), invVP, currentPos, fp.normal, v3) + camDelta;
 
-    float sigma_combined = max(sigma_alice, sigma_neighborhood);
-    float expand_sigma = sigma_combined * TEMPORAL_AABB_SIGMA_SCALE;
-    float expand_min = TEMPORAL_AABB_MIN_EXTENT;
-    float box_scale = TEMPORAL_AABB_BOX_SCALE;
+    if (!(v0 && v1 && v2 && v3)) return false;
 
-    vec4 expand_aliceY = (extent_aliceY * TEMPORAL_AABB_EXPAND + vec4(expand_sigma + expand_min)) * box_scale;
-    vec2 expand_CoCg = (extent_CoCg * TEMPORAL_AABB_EXPAND + vec2(expand_sigma * 0.5 + expand_min)) * box_scale;
+    fp.plane0 = vec2(dot(w0 - fp.origin, fp.tangent), dot(w0 - fp.origin, fp.bitangent));
+    fp.plane1 = vec2(dot(w1 - fp.origin, fp.tangent), dot(w1 - fp.origin, fp.bitangent));
+    fp.plane2 = vec2(dot(w2 - fp.origin, fp.tangent), dot(w2 - fp.origin, fp.bitangent));
+    fp.plane3 = vec2(dot(w3 - fp.origin, fp.tangent), dot(w3 - fp.origin, fp.bitangent));
 
-    min_aliceY -= expand_aliceY;
-    max_aliceY += expand_aliceY;
-    min_CoCg -= expand_CoCg;
-    max_CoCg += expand_CoCg;
+    float footprintDiameter = max(length(fp.plane2 - fp.plane0), length(fp.plane3 - fp.plane1));
+    fp.depthHalfExtent = footprintDiameter * TEMPORAL_DEPTH_FOOTPRINT_SCALE;
+    fp.planeEdgeEpsilon = TEMPORAL_GEOMETRY_EPSILON * max(footprintDiameter, 1.0);
+
+    return true;
 }
 
-#endif // TEMPORAL_AABB_ENABLE
+bool strictHistoryGeometryTest(vec3 histPos, vec3 histNormal, TemporalFootprint fp) {
+    vec3 delta = histPos - fp.origin;
+    if (abs(dot(delta, fp.normal)) > fp.depthHalfExtent) return false;
 
-// 6 通道统一线性缩放:
-//   对每个越界通道计算 scale = bound / hist,
-//   取所有通道中最小的 scale (最保守), 等比应用到全部 6 维
-//   保持 v/omega 比例不变 → 无方向伪影
-void clampHistoryToAABB(inout AliceEncoding histAlice,
-                        vec4 min_aliceY, vec4 max_aliceY,
-                        vec2 min_CoCg, vec2 max_CoCg) {
-    float scale = 1.0;
+    vec2 p = vec2(dot(delta, fp.tangent), dot(delta, fp.bitangent));
 
-    // 宏: 单通道缩放因子 (取 min 以保最保守)
-    #define CHK(v, lo, hi) \
-        { float _v = (v); if (_v > (hi)) scale = min(scale, (hi) / _v); \
-          else if (_v < (lo)) scale = min(scale, (lo) / _v); }
+    float e0 = cross2(fp.plane1 - fp.plane0, p - fp.plane0);
+    float e1 = cross2(fp.plane2 - fp.plane1, p - fp.plane1);
+    float e2 = cross2(fp.plane3 - fp.plane2, p - fp.plane2);
+    float e3 = cross2(fp.plane0 - fp.plane3, p - fp.plane3);
+    float eps = fp.planeEdgeEpsilon;
 
-    CHK(histAlice.aliceY.x, min_aliceY.x, max_aliceY.x);
-    CHK(histAlice.aliceY.y, min_aliceY.y, max_aliceY.y);
-    CHK(histAlice.aliceY.z, min_aliceY.z, max_aliceY.z);
-    CHK(histAlice.aliceY.w, min_aliceY.w, max_aliceY.w);
-    CHK(histAlice.CoCg.x, min_CoCg.x, max_CoCg.x);
-    CHK(histAlice.CoCg.y, min_CoCg.y, max_CoCg.y);
+    if (!((e0 >= -eps && e1 >= -eps && e2 >= -eps && e3 >= -eps) ||
+            (e0 <= eps && e1 <= eps && e2 <= eps && e3 <= eps))) {
+        return false;
+    }
 
-    #undef CHK
+    #if TEMPORAL_REQUIRE_SAME_NORMAL_HEMISPHERE
+    // 疑似存在一些小问题，主要是历史权重判定各向异性导致墙缝权重清零
+    if (dot(histNormal, fp.normal) < -0.015) return false;
+    #endif
 
-    // 安全钳制: 禁止反转符号, 禁止超过 2× 放大
-    scale = clamp(scale, 0.0, 2.0);
-
-    histAlice.aliceY  *= scale;
-    histAlice.CoCg *= scale;
-}
-
-// ===========================================================================
-// 3×3 最近邻几何采样 (用于重投影置信度)
-//
-// 直接从 SSBO 读取整数坐标处的历史几何数据 (pos + normal),
-// 避免双线性插值在亚像素几何抖动时引入的虚假不匹配。
-// 返回 false 表示该像素无有效几何 (天空/越界)。
-// ===========================================================================
-
-bool fetchHistoryGeometry(ivec2 p, out vec3 pos, out vec3 normal) {
-    ivec2 clamped_p = clamp(p, ivec2(0), ivec2(resolution_global) - 1);
-    uint n_idx = getIndex(uvec2(clamped_p));
-
-    if (denoiseBuffer.data[n_idx].distance < -0.5) return false;
-
-    UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[n_idx];
-    pos    = vec3(e.hist_px, e.hist_py, e.hist_pz);
-    normal = decodeNormal(e.hist_oct_n);
     return true;
 }
 
 // ===========================================================================
-// 时域累积核心逻辑 (NN 几何搜索 + AABB 钳制 + EMA 混合)
+// AABB 邻域钳制
 // ===========================================================================
 
-void MixDiffuse() {
-    const float max_history = TEMPORAL_MAX_HISTORY;
-    float curWeight = 1.0;
+#if TEMPORAL_AABB_ENABLE
+void computeAABB_CS(out vec4 minAY, out vec4 maxAY, out vec2 minCC, out vec2 maxCC, out int validCnt) {
+    int cx = int(gl_LocalInvocationID.x + AABB_HALO);
+    int cy = int(gl_LocalInvocationID.y + AABB_HALO);
 
-    // -----------------------------------------------------------------------
-    // 情况 1: 重投影失败
-    // -----------------------------------------------------------------------
-    if (notInRange3(prevScreenPos)) {
-        output_weight = curWeight;
-        out_data.data_swap = current_data.data_swap;
+    vec4 cenAY = current_data.data_swap.aliceY;
+    vec2 cenCC = current_data.data_swap.CoCg;
+
+    minAY = maxAY = cenAY;
+    minCC = maxCC = cenCC;
+    validCnt = 1;
+
+    vec4 sumAY = cenAY;
+    vec4 sumSqAY = cenAY * cenAY;
+
+    for (int dy = -TEMPORAL_AABB_NEIGHBOR_RADIUS; dy <= TEMPORAL_AABB_NEIGHBOR_RADIUS; dy++) {
+        for (int dx = -TEMPORAL_AABB_NEIGHBOR_RADIUS; dx <= TEMPORAL_AABB_NEIGHBOR_RADIUS; dx++) {
+            if (dx == 0 && dy == 0) continue;
+
+            AABBTileSample s = sm_aabbTile[cy + dy][cx + dx];
+            if (s.dist < -0.5) continue;
+
+            minAY = min(minAY, s.aliceY);
+            maxAY = max(maxAY, s.aliceY);
+            minCC = min(minCC, s.CoCg);
+            maxCC = max(maxCC, s.CoCg);
+
+            sumAY += s.aliceY;
+            sumSqAY += s.aliceY * s.aliceY;
+            validCnt++;
+        }
+    }
+
+    vec4 extAY = maxAY - minAY;
+    vec2 extCC = maxCC - minCC;
+
+    float sigmaA = sqrt(max(0.0, alice_variance(cenAY)));
+    float invN = 1.0 / float(validCnt);
+    vec4 meanAY = sumAY * invN;
+    vec4 nbVar = max(vec4(0.0), sumSqAY * invN - meanAY * meanAY);
+    float sigmaN = sqrt(max(0.0, max(max(nbVar.x, nbVar.y), max(nbVar.z, nbVar.w))));
+
+    float sigCombined = max(sigmaA, sigmaN);
+    float sigExp = sigCombined * TEMPORAL_AABB_SIGMA_SCALE;
+
+    vec4 expAY = (extAY * TEMPORAL_AABB_EXPAND + sigExp + TEMPORAL_AABB_MIN_EXTENT) * TEMPORAL_AABB_BOX_SCALE;
+    vec2 expCC = (extCC * TEMPORAL_AABB_EXPAND + sigExp * 0.5 + TEMPORAL_AABB_MIN_EXTENT) * TEMPORAL_AABB_BOX_SCALE;
+
+    minAY -= expAY;
+    maxAY += expAY;
+    minCC -= expCC;
+    maxCC += expCC;
+}
+#endif
+
+float updateAABBScale(float scale, float val, float lo, float hi) {
+    if (val > hi) return (val > 0.0 && hi >= 0.0) ? min(scale, hi / val) : 0.0;
+    if (val < lo) return (val < 0.0 && lo <= 0.0) ? min(scale, lo / val) : 0.0;
+    return scale;
+}
+
+void clampHistoryToAABB(inout AliceEncoding hist, vec4 minAY, vec4 maxAY, vec2 minCC, vec2 maxCC) {
+    float s = 1.0;
+    s = updateAABBScale(s, hist.aliceY.x, minAY.x, maxAY.x);
+    s = updateAABBScale(s, hist.aliceY.y, minAY.y, maxAY.y);
+    s = updateAABBScale(s, hist.aliceY.z, minAY.z, maxAY.z);
+    s = updateAABBScale(s, hist.aliceY.w, minAY.w, maxAY.w);
+    s = updateAABBScale(s, hist.CoCg.x, minCC.x, maxCC.x);
+    s = updateAABBScale(s, hist.CoCg.y, minCC.y, maxCC.y);
+    s = clamp(s, 0.0, 1.0);
+
+    hist.aliceY *= s;
+    hist.CoCg *= s;
+}
+
+// ===========================================================================
+// 时域累积核心
+// ===========================================================================
+
+void resetToCurrentSample() {
+    output_weight = 1.0;
+    out_data.data_swap = current_data.data_swap;
+}
+
+void MixDiffuse() {
+    if (any(lessThan(prevScreenPos, vec3(0.0))) || any(greaterThan(prevScreenPos, vec3(1.0)))) {
+        resetToCurrentSample();
         return;
     }
 
-    // -----------------------------------------------------------------------
-    // 情况 2: 2×2 双线性历史采样 + 逐样本置信度 + 距离尺度修正
-    // -----------------------------------------------------------------------
-    vec2 prevTexelcoord = prevScreenPos.xy * vec2(resolution_global);
-    ivec2 prevTexel = ivec2(floor(prevTexelcoord));
+    TemporalFootprint fp;
+    if (!buildTemporalFootprint(uvec2(gl_GlobalInvocationID.xy), current_data.pos, current_data.normal, cameraDelta, fp)) {
+        resetToCurrentSample();
+        return;
+    }
+
+    vec2 prevCoord = prevScreenPos.xy * vec2(resolution_global);
+    ivec2 prevBase = ivec2(floor(prevCoord));
+    vec2 prevFrac = fract(prevCoord);
 
     AliceEncoding accumAlice = init_alice();
-    float sumWeight = 0.0;
-    float maxTapConf = 0.0;
+    float validKernelWeight = 0.0;
     float accumHistWeight = 0.0;
 
-    for (int i = 0; i < 4; i++) {
-        ivec2 sampleTexel = prevTexel + ivec2(i & 1, i >> 1);
-        vec2 sampleCoord = vec2(sampleTexel);
+    float w[4] = {
+        (1.0 - prevFrac.x) * (1.0 - prevFrac.y),
+        prevFrac.x * (1.0 - prevFrac.y),
+        (1.0 - prevFrac.x) * prevFrac.y,
+        prevFrac.x * prevFrac.y
+        };
 
-        float bilinearWeight = (1.0 - abs(prevTexelcoord.x - sampleCoord.x))
-                             * (1.0 - abs(prevTexelcoord.y - sampleCoord.y));
+    for (int i = 0; i < 4; i++) {
+        ivec2 sampleTexel = prevBase + ivec2(i & 1, i >> 1);
+
+        if (any(lessThan(sampleTexel, ivec2(0))) || any(greaterThanEqual(sampleTexel, ivec2(resolution_global)))) continue;
 
         diffuseIlluminationData tap = fetchDiffuse(sampleTexel);
-        vec3 tapPos, tapNormal;
-        if (!fetchHistoryGeometry(sampleTexel, tapPos, tapNormal)) continue;
+        if (tap.prev_weight < TEMPORAL_HISTORY_MIN_WEIGHT) continue;
+        // 几何一致性测试
+        if (!strictHistoryGeometryTest(tap.pos, tap.normal, fp)) continue;
 
-        float tapW = sanitizeWeight(tap.prev_weight);
-        if (tapW < TEMPORAL_HISTORY_MIN_WEIGHT) continue;
+        float d1_sq = dot(tap.pos, tap.pos);
+        vec3 histPosCur = tap.pos - cameraDelta;
+        float d2_sq = dot(histPosCur, histPosCur);
 
-        // 几何权重: 历史 pos 转当前相机帧后比较
-        vec3 tapPosCur = tapPos - cameraDelta;
-        float posW = svgfPositionWeight(tapPosCur, current_data.pos,
-                                        current_data.normal, info_distance);
-        float normW = svgfNormalWeight(tapNormal, current_data.normal, info_distance);
-        float conf = posW * normW;
+        float scale = clamp(d2_sq / max(d1_sq, 1e-4), 0.0, 4.0);
+        float correctedTapW = min(tap.prev_weight * scale, float(TEMPORAL_MAX_HISTORY));
 
-        maxTapConf = max(maxTapConf, conf);
-        float w = bilinearWeight * conf + 1e-10;
-
-        // ===================================================================
-        // 基于物理尺度的时域累积有效样本数修正
-        // d1 = length(tapPos) (上一帧距离)
-        // d2 = length(tapPosCur) (当前帧距离)
-        // ===================================================================
-        float d1_sq = dot(tapPos, tapPos);
-        float d2_sq = dot(tapPosCur, tapPosCur);
-        
-        // 物理缩放因子: (d2 / d1)^2
-        float scale = d2_sq / max(d1_sq, 1e-4);
-        
-        // 工程钳制保护：
-        // 1. 防止极近处除零导致有效权重溢出
-        // 2. 限制最大放大倍数（如 4.0），防止大跨度镜头拉远时有效历史权重过度膨胀
-        scale = clamp(scale, 0.01, 4.0); 
-
-        // 应用修正后的时域历史有效权重
-        float correctedTapW = sanitizeWeight(tapW * scale);
-        // ===================================================================
-
-        accumulate_alice(accumAlice, tap.data, w);
-        sumWeight += w;
-        accumHistWeight += w * correctedTapW; // 使用修正后的 N_eff 参与均值混合
+        accumulate_alice(accumAlice, tap.data, w[i]);
+        validKernelWeight += w[i];
+        accumHistWeight += w[i] * correctedTapW;
     }
 
-    if (sumWeight < 1e-8) {
-        output_weight = curWeight;
-        out_data.data_swap = current_data.data_swap;
+    if (validKernelWeight < 1e-5) {
+        resetToCurrentSample();
         return;
     }
 
-    AliceEncoding histAlice = scale_alice(accumAlice, 1.0 / sumWeight);
-    float histWeight = accumHistWeight / max(sumWeight, 1e-6);
+    AliceEncoding histAlice = scale_alice(accumAlice, 1.0 / validKernelWeight);
+    float histWeight = accumHistWeight / validKernelWeight;
 
-    float confidence = float(info_distance > -0.5) * maxTapConf;
-    confidence = pow(clamp(confidence, 0.0, 1.0), TEMPORAL_CONFIDENCE_POWER);
+    #if TEMPORAL_USE_KERNEL_COVERAGE
+    histWeight *= clamp(validKernelWeight, 0.0, 1.0);
+    #endif
 
-    // -----------------------------------------------------------------------
-    // AABB 钳制 (omega + CoCg) → EMA 混合
-    // -----------------------------------------------------------------------
-    float Wh = histWeight * confidence;
-    if (Wh <= TEMPORAL_HISTORY_MIN_WEIGHT) {
-        output_weight = min(curWeight, max_history);
-        out_data.data_swap = current_data.data_swap;
+    histWeight = clamp(histWeight, 0.0, float(TEMPORAL_MAX_HISTORY));
+    if (histWeight <= TEMPORAL_HISTORY_MIN_WEIGHT) {
+        resetToCurrentSample();
         return;
     }
 
     #if TEMPORAL_AABB_ENABLE
-    {
-        vec4 min_aliceY, max_aliceY;
-        vec2 min_CoCg, max_CoCg;
-        int validNeighborCount;
-        computeAABB_CS(
-                    min_aliceY, max_aliceY,
-                    min_CoCg, max_CoCg,
-                    validNeighborCount);
-        if (validNeighborCount >= TEMPORAL_AABB_MIN_VALID_NEIGHBORS) {
-            clampHistoryToAABB(histAlice, min_aliceY, max_aliceY, min_CoCg, max_CoCg);
-        }
+    vec4 minAY, maxAY;
+    vec2 minCC, maxCC;
+    int validCnt;
+
+    computeAABB_CS(minAY, maxAY, minCC, maxCC, validCnt);
+    if (validCnt >= TEMPORAL_AABB_MIN_VALID_NEIGHBORS) {
+        clampHistoryToAABB(histAlice, minAY, maxAY, minCC, maxCC);
     }
     #endif
 
-    // -----------------------------------------------------------------------
-    // EMA 混合
-    // -----------------------------------------------------------------------
-    float W = Wh + curWeight;
-    float currentAlpha = curWeight / max(W, 1e-6);
-    output_weight = min(W, max_history);
+    float W = histWeight + 1.0;
+    float curAlpha = 1.0 / max(W, 1e-6);
+    output_weight = min(W, float(TEMPORAL_MAX_HISTORY));
 
-    if (currentAlpha >= 0.9999) {
-        out_data.data_swap = current_data.data_swap;
-    } else {
-        out_data.data_swap = mix_alice(histAlice, current_data.data_swap, currentAlpha);
-    }
+    out_data.data_swap = curAlpha >= 0.9999 ? current_data.data_swap : mix_alice(histAlice, current_data.data_swap, curAlpha);
 }
 
 // ===========================================================================
@@ -454,15 +382,12 @@ void MixDiffuse() {
 void main() {
     uvec2 pix = gl_GlobalInvocationID.xy;
 
-    // =========================================================================
-    // Phase 1: Cooperative load AABB tile into shared memory
-    // 所有线程必须到达 barrier — 在 OOB / sky 提前返回之前完成。
-    // =========================================================================
     #if TEMPORAL_AABB_ENABLE
     {
-        uint threadIdx = gl_LocalInvocationID.y * TILE_SIZE + gl_LocalInvocationID.x;
-        uint totalThreads = TILE_SIZE * TILE_SIZE;
-        for (uint i = threadIdx; i < AABB_SM_W * AABB_SM_H; i += totalThreads) {
+        uint tid = gl_LocalInvocationID.y * TILE_SIZE + gl_LocalInvocationID.x;
+        uint totalSamples = AABB_SM_W * AABB_SM_H;
+
+        for (uint i = tid; i < totalSamples; i += TILE_SIZE * TILE_SIZE) {
             uint row = i / AABB_SM_W;
             uint col = i % AABB_SM_W;
 
@@ -471,48 +396,37 @@ void main() {
             uint loadIdx = getIndex(uvec2(clamped));
 
             float d = denoiseBuffer.data[loadIdx].distance;
-
             AABBTileSample s;
             s.dist = d;
+
             if (d > -0.5) {
                 UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[loadIdx];
-                mediump vec2 aliceY_xy = unpackHalf2x16(floatBitsToUint(e.rt_aliceY_xy));
-                mediump vec2 aliceY_zw = unpackHalf2x16(floatBitsToUint(e.rt_aliceY_zw));
-                s.aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-10000), vec4(10000));
+                vec2 ay_xy = unpackHalf2x16(floatBitsToUint(e.rt_aliceY_xy));
+                vec2 ay_zw = unpackHalf2x16(floatBitsToUint(e.rt_aliceY_zw));
+                s.aliceY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
                 s.CoCg = unpackHalf2x16(floatBitsToUint(e.rt_CoCg));
             } else {
                 s.aliceY = vec4(0.0);
                 s.CoCg = vec2(0.0);
             }
-
             sm_aabbTile[row][col] = s;
         }
     }
-    barrier();
     memoryBarrierShared();
+    barrier();
     #endif
 
-    // =========================================================================
-    // Phase 2: 逐像素时域累积
-    // =========================================================================
     if (any(greaterThanEqual(pix, uvec2(resolution)))) return;
 
     idx = getIndex(pix);
-
-
-    // -----------------------------------------------------------------------
-    // 读取当前像素几何与光照
-    // -----------------------------------------------------------------------
     info_distance = denoiseBuffer.data[idx].distance;
     current_data = loadDiffuseInput(idx);
 
-    // 默认输出初始化
     out_data.data_swap = current_data.data_swap;
     out_data.data = init_alice();
     out_data.normal = current_data.normal;
     out_data.normal2 = current_data.normal2;
     out_data.pos = current_data.pos;
-
     output_weight = 1.0;
 
     if (info_distance < -0.5) {
@@ -521,15 +435,11 @@ void main() {
         return;
     }
 
-    // -----------------------------------------------------------------------
-    // 重投影到上一帧
-    // -----------------------------------------------------------------------
     cameraDelta = camPos - prevRaytracingCamPos;
-    prevScreenPos = reproject(current_data.pos);
 
-    // -----------------------------------------------------------------------
-    // 执行时域累积
-    // -----------------------------------------------------------------------
+    vec4 clipPos = rtPrevProjection * rtPrevModelView * vec4(current_data.pos + cameraDelta, 1.0);
+    prevScreenPos = abs(clipPos.w) > 1e-6 ? (clipPos.xyz / clipPos.w) * 0.5 + 0.5 : vec3(-1.0);
+
     MixDiffuse();
 
     out_data.weight = output_weight;

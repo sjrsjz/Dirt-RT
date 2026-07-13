@@ -45,7 +45,8 @@
 // -- Bloom --
 #define BLOOM_MIX 0.15 // Bloom blend strength. 0 = off (scene only), 1 = full bloom. [0.0 0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5 0.6 0.8 1.0]
 
-#define DISPLAY_MAX_LUMINANCE 100.0 // Peak brightness of your display in nits (cd/m²). Used for HDR exposure calculation. [50 75 100 150 200 300 400 500 600 700 800 900 1000]
+#define DISPLAY_MAX_LUMINANCE 100 // Peak brightness of your display in nits (cd/m²). Used for HDR exposure calculation. [50 75 100 150 200 300 400 500 600 700 800 900 1000]
+#define DISPLAY_PAPER_WHITE_LUMINANCE 0.5 // Target paper white luminance in sRGB normalized space (0–1). Sets the mid-gray anchor for auto exposure — lower = brighter scene. [0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
 
 // -- Exposure curve --
 #define EXPOSURE_CURVE_K 1.0 // Highlight compression before tonemap: f(x)=ln(k+e^x)-ln(1+k). 0=off, higher=more compression. [0.0 0.1 0.25 0.5 1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0 9.0 10.0]
@@ -55,7 +56,7 @@
 #define PATH_GUIDING_SPECULAR_STRENGTH 0.85 // Base mix probability for ALICE-guided specular reflection. Final probability = STRENGTH × roughness × rho, so smooth surfaces (low roughness) or isotropic fields (low rho) naturally suppress guiding. Guiding is only active when both roughness and rho are meaningful. [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.95 0.99]
 
 // -- Debug view --
-#define DEBUG_VIEW 0 // Debug output mode. 0=Normal 1=Diffuse 2=Refract 3=Reflect 4=WhiteModel 5=LightField 6=Normals 7=Absorption 8=ReflDir 9=ReflDist 10=SpecAlbedo 11=Roughness 12=ReflRaw [0 1 2 3 4 5 6 7 8 9 10 11 12]
+#define DEBUG_VIEW 0 // Debug output mode. 0=Normal 1=Diffuse 2=Refract 3=Reflect 4=WhiteModel 5=LightField 6=Normals 7=Absorption 8=ReflDir 9=ReflDist 10=SpecAlbedo 11=Roughness 12=ReflRaw 13=DiffuseWeight 14=ReflectWeight 15=RefractWeight 16=DirectLight 17=Emission 18=DiffuseAlbedo [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18]
 
 const float sunPathRotation = 0.0;
 

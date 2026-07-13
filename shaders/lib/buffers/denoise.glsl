@@ -316,7 +316,7 @@ DiffuseIlluminationWriteData loadDiffuseInput(uint idx) {
     DiffuseIlluminationWriteData t;
     vec2 aliceY_xy = unpackHalf2x16(floatBitsToUint(e.rt_aliceY_xy));
     vec2 aliceY_zw = unpackHalf2x16(floatBitsToUint(e.rt_aliceY_zw));
-    t.data_swap.aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-10000), vec4(10000));
+    t.data_swap.aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-65504), vec4(65504));
     t.data_swap.CoCg = unpackHalf2x16(floatBitsToUint(e.rt_CoCg));
     t.pos = vec3(e.px, e.py, e.pz);
     t.normal = decodeNormal(e.oct_n);
@@ -413,7 +413,7 @@ DiffuseIlluminationWriteData fetchPrevDiffuse(ivec2 p) {
     DiffuseIlluminationWriteData t;
     vec2 aliceY_xy = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_xy));
     vec2 aliceY_zw = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_zw));
-    t.data_swap.aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-10000), vec4(10000));
+    t.data_swap.aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-65504), vec4(65504));
     t.data_swap.CoCg = unpackHalf2x16(floatBitsToUint(e.swap_CoCg));
     t.pos = vec3(e.px, e.py, e.pz);
     t.normal = decodeNormal(e.oct_n);

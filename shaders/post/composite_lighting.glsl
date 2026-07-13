@@ -156,6 +156,49 @@ void main() {
         // The denoised signal before composite multiplications — pure light field
         fragColor.xyz = tmp2.data_swap;
 
+        #elif DEBUG_VIEW == 13
+        // Diffuse temporal accumulation weight (heatmap: blue→cyan→green→yellow→red)
+        // N_eff / ACCUMULATION_LENGTH — cold = few frames, hot = fully converged
+        {
+            float t = clamp(tmp.weight / ACCUMULATION_LENGTH, 0.0, 1.0);
+            fragColor.xyz = vec3(
+                clamp(min(4.0 * t - 1.5, -4.0 * t + 4.5), 0.0, 1.0),
+                clamp(min(4.0 * t - 0.5, -4.0 * t + 3.5), 0.0, 1.0),
+                clamp(min(4.0 * t + 0.5, -4.0 * t + 2.5), 0.0, 1.0));
+        }
+
+        #elif DEBUG_VIEW == 14
+        // Reflect temporal accumulation weight (heatmap)
+        {
+            float t = clamp(tmp2.weight / ACCUMULATION_LENGTH, 0.0, 1.0);
+            fragColor.xyz = vec3(
+                clamp(min(4.0 * t - 1.5, -4.0 * t + 4.5), 0.0, 1.0),
+                clamp(min(4.0 * t - 0.5, -4.0 * t + 3.5), 0.0, 1.0),
+                clamp(min(4.0 * t + 0.5, -4.0 * t + 2.5), 0.0, 1.0));
+        }
+
+        #elif DEBUG_VIEW == 15
+        // Refract temporal accumulation weight (heatmap)
+        {
+            float t = clamp(tmp3.weight / ACCUMULATION_LENGTH, 0.0, 1.0);
+            fragColor.xyz = vec3(
+                clamp(min(4.0 * t - 1.5, -4.0 * t + 4.5), 0.0, 1.0),
+                clamp(min(4.0 * t - 0.5, -4.0 * t + 3.5), 0.0, 1.0),
+                clamp(min(4.0 * t + 0.5, -4.0 * t + 2.5), 0.0, 1.0));
+        }
+
+        #elif DEBUG_VIEW == 16
+        // Direct light only — raw direct illumination component
+        fragColor.xyz = data.light;
+
+        #elif DEBUG_VIEW == 17
+        // Emission only — self-illuminating surfaces (glowstone, lava, etc.)
+        fragColor.xyz = data.emission;
+
+        #elif DEBUG_VIEW == 18
+        // Diffuse albedo — per-pixel diffuse material multiplier
+        fragColor.xyz = data.diffuseAlbedo;
+
         #endif
     }
 }

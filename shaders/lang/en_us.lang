@@ -2,6 +2,7 @@ screen.RAY_TRACING = Ray Tracing
 option.ACCUMULATION_LENGTH = Accumulation Length
 option.RAY_BOUNCES = Ray Bounces
 option.PATH_GUIDING_STRENGTH = Path Guiding Strength
+option.PATH_GUIDING_SPECULAR_STRENGTH = Specular Guiding Strength
 
 screen.MATERIAL = Material
 option.REFRACTIVE_INDEX = Water IOR
@@ -15,6 +16,7 @@ option.VOLUMETRIC_LIGHT_SAMPLES = Volumetric Light Samples
 
 screen.EXPOSURE_DISPLAY = Exposure & Display
 option.DISPLAY_MAX_LUMINANCE = Display Peak Luminance
+option.DISPLAY_PAPER_WHITE_LUMINANCE = sRGB Paper White Luminance
 option.EXPOSURE_CURVE_K = Exposure Curve
 
 screen.BLOOM = Bloom
@@ -65,6 +67,12 @@ value.DEBUG_VIEW.9 = Refl. VirtDist
 value.DEBUG_VIEW.10 = Specular Albedo
 value.DEBUG_VIEW.11 = Roughness
 value.DEBUG_VIEW.12 = Refl. Incident
+value.DEBUG_VIEW.13 = Diffuse Weight
+value.DEBUG_VIEW.14 = Reflect Weight
+value.DEBUG_VIEW.15 = Refract Weight
+value.DEBUG_VIEW.16 = Direct Light
+value.DEBUG_VIEW.17 = Emission
+value.DEBUG_VIEW.18 = Diffuse Albedo
 
 # -- ReSTIR --
 option.useReSTIR = Use ReSTIR

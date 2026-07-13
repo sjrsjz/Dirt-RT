@@ -646,7 +646,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             // microNormal (GGX-perturbed) is noisy per-frame; macroNormal (block face) loses detail.
             // normal captures the normal-map spatial variation while staying deterministic each frame.
             vec4 rC_stable = reflectanceColor(surface.Cs, abs(dot(rd_i, normal)));
-            vec3 nonSpecColor_stable = surface.Cd * max(vec3(0.0), vec3(1.0) - rC_stable.rgb * surface.S.x);
+            vec3 nonSpecColor_stable = surface.Cd * max(vec3(0.0), vec3(1.0) - rC_stable.rgb * surface.S.x * 0.5);
             {
                 vec3 F0 = surface.Cs * surface.S.x;
                 float NoV = clamp(abs(dot(rd_i, normal)), 0.0, 1.0);
@@ -708,7 +708,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
     vec3 total_illumination = L_indirect + L_direct_0;
     if (any(isnan(total_illumination))) total_illumination = vec3(0.0);
-    total_illumination = clamp(total_illumination, 0.0, 10000.0);
+    total_illumination = clamp(total_illumination, 0.0, 65504.0);
 
     // Shared G-Buffer (denoiseBuffer): only written by diffuse pass (ray0).
     // All three passes hit the same first surface → fields are fully deterministic.
