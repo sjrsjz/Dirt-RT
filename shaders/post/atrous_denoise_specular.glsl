@@ -173,7 +173,7 @@ void main() {
     float sumVariance = cVar * centerWeight * centerWeight;
 
     // ---- Poisson 圆盘采样 (NRD, STEP>=4) -----------------------------------
-    float theta = 2.0 * PI * rand(vec2(pix + R0));
+    float theta = 2.0 * PI * fract(rand(vec2(pix)) + R0 * 0.6180339887498949);
     mat2 rotM = mat2(cos(theta), -sin(theta), sin(theta), cos(theta)) * R0 * 1.75;
 
     for (int k = 0; k < 8; k++) {

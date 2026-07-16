@@ -5,11 +5,11 @@
 // ===========================================================================
 // 管线位置: 在光线追踪生成镜面反射样本后，与上一帧历史混合。
 //
-// 双路径 (NRD RELAX 镜面时域累积，curvature=0):
+// 双路径 (NRD RELAX 镜面时域累积，curvature_correct_specular 预处理):
 //   SMB (表面运动): reproject(反射表面点 pos)。
 //       posConf (反射点位移) + ggxConf (法线相容) → 运动抗拖影。
 //   VMB (虚拟运动): reproject(pos + viewDir·vproj) — NRD RELAX virtual motion。
-//       viewDir = normalize(pos) = eye→surface 方向, vproj = 反射投射距离。
+//       viewDir = normalize(pos) = eye→surface 方向, vproj = 曲率修正后反射投射距离。
 //       静止相机 → viewDir·vproj 与 pos 共视线 → VMB=SMB (无漂移)。
 //       运镜 → 视线延长点 tracking 反射内容 (平面反遮挡 + posConf 验证)。
 //   vha = Dfactor(NoV,rough) × VMB置信 × motionFactor × SMB回退。
@@ -284,7 +284,7 @@ void main() {
     float vha = vmbFound ? (Dfactor * vmbConf) : 0.0;
     float virtualMotionRoughnessWeight = smoothstep(0.0, 0.3, roughness); 
     vha *= (1.0 - virtualMotionRoughnessWeight);
-    
+
     // SMB 回退: SMB 更可信时偏向 SMB
     vha *= (smbConf > 1e-6) ? clamp(vmbConf / smbConf, 0.0, 1.0) : 1.0;
     // 运镜门控: 静止相机 VMB→0 (VMB=SMB 同视线, vha 无关; 但保持干净)

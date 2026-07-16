@@ -23,14 +23,9 @@ uniform float near;
 uniform float far;
 
 uniform sampler2D colortex0;   // 主场景颜色
-uniform sampler2D colortex1;
-uniform sampler2D colortex2;
-uniform sampler2D colortex4;
-uniform sampler2D colortex5;
 uniform sampler2D colortex7;   // 实体渲染
 uniform sampler2D colortex8;   // 实体深度 (或其他)
 uniform sampler2D colortex9;   // 场景深度 (或其他)
-uniform sampler2D depthtex0;
 
 /* RENDERTARGETS: 0,8,9 */
 layout(location = 0) out vec4 fragColor;

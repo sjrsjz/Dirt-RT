@@ -55,10 +55,13 @@
 #define PATH_GUIDING_STRENGTH 0.975 // Mix probability weight for ALICE-guided importance sampling vs cosine-weighted sampling. Higher = more samples steered toward the prior, lower = more uniform. [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.925 0.95 0.975 0.99 0.999]
 #define PATH_GUIDING_SPECULAR_STRENGTH 0.85 // Base mix probability for ALICE-guided specular reflection. Final probability = STRENGTH × roughness × rho, so smooth surfaces (low roughness) or isotropic fields (low rho) naturally suppress guiding. Guiding is only active when both roughness and rho are meaningful. [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.95 0.99]
 
+// -- NRD curvature correction --
+#define CURVATURE_CORRECTION_STRENGTH 1.0 // NRD curvature correction strength for specular virtual distance. 1.0 = standard NRD, 0.0 = off (planar assumption). Corrects virtual reprojection distance based on local surface curvature to reduce ghosting on curved surfaces. [0.0 0.25 0.5 0.75 1.0 1.25 1.5]
+
 // -- Debug view --
 #define DEBUG_VIEW 0 // Debug output mode. 0=Normal 1=Diffuse 2=Refract 3=Reflect 4=WhiteModel 5=LightField 6=Normals 7=Absorption 8=ReflDir 9=ReflDist 10=SpecAlbedo 11=Roughness 12=ReflRaw 13=DiffuseWeight 14=ReflectWeight 15=RefractWeight 16=DirectLight 17=Emission 18=DiffuseAlbedo [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18]
 
-const float sunPathRotation = 0.0;
+#define SUN_PATH_ROTATION 45.0 // Sun path rotation angle (degrees around X axis). Adjusts the sun's apparent path in the sky. [0 15 30 45 60 75 90]
 
 /*
 const int depthtex0Format = RGBA32F;
@@ -73,12 +76,13 @@ const int colortex7Format = RGBA32F;
 const int colortex8Format = RGBA32F;
 const int colortex9Format = RGBA32F;
 
-const bool colortex1Clear = false;
-const bool colortex2Clear = false;
-const bool colortex3Clear = false;
-const bool colortex4Clear = false;
-const bool colortex5Clear = false;
-const bool colortex6Clear = false;
+const bool depthtex0Clear = true;
+const bool colortex1Clear = true;
+const bool colortex2Clear = true;
+const bool colortex3Clear = true;
+const bool colortex4Clear = true;
+const bool colortex5Clear = true;
+const bool colortex6Clear = true;
 const bool colortex7Clear = true;
 const bool colortex8Clear = true;
 const bool colortex9Clear = true;

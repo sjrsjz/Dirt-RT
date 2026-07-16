@@ -40,8 +40,6 @@
 layout(std430, binding = 0) uniform CameraInfo {
     vec3 corners[4];
     mat4 viewInverse;
-    vec4 sunPosition;
-    vec4 moonPosition;
     uint frameId;
     uint flags;
     uint world_type;
@@ -69,9 +67,6 @@ void main() {
     setFrame(cam.frameId);
     isDarkened = world_type_global != WORLD_OVERWORLD && world_type_global != WORLD_THE_END && world_type_global != WORLD_THE_NETHER;
 
-    vec4 celestialQuat = quatAxisAngle(vec3(1, 0, 0), radians(sunPathRotation));
-    vec3 sunDir = quatRotate(normalize(mat3(cam.viewInverse) * cam.sunPosition.xyz), celestialQuat);
-
     wseed = floatBitsToUint(rand(direction * cam.frameId));
 
     vec3 seed0 = vec3(randcore4(), randcore4(), randcore4());
@@ -80,7 +75,7 @@ void main() {
     wseed3.z = floatBitsToUint(seed0.z);
 
     setSkyVars();
-    Trace(uvec2(gl_LaunchIDEXT.xy), origin, direction, -sunDir);
+    Trace(uvec2(gl_LaunchIDEXT.xy), origin, direction, -lightDir_global);
 
     // Per-frame-once global state: only diffuse pass (ray0) pixel (0,0).
     // rtPrev=rtModelView is non-idempotent — if all 3 passes run it,
@@ -88,7 +83,6 @@ void main() {
     #if defined(FIRST_LOBE_DIFFUSE)
     if (gl_LaunchIDEXT.xy == vec2(0)) {
         world_type_global = int(cam.world_type);
-        lightDir_global = sunDir;
         frame_id = int(cam.frameId);
         camPos = origin;
         camY_global = (cam.viewInverse * vec4(normalize(cam.corners[0] - cam.corners[2]), 0)).xyz;
@@ -140,6 +134,17 @@ float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse
 float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse_0) {
     return raycast(ro, rd, ro_o, rd_o, inverse_0, 0, 0u);
 }
+
+
+struct material {
+    vec3 Cs;
+    vec3 Cd;
+    vec2 S;
+    vec4 R;
+    vec3 light;
+};
+
+
 
 material newMaterial(vec3 Cs, vec3 Cd, vec2 S, vec4 R, vec3 light) {
     material a;

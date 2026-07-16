@@ -16,18 +16,42 @@ uniform float rainStrength;
 uniform float wetness;
 uniform float viewWidth;
 uniform float viewHeight;
+uniform vec3 sunPosition;
+uniform mat4 gbufferModelViewInverse;
 
 const int NUM_SAMPLES = 128;
 
-// 使用牛顿迭代从期望的线性亮度计算需要输入的线性亮度基准
+// 曝光曲线: f(x) = ln(k + e^x) - ln(1 + k)
+// 应用于 tonemap 之前作为高光压缩
+float applyExposureCurve(float x, float k) {
+    if (k <= 0.0) return x;
+    return log(k + exp(x)) - log(1.0 + k);
+}
+
+// 曝光曲线导数: f'(x) = e^x / (k + e^x) = 1 / (1 + k·e^(-x))
+float exposureCurveDerivative(float x, float k) {
+    if (k <= 0.0) return 1.0;
+    return 1.0 / (1.0 + k * exp(-x));
+}
+
+// 牛顿迭代求逆: 找到 linear_L 使得 tonemap(curve(linear_L)) = expected
+// 建模完整管线: linear → exposure_curve → tonemap → sRGB
 float solveBaseline(float expected) {
-    float x = expected; // 初始猜测
-    for (int i = 0; i < 5; i++) {
-        float f_x = TonyMcMapface_LumaApprox(x) - expected;
-        float f_prime_x = (TonyMcMapface_LumaApprox(x + 1e-5) - TonyMcMapface_LumaApprox(x - 1e-5)) / (2e-5);
-        x = x - f_x / max(f_prime_x, 1e-6); // 避免除以零
+    float k = EXPOSURE_CURVE_K;
+    float x = expected;
+
+    for (int i = 0; i < 6; i++) {
+        float curved = applyExposureCurve(x, k);
+        float f_x = TonyMcMapface_LumaApprox(curved) - expected;
+
+        // 链式法则: d/dx tonemap(curve(x)) = tonemap'(curve) · curve'(x)
+        float t_deriv = (TonyMcMapface_LumaApprox(curved + 1e-5) - TonyMcMapface_LumaApprox(curved - 1e-5)) / (2e-5);
+        float c_deriv = exposureCurveDerivative(x, k);
+        float f_prime_x = t_deriv * c_deriv;
+
+        x = x - f_x / max(f_prime_x, 1e-6);
     }
-    return max(x, 0.0); // 确保非负
+    return max(x, 0.0);
 }
 
 // 将用户自定义的 sRGB 纸白亮度转换为线性空间
@@ -97,6 +121,8 @@ void main() {
 
     float targetExposure = clamp(calculateExposure(currentLuma), 1e-10, 10.0);
 
+    avgExposure = ensurePositive(avgExposure, targetExposure);
+
     if (frameCounter <= 1) {
         avgExposure = targetExposure;
     } else {
@@ -111,4 +137,12 @@ void main() {
 
     // --- Save camera matrices ---
     prevRaytracingCamPos = camPos;     // 光线追踪相机 (供下一帧时域 cameraDelta)
+    // 从视空间转为世界空间的太阳方向 (供下一帧时域 sunDir)
+    vec3 lightDir = normalize((vec3(gbufferModelViewInverse * vec4(normalize(sunPosition), 0.0))));
+    // 然后侧转30度，模拟太阳路径旋转 (绕 X 轴旋转)
+    float angle = radians(SUN_PATH_ROTATION);
+    mat3 rotationMatrix = mat3(1.0, 0.0, 0.0,
+                                   0.0, cos(angle), sin(angle),
+                                   0.0, -sin(angle), cos(angle));
+    lightDir_global = normalize(rotationMatrix * lightDir);
 }

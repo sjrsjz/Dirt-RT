@@ -9,15 +9,6 @@ void setFrame(uint frame) {
     iFrame = frame;
 }
 
-struct material {
-    vec3 Cs;
-    vec3 Cd;
-    vec2 S;
-    vec4 R;
-    vec3 light;
-};
-
-
 vec2 rot(vec2 a, float theta) {
     return a.xx * vec2(cos(theta), sin(theta)) + a.yy * vec2(-sin(theta), cos(theta));
 }
@@ -50,6 +41,10 @@ void XYZ(vec3 n, out vec3 X, out vec3 Y, out vec3 Z) {
     X = vec3(n.z, 0, n.x);
     X = abs(n.y) == 1 ? vec3(1, 0, 0) : normalize(X);
     Z = cross(n, X);
+}
+
+float ensurePositive(float x, float defaultValue) {
+    return (x <= 0.0 || isnan(x) || isinf(x)) ? defaultValue : x;
 }
 
 // Weyl sequence — low-discrepancy quasi-random generator
