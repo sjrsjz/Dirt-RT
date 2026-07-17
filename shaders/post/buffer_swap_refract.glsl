@@ -1,10 +1,10 @@
 #version 430 compatibility
 
 // ===========================================================================
-// Pass swap7: 折射缓冲写回 (Compute) — swap_color + color(flip+mixWeight) + lpos + lnormal
+// Pass swap7: 折射缓冲写回 (Compute) — swap_color + color(flip) + lpos + lnormal
 // ===========================================================================
 // 102 (REFRACT_BUFFER_MIN) 已写入 swap_color = (accumulated, weight).
-// 本 pass: 降噪颜色写回 swap_color.xyz, 保留 .w(weight); color(flip + mixWeight);
+// 本 pass: 降噪颜色写回 swap_color.xyz, 保留 .w(weight); color(flip);
 // lpos/lnormal 重建后写出.
 // ===========================================================================
 

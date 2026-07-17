@@ -40,9 +40,9 @@
 // ---------------------------------------------------------------------------
 // PSR (Primary Surface Replacement) — refraction virtual-image reprojection
 // ---------------------------------------------------------------------------
-const float PSR_ROUGHNESS_THRESHOLD  = 0.15; // first-surface roughness above this → disable PSR, fall back to first-surface temporal accumulation
-const float PATH_ROUGHNESS_TERMINATE = 0.8;  // accumulated sqrt(Σ r_i²) above this → terminate refractive chain early (too diffuse)
-const int   MAX_REFRACTIVE_BOUNCES   = 4;    // max refractive surfaces to trace through before stopping
+const float PSR_ROUGHNESS_THRESHOLD = 0.15; // first-surface roughness above this → disable PSR, fall back to first-surface temporal accumulation
+const float PATH_ROUGHNESS_TERMINATE = 0.8; // accumulated sqrt(Σ r_i²) above this → terminate refractive chain early (too diffuse)
+const int MAX_REFRACTIVE_BOUNCES = 4; // max refractive surfaces to trace through before stopping
 
 layout(std430, binding = 0) uniform CameraInfo {
     vec3 corners[4];
@@ -128,7 +128,11 @@ float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse
     payload_packShadow(payload.data, vec3(1.0), 0);
     float tMin = 0;
     float tMax = 2048.0;
-    uint rayFlags = inverse_0 ? gl_RayFlagsCullBackFacingTrianglesEXT : 0u;
+    // Shadow rays (ignore_block_id≠0): disable back-face culling so both
+    // entry and exit faces of transmissive blocks are hit — extinction is
+    // accumulated at the exit face (inside→outside transition).
+    // Main trace (ignore_block_id=0): keep culling to stop at first front face.
+    uint rayFlags = (inverse_0 && ignore_block_id == 0) ? gl_RayFlagsCullBackFacingTrianglesEXT : 0u;
     traceRayEXT(acc, rayFlags, 0xFF, 0, 0, 0, ro, tMin, rd, tMax, 6);
     Payload hitPayload = payload;
     float t;
@@ -142,7 +146,6 @@ float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse
     return raycast(ro, rd, ro_o, rd_o, inverse_0, 0, 0u);
 }
 
-
 struct material {
     vec3 Cs;
     vec3 Cd;
@@ -150,8 +153,6 @@ struct material {
     vec4 R;
     vec3 light;
 };
-
-
 
 material newMaterial(vec3 Cs, vec3 Cd, vec2 S, vec4 R, vec3 light) {
     material a;
@@ -220,26 +221,26 @@ Material evaluateMaterial(Payload pld, vec3 rd_i, uint bounce) {
 // Check if a block is a transmissive/refractive surface (water, glass).
 // LabPBR standard: translucent blocks are identified by the rendering layer,
 // not by any material channel. In our ray-tracing pipeline we conservatively
-// treat only water (1000) and glass (1001) as transmissive for the PSR chain.
+// treat only water and glass as transmissive for the PSR chain.
 bool isTransmissiveBlock(int blockID) {
-    return blockID == 1000 || blockID == 1001;
+    return blockID == BLOCK_WATER || blockID == BLOCK_GLASS;
 }
 
 // Convert Material (from getMaterial) to BSDF material struct
 material materialFromEvaluated(Material mat, int blockID) {
     float metallic = mat.metallic;
-    float trans = float(blockID != 1000 && 0.9 < mat.translucent && blockID != 1001);
-    trans = blockID == 1002 ? 0.25 : trans;
-    float roughness = blockID == 1000 ? 0.0 : mat.roughness;
-    roughness = blockID == 1002 ? 0.0 : roughness;
-    vec3 albedo = blockID == 1000 ? vec3(1.0) : mat.albedo;
-    vec3 emission = blockID == 1002 ? albedo * (1.0 - trans) : mat.emission;
-    float specSelector = blockID == 1000 ? 1.0 : mix(trans, 1.0, metallic);
+    float trans = float(blockID != BLOCK_WATER && 0.9 < mat.translucent && blockID != BLOCK_GLASS);
+    trans = blockID == BLOCK_PORTAL ? 0.25 : trans;
+    float roughness = blockID == BLOCK_WATER ? 0.0 : mat.roughness;
+    roughness = blockID == BLOCK_PORTAL ? 0.0 : roughness;
+    vec3 albedo = blockID == BLOCK_WATER ? vec3(1.0) : mat.albedo;
+    vec3 emission = blockID == BLOCK_PORTAL ? albedo * (1.0 - trans) : mat.emission;
+    float specSelector = blockID == BLOCK_WATER ? 1.0 : mix(trans, 1.0, metallic);
 
     return newMaterial(clamp(mat.F0, 0.0, 1.0), albedo,
         vec2(specSelector, 1.0 - trans),
         vec4(roughness > 0.01 ? max(roughness, 0.0125) : 0.0, trans,
-            blockID == 1000, mat.subsurface_scattering),
+            blockID == BLOCK_WATER, mat.subsurface_scattering),
         emission);
 }
 
@@ -264,7 +265,7 @@ vec3 sampleSunlight(vec3 ro, vec3 normal, vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S, v
     vec3 sampleDir = cosbeta * Y + sqrt(1.0 - cosbeta * cosbeta) * (cos(alpha) * X + sin(alpha) * Z);
 
     vec3 ro_o, rd_o;
-    float t = raycast(ro, -sampleDir, ro_o, rd_o, !inside, 1001, 1u); // POM skipped for shadow rays
+    float t = raycast(ro, -sampleDir, ro_o, rd_o, !inside, BLOCK_GLASS, 1u); // POM skipped for shadow rays
     if (t > -0.5) return vec3(0.0);
 
     vec3 wi = -sampleDir;
@@ -335,13 +336,12 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     float first_n_i = 1.0;
     float first_n_o = 1.0;
     vec3 first_micro_n = -rd;
-    vec2 mixWeight = vec2(0.0);
     vec3 first_absorption = vec3(1.0);
     vec3 first_emission_val = vec3(0.0);
     vec3 first_light_surf = vec3(0.0);
     float first_t2_ior_adjusted = 0.0; // IOR-adjusted virtual distance through refractive chain (PSR)
-    float first_pathRoughness  = 0.0;  // accumulated sqrt(Σ r_i²) through refractive chain
-    vec3  first_refr_dir       = rd;   // refracted direction at first surface (for edge-stopping)
+    float first_pathRoughness = 0.0; // accumulated sqrt(Σ r_i²) through refractive chain
+    vec3 first_refr_dir = rd; // refracted direction at first surface (for edge-stopping)
 
     int depth = 0;
     for (; depth < MaxRay; depth++) {
@@ -545,14 +545,14 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                     vec3 ro_chain = ro_o;
                     vec3 rd_chain = dot(psr_refract_dir, psr_refract_dir) > 0.0 ? psr_refract_dir : refract_dir;
                     bool inside_chain = !was_inverse_0; // medium state after first refract
-                        vec3 departN = macroNormal;          // normal of surface we're departing from
-                        // n_camera: original camera medium IOR (constant; derivation → t_virtual = t × n_camera / n_segment)
-                        float n_camera = was_inverse_0 ? REFRACTIVE_INDEX : 1.0;
+                    vec3 departN = macroNormal; // normal of surface we're departing from
+                    // n_camera: original camera medium IOR (constant; derivation → t_virtual = t × n_camera / n_segment)
+                    float n_camera = was_inverse_0 ? REFRACTIVE_INDEX : 1.0;
 
-                        for (int refr_depth = 0; refr_depth < MAX_REFRACTIVE_BOUNCES; refr_depth++) {
+                    for (int refr_depth = 0; refr_depth < MAX_REFRACTIVE_BOUNCES; refr_depth++) {
                         vec3 ro_next, rd_next;
                         float t_next = raycast(ro_chain + departN * (inside_chain ? -0.00025 : 0.00025),
-                                                rd_chain, ro_next, rd_next, !inside_chain, 0, uint(depth + 1 + refr_depth));
+                                rd_chain, ro_next, rd_next, !inside_chain, 0, uint(depth + 1 + refr_depth));
 
                         if (t_next < -0.5) {
                             // Sky — virtual image at infinity
@@ -589,7 +589,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
                         // IOR ratio for Snell's refraction: n_from / n_to
                         float n_from_refr = inside_chain ? REFRACTIVE_INDEX : 1.0; // medium ray is coming FROM
-                        float n_to_refr   = inside_chain ? 1.0 : REFRACTIVE_INDEX; // medium ray is going TO
+                        float n_to_refr = inside_chain ? 1.0 : REFRACTIVE_INDEX; // medium ray is going TO
                         float rs_chain = n_from_refr / n_to_refr;
                         vec3 next_refract = refract(rd_chain, hitGeomN, rs_chain);
 
@@ -814,10 +814,6 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             first_emission_val = segment_emission;
             first_light_surf = surface.light;
             first_absorption = current_absorption;
-
-            float reflectWeight = P_spec + P_refr * F;
-            float refractWeight = P_refr * (1.0 - F);
-            mixWeight = vec2(reflectWeight, refractWeight);
         }
 
         // --- 7. Update throughput ---
@@ -854,8 +850,6 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     // Shared G-Buffer (denoiseBuffer): only written by diffuse pass (ray0).
     // All three passes hit the same first surface → fields are fully deterministic.
     #if defined(FIRST_LOBE_DIFFUSE)
-    denoiseBuffer.data[idx].reflectWeight = mixWeight.x;
-    denoiseBuffer.data[idx].refractWeight = mixWeight.y;
     denoiseBuffer.data[idx].specularAlbedo = first_specularAlbedo;
     denoiseBuffer.data[idx].diffuseAlbedo = first_diffuseAlbedo;
     denoiseBuffer.data[idx].transmissionAlbedo = first_transmissionAlbedo;
@@ -939,13 +933,11 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         //
         //   If the first surface is too rough (psrEnabled=false), first_t2_ior_adjusted=0
         //   → virtualProjDist=0 → P_virtual = P_surf → falls back to first-surface temporal accumulation.
-        vec3 refr_R = first_refr_dir;           // refracted direction T (TIR→reflect; for edge-stopping)
+        vec3 refr_R = first_refr_dir; // refracted direction T (TIR→reflect; for edge-stopping)
         float refr_vprojdist = 0.0;
         vec3 refr_color = vec3(0.0);
         if (!hit_sky_first && first_t > -0.5) {
-            if (mixWeight.y > 0.001) {
-                refr_vprojdist = first_t2_ior_adjusted; // IOR-adjusted Σ(t_i / n_i), 0 if PSR disabled
-            }
+            refr_vprojdist = first_t2_ior_adjusted; // IOR-adjusted Σ(t_i / n_i), 0 if PSR disabled
             refr_color = clamp(total_illumination / max(first_transmissionAlbedo, vec3(1e-6)), 0.0, 200.0 * div_avgExposure);
         }
         refractIlluminationBuffer.data[idx].px = pos_rel.x;

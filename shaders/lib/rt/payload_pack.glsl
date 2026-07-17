@@ -4,6 +4,14 @@
 #include "/lib/common/oct_encode.glsl"
 #include "/lib/common/pack8.glsl"
 
+// Block ID macros — synchronized with shaders/block.properties and lib/constants.glsl.
+// Conditionally defined so they are always available regardless of include order.
+#ifndef BLOCK_WATER
+#define BLOCK_WATER  1000 // water
+#define BLOCK_GLASS  1001 // ice, stained glass (all colors + panes), blue_ice, packed_ice
+#define BLOCK_PORTAL 1002 // nether_portal (frosted / translucent emissive)
+#endif
+
 // ===========================================================================
 // Ultra-minimal payload pack/unpack — 9/16 slots used, 7 free.
 //
@@ -69,19 +77,19 @@ vec2 payload_unpackBarycentrics(uint d[PAYLOAD_SLOTS]) {
 
 // ---------------------------------------------------------------------------
 // Shadow [7] — 3×unorm8 + blockID_enc in 4th byte
-// blockID_enc: 0=normal, 1/255=water(1000), 2/255=glass(1001), 3/255=frosted(1002)
+// blockID_enc: 0=normal, 1/255=water(BLOCK_WATER), 2/255=glass(BLOCK_GLASS), 3/255=portal(BLOCK_PORTAL)
 // ---------------------------------------------------------------------------
 void payload_packShadow(inout uint d[PAYLOAD_SLOTS], vec3 st, int blockID) {
     float bEnc = 0.0;
-    if (blockID == 1000) bEnc = 1.0 / 255.0;
-    else if (blockID == 1001) bEnc = 2.0 / 255.0;
-    else if (blockID == 1002) bEnc = 3.0 / 255.0;
+    if (blockID == BLOCK_WATER) bEnc = 1.0 / 255.0;
+    else if (blockID == BLOCK_GLASS) bEnc = 2.0 / 255.0;
+    else if (blockID == BLOCK_PORTAL) bEnc = 3.0 / 255.0;
     d[7] = packUnorm4x8(vec4(st, bEnc));
 }
 vec3 payload_unpackShadow(uint d[PAYLOAD_SLOTS], out int blockID) {
     vec4 v = unpackUnorm4x8(d[7]);
     int bEnc = int(v.a * 255.0 + 0.5);
-    blockID = bEnc == 1 ? 1000 : (bEnc == 2 ? 1001 : (bEnc == 3 ? 1002 : 0));
+    blockID = bEnc == 1 ? BLOCK_WATER : (bEnc == 2 ? BLOCK_GLASS : (bEnc == 3 ? BLOCK_PORTAL : 0));
     return v.rgb;
 }
 // Backward-compat overload
@@ -94,7 +102,7 @@ vec3 payload_unpackShadow(uint d[PAYLOAD_SLOTS]) {
 // Flags + prevDist [8]
 //
 // ignoreID encoding (2 bits):
-//   0 = none, 1 = water (1000), 2 = glass (1001), 3 = frosted (1002)
+//   0 = none, 1 = water (BLOCK_WATER), 2 = glass (BLOCK_GLASS), 3 = portal (BLOCK_PORTAL)
 // ---------------------------------------------------------------------------
 void payload_packFlags(inout uint d[PAYLOAD_SLOTS], float prevDist,
     bool inside, uint bounce, bool handedness, uint ignoreID_enc) {
@@ -121,12 +129,12 @@ float payload_unpackFlags(uint d[PAYLOAD_SLOTS],
 // ignoreID helpers — encode/decode block ID ↔ 2-bit compact form
 // ---------------------------------------------------------------------------
 int payload_decodeIgnoreID(uint enc) {
-    return enc == 1u ? 1000 : (enc == 2u ? 1001 : (enc == 3u ? 1002 : 0));
+    return enc == 1u ? BLOCK_WATER : (enc == 2u ? BLOCK_GLASS : (enc == 3u ? BLOCK_PORTAL : 0));
 }
 uint payload_encodeIgnoreID(int blockID) {
-    if (blockID == 1000) return 1u;
-    if (blockID == 1001) return 2u;
-    if (blockID == 1002) return 3u;
+    if (blockID == BLOCK_WATER) return 1u;
+    if (blockID == BLOCK_GLASS) return 2u;
+    if (blockID == BLOCK_PORTAL) return 3u;
     return 0u;
 }
 

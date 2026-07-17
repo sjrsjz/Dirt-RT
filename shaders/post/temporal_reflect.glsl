@@ -84,14 +84,11 @@ float disocclusionThreshold; // NRD 平面距离阈值 (世界单位)
 bool notInRange(vec2 p) {
     return clamp(p, vec2(0), vec2(1)) != p;
 }
-
-vec3IlluminationData data2; // 当前像素的反射光照数据 (来自 SSBO)
-
 // ---------------------------------------------------------------------------
 // 优化后的单路径评估 (基于波瓣相似度与健壮的 EMA 更新)
 // ---------------------------------------------------------------------------
 void evalPath(vec2 prevUV, bool useGgx,
-    vec3 pos, vec3 normal, vec3 N, float roughness,
+    vec3 pos, vec3 R_cur, vec3 N, float roughness,
     vec3 curVirtual, float vproj, vec3 curColor,
     out bool found, out vec3 result, out float Wnew, out float maxTapConf) {
     found = false;
@@ -105,7 +102,6 @@ void evalPath(vec2 prevUV, bool useGgx,
 
     // alpha 是粗糙度的平方，代表 GGX NDF 的方差 (Variance)
     float alpha = roughness * roughness;
-    vec3 R_cur = normalize(normal); // 当前反射方向
 
     // 视觉光路总长度 (用于稳健地归一化位置误差)
     float opticalDepth = max(length(pos) + vproj, 0.2);
@@ -139,7 +135,7 @@ void evalPath(vec2 prevUV, bool useGgx,
         float distDiff = length(sampleVirtual - curVirtual);
 
         // alpha2 = alpha^2 = roughness^4 (表示反射分布的统计方差尺度)
-        float alpha2 = alpha * alpha; 
+        float alpha2 = alpha * alpha;
 
         // 引入 2.0 因子 (来自卡方分布自由度为2的推导)
         // 设定 1e-5 的下限，防止极光滑镜面时分母除零崩溃
@@ -220,30 +216,30 @@ void main() {
     info_distance = denoiseBuffer.data[idx].distance;
 
     // 从 SSBO (SpecularRTElement) 重建当前帧反射数据: normal = R*virtualProjDist
-    unpackSpecularRT(reflectIlluminationBuffer.data[idx], data2.pos, data2.normal, data2.data_swap);
-    data2.data = vec3(0.0);
-    data2.weight = 0.0;
-    data2.prev_weight = 0.0;
-    data2.mixWeight = 0.0;
+    float vproj;
+    vec3IlluminationData curr_sample; // 当前像素的反射光照数据 (来自 SSBO)
+
+    unpackSpecularRT(reflectIlluminationBuffer.data[idx], curr_sample.pos, curr_sample.normal, curr_sample.data_swap, vproj);
+    curr_sample.data = vec3(0.0);
+    curr_sample.weight = 0.0;
+    curr_sample.prev_weight = 0.0;
 
     // ---- 天空 / 无效几何: 重置权重后直接写出 -----------------------------
     if (info_distance < -0.5) {
-        data2.weight = 1.0;
-        data2.mixWeight = 0.0;
-        WriteReflect(data2, ivec2(pix));
+        curr_sample.weight = 1.0;
+        WriteReflect(curr_sample, ivec2(pix));
         return;
     }
 
     cameraDelta = camPos - prevRaytracingCamPos;
 
     // ---- 当前像素反射几何 / 材质 -----------------------------------------
-    vec3 pos = data2.pos;
-    vec3 normal = data2.normal; // R · vproj
-    float vproj = max(length(normal), 0.001);
-    vec3 curColor = data2.data_swap; // 当前帧 raw RT (含噪)
+    vec3 pos = curr_sample.pos;
+    vec3 normal = curr_sample.normal; // R
+    vec3 curColor = curr_sample.data_swap; // 当前帧 raw RT (含噪)
     vec3 N = denoiseBuffer.data[idx].macroNormal;
     float roughness = denoiseBuffer.data[idx].roughness;
-    vec3 curVirtual = pos + normal; // 当前反射命中点 Q_C
+    vec3 curVirtual = pos + normal * vproj; // 当前反射命中点 Q_C
     float posLen = max(length(pos), 0.001);
     vec3 viewDir = pos / posLen; // eye → surface (相机在原点)
 
@@ -282,7 +278,7 @@ void main() {
     float Dfactor = GetSpecularDominantFactor(NoV, roughness);
 
     float vha = vmbFound ? (Dfactor * vmbConf) : 0.0;
-    float virtualMotionRoughnessWeight = smoothstep(0.0, 0.3, roughness); 
+    float virtualMotionRoughnessWeight = smoothstep(0.0, 0.3, roughness);
     vha *= (1.0 - virtualMotionRoughnessWeight);
 
     // SMB 回退: SMB 更可信时偏向 SMB
@@ -298,9 +294,7 @@ void main() {
     if (any(isnan(result))) result = curColor;
 
     // ---- 写出 (REFLECT_BUFFER_MIN: 仅 swap_color) ------------------------
-    data2.data_swap = result;
-    data2.weight = Wnew;
-    // 控制字段通过 swap_color.w 传递; flip / prev_weight / lpos / lnormal 由 swap5 写出.
-    data2.mixWeight = denoiseBuffer.data[idx].reflectWeight;
-    WriteReflect(data2, ivec2(pix));
+    curr_sample.data_swap = result;
+    curr_sample.weight = Wnew;
+    WriteReflect(curr_sample, ivec2(pix));
 }

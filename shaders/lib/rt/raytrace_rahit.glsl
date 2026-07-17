@@ -37,23 +37,38 @@ void main() {
     vec4 texColor = texture(blockTex, uv);
 
     // Unpack volume state
-    bool inside; uint bounce; bool handedness; uint ignoreEnc;
+    bool inside;
+    uint bounce;
+    bool handedness;
+    uint ignoreEnc;
     float prevDist = payload_unpackFlags(payload.data, inside, bounce, handedness, ignoreEnc);
     int blockID;
     vec3 shadowTrans = payload_unpackShadow(payload.data, blockID);
 
     if (inside) {
-        if (quad.vertices[0].block_id.x == 1000) {
-            shadowTrans *= exp(-clamp(gl_HitTEXT - prevDist, 0.0, 100.0) * vec3(0.1, 0.03, 0.04));
+        float segDist = clamp(gl_HitTEXT - prevDist, 0.0, 100.0);
+        if (quad.vertices[0].block_id.x == BLOCK_WATER) {
+            // Physically-based water extinction (real absorption coefficients)
+            shadowTrans *= exp(-segDist * vec3(0.1, 0.03, 0.04));
         } else {
-            shadowTrans *= exp(-10.0 * clamp(gl_HitTEXT - prevDist, 0.0, 10.0) * (1.05 - texColor.rgb) * texColor.a);
+            // LabPBR dielectric extinction:
+            //   albedo.rgb = base color (surface appearance → transmitted tint)
+            //   albedo.a   = translucent  (0=opaque, 1=fully transmitting)
+            //   T(d) = mix(0, albedo^d, translucent)
+            //   translucent→0: rapid extinction regardless of albedo
+            //   translucent→1: pure Beer-Lambert albedo^d
+            float translucency = texColor.a;
+            vec3 beersLambert = pow(max(texColor.rgb, 0.005), vec3(segDist));
+            shadowTrans *= mix(vec3(0.0), beersLambert, translucency);
         }
     }
 
     int ignoreID = payload_decodeIgnoreID(ignoreEnc);
 
+    // Pass through: transparent textures, shadow-ray-ignored transmissive blocks,
+    // or water when any ignore is active (shadow rays pass through all water/glass).
     if (texColor.a < 0.1 || quad.vertices[0].block_id.x == ignoreID
-        || (quad.vertices[0].block_id.x == 1000 && ignoreEnc != 0u)) {
+            || (quad.vertices[0].block_id.x == BLOCK_WATER && ignoreEnc != 0u)) {
         prevDist = gl_HitTEXT;
         inside = !inside;
         payload_packShadow(payload.data, shadowTrans, quad.vertices[0].block_id.x);

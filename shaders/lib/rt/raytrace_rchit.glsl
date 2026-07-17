@@ -92,12 +92,19 @@ void main() {
     if (inside) {
         vec2 uv = getFragmentUV(quad, baryCoord);
         vec4 albedo = texture(blockTex, uv);
-        if (quad.vertices[0].block_id.x == 1000) {
-            shadowTrans *= exp2(-clamp(gl_HitTEXT - prevDist, 0.0, 100.0)
+        float segDist = clamp(gl_HitTEXT - prevDist, 0.0, 100.0);
+        if (quad.vertices[0].block_id.x == BLOCK_WATER) {
+            // Physically-based water extinction (real absorption coefficients)
+            shadowTrans *= exp2(-segDist
                         * vec3(0.14426950, 0.04328085, 0.05770780));
         } else {
-            shadowTrans *= exp2(-14.42695 * clamp(gl_HitTEXT - prevDist, 0.0, 10.0)
-                        * (1.05 - albedo.rgb) * albedo.a);
+            // LabPBR dielectric extinction:
+            //   albedo.rgb = base color (surface appearance → transmitted tint)
+            //   albedo.a   = translucent  (0=opaque, 1=fully transmitting)
+            //   T(d) = mix(0, albedo^d, translucent)
+            float translucency = albedo.a;
+            vec3 beersLambert = pow(max(albedo.rgb, 0.005), vec3(segDist));
+            shadowTrans *= mix(vec3(0.0), beersLambert, translucency);
         }
     }
 

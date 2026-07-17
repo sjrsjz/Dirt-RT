@@ -47,9 +47,7 @@ struct bufferData {
     vec3 light;              // offset  16 (12B)
     float roughness;         // offset  28 (4B)
     vec3 specularAlbedo;     // offset  32 (12B) — rC.rgb * S.x
-    float reflectWeight;     // offset  44 (4B)
     vec3 diffuseAlbedo;      // offset  48 (12B) — nonSpecColor * diffuseSelector
-    float refractWeight;     // offset  60 (4B)
     vec3 transmissionAlbedo; // offset  64 (12B) — nonSpecColor * transmissionSelector
     int illuminationType;    // offset  76 (4B)
     vec3 emission;           // offset  80 (12B)
@@ -332,7 +330,6 @@ struct vec3IlluminationData {
     vec3 normal;
     float weight;
     float prev_weight;
-    float mixWeight;
 };
 
 // ---------------------------------------------------------------------------
@@ -376,23 +373,13 @@ SpecularRTElement packSpecularRT(vec3 pos, vec3 R, float virtualProjDist, vec3 c
     return e;
 }
 
-// 重建当前帧: pos + normal(=R*virtualProjDist) + raw RT color
-void unpackSpecularRT(SpecularRTElement e, out vec3 pos, out vec3 normal, out vec3 color) {
+void unpackSpecularRT(SpecularRTElement e, out vec3 pos, out vec3 R, out vec3 color, out float virtualProjDist) {
     pos    = vec3(e.px, e.py, e.pz);
-    normal = decodeNormal(e.oct_dir) * e.virtualProjDist;
+    R = decodeNormal(e.oct_dir);
     vec2 rg = unpackHalf2x16(floatBitsToUint(e.color_rg));
     float b = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
     color  = vec3(rg.x, rg.y, b);
-}
-
-// 读取时域历史 (swap5/7 写入, 101/102 下帧读)
-void unpackSpecularHistory(SpecularRTElement e, out vec3 histPos, out vec3 histNormal, out vec3 histColor, out float histWeight) {
-    histPos    = vec3(e.hist_px, e.hist_py, e.hist_pz);
-    histNormal = decodeNormal(e.hist_oct_dir) * e.hist_vprojdist;
-    vec2 rg = unpackHalf2x16(floatBitsToUint(e.hist_color_rg));
-    float b = unpackHalf2x16(floatBitsToUint(e.hist_color_b)).x;
-    histColor  = vec3(rg.x, rg.y, b);
-    histWeight = e.hist_weight;
+    virtualProjDist = e.virtualProjDist;
 }
 
 layout(std430, set = 3, binding = 3) buffer ReflectIlluminationDataBuffer {
@@ -557,7 +544,6 @@ vec3IlluminationData fetchReflect(ivec2 p) {
     float b = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
     tmp.data_swap = vec3(rg.x, rg.y, b);
     tmp.weight = e.accum_weight;
-    tmp.mixWeight = 0.0;
 
     #ifndef REFLECT_BUFFER_MIN2
     // 时域历史 (swap5 写入, 101 下帧读取)
@@ -580,7 +566,6 @@ vec3IlluminationData blendReflect(vec3IlluminationData A, vec3IlluminationData B
     t.data = mix(A.data, B.data, x);
     t.pos = mix(A.pos, B.pos, x);
     t.normal = mix(A.normal, B.normal, x);
-    t.mixWeight = (B.mixWeight - A.mixWeight) * x + A.mixWeight;
     #endif
     return t;
 }
@@ -647,7 +632,6 @@ vec3IlluminationData fetchRefract(ivec2 p) {
     rg = unpackHalf2x16(floatBitsToUint(e.hist_color_rg));
     b  = unpackHalf2x16(floatBitsToUint(e.hist_color_b)).x;
     tmp.data = vec3(rg.x, rg.y, b);
-    tmp.mixWeight = 0.0;
     tmp.normal = decodeNormal(e.hist_oct_dir) * e.hist_vprojdist;
     tmp.pos = vec3(e.hist_px, e.hist_py, e.hist_pz);
     #endif
@@ -663,7 +647,6 @@ vec3IlluminationData blendRefract(vec3IlluminationData A, vec3IlluminationData B
     t.data = mix(A.data, B.data, x);
     t.pos = mix(A.pos, B.pos, x);
     t.normal = mix(A.normal, B.normal, x);
-    t.mixWeight = (B.mixWeight - A.mixWeight) * x + A.mixWeight;
     #endif
     return t;
 }

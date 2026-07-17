@@ -30,7 +30,7 @@ bool notInRange(vec2 p) {
     return clamp(p, vec2(0), vec2(1)) != p;
 }
 
-bool evalVirtualPath(vec2 prevUV, vec3 curVirtual, vec3 curNormal_dir, vec3 curColor,
+bool evalVirtualPath(vec2 prevUV, vec3 curVirtual, vec3 curNormal_dir, vec3 curColor, float vproj,
     out vec3 result, out float Wnew) {
     result = curColor;
     Wnew = 1.0;
@@ -41,6 +41,8 @@ bool evalVirtualPath(vec2 prevUV, vec3 curVirtual, vec3 curNormal_dir, vec3 curC
     vec3 accumColor = vec3(0.0);
     float sumW = 0.0, sumPrevW = 0.0;
     float maxConf = 0.0;
+
+    float footprint = 1.0 / max(vproj, 1e-4);
 
     for (int i = 0; i < 4; i++) {
         ivec2 st = pt + ivec2(i & 1, i >> 1);
@@ -60,7 +62,7 @@ bool evalVirtualPath(vec2 prevUV, vec3 curVirtual, vec3 curNormal_dir, vec3 curC
         float distDiff = length(hVirtual - curVirtual);
 
         // 软性置信度：随虚像距离差平滑衰减
-        float posConf = exp2(-VIRT_POS_PARAM * distDiff);
+        float posConf = exp2(-VIRT_POS_PARAM * distDiff * footprint);
 
         vec3 hNormal_dir = decodeNormal(e.hist_oct_dir);
         float normDot = dot(hNormal_dir, curNormal_dir);
@@ -96,7 +98,6 @@ bool evalVirtualPath(vec2 prevUV, vec3 curVirtual, vec3 curNormal_dir, vec3 curC
     return true;
 }
 
-vec3IlluminationData data3;
 uint idx;
 
 void main() {
@@ -105,36 +106,34 @@ void main() {
 
     vec2 texCoord = (vec2(pix) + 0.5) / vec2(resolution);
     idx = getIndex(pix);
+
     float info_distance = denoiseBuffer.data[idx].distance;
 
-    unpackSpecularRT(refractIlluminationBuffer.data[idx], data3.pos, data3.normal, data3.data_swap);
-    data3.data = vec3(0.0);
-    data3.weight = 0.0;
-    data3.prev_weight = 0.0;
-    data3.mixWeight = 0.0;
+    float vproj;
+    vec3IlluminationData curr_sample;
+
+    unpackSpecularRT(refractIlluminationBuffer.data[idx], curr_sample.pos, curr_sample.normal, curr_sample.data_swap, vproj);
+    curr_sample.data = vec3(0.0);
+    curr_sample.weight = 0.0;
+    curr_sample.prev_weight = 0.0;
 
     // 如果几何深度无效，直接跳过时域
     if (info_distance < -0.5) {
-        data3.weight = 1.0;
-        WriteRefract(data3, ivec2(pix));
+        curr_sample.weight = 1.0;
+        WriteRefract(curr_sample, ivec2(pix));
         return;
     }
 
     cameraDelta = camPos - prevRaytracingCamPos;
 
-    vec3 pos = data3.pos;
-    vec3 normal = data3.normal;
-    // 解耦：normal 的长度是虚像距离(vproj)，方向才是纯法线
-    float vproj = length(normal);
-    vec3 curNormal_dir = vproj > 0.001 ? (normal / vproj) : vec3(0.0, 1.0, 0.0);
+    vec3 pos = curr_sample.pos;
+    vec3 curNormal_dir = curr_sample.normal;
 
-    vec3 curColor = data3.data_swap;
-    vec3 viewDir = pos / max(length(pos), 0.001);
+    vec3 curColor = curr_sample.data_swap;
+    vec3 rd = normalize(curr_sample.pos);
 
     // 计算当前帧的虚拟世界坐标
-    // 当 vproj 非常小时（例如没有折射的粗糙表面），curVirtual 天然等于 pos。
-    // 这意味着 VMB 会自动完美退化为普通的 SMB 表面重投影，无需做 IF/ELSE 分支混合！
-    vec3 curVirtual = pos + viewDir * vproj;
+    vec3 curVirtual = pos + rd * vproj;
 
     vec3 result = curColor;
     float Wnew = 1.0;
@@ -147,14 +146,13 @@ void main() {
         vec3 vmbUV = reproject(curVirtual);
 
         if (!any(isnan(vmbUV)) && !any(isinf(vmbUV)) && !notInRange(vmbUV.xy)) {
-            evalVirtualPath(vmbUV.xy, curVirtual, curNormal_dir, curColor, result, Wnew);
+            evalVirtualPath(vmbUV.xy, curVirtual, curNormal_dir, curColor, vproj, result, Wnew);
         }
     }
 
     if (any(isnan(result))) result = curColor;
 
-    data3.data_swap = result;
-    data3.weight = Wnew;
-    data3.mixWeight = denoiseBuffer.data[idx].refractWeight;
-    WriteRefract(data3, ivec2(pix));
+    curr_sample.data_swap = result;
+    curr_sample.weight = Wnew;
+    WriteRefract(curr_sample, ivec2(pix));
 }

@@ -3,7 +3,7 @@
 // ===========================================================================
 // Pass swap5: 反射缓冲写回 (Compute) — swap_color + color(flip) + lpos + lnormal
 // ===========================================================================
-// 101 (REFLECT_BUFFER_MIN) 已写入 swap_color = (accumulated, pack(weight, mixWeight)).
+// 101 (REFLECT_BUFFER_MIN) 已写入 swap_color = (accumulated, weight).
 // 本 pass: 将 301 降噪后颜色写回 swap_color.xyz, 保留 .w; 同时写 color(flip) / lpos / lnormal.
 // swap_color 的 sampler 读+image 写 UB 与原始 swap5 一致 (已验证可行).
 // ===========================================================================
