@@ -37,6 +37,13 @@
 #define FIRST_LOBE_VAL 2
 #endif
 
+// ---------------------------------------------------------------------------
+// PSR (Primary Surface Replacement) — refraction virtual-image reprojection
+// ---------------------------------------------------------------------------
+const float PSR_ROUGHNESS_THRESHOLD  = 0.15; // first-surface roughness above this → disable PSR, fall back to first-surface temporal accumulation
+const float PATH_ROUGHNESS_TERMINATE = 0.8;  // accumulated sqrt(Σ r_i²) above this → terminate refractive chain early (too diffuse)
+const int   MAX_REFRACTIVE_BOUNCES   = 4;    // max refractive surfaces to trace through before stopping
+
 layout(std430, binding = 0) uniform CameraInfo {
     vec3 corners[4];
     mat4 viewInverse;
@@ -210,6 +217,14 @@ Material evaluateMaterial(Payload pld, vec3 rd_i, uint bounce) {
         wetStrength_global, wetness_global, skylight, geomN);
 }
 
+// Check if a block is a transmissive/refractive surface (water, glass).
+// LabPBR standard: translucent blocks are identified by the rendering layer,
+// not by any material channel. In our ray-tracing pipeline we conservatively
+// treat only water (1000) and glass (1001) as transmissive for the PSR chain.
+bool isTransmissiveBlock(int blockID) {
+    return blockID == 1000 || blockID == 1001;
+}
+
 // Convert Material (from getMaterial) to BSDF material struct
 material materialFromEvaluated(Material mat, int blockID) {
     float metallic = mat.metallic;
@@ -324,6 +339,9 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     vec3 first_absorption = vec3(1.0);
     vec3 first_emission_val = vec3(0.0);
     vec3 first_light_surf = vec3(0.0);
+    float first_t2_ior_adjusted = 0.0; // IOR-adjusted virtual distance through refractive chain (PSR)
+    float first_pathRoughness  = 0.0;  // accumulated sqrt(Σ r_i²) through refractive chain
+    vec3  first_refr_dir       = rd;   // refracted direction at first surface (for edge-stopping)
 
     int depth = 0;
     for (; depth < MaxRay; depth++) {
@@ -500,15 +518,104 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             // [Refraction: transmission only, no Fresnel sub-event]
             // TIR (total internal reflection) → bsdf_weight=0 — that energy is covered by the
             // reflection pass's F term.  Transmission direction driven by GGX microNormal.
+            //
+            // PSR (Primary Surface Replacement):
+            //   Trace through the refractive chain to find the first non-refractive surface.
+            //   Accumulate IOR-adjusted virtual distance: t_virtual = Σ(t_i / n_i).
+            //   Virtual image position: P_virtual = C + V × (t1 + Σ[t_i / n_i]).
+            //   If the first surface is too rough, disable PSR and fall back to first-surface
+            //   temporal accumulation (virtualProjDist = 0).
             current_type = REFRACTION;
+            // ---- 用于实际路径追踪的 BSDF 方向 (POM 细节) ----
             vec3 refract_dir = refract(rd_i, microNormal, rs);
+            // ---- 用于 PSR 链追踪的稳定折射方向 (几何宏法线, 不受 POM/jitter 影响) ----
+            vec3 psr_refract_dir = refract(rd_i, macroNormal, rs);
             if (dot(refract_dir, refract_dir) > 0.0) {
                 next_rd = refract_dir;
+                // oct_dir 也存几何折射方向 → 时域边缘停止更稳定
+                first_refr_dir = dot(psr_refract_dir, psr_refract_dir) > 0.0 ? psr_refract_dir : refract_dir;
+                bool was_inverse_0 = inverse_0;
                 inverse_0 = !inverse_0;
+
+                // ---- PSR roughness gate ----
+                float r_accum2 = surface.R.x * surface.R.x;
+                bool psrEnabled = surface.R.x < PSR_ROUGHNESS_THRESHOLD;
+
+                if (psrEnabled) {
+                    vec3 ro_chain = ro_o;
+                    vec3 rd_chain = dot(psr_refract_dir, psr_refract_dir) > 0.0 ? psr_refract_dir : refract_dir;
+                    bool inside_chain = !was_inverse_0; // medium state after first refract
+                        vec3 departN = macroNormal;          // normal of surface we're departing from
+                        // n_camera: original camera medium IOR (constant; derivation → t_virtual = t × n_camera / n_segment)
+                        float n_camera = was_inverse_0 ? REFRACTIVE_INDEX : 1.0;
+
+                        for (int refr_depth = 0; refr_depth < MAX_REFRACTIVE_BOUNCES; refr_depth++) {
+                        vec3 ro_next, rd_next;
+                        float t_next = raycast(ro_chain + departN * (inside_chain ? -0.00025 : 0.00025),
+                                                rd_chain, ro_next, rd_next, !inside_chain, 0, uint(depth + 1 + refr_depth));
+
+                        if (t_next < -0.5) {
+                            // Sky — virtual image at infinity
+                            first_t2_ior_adjusted = VPROJDIST_SKY;
+                            break;
+                        }
+
+                        // Evaluate hit material
+                        Material hitMat = evaluateMaterial(tmp_Payload, rd_chain, uint(depth + 1 + refr_depth));
+                        int hitBlockID;
+                        payload_unpackShadow(tmp_Payload.data, hitBlockID);
+                        material hitSurf = materialFromEvaluated(hitMat, hitBlockID);
+
+                        // IOR-adjusted virtual distance for this segment.
+                        // Derivation: from Snell's law, t_virtual = t_segment × n_camera / n_segment
+                        // where n_segment is the medium the ray traveled through for this segment.
+                        float n_segment = inside_chain ? REFRACTIVE_INDEX : 1.0;
+                        first_t2_ior_adjusted += t_next * n_camera / n_segment;
+
+                        // Accumulate roughness (variance-additive)
+                        r_accum2 += hitSurf.R.x * hitSurf.R.x;
+
+                        // PSR anchor: only continue through water / glass surfaces.
+                        if (!isTransmissiveBlock(hitBlockID)) {
+                            // Non-transmissive surface (diffuse/reflective) — PSR anchor found
+                            break;
+                        }
+
+                        // Transmissive surface — continue through with GEOMETRIC normal
+                        // (PSR chain uses geometric normals exclusively — no GGX, no POM —
+                        //  so virtualProjDist is deterministic frame to frame)
+                        vec3 hitGeomN = payload_unpackGeomNormal(tmp_Payload.data);
+                        hitGeomN = faceforward(hitGeomN, hitGeomN, rd_chain);
+
+                        // IOR ratio for Snell's refraction: n_from / n_to
+                        float n_from_refr = inside_chain ? REFRACTIVE_INDEX : 1.0; // medium ray is coming FROM
+                        float n_to_refr   = inside_chain ? 1.0 : REFRACTIVE_INDEX; // medium ray is going TO
+                        float rs_chain = n_from_refr / n_to_refr;
+                        vec3 next_refract = refract(rd_chain, hitGeomN, rs_chain);
+
+                        if (dot(next_refract, next_refract) <= 0.0) {
+                            // TIR — chain terminates
+                            break;
+                        }
+
+                        rd_chain = next_refract;
+                        ro_chain = ro_next;
+                        inside_chain = !inside_chain;
+                        departN = hitGeomN; // surface normal we'll offset from next iteration
+
+                        // Early termination: path too diffuse
+                        if (sqrt(r_accum2) > PATH_ROUGHNESS_TERMINATE) break;
+                    }
+                }
+                // else: psrEnabled=false → first_t2_ior_adjusted stays 0.0 → fall back to
+                //       first-surface temporal accumulation (virtualProjDist=0).
+
+                first_pathRoughness = sqrt(r_accum2);
                 bsdf_weight = P_refr * refrLobeWeight * (1.0 - F);
             } else {
                 // TIR — transmission impossible, zero contribution; pick valid next_rd
                 next_rd = reflect(rd_i, microNormal);
+                first_refr_dir = next_rd; // TIR → oct_dir uses reflected direction
             }
             #else
             // [Diffuse + ALICE screen-space path guiding]
@@ -552,15 +659,44 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             bsdf_weight = vec3(guideWeight);
             #endif
         } else {
-            // --- Secondary bounces: preserve original stochastic mixture (with /P_lobe weights) ---
+            // --- Secondary bounces: stochastic mixture with correct MC estimator ---
             float rnd_lobe = getRandom();
             if (rnd_lobe < P_spec) {
                 current_type = REFLECTION;
+                // NDF-sampled reflection direction (same as first-bounce GGX sampling)
                 next_rd = reflect(rd_i, microNormal);
                 if (dot(next_rd, normal) > 0.0) {
-                    float IoN = abs(dot(rd_i, normal));
-                    float OoN = dot(next_rd, normal);
-                    bsdf_weight = specLobeWeight * GGX_G2(IoN, OoN, surface.R.x);
+                    vec3 wo = -rd_i;
+                    vec3 wi = next_rd;
+                    float NoV = abs(dot(normal, wo));
+                    float NoL = dot(normal, wi);
+
+                    if (NoV > 1e-6 && NoL > 1e-6) {
+                        vec3 Hsum = wo + wi;
+                        float Hlen2 = dot(Hsum, Hsum);
+                        if (Hlen2 > 1e-12) {
+                            vec3 H = Hsum * inversesqrt(Hlen2);
+                            float NoH = abs(dot(normal, H));
+                            float VoH = abs(dot(wo, H));
+
+                            if (NoH > 1e-6 && VoH > 1e-6) {
+                                float rough = max(surface.R.x, 1e-4);
+                                float D_NoH = GGXpdf(NoH, 0.0, rough);
+                                float D = D_NoH / NoH;
+                                float G2 = GGX_G2_standard(NoV, NoL, rough);
+                                vec3 Fh = reflectanceColor(surface.Cs, VoH).rgb;
+
+                                // Full microfacet BRDF → f × NoL / pdf_ndf
+                                // = Fh × S.x × G2 × VoH / (NoV × NoH)  (D cancels with pdf)
+                                vec3 fSpec = Fh * surface.S.x * D * G2 / max(4.0 * NoV * NoL, 1e-8);
+                                float pdfNDF = GGX_ndf_pdf(wo, wi, normal, rough);
+
+                                // Stochastic-lobe MIS: divide by P_spec (lobe selection probability)
+                                bsdf_weight = (pdfNDF > 1e-8)
+                                    ? (fSpec * NoL / (pdfNDF * P_spec)) : vec3(0.0);
+                            }
+                        }
+                    }
                 }
             } else if (rnd_lobe < P_spec + P_refr) {
                 current_type = REFRACTION;
@@ -728,6 +864,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     denoiseBuffer.data[idx].macroNormal = first_macro_n;
     denoiseBuffer.data[idx].illuminationType = first_type;
     denoiseBuffer.data[idx].roughness = first_roughness;
+    denoiseBuffer.data[idx].pathRoughness = first_roughness; // default: surface roughness; overwritten by refraction pass with accumulated path roughness
     denoiseBuffer.data[idx].absorption = first_absorption;
     denoiseBuffer.data[idx].rd = first_rd_i;
     #endif
@@ -794,23 +931,22 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     #else
     {
         // --- Refraction pass: write refractIlluminationBuffer (transmission only; TIR → reflection pass) ---
-        vec3 refr_R = first_rd_i;
+        // PSR (Primary Surface Replacement):
+        //   oct_dir encodes the refracted direction T at the first surface (for edge-stopping lobe similarity,
+        //   analogous to the reflection pass storing the reflected direction R).
+        //   The view direction V is reconstructible from pos (camera-relative: pos = P_surf - C → V = normalize(pos)).
+        //   Virtual position: P_virtual = P_surf + V × virtualProjDist, where virtualProjDist = Σ(t_i × n_camera / n_i).
+        //
+        //   If the first surface is too rough (psrEnabled=false), first_t2_ior_adjusted=0
+        //   → virtualProjDist=0 → P_virtual = P_surf → falls back to first-surface temporal accumulation.
+        vec3 refr_R = first_refr_dir;           // refracted direction T (TIR→reflect; for edge-stopping)
         float refr_vprojdist = 0.0;
         vec3 refr_color = vec3(0.0);
         if (!hit_sky_first && first_t > -0.5) {
             if (mixWeight.y > 0.001) {
-                vec3 r_rd, r_ro;
-                float rs_refract = first_n_i == REFRACTIVE_INDEX ? REFRACTIVE_INDEX : 1.0 / REFRACTIVE_INDEX;
-                vec3 refract_rd = refract(first_rd_i, first_n, rs_refract);
-                bool is_refract = dot(refract_rd, refract_rd) > 0.0;
-                if (!is_refract) refract_rd = reflect(first_rd_i, first_n);
-                float t_refr = raycast(
-                        first_p + (is_refract ? -1.0 : 1.0) * first_macro_n * 0.00025,
-                        refract_rd, r_ro, r_rd, false, 0, 1u);
-                refr_R = refract_rd;
-                refr_vprojdist = (t_refr > -0.5) ? t_refr : VPROJDIST_SKY;
+                refr_vprojdist = first_t2_ior_adjusted; // IOR-adjusted Σ(t_i / n_i), 0 if PSR disabled
             }
-            refr_color = total_illumination / max(first_transmissionAlbedo, vec3(1e-6));
+            refr_color = clamp(total_illumination / max(first_transmissionAlbedo, vec3(1e-6)), 0.0, 200.0 * div_avgExposure);
         }
         refractIlluminationBuffer.data[idx].px = pos_rel.x;
         refractIlluminationBuffer.data[idx].py = pos_rel.y;
@@ -819,6 +955,8 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         refractIlluminationBuffer.data[idx].virtualProjDist = refr_vprojdist;
         refractIlluminationBuffer.data[idx].color_rg = pack2HalfClamped(refr_color.r, refr_color.g);
         refractIlluminationBuffer.data[idx].color_b = pack2HalfClamped(refr_color.b, 0.0);
+        // Write accumulated path roughness for the denoiser (overwrites the default set by diffuse pass)
+        denoiseBuffer.data[idx].pathRoughness = first_pathRoughness;
     }
     #endif
 

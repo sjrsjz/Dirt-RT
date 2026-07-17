@@ -74,6 +74,7 @@ value.DEBUG_VIEW.15 = 折射历史权重
 value.DEBUG_VIEW.16 = 直接光照
 value.DEBUG_VIEW.17 = 自发光
 value.DEBUG_VIEW.18 = 漫反射反照率
+value.DEBUG_VIEW.19 = 折射虚拟距离
 
 # -- ReSTIR --
 option.useReSTIR = 使用 ReSTIR

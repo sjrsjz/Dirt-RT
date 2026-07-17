@@ -1,23 +1,10 @@
 #version 430 compatibility
 
 // ===========================================================================
-// Pass 102 CS: 折射时域累积 (Refract Temporal Accumulation)
-// ===========================================================================
-// 管线位置: 在光线追踪生成折射样本后，与上一帧历史混合
-//
-// 与 temporal_diffuse.glsl (漫反射) / temporal_reflect.glsl (反射) 的关键区别:
-//   - 折射的 mixWeight 用于追踪折射率变化 (穿过不同材质)
-//   - 附加 refractWeight 一致性检查 (来自 denoiseBuffer)
-//   - 使用 svgfPositionWeight 辅助验证位置一致性
-//   - NORMAL_PARAM=64 — 中间严厉度 (折射表面通常不如镜面敏感)
-//
-// 混合公式: 与反射相同的 EMA 模式
-//   new = old + (current - old) / prevW
+// Pass 102 CS: 折射时域累积 — P_virtual 虚像重投影 (完全修复版)
 // ===========================================================================
 
 #define REFRACT_BUFFER_MIN
-// 仅写 swap_color (color/lpos/lnormal 由 swap7 写),
-// 避免 SSBO 读写的潜在冲突 (转为纯计算管线后 UV 边界由 dispatch 保证).
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -25,46 +12,13 @@ layout(local_size_x = 8, local_size_y = 8) in;
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/denoise.glsl"
 
-// ---------------------------------------------------------------------------
-// Uniform 输入
-// ---------------------------------------------------------------------------
-
 uniform vec2 resolution;
 
-// ---------------------------------------------------------------------------
-// 可调参数
-// ---------------------------------------------------------------------------
-
-// 法线相似度权重指数
-const float NORMAL_PARAM = 64.0;
-
-// 位置/深度差异灵敏度
-const float POSITION_PARAM = 64.0;
-
-const float LUMINANCE_PARAM = 4.0;
-
-// ---------------------------------------------------------------------------
-// 边缘停止权重函数
-// ---------------------------------------------------------------------------
-
-// 法线权重: 基于法线矢量差的指数衰减 (替代夹角余弦方式)
-float svgfNormalWeight(vec3 centerNormal, vec3 normal) {
-    return clamp(exp2(-7.21347520 * length(centerNormal - normal)), 0.0, 1.0);
-}
-
-// 位置权重: 平面距离衰减 (注: "1 + 0*exp(...)" 当前退化为常数 1)
-float svgfPositionWeight(vec3 centerPos, vec3 pixelPos, vec3 normal, float distance) {
-    return exp2(-POSITION_PARAM * LOG2_E * abs(dot(pixelPos - centerPos, normal)
-               * (1.0 + 0.0 * exp2(-0.18033688 * distance))));
-}
-
-// ---------------------------------------------------------------------------
-// 重投影函数
-// ---------------------------------------------------------------------------
+// 虚像位置边缘停止: 多少米位移导致置信度减半
+const float VIRT_POS_PARAM = 8.0;
 
 vec3 cameraDelta;
 
-// 重投影: 全光线追踪推导矩阵 (单源一致, 零 Iris 混合)
 vec3 reproject(vec3 pos_rel) {
     vec3 prevPlayerPos = pos_rel + cameraDelta;
     vec4 clipPos = rtPrevProjection * rtPrevModelView * vec4(prevPlayerPos, 1.0);
@@ -72,85 +26,135 @@ vec3 reproject(vec3 pos_rel) {
     return ndc * 0.5 + 0.5;
 }
 
-// ---------------------------------------------------------------------------
-// 全局状态
-// ---------------------------------------------------------------------------
-
-vec3 prevScreenPos;
-float info_distance;
-uint idx_l;
-uint idx;
-
 bool notInRange(vec2 p) {
     return clamp(p, vec2(0), vec2(1)) != p;
 }
 
-vec3IlluminationData data3;  // 当前像素的折射光照数据 (来自 SSBO)
+bool evalVirtualPath(vec2 prevUV, vec3 curVirtual, vec3 curNormal_dir, vec3 curColor,
+    out vec3 result, out float Wnew) {
+    result = curColor;
+    Wnew = 1.0;
 
-// ===========================================================================
-// 时域混合 (Refract)
-// ===========================================================================
-void MixRefract() {
-    // ---- 重投影失败: 重置历史 --------------------------------------------
-    if (notInRange(prevScreenPos.xy)) {
-        data3.weight = 1.0;
-        return;
+    vec2 ptc = prevUV * vec2(resolution_global);
+    ivec2 pt = ivec2(floor(ptc));
+
+    vec3 accumColor = vec3(0.0);
+    float sumW = 0.0, sumPrevW = 0.0;
+    float maxConf = 0.0;
+
+    for (int i = 0; i < 4; i++) {
+        ivec2 st = pt + ivec2(i & 1, i >> 1);
+        uint si = getIndex(uvec2(clamp(st, ivec2(0), ivec2(resolution_global) - 1)));
+        SpecularRTElement e = refractIlluminationBuffer.data[si];
+
+        if (e.hist_weight < 1e-4) continue;
+
+        vec3 hPos = vec3(e.hist_px, e.hist_py, e.hist_pz);
+        vec3 hPosCur = hPos - cameraDelta;
+
+        vec3 hV = length(hPosCur) > 0.001 ? normalize(hPosCur) : vec3(0, 0, 1);
+        float hVproj = e.hist_vprojdist;
+
+        vec3 hVirtual = hPosCur + hV * hVproj;
+
+        float distDiff = length(hVirtual - curVirtual);
+
+        // 软性置信度：随虚像距离差平滑衰减
+        float posConf = exp2(-VIRT_POS_PARAM * distDiff);
+
+        vec3 hNormal_dir = decodeNormal(e.hist_oct_dir);
+        float normDot = dot(hNormal_dir, curNormal_dir);
+        // 如果法线差异过大(夹角>45度)，抛弃历史防止拖影
+        if (normDot < 0.707) continue;
+
+        // 双线性插值权重
+        vec2 sc = vec2(st);
+        float bw = (1.0 - abs(ptc.x - sc.x)) * (1.0 - abs(ptc.y - sc.y));
+        float w = bw * posConf;
+
+        // 颜色解包
+        vec2 rg = unpackHalf2x16(floatBitsToUint(e.hist_color_rg));
+        float b = unpackHalf2x16(floatBitsToUint(e.hist_color_b)).x;
+        vec3 hColor = vec3(rg.x, rg.y, b);
+
+        if (any(isnan(hColor)) || any(isinf(hColor))) continue;
+
+        accumColor += hColor * w;
+        sumW += w;
+        sumPrevW += w * e.hist_weight;
+        maxConf = max(maxConf, posConf);
     }
 
-    vec3IlluminationData data = sampleRefract(prevScreenPos.xy * vec2(resolution));
+    if (sumW < 1e-8) return false;
 
-    // req 6: 虚拟击中点 (pos + R*virtualProjDist) 用于重投影+权重
-    vec3 curVirtual = data3.pos + data3.normal;
-    vec3 histVirtualCur = (data.pos - cameraDelta) + data.normal;
-    float posWeight = exp2(-POSITION_PARAM * LOG2_E * length(histVirtualCur - curVirtual)
-                         / max(length(data3.normal), 0.1));
-    float s = exp2(-0.36067376 * abs(denoiseBuffer.data[idx_l].refractWeight - data.mixWeight))
-            * float(denoiseBuffer.data[idx_l].distance > -0.5)
-            * svgfNormalWeight(data.normal, data3.normal)
-            * posWeight;
+    float historyW = sumPrevW / sumW;
+    float allowed = ACCUMULATION_LENGTH * maxConf;
+    float prevW = min(historyW, allowed) + 1.0;
 
-    float prevW = data.weight;
-    // 历史权重上限 = ACCUMULATION_LENGTH (折射比反射更容易变化，所以限制更紧)
-    prevW = max(1.0, min(prevW * s + 1.0, ACCUMULATION_LENGTH));
-
-    // EMA 混合
-    data3.data_swap = data.data + (data3.data_swap - data.data) / prevW;
-    data3.weight = prevW;
+    result = mix(accumColor / sumW, curColor, 1.0 / max(prevW, 1.0));
+    Wnew = prevW;
+    return true;
 }
 
-// ===========================================================================
-// 主入口
-// ===========================================================================
+vec3IlluminationData data3;
+uint idx;
+
 void main() {
     uvec2 pix = gl_GlobalInvocationID.xy;
     if (any(greaterThanEqual(pix, uvec2(resolution)))) return;
 
+    vec2 texCoord = (vec2(pix) + 0.5) / vec2(resolution);
     idx = getIndex(pix);
+    float info_distance = denoiseBuffer.data[idx].distance;
 
-    info_distance = denoiseBuffer.data[idx].distance;
-
-    // 从 SSBO (SpecularRTElement) 重建当前帧折射数据: normal = R*virtualProjDist
     unpackSpecularRT(refractIlluminationBuffer.data[idx], data3.pos, data3.normal, data3.data_swap);
     data3.data = vec3(0.0);
     data3.weight = 0.0;
     data3.prev_weight = 0.0;
     data3.mixWeight = 0.0;
 
-    // ---- 天空 / 无效几何: 重置权重后直接写出 -----------------------------
+    // 如果几何深度无效，直接跳过时域
     if (info_distance < -0.5) {
         data3.weight = 1.0;
         WriteRefract(data3, ivec2(pix));
         return;
     }
 
-    // ---- 重投影到上一帧 (主命中点: 定位同一折射表面点) ------------------
     cameraDelta = camPos - prevRaytracingCamPos;
-    prevScreenPos = reproject(data3.pos);
-    idx_l = getIndex(uvec2(prevScreenPos.xy * vec2(resolution)));
 
-    // ---- 执行时域混合 ----------------------------------------------------
-    MixRefract();
+    vec3 pos = data3.pos;
+    vec3 normal = data3.normal;
+    // 解耦：normal 的长度是虚像距离(vproj)，方向才是纯法线
+    float vproj = length(normal);
+    vec3 curNormal_dir = vproj > 0.001 ? (normal / vproj) : vec3(0.0, 1.0, 0.0);
 
-    // 控制字段由 swap7 写出 (REFRACT_BUFFER_MIN 仅写 swap_color).
+    vec3 curColor = data3.data_swap;
+    vec3 viewDir = pos / max(length(pos), 0.001);
+
+    // 计算当前帧的虚拟世界坐标
+    // 当 vproj 非常小时（例如没有折射的粗糙表面），curVirtual 天然等于 pos。
+    // 这意味着 VMB 会自动完美退化为普通的 SMB 表面重投影，无需做 IF/ELSE 分支混合！
+    vec3 curVirtual = pos + viewDir * vproj;
+
+    vec3 result = curColor;
+    float Wnew = 1.0;
+
+    // 屏蔽掉指向天空的无效历史
+    bool hitSky = (vproj > 0.5 * VPROJDIST_SKY);
+
+    if (!hitSky) {
+        // 统一对虚像位置进行重投影
+        vec3 vmbUV = reproject(curVirtual);
+
+        if (!any(isnan(vmbUV)) && !any(isinf(vmbUV)) && !notInRange(vmbUV.xy)) {
+            evalVirtualPath(vmbUV.xy, curVirtual, curNormal_dir, curColor, result, Wnew);
+        }
+    }
+
+    if (any(isnan(result))) result = curColor;
+
+    data3.data_swap = result;
+    data3.weight = Wnew;
+    data3.mixWeight = denoiseBuffer.data[idx].refractWeight;
     WriteRefract(data3, ivec2(pix));
 }

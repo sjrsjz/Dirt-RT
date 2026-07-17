@@ -53,7 +53,7 @@ struct bufferData {
     vec3 transmissionAlbedo; // offset  64 (12B) — nonSpecColor * transmissionSelector
     int illuminationType;    // offset  76 (4B)
     vec3 emission;           // offset  80 (12B)
-    // [4B pad to 96]
+    float pathRoughness;     // offset  92 (4B)  — accumulated path roughness (PSR refraction chain)
     vec3 absorption;         // offset  96 (12B) — primary-segment atmospheric transmission
     // [4B pad to 112]
     vec3 rd;                 // offset 112 (12B) — primary ray direction (sky branch)

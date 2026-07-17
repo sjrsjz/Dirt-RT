@@ -110,7 +110,7 @@ void main() {
     vec3 cColor = c.color_vproj.xyz;
     float cVproj = c.color_vproj.w;
     uint cidx = getIndex(uvec2(clamp(ivec2(gid), ivec2(0), texSize - 1)));
-    float cRough = denoiseBuffer.data[cidx].roughness;
+    float cRough = denoiseBuffer.data[cidx].pathRoughness; // PSR 累计路径粗糙度
 
     float sumW = 0.0, sumL = 0.0, sumL2 = 0.0;
     for (int ky = -2; ky <= 2; ky++) {

@@ -199,6 +199,25 @@ void main() {
         // Diffuse albedo — per-pixel diffuse material multiplier
         fragColor.xyz = data.diffuseAlbedo;
 
+        #elif DEBUG_VIEW == 19
+        // Refraction virtual projection distance (IOR-adjusted, rainbow colormap, log scale)
+        //   blue → cyan → green → yellow → red → white(sky)
+        //   near 0              10              40      VPROJDIST_SKY
+        //   virtualProjDist = Σ(t_i × n_camera / n_segment) — IOR 修正后的虚像距离
+        {
+            SpecularRTElement re = refractIlluminationBuffer.data[getIndex(uvec2(gl_FragCoord.xy))];
+            float d = re.virtualProjDist;
+            if (d >= VPROJDIST_SKY * 0.99) {
+                fragColor.xyz = vec3(1.0, 1.0, 1.0);  // sky / no hit → white
+            } else {
+                float t = clamp(log2(max(d, 0.01) * 100.0 + 1.0) / 14.0, 0.0, 1.0);
+                float r = clamp(min(4.0 * t - 1.5, -4.0 * t + 4.5), 0.0, 1.0);
+                float g = clamp(min(4.0 * t - 0.5, -4.0 * t + 3.5), 0.0, 1.0);
+                float b = clamp(min(4.0 * t + 0.5, -4.0 * t + 2.5), 0.0, 1.0);
+                fragColor.xyz = vec3(r, g, b);
+            }
+        }
+
         #endif
     }
 }
