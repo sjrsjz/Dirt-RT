@@ -40,7 +40,7 @@ shared vec4 sm_light[TILE_AREA];
 // ---------------------------------------------------------------------------
 
 void unpackLightSampleSM(uint tile_idx, out vec3 pos, out vec3 normal,
-                         out AliceEncoding encoded, out float variance) {
+    out AliceEncoding encoded, out float variance) {
     vec4 geom = sm_geometry[tile_idx];
     vec4 light = sm_light[tile_idx];
     pos = geom.xyz;
@@ -109,8 +109,8 @@ void main() {
     float c_kappa = alice_kappa(c_len_v, c_omega);
 
     float c_var_omega_est = alice_radial_est_var_from_scalar(center_var_est, c_kappa);
-    float c_inv_sqrt_var       = inversesqrt(center_var_est);
-    float c_inv_sqrt_var_omega = inversesqrt(max(c_var_omega_est, 1e-12));
+    float c_inv_sqrt_var = inversesqrt(max(center_var_est, 1e-5));
+    float c_inv_sqrt_var_omega = inversesqrt(max(c_var_omega_est, 1e-5));
 
     #if ENABLE_GAUSSIAN_FILTER == 1
     float geomValid = float(c_omega >= 0.0);
@@ -122,7 +122,7 @@ void main() {
 
     float dist_to_cam = max(length(center_pos), 0.001);
     float inv_pixel_footprint = 1.0 / (SVGF_POSITION_PARAM
-        * max(dist_to_cam / float(resolution_global.y), 0.00001));
+                * max(dist_to_cam / float(resolution_global.y), 0.00001));
 
     // ---- 初始化累积器 ----------------------------------------------------
     float sumWeight = 1.0;
@@ -133,9 +133,9 @@ void main() {
     // 权重 = hw[|dx|] * hw[|dy|]; hw[0]=1.0, hw[1]=0.66667
     const vec3 GRID_3x3[8] = {
         vec3(-1, -1, 0.44445), vec3(-1, 0, 0.66667), vec3(-1, 1, 0.44445),
-        vec3( 0, -1, 0.66667),                        vec3( 0, 1, 0.66667),
-        vec3( 1, -1, 0.44445), vec3( 1, 0, 0.66667), vec3( 1, 1, 0.44445),
-    };
+        vec3(0, -1, 0.66667), vec3(0, 1, 0.66667),
+        vec3(1, -1, 0.44445), vec3(1, 0, 0.66667), vec3(1, 1, 0.44445),
+        };
 
     // =========================================================================
     // Phase 3: 单循环采样 — 全部从共享内存读取
@@ -151,42 +151,42 @@ void main() {
 
         if (sm_light[sample_idx].w < 0.0) continue;
 
-            // ---- 解包邻域样本 (共享内存读取) ------------------------------
-            vec3 sample_world_pos, sample_normal;
-            AliceEncoding sample_alice;
-            float sample_var_est;
-            unpackLightSampleSM(sample_idx, sample_world_pos, sample_normal,
-                                sample_alice, sample_var_est);
+        // ---- 解包邻域样本 (共享内存读取) ------------------------------
+        vec3 sample_world_pos, sample_normal;
+        AliceEncoding sample_alice;
+        float sample_var_est;
+        unpackLightSampleSM(sample_idx, sample_world_pos, sample_normal,
+            sample_alice, sample_var_est);
 
-            sample_alice.aliceY.w = abs(sample_alice.aliceY.w);
+        sample_alice.aliceY.w = abs(sample_alice.aliceY.w);
 
-            // ---- 几何权重 (不变) --------------------------------------------
-            vec3 delta = (sample_world_pos - center_pos) * inv_pixel_footprint;
-            float depthTerm = abs(dot(delta, center_normal));
-            float w_geometry = SVGF_NORMAL_POWER * (1.0 - dot(center_normal, sample_normal))
-                             + depthTerm * geomValid;
+        // ---- 几何权重 (不变) --------------------------------------------
+        vec3 delta = (sample_world_pos - center_pos) * inv_pixel_footprint;
+        float depthTerm = abs(dot(delta, center_normal));
+        float w_geometry = SVGF_NORMAL_POWER * (1.0 - dot(center_normal, sample_normal))
+                + depthTerm * geomValid;
 
-            // ---- Bures 距离 + 能量感知 -------------------------------------
-            vec4 s_enc = sample_alice.aliceY;
-            float s_len_v = length(s_enc.xyz);
-            float s_kappa = alice_kappa(s_len_v, s_enc.w);
+        // ---- Bures 距离 + 能量感知 -------------------------------------
+        vec4 s_enc = sample_alice.aliceY;
+        float s_len_v = length(s_enc.xyz);
+        float s_kappa = alice_kappa(s_len_v, s_enc.w);
 
-            float d_bures_sq = alice_bures_distance_sq(c_enc, c_kappa, s_enc, s_kappa);
+        float d_bures_sq = alice_bures_distance_sq(c_enc, c_kappa, s_enc, s_kappa);
 
-            float z_bures = sqrt(d_bures_sq) * c_inv_sqrt_var;
+        float z_bures = sqrt(d_bures_sq) * c_inv_sqrt_var;
 
-            float delta_omega = c_omega - s_enc.w;
-            float z_energy = abs(delta_omega) * c_inv_sqrt_var_omega * PHI_ENERGY;
+        float delta_omega = c_omega - s_enc.w;
+        float z_energy = abs(delta_omega) * c_inv_sqrt_var_omega * PHI_ENERGY;
 
-            float w_luma = SVGF_PHI_L * sqrt(z_bures * z_bures + z_energy * z_energy);
+        float w_luma = SVGF_PHI_L * sqrt(z_bures * z_bures + z_energy * z_energy);
 
-            // ---- 组合权重 -------------------------------------------------
-            float w0 = w_kernel * (1.0 + w_luma) * exp2(-(w_geometry + w_luma) * LOG2_E);
+        // ---- 组合权重 -------------------------------------------------
+        float w0 = w_kernel *  exp2(-(w_geometry + w_luma) * LOG2_E);
 
-            // ---- 累积 ------------------------------------------------------
-            accumulate_alice(accumAlice, sample_alice, w0);
-            sumWeight += w0;
-            sumVarEnergy += w0 * w0 * sample_var_est;
+        // ---- 累积 ------------------------------------------------------
+        accumulate_alice(accumAlice, sample_alice, w0);
+        sumWeight += w0;
+        sumVarEnergy += w0 * w0 * sample_var_est;
     }
 
     float inv_sumWeight = 1.0 / sumWeight;

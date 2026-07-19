@@ -23,7 +23,7 @@ layout(rgba32f) uniform writeonly image2D colorimg3;
 layout(rgba32f) uniform writeonly image2D colorimg4;
 
 // --- Kernel constants ---
-const float hw[3] = float[](1.0, 0.66667, 0.44444); // B-spline 5x5 kernel
+const float hw[3] = float[](1.0, 0.25, 0.075);
 
 #ifndef VAR_FILTER_NORMAL_POWER
 #define VAR_FILTER_NORMAL_POWER SVGF_NORMAL_POWER
@@ -254,6 +254,8 @@ void main() {
     {
         // 中心 + 邻域位置 (复用 Phase 1 加载的 sm_tile 2D 数组)
         int scx = int(cx), scy = int(cy);
+        #define P(dx,dy) vec3(sm_tile[scy+(dy)][scx+(dx)].px, \
+                                      sm_tile[scy+(dy)][scx+(dx)].py, \
         #define P(dx,dy) vec3(sm_tile[scy+(dy)][scx+(dx)].px, \
                               sm_tile[scy+(dy)][scx+(dx)].py, \
                               sm_tile[scy+(dy)][scx+(dx)].pz)

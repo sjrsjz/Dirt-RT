@@ -40,15 +40,15 @@ layout(location = 1) out mediump vec4 out_light_sample_blurred;
 // samples = 8, min distance = 0.5
 // .xy = 归一化采样偏移, .z = length(.xy), .w = 高斯核权重 exp(-z^2/2)
 const vec4 POISSON_8[8] = {
-    vec4( -0.4706069, -0.4427112, +0.6461146, +0.81170 ),
-    vec4( -0.9057375, +0.3003471, +0.9542373, +0.63422 ),
-    vec4( -0.3487388, +0.4037880, +0.5335386, +0.86734 ),
-    vec4( +0.1023042, +0.6439373, +0.6520134, +0.80847 ),
-    vec4( +0.5699277, +0.3513750, +0.6695386, +0.79925 ),
-    vec4( +0.2939128, -0.1131226, +0.3149309, +0.95161 ),
-    vec4( +0.7836658, -0.4208784, +0.8895339, +0.67328 ),
-    vec4( +0.1564120, -0.8198990, +0.8346850, +0.70589 )
-};
+    vec4(-0.4706069, -0.4427112, +0.6461146, +0.81170),
+    vec4(-0.9057375, +0.3003471, +0.9542373, +0.63422),
+    vec4(-0.3487388, +0.4037880, +0.5335386, +0.86734),
+    vec4(+0.1023042, +0.6439373, +0.6520134, +0.80847),
+    vec4(+0.5699277, +0.3513750, +0.6695386, +0.79925),
+    vec4(+0.2939128, -0.1131226, +0.3149309, +0.95161),
+    vec4(+0.7836658, -0.4208784, +0.8895339, +0.67328),
+    vec4(+0.1564120, -0.8198990, +0.8346850, +0.70589)
+    };
 
 #define POISSON_N 8
 
@@ -57,7 +57,7 @@ const vec4 POISSON_8[8] = {
 // ---------------------------------------------------------------------------
 
 void unpackLightSample(ivec2 coord, out vec3 pos, out vec3 normal,
-                       out AliceEncoding encoded, out float variance) {
+    out AliceEncoding encoded, out float variance) {
     vec4 sample_data0 = texelFetch(colortex3, coord, 0);
     vec4 sample_data1 = texelFetch(colortex4, coord, 0);
     pos = sample_data0.xyz;
@@ -96,7 +96,7 @@ void main() {
     //   c_inv_sqrt_var       → v-space z-score 归一化 (标量估计量标准差逆)
     //   c_inv_sqrt_var_omega → ω-space z-score 归一化 (径向估计量标准差逆)
     float c_var_omega_est = alice_radial_est_var_from_scalar(center_var_est, c_kappa);
-    float c_inv_sqrt_var       = inversesqrt(center_var_est);
+    float c_inv_sqrt_var = inversesqrt(max(center_var_est, 1e-12));
     float c_inv_sqrt_var_omega = inversesqrt(max(c_var_omega_est, 1e-12));
 
     // 高斯曲率标记
@@ -110,7 +110,7 @@ void main() {
 
     float dist_to_cam = max(length(center_pos), 0.001);
     float inv_pixel_footprint = 1.0 / (SVGF_POSITION_PARAM
-        * max(dist_to_cam / float(resolution_global.y), 0.00001));
+                * max(dist_to_cam / float(resolution_global.y), 0.00001));
 
     // ---- 初始化累积器 ----------------------------------------------------
     float sumWeight = 1.0;
@@ -137,7 +137,7 @@ void main() {
         AliceEncoding sample_alice;
         float sample_var_est;
         unpackLightSample(sample_coord, sample_world_pos, sample_normal,
-                          sample_alice, sample_var_est);
+            sample_alice, sample_var_est);
 
         if (sample_var_est < 0.0) continue; // 天空
         sample_alice.aliceY.w = abs(sample_alice.aliceY.w);
@@ -146,7 +146,7 @@ void main() {
         vec3 delta = (sample_world_pos - center_pos) * inv_pixel_footprint;
         float depthTerm = abs(dot(delta, center_normal));
         float w_geometry = SVGF_NORMAL_POWER * (1.0 - dot(center_normal, sample_normal))
-                         + depthTerm * geomValid;
+                + depthTerm * geomValid;
 
         // ---- Bures 距离 + 能量感知 -------------------------------------
         vec4 s_enc = sample_alice.aliceY;
@@ -162,7 +162,7 @@ void main() {
         float w_luma = SVGF_PHI_L * sqrt(z_bures * z_bures + z_energy * z_energy);
 
         // ---- 组合权重 -----------------------------------------------
-        float w0 = w_kernel * (1.0 + w_luma) * exp2(-(w_geometry + w_luma) * LOG2_E);
+        float w0 = w_kernel * exp2(-(w_geometry + w_luma) * LOG2_E);
 
         // ---- 累积 ----------------------------------------------------
         accumulate_alice(accumAlice, sample_alice, w0);

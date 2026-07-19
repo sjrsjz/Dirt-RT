@@ -885,6 +885,8 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             // Both are encoded directly — no albedo demodulation needed.
             // The full diffuse BRDF (nonSpecColor × diffuseSelector) is baked
             // into denoiseBuffer.diffuseAlbedo and applied in fog.glsl.
+            L_indirect = clamp(L_indirect, 0.0, 32000.0);
+            L_direct_0 = clamp(L_direct_0, 0.0, 32000.0);
             AliceEncoding indAlice = irradiance_to_alice(L_indirect, first_rd_o);
             AliceEncoding dirAlice = irradiance_to_alice(L_direct_0, -lightDir);
             indAlice.CoCg += dirAlice.CoCg;
