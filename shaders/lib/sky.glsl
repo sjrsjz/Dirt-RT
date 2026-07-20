@@ -147,4 +147,4 @@ vec3 sampleSkyNoSun(float pos_y, in vec3 n, in vec3 lightDir) {
     return max(c_sun + c_moon, 0.0);
 }
 
-#endif // LIGHT_COLOR_GLSL
+#endif // SKY_GLSL
