@@ -21,7 +21,7 @@ vec3 applyVolumeExtinction(vec3 shadowTrans, float segDist, vec4 texColor, int b
     }
     float translucency = texColor.a;
     vec3 beersLambert = pow(max(texColor.rgb, 0.005), vec3(segDist));
-    return shadowTrans * mix(vec3(0.0), beersLambert, translucency);
+    return shadowTrans * mix(vec3(1.0), beersLambert, translucency);
 }
 
 #endif // VOLUME_EXTINCTION_GLSL
