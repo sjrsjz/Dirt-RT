@@ -212,8 +212,8 @@ void main() {
         // Path guide ALICE direction as RGB (蓄水池+降噪投票结果, N=5)
         {
             vec4 guideY; float guideEnergy;
-            readPathGuide(xy, guideY, guideEnergy);
-            if (guideEnergy < 1e-6) {
+            float guideM; readPathGuide(xy, guideY, guideM);
+            if (guideM < 1e-6) {
                 fragColor.xyz = vec3(0.0); // 无效/天空 → 黑
             } else {
                 vec3 dir = guideY.xyz / max(length(guideY.xyz), 1e-6);

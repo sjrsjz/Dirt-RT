@@ -5,6 +5,7 @@
 // ===========================================================================
 
 layout(local_size_x = 16, local_size_y = 16) in;
+layout(rgba32f) uniform writeonly image2D colorimg6;
 
 #define DIFFUSE_BUFFER_MIN
 #define PREV_DIFFUSE_BUFFER
@@ -340,6 +341,7 @@ void MixDiffuse() {
 
     if (validKernelWeight < 1e-5) {
         resetToCurrentSample();
+        imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), vec4(0.0, 0.0, 0.0, 0.0));
         return;
     }
 
@@ -353,6 +355,7 @@ void MixDiffuse() {
     histWeight = clamp(histWeight, 0.0, float(TEMPORAL_MAX_HISTORY));
     if (histWeight <= TEMPORAL_HISTORY_MIN_WEIGHT) {
         resetToCurrentSample();
+        imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), vec4(0.0, 0.0, 0.0, 0.0));
         return;
     }
 
@@ -372,6 +375,7 @@ void MixDiffuse() {
     output_weight = min(W, float(TEMPORAL_MAX_HISTORY));
 
     out_data.data_swap = curAlpha >= 0.9999 ? current_data.data_swap : mix_alice(histAlice, current_data.data_swap, curAlpha);
+    imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), vec4(validKernelWeight, 0.0, 0.0, 0.0));
 }
 
 // ===========================================================================
@@ -394,13 +398,15 @@ void main() {
             ivec2 clamped = clamp(gc, ivec2(0), ivec2(resolution) - 1);
             uvec2 loadXY = uvec2(clamped);
 
-            vec3 _pos; float d;
+            vec3 _pos;
+            float d;
             readGeo0(GEO_N_GEO, loadXY, _pos, d);
             AABBTileSample s;
             s.dist = d;
 
             if (d > -0.5) {
-                AliceEncoding alice; vec3 _n2;
+                AliceEncoding alice;
+                vec3 _n2;
                 readDiffuseLightRT(loadXY, alice, _n2);
                 s.aliceY = alice.aliceY;
                 s.CoCg = alice.CoCg;
@@ -417,18 +423,24 @@ void main() {
 
     if (any(greaterThanEqual(pix, uvec2(resolution)))) return;
 
-    { readGeo0(GEO_N_GEO, pix, current_data.pos, info_distance); }
+    {
+        readGeo0(GEO_N_GEO, pix, current_data.pos, info_distance);
+    }
     {
         // 从 DiffuseBuffer 只读 ALICE 光照 + normal2，pos 复用上面的 Geo0 结果
         uvec2 _xy = uvec2(pix);
-        AliceEncoding alice; vec3 n2;
+        AliceEncoding alice;
+        vec3 n2;
         readDiffuseLightRT(_xy, alice, n2);
         current_data.data_swap = alice;
         current_data.normal2 = n2;
         current_data.weight = 1.0;
         // normal 也从 Geo1 取，避免再读 DiffuseBuffer
-        vec3 _n; float _r; int _it;
-        float _pr; readGeo1(GEO_N_NORMALS, pix, _n, _r, _it, _pr);
+        vec3 _n;
+        float _r;
+        int _it;
+        float _pr;
+        readGeo1(GEO_N_NORMALS, pix, _n, _r, _it, _pr);
         current_data.normal = _n;
     }
 
@@ -442,6 +454,7 @@ void main() {
     if (info_distance < -0.5) {
         out_data.weight = 0.0;
         WriteDiffuse(out_data, ivec2(pix));
+        imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), vec4(0.0, 0.0, 0.0, 0.0));
         return;
     }
 

@@ -52,7 +52,7 @@
 #define EXPOSURE_CURVE_K 1.0 // Highlight compression before tonemap: f(x)=ln(k+e^x)-ln(1+k). 0=off, higher=more compression. [0.0 0.1 0.25 0.5 1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0 9.0 10.0]
 
 // -- Path guiding --
-#define PATH_GUIDING_STRENGTH 0.9 // Mix probability weight for ALICE-guided importance sampling vs cosine-weighted sampling. Higher = more samples steered toward the prior, lower = more uniform. [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.925 0.95 0.975 0.99 0.999]
+#define PATH_GUIDING_STRENGTH 0.75 // Mix probability weight for ALICE-guided importance sampling vs cosine-weighted sampling. Higher = more samples steered toward the prior, lower = more uniform. [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.925 0.95 0.975 0.99 0.999]
 #define PATH_GUIDING_SPECULAR_STRENGTH 0.85 // Base mix probability for ALICE-guided specular reflection. Final probability = STRENGTH × roughness × rho, so smooth surfaces (low roughness) or isotropic fields (low rho) naturally suppress guiding. Guiding is only active when both roughness and rho are meaningful. [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.95 0.99]
 
 // -- NRD curvature correction --
@@ -71,7 +71,7 @@ const int colortex2Format = RGBA32F;
 const int colortex3Format = RGBA32F;
 const int colortex4Format = RGBA32F;
 const int colortex5Format = RGBA32F;
-const int colortex6Format = RGBA16F;
+const int colortex6Format = RGBA32F;
 const int colortex7Format = RGBA32F;
 const int colortex8Format = RGBA32F;
 const int colortex9Format = RGBA32F;
