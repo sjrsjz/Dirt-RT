@@ -66,38 +66,72 @@ void main() {
     ivec2 texSize = ivec2(resolution);
     uint tid = gl_LocalInvocationIndex;
 
-    // ---- Phase 1: 协作加载 tile 到共享内存 ----
+    // ---- Phase 1: 协作加载 tile 到共享内存（按 N 层级拆分 barrier）----
+    // Phase 1a: Binding 0 N=0 — 几何位置 + 距离（用于天空判定）
     for (uint i = tid; i < TILE_AREA; i += 256u) {
         uint tx = i % TILE;
         uint ty = i / TILE;
         ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(tx, ty);
         ivec2 cc = clamp(gc, ivec2(0), texSize - 1);
-        uint idx = getIndex(uvec2(cc));
+        uvec2 xy = uvec2(cc);
 
-        float dist = denoiseBuffer.data[idx].distance;
-        TileSample s;
-        if (dist > -0.5) {
-            SpecularRTElement e = reflectIlluminationBuffer.data[idx];
-            vec2 rg = unpackHalf2x16(floatBitsToUint(e.color_rg));
-            float b = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
-            vec3 color = vec3(rg.x, rg.y, b);
-            if (any(isnan(color)) || any(isinf(color))) color = vec3(0.0);
-            vec3 R = decodeNormal(e.oct_dir);
-            vec3 epos = vec3(e.px, e.py, e.pz);
-            // Store the actual surface geometry normal (not the reconstructed V+R)
-            // for use as surface geometry weight in 301 edge-stopping
-            vec3 H = denoiseBuffer.data[idx].macroNormal;
-            s.pos_oct = vec4(epos, e.oct_dir);
-            s.color_vproj = vec4(color, e.virtualProjDist);
-            s.H_dist = vec4(H, dist);
-        } else {
-            s.pos_oct = vec4(0.0);
-            s.color_vproj = vec4(0.0);
-            s.H_dist = vec4(0.0, 0.0, 0.0, dist); // dist<0 → 天空
-        }
-        sm[i] = s;
+        vec3 dpos; float dist;
+        readGeo0(GEO_N_GEO, xy, dpos, dist);
+        sm[i].H_dist.w = dist;
+        sm[i].pos_oct.xyz = dpos;
     }
+    barrier();
+    memoryBarrierShared();
 
+    // Phase 1b: Binding 0 N=1 — 法线 + roughness（仅非天空像素）
+    for (uint i = tid; i < TILE_AREA; i += 256u) {
+        if (sm[i].H_dist.w > -0.5) {
+            uint tx = i % TILE;
+            uint ty = i / TILE;
+            ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(tx, ty);
+            ivec2 cc = clamp(gc, ivec2(0), texSize - 1);
+            uvec2 xy = uvec2(cc);
+
+            vec3 H; float rough_unused; int illumType_unused;
+            float _pr; readGeo1(GEO_N_NORMALS, xy, H, rough_unused, illumType_unused, _pr);
+            sm[i].H_dist.xyz = H;
+        }
+    }
+    barrier();
+    memoryBarrierShared();
+
+    // Phase 1c: Binding 3 N=0 — 反射几何（位置 + 方向 R）
+    for (uint i = tid; i < TILE_AREA; i += 256u) {
+        if (sm[i].H_dist.w > -0.5) {
+            uint tx = i % TILE;
+            uint ty = i / TILE;
+            ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(tx, ty);
+            ivec2 cc = clamp(gc, ivec2(0), texSize - 1);
+            uvec2 xy = uvec2(cc);
+
+            vec3 epos, R;
+            readReflGeo(xy, epos, R);
+            sm[i].pos_oct = vec4(epos, encodeNormal(R));
+        }
+    }
+    barrier();
+    memoryBarrierShared();
+
+    // Phase 1d: Binding 3 N=1 — 反射光照（颜色 + 虚拟投射距离）
+    for (uint i = tid; i < TILE_AREA; i += 256u) {
+        if (sm[i].H_dist.w > -0.5) {
+            uint tx = i % TILE;
+            uint ty = i / TILE;
+            ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(tx, ty);
+            ivec2 cc = clamp(gc, ivec2(0), texSize - 1);
+            uvec2 xy = uvec2(cc);
+
+            vec3 color; float vprojDist, accumW;
+            readReflLight(xy, color, vprojDist, accumW);
+            if (any(isnan(color)) || any(isinf(color))) color = vec3(0.0);
+            sm[i].color_vproj = vec4(color, vprojDist);
+        }
+    }
     barrier();
     memoryBarrierShared();
 
@@ -117,16 +151,11 @@ void main() {
     vec3 cPos = c.pos_oct.xyz;
     vec3 cR = decodeNormal(c.pos_oct.w);
     vec3 cH = c.H_dist.xyz;
-    uint gidx = getIndex(uvec2(clamp(ivec2(gid), ivec2(0), texSize - 1)));
-    SpecularRTElement ce = reflectIlluminationBuffer.data[gidx];
-    vec2 crg = unpackHalf2x16(floatBitsToUint(ce.color_rg));
-    float cb = unpackHalf2x16(floatBitsToUint(ce.color_b)).x;
-    vec3 cColor = vec3(crg.x, crg.y, cb);
-    float cWeight = ce.accum_weight;
-    float cVproj = c.color_vproj.w;
-    // roughness 仅中心输出需要, 邻域方差不用 → 直接读 denoiseBuffer (中心)
-    uint cidx = getIndex(uvec2(clamp(ivec2(gid), ivec2(0), texSize - 1)));
-    float cRough = denoiseBuffer.data[cidx].roughness;
+    uvec2 gxy = uvec2(clamp(ivec2(gid), ivec2(0), texSize - 1));
+    vec3 cColor; float cVproj, cWeight;
+    readReflLight(gxy, cColor, cVproj, cWeight);
+    vec3 cH_unused; float cRough; int cIllumType_unused;
+    float _pr2; readGeo1(GEO_N_NORMALS, gxy, cH_unused, cRough, cIllumType_unused, _pr2);
     cRough = clamp(cRough, 0.1, 1.0);
 
     // ---- Phase 2: 5×5 几何感知双边方差 (亮度矩: var = Σw·L²/Σw − (Σw·L/Σw)²) ----

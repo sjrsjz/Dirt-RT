@@ -1,213 +1,245 @@
 
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/lighting/alice.glsl"
-
-uint getIndex(uvec2 xy) {
-    uvec2 p = min(xy, uvec2(resolution_global) - 1u);
-    uint W = uint(resolution_global.x);
-    uint H = uint(resolution_global.y);
-    
-    // 1. 计算最大能被 8 整除的内部安全区域大小
-    uint W_safe = (W >> 3u) << 3u; // (W / 8) * 8
-    uint H_safe = (H >> 3u) << 3u; // (H / 8) * 8
-    
-    if (p.x < W_safe && p.y < H_safe) {
-        // ---- 安全内部区：继续使用极致的 8x8 Morton Tiling ----
-        uint tileX = p.x >> 3u;
-        uint tileY = p.y >> 3u;
-        uint tilesPerRow = W_safe >> 3u; // 安全区域横向有多少个 Tile
-        uint tileIndex = tileY * tilesPerRow + tileX;
-        
-        uint localX = p.x & 7u;
-        uint localY = p.y & 7u;
-        uint mortonLocal = ((localY & 4u) << 3u) | ((localX & 4u) << 2u) | 
-                           ((localY & 2u) << 2u) | ((localX & 2u) << 1u) | 
-                           ((localY & 1u) << 1u) |  (localX & 1u);
-        
-        return (tileIndex << 6u) | mortonLocal;
-    } 
-    else if (p.y >= H_safe) {
-        // ---- 顶部残缺带：线性映射到缓冲区后部 ----
-        uint local_y = p.y - H_safe;
-        return W_safe * H_safe + local_y * W + p.x;
-    } 
-    else {
-        // ---- 右侧残缺带：线性映射到缓冲区最后剩余空间 ----
-        uint local_x = p.x - W_safe;
-        return W_safe * H_safe + W * (H - H_safe) + p.y * (W - W_safe) + local_x;
-    }
-}
-
-// 逐 lobe 材质乘数 + G-Buffer: 128B/元素, scalar 填入 vec3 尾部 4B padding.
-// specularAlbedo / diffuseAlbedo / transmissionAlbedo 由 ray0.rgen 写入,
-// 供 composite_lighting.glsl 合成时与各自 denoised 光照相乘 (每个 buffer 存材质无关光场信号)。
-struct bufferData {
-    vec3 macroNormal;        // offset   0 (12B)
-    float distance;          // offset  12 (4B)
-    vec3 light;              // offset  16 (12B)
-    float roughness;         // offset  28 (4B)
-    vec3 specularAlbedo;     // offset  32 (12B) — rC.rgb * S.x
-    vec3 diffuseAlbedo;      // offset  48 (12B) — nonSpecColor * diffuseSelector
-    vec3 transmissionAlbedo; // offset  64 (12B) — nonSpecColor * transmissionSelector
-    int illuminationType;    // offset  76 (4B)
-    vec3 emission;           // offset  80 (12B)
-    float pathRoughness;     // offset  92 (4B)  — accumulated path roughness (PSR refraction chain)
-    vec3 absorption;         // offset  96 (12B) — primary-segment atmospheric transmission
-    // [4B pad to 112]
-    vec3 rd;                 // offset 112 (12B) — primary ray direction (sky branch)
-    // [4B pad to 128]
-};                           // 128B total
-
-layout(std430, set = 3, binding = 0) buffer DenoiseBuffer {
-    bufferData data[];
-} denoiseBuffer;
-
+#include "/lib/common/tiled_addr.glsl"
 #include "/lib/common/oct_encode.glsl"
 
-// 打包两个 half 为单个 float
+// ===========================================================================
+// Vec4-based SSBO addressing — 用 tiledAddr8x8 替代旧 getIndex
+// ===========================================================================
+// 所有 SSBO 均以 vec4 data[] 存储。每个"抽象 image"是一张分辨率×分辨率
+// 的 vec4 格网，以 8×8 瓦片编码。N 选抽象 image 层级。
+
+uint addr(uint N, uvec2 xy) {
+    // 钳制到 resolution_global 范围内，匹配旧 getIndex 行为：防止越界坐标破坏 tile 计算
+    uvec2 p = min(xy, uvec2(resolution_global) - 1u);
+    return tiledAddr8x8(N, uint(resolution_global.x), uint(resolution_global.y), p.x, p.y);
+}
+
+uint addr(uint N, ivec2 xy) {
+    return addr(N, uvec2(xy));
+}
+
+// ===========================================================================
+// SSBO 声明 — 4 个 binding，全部 vec4 data[]
+// ===========================================================================
+
+layout(std430, set = 3, binding = 0) buffer GeometryMaterialBuffer {
+    vec4 data[];
+} geomBuffer;
+
+layout(std430, set = 3, binding = 2) buffer DiffuseBuffer {
+    vec4 data[];
+} diffuseBuffer;
+
+layout(std430, set = 3, binding = 3) buffer ReflectBuffer {
+    vec4 data[];
+} reflectBuffer;
+
+layout(std430, set = 3, binding = 4) buffer RefractBuffer {
+    vec4 data[];
+} refractBuffer;
+
+// ===========================================================================
+// Binding 0 — GeometryMaterialBuffer pack/unpack
+// ===========================================================================
+// N=0: vec4(worldPos.xyz, distance)
+// N=1: vec4(oct(macroNormal), roughness, float(illumType), pathRoughness)
+// N=2: vec4(packHalf(spR,spG), packHalf(spB,dfR), packHalf(dfG,dfB), pad)
+// N=3: vec4(packHalf(trR,trG), packHalf(trB,emR), packHalf(emG,emB), oct(rd))
+// N=4: vec4(packHalf(ltR,ltG), packHalf(ltB,abR), packHalf(abG,abB), pad)
+
+// --- N=0 ---
+void writeGeo0(uint N, uvec2 xy, vec3 pos, float dist) {
+    geomBuffer.data[addr(N, xy)] = vec4(pos, dist);
+}
+void readGeo0(uint N, uvec2 xy, out vec3 pos, out float dist) {
+    vec4 v = geomBuffer.data[addr(N, xy)];
+    pos = v.xyz; dist = v.w;
+}
+
+// --- N=1 ---
+void writeGeo1(uint N, uvec2 xy, vec3 macroN, float rough, int illumType, float pathRoughness) {
+    geomBuffer.data[addr(N, xy)] = vec4(encodeNormal(macroN), rough, float(illumType), pathRoughness);
+}
+void readGeo1(uint N, uvec2 xy, out vec3 macroN, out float rough, out int illumType, out float pathRoughness) {
+    vec4 v = geomBuffer.data[addr(N, xy)];
+    macroN = decodeNormal(v.x);
+    rough = v.y;
+    illumType = int(v.z);
+    pathRoughness = v.w;
+}
+
+// 折射 pass 专用：只更新 pathRoughness（RMW 但无需 half 打包/解包）
+void writePathRoughness(uint N, uvec2 xy, float pathR) {
+    uint idx = addr(N, xy);
+    vec4 v = geomBuffer.data[idx];
+    v.w = pathR;
+    geomBuffer.data[idx] = v;
+}
+float readPathRoughness(uint N, uvec2 xy) {
+    return geomBuffer.data[addr(N, xy)].w;
+}
+
+// --- N=2 ---
+void writeAlbedosPath(uint N, uvec2 xy, vec3 spec, vec3 diff) {
+    geomBuffer.data[addr(N, xy)] = vec4(
+        uintBitsToFloat(packHalf2x16(vec2(clamp(spec.r, -65504.0, 65504.0), clamp(spec.g, -65504.0, 65504.0)))),
+        uintBitsToFloat(packHalf2x16(vec2(clamp(spec.b, -65504.0, 65504.0), clamp(diff.r, -65504.0, 65504.0)))),
+        uintBitsToFloat(packHalf2x16(vec2(clamp(diff.g, -65504.0, 65504.0), clamp(diff.b, -65504.0, 65504.0)))),
+        0.0
+    );
+}
+void readAlbedosPath(uint N, uvec2 xy, out vec3 spec, out vec3 diff) {
+    vec4 v = geomBuffer.data[addr(N, xy)];
+    vec2 sg = unpackHalf2x16(floatBitsToUint(v.x));
+    vec2 sd = unpackHalf2x16(floatBitsToUint(v.y));
+    vec2 db = unpackHalf2x16(floatBitsToUint(v.z));
+    spec = vec3(sg.x, sg.y, sd.x);
+    diff = vec3(sd.y, db.x, db.y);
+}
+
+// --- N=3 ---
+void writeMisc(uint N, uvec2 xy, vec3 trans, vec3 emis, vec3 rd) {
+    geomBuffer.data[addr(N, xy)] = vec4(
+        uintBitsToFloat(packHalf2x16(vec2(clamp(trans.r, -65504.0, 65504.0), clamp(trans.g, -65504.0, 65504.0)))),
+        uintBitsToFloat(packHalf2x16(vec2(clamp(trans.b, -65504.0, 65504.0), clamp(emis.r, -65504.0, 65504.0)))),
+        uintBitsToFloat(packHalf2x16(vec2(clamp(emis.g, -65504.0, 65504.0), clamp(emis.b, -65504.0, 65504.0)))),
+        encodeNormal(rd)
+    );
+}
+void readMisc(uint N, uvec2 xy, out vec3 trans, out vec3 emis, out vec3 rd) {
+    vec4 v = geomBuffer.data[addr(N, xy)];
+    vec2 tg = unpackHalf2x16(floatBitsToUint(v.x));
+    vec2 te = unpackHalf2x16(floatBitsToUint(v.y));
+    vec2 eb = unpackHalf2x16(floatBitsToUint(v.z));
+    trans = vec3(tg.x, tg.y, te.x);
+    emis  = vec3(te.y, eb.x, eb.y);
+    rd    = decodeNormal(v.w);
+}
+
+// --- N=4 ---
+void writeLightAbs(uint N, uvec2 xy, vec3 light, vec3 absorption) {
+    geomBuffer.data[addr(N, xy)] = vec4(
+        uintBitsToFloat(packHalf2x16(vec2(clamp(light.r, -65504.0, 65504.0), clamp(light.g, -65504.0, 65504.0)))),
+        uintBitsToFloat(packHalf2x16(vec2(clamp(light.b, -65504.0, 65504.0), clamp(absorption.r, -65504.0, 65504.0)))),
+        uintBitsToFloat(packHalf2x16(vec2(clamp(absorption.g, -65504.0, 65504.0), clamp(absorption.b, -65504.0, 65504.0)))),
+        0.0
+    );
+}
+void readLightAbs(uint N, uvec2 xy, out vec3 light, out vec3 absorption) {
+    vec4 v = geomBuffer.data[addr(N, xy)];
+    vec2 lg = unpackHalf2x16(floatBitsToUint(v.x));
+    vec2 la = unpackHalf2x16(floatBitsToUint(v.y));
+    vec2 ab = unpackHalf2x16(floatBitsToUint(v.z));
+    light      = vec3(lg.x, lg.y, la.x);
+    absorption = vec3(la.y, ab.x, ab.y);
+}
+
+// N=0..4 常量（语义化）
+#define GEO_N_GEO       0u
+#define GEO_N_NORMALS   1u
+#define GEO_N_ALBEDOS   2u
+#define GEO_N_MISC      3u
+#define GEO_N_LIGHTABS  4u
+
+// ===========================================================================
+// pack2Half / unpack2Half — 保留现有工具
+// ===========================================================================
+
 float pack2Half(float a, float b) {
     return uintBitsToFloat(packHalf2x16(vec2(a, b)));
 }
 
-// 解包
 void unpack2Half(float packed_, out float a, out float b) {
     vec2 v = unpackHalf2x16(floatBitsToUint(packed_));
     a = v.x;
     b = v.y;
 }
 
-// 镜面反射射线击中天空时的虚拟投射距离哨兵值 (f16 可表示, ~6e4)
 const float VPROJDIST_SKY = 60000.0;
 
-// 打包两个 half 并钳制到 f16 范围, 避免 HDR 颜色溢出为 Inf
 float pack2HalfClamped(float a, float b) {
     return uintBitsToFloat(packHalf2x16(
         vec2(clamp(a, -65504.0, 65504.0), clamp(b, -65504.0, 65504.0))));
 }
 
 // ===========================================================================
-// ALICE 光照编码与辐照度重建 (NaCg-Safe, O(1) 闭型逼近)
+// ALICE 光照编码 — 保持现有逻辑不变
 // ===========================================================================
-// AliceEncoding.aliceY = vec4(v, ω) — 即 ALICE 线性嵌入表示，与 alice_encode 输出兼容
-// AliceEncoding.CoCg = vec2(Co, Cg) — 色度 (YCoCg 空间)
-//
-// 辐照度解码使用 ALICE 最大熵半球余弦投影解析逼近，全域误差 < 0.4%
 
 struct AliceEncoding {
-    vec4 aliceY; // ALICE 嵌入: xyz = 方向向量 v, w = 总能量 ω = |v| + I
-    vec2 CoCg; // (Co, Cg)
+    vec4 aliceY;
+    vec2 CoCg;
 };
 
-// ---------------------------------------------------------------------------
-// 编解码与投影核心接口
-// ---------------------------------------------------------------------------
-
-// 将 RGB 入射辐射率 (incident radiance) 编码为 AliceEncoding。
-// 输入约定 (better-denoiser-dev):
-//   color — 入射辐射率 RGB, 不含任何 BSDF 调制 (BRDF 已延迟至 composite)
-//   dir   — 射线入射方向 (归一化)
-// 单样本编码规则:
-//   aliceY = (dir * Y, Y)  锥边界态 (ω = |v|, I=0)
-//   CoCg   = (Co, Cg)      色度分量, 独立于亮度进行降噪
-//   其中 Y = luminance(color), (Co, Cg) = RGB→YCoCg 色度投影
 AliceEncoding irradiance_to_alice(vec3 color, vec3 dir)
 {
     AliceEncoding result;
-
     float Y = dot(color, vec3(0.2126, 0.7152, 0.0722));
-
     float Co = 0.5 * color.r - 0.5 * color.b;
     float Cg = -0.25 * color.r + 0.5 * color.g - 0.25 * color.b;
-
     result.CoCg = vec2(Co, Cg);
-    // ALICE 编码: v = dir*Y, ω = Y (单样本 I=0, 锥边界态)
     result.aliceY = vec4(dir * Y, Y);
-
     return result;
 }
 
-// ALICE 辐照度投影 (替代原 SG 模型)
-// encoded.aliceY 即为 ALICE 编码 vec4(v, ω)
-// 返回余弦加权漫反射辐照度 RGB
 vec3 project_alice_irradiance(AliceEncoding encoded, vec3 N)
 {
     float total_omega = encoded.aliceY.w;
-    
     float irradiance = alice_irradiance(encoded.aliceY, N);
-
     float attenuation = (total_omega > 1e-10) ? (irradiance / total_omega) : 0.0;
-
     float Co = encoded.CoCg.x * attenuation;
     float Cg = encoded.CoCg.y * attenuation;
-
     float B = irradiance - 1.1404 * Co - 1.4304 * Cg;
     float R = B + 2.0 * Co;
     float G = irradiance - 0.1404 * Co + 0.5696 * Cg;
     return max(vec3(R, G, B), vec3(0.0));
 }
 
-// ---------------------------------------------------------------------------
-// colortex5 双对偶向量 (θ, β) 打包/解包 — 用于 Jeffreys 散度计算
-// ---------------------------------------------------------------------------
-// colortex5 格式: RGBA32F — 直接存储 vec4(theta.xyz, beta)
-//   θ = 自然参数空间方向分量 (3D 向量)
-//   β = 自然参数空间能量分量 (标量)
-
+// colortex5 双对偶向量打包/解包
 vec4 packDualVector(vec3 dual_theta, float dual_beta) {
     return vec4(dual_theta, dual_beta);
 }
-
 vec4 packDualVectorFromEncoded(vec4 aliceEncoded) {
     vec4 tb = alice_theta_beta(aliceEncoded);
-    return tb; // vec4(theta.xyz, beta)
+    return tb;
 }
-
 void unpackDualVector(vec4 packed_, out vec3 dual_theta, out float dual_beta) {
     dual_theta = packed_.xyz;
     dual_beta = packed_.w;
 }
 
-// ---------------------------------------------------------------------------
-// 基础混合原语
-// ---------------------------------------------------------------------------
-AliceEncoding mix_alice(AliceEncoding a, AliceEncoding b, float s)
-{
+// ALICE 混合原语
+AliceEncoding mix_alice(AliceEncoding a, AliceEncoding b, float s) {
     AliceEncoding result;
     result.aliceY = mix(a.aliceY, b.aliceY, s);
     result.CoCg = mix(a.CoCg, b.CoCg, s);
     return result;
 }
-
-AliceEncoding init_alice()
-{
+AliceEncoding init_alice() {
     AliceEncoding result;
     result.aliceY = vec4(0.0);
     result.CoCg = vec2(0.0);
     return result;
 }
-
 AliceEncoding scale_alice(AliceEncoding A, float x) {
     AliceEncoding tmp;
     tmp.CoCg = A.CoCg * x;
     tmp.aliceY = A.aliceY * x;
     return tmp;
 }
-
-void accumulate_alice(inout AliceEncoding accum, AliceEncoding b, float scale)
-{
+void accumulate_alice(inout AliceEncoding accum, AliceEncoding b, float scale) {
     accum.aliceY += b.aliceY * scale;
     accum.CoCg += b.CoCg * scale;
 }
 
-// 将 AliceEncoding 压缩为 3 个 float
 vec3 packAlice(AliceEncoding encoded) {
-    // 注意：aliceY 和 CoCg 可能超出 half 范围（但通常不会），必要时 clamp
     float s0 = uintBitsToFloat(packHalf2x16(vec2(encoded.aliceY.x, encoded.aliceY.y)));
     float s1 = uintBitsToFloat(packHalf2x16(vec2(encoded.aliceY.z, encoded.aliceY.w)));
     float s2 = uintBitsToFloat(packHalf2x16(vec2(encoded.CoCg.x, encoded.CoCg.y)));
     return vec3(s0, s1, s2);
 }
-
 AliceEncoding unpackAlice(float s0, float s1, float s2) {
     AliceEncoding encoded;
     vec2 v0 = unpackHalf2x16(floatBitsToUint(s0));
@@ -218,12 +250,258 @@ AliceEncoding unpackAlice(float s0, float s1, float s2) {
     return encoded;
 }
 
-// 镜面降噪纹理打包 (colortex3 + colortex4)
-//   data0 (colortex3): pos.xyz + oct(R)            R = 主导反射/折射方向
-//   data1 (colortex4): f16(R,G) | f16(B,roughness) | f16(variance, virtualProjDist) | oct(H)
-//   variance < 0 复用为天空 mask; virtualProjDist = VPROJDIST_SKY 表示反射射线击中天空
-//   H = GGX 主半向量 (虚拟平面法线)
-//   weight 不再走纹理 — 由 101/102 直接写入 image, 降噪 pass 不参与
+// ===========================================================================
+// Binding 2 — DiffuseBuffer pack/unpack
+// ===========================================================================
+// N=0: Current Light  — vec4(aliceY_xy_f16, aliceY_zw_f16, CoCg_f16, oct(normal2))
+// N=1: Current Geo    — vec4(worldPos.xyz, oct(normal))
+// N=2: History Light  — vec4(hist_aliceY_xy_f16, hist_aliceY_zw_f16, hist_CoCg_f16, hist_weight)
+// N=3: History Geo    — vec4(hist_worldPos.xyz, oct(hist_normal))
+// N=4: Swap Light     — vec4(swap_aliceY_xy_f16, swap_aliceY_zw_f16, swap_CoCg_f16, swap_weight)
+
+#define DIF_N_LIGHT   0u
+#define DIF_N_GEO     1u
+#define DIF_N_HIST    2u
+#define DIF_N_HISTGEO 3u
+#define DIF_N_SWAP    4u
+
+// --- N=0: Current RT Light ---
+void writeDiffuseLightRT(uvec2 xy, AliceEncoding alice, vec3 n2) {
+    diffuseBuffer.data[addr(DIF_N_LIGHT, xy)] = vec4(
+        uintBitsToFloat(packHalf2x16(clamp(alice.aliceY.xy, vec2(-65504.0), vec2(65504.0)))),
+        uintBitsToFloat(packHalf2x16(clamp(alice.aliceY.zw, vec2(-65504.0), vec2(65504.0)))),
+        uintBitsToFloat(packHalf2x16(clamp(alice.CoCg, vec2(-65504.0), vec2(65504.0)))),
+        encodeNormal(n2)
+    );
+}
+void readDiffuseLightRT(uvec2 xy, out AliceEncoding alice, out vec3 n2) {
+    vec4 v = diffuseBuffer.data[addr(DIF_N_LIGHT, xy)];
+    vec2 ay_xy = unpackHalf2x16(floatBitsToUint(v.x));
+    vec2 ay_zw = unpackHalf2x16(floatBitsToUint(v.y));
+    vec2 cocg  = unpackHalf2x16(floatBitsToUint(v.z));
+    alice.aliceY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
+    alice.CoCg = cocg;
+    n2 = decodeNormal(v.w);
+}
+
+// Helper: write zero light (sky reset)
+void writeDiffuseLightRTSky(uvec2 xy) {
+    diffuseBuffer.data[addr(DIF_N_LIGHT, xy)] = vec4(0.0);
+}
+
+// --- N=1: Current Geometry ---
+void writeDiffuseGeo(uvec2 xy, vec3 pos, vec3 normal) {
+    diffuseBuffer.data[addr(DIF_N_GEO, xy)] = vec4(pos, encodeNormal(normal));
+}
+void readDiffuseGeo(uvec2 xy, out vec3 pos, out vec3 normal) {
+    vec4 v = diffuseBuffer.data[addr(DIF_N_GEO, xy)];
+    pos = v.xyz;
+    normal = decodeNormal(v.w);
+}
+
+// --- N=2: History Light ---
+void writeDiffuseHist(uvec2 xy, AliceEncoding alice, float weight) {
+    diffuseBuffer.data[addr(DIF_N_HIST, xy)] = vec4(
+        uintBitsToFloat(packHalf2x16(clamp(alice.aliceY.xy, vec2(-65504.0), vec2(65504.0)))),
+        uintBitsToFloat(packHalf2x16(clamp(alice.aliceY.zw, vec2(-65504.0), vec2(65504.0)))),
+        uintBitsToFloat(packHalf2x16(clamp(alice.CoCg, vec2(-65504.0), vec2(65504.0)))),
+        clamp(weight, 0.0, 65504.0)
+    );
+}
+void readDiffuseHist(uvec2 xy, out AliceEncoding alice, out float weight) {
+    vec4 v = diffuseBuffer.data[addr(DIF_N_HIST, xy)];
+    vec2 ay_xy = unpackHalf2x16(floatBitsToUint(v.x));
+    vec2 ay_zw = unpackHalf2x16(floatBitsToUint(v.y));
+    vec2 cocg  = unpackHalf2x16(floatBitsToUint(v.z));
+    alice.aliceY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
+    alice.CoCg = cocg;
+    weight = v.w;
+}
+
+// --- N=3: History Geometry ---
+void writeDiffuseHistGeo(uvec2 xy, vec3 pos, vec3 normal) {
+    diffuseBuffer.data[addr(DIF_N_HISTGEO, xy)] = vec4(pos, encodeNormal(normal));
+}
+void readDiffuseHistGeo(uvec2 xy, out vec3 pos, out vec3 normal) {
+    vec4 v = diffuseBuffer.data[addr(DIF_N_HISTGEO, xy)];
+    pos = v.xyz;
+    normal = decodeNormal(v.w);
+}
+
+// --- N=4: Swap Light ---
+void writeDiffuseSwap(uvec2 xy, AliceEncoding alice, float weight) {
+    diffuseBuffer.data[addr(DIF_N_SWAP, xy)] = vec4(
+        uintBitsToFloat(packHalf2x16(clamp(alice.aliceY.xy, vec2(-65504.0), vec2(65504.0)))),
+        uintBitsToFloat(packHalf2x16(clamp(alice.aliceY.zw, vec2(-65504.0), vec2(65504.0)))),
+        uintBitsToFloat(packHalf2x16(clamp(alice.CoCg, vec2(-65504.0), vec2(65504.0)))),
+        clamp(weight, 0.0, 65504.0)
+    );
+}
+void readDiffuseSwap(uvec2 xy, out AliceEncoding alice, out float weight) {
+    vec4 v = diffuseBuffer.data[addr(DIF_N_SWAP, xy)];
+    vec2 ay_xy = unpackHalf2x16(floatBitsToUint(v.x));
+    vec2 ay_zw = unpackHalf2x16(floatBitsToUint(v.y));
+    vec2 cocg  = unpackHalf2x16(floatBitsToUint(v.z));
+    alice.aliceY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
+    alice.CoCg = cocg;
+    weight = v.w;
+}
+
+// ===========================================================================
+// Binding 3/4 — SpecularBuffer (Reflect/Refract) pack/unpack
+// ===========================================================================
+// N=0: Current Geo+Dir — vec4(worldPos.xyz, oct(dir))
+// N=1: Current Light   — vec4(packHalf(cR,cG), packHalf(cB,vprojDist), accum_weight, pad)
+// N=2: History Geo+Dir — vec4(hist_pos.xyz, oct(hist_dir))
+// N=3: History Light   — vec4(packHalf(hcR,hcG), packHalf(hcB,h_vproj), hist_weight, pad)
+
+#define SPEC_N_GEO      0u
+#define SPEC_N_LIGHT    1u
+#define SPEC_N_HISTGEO  2u
+#define SPEC_N_HISTLIGHT 3u
+
+// --- N=0: Current Geometry + Direction ---
+void writeSpecGeo(uint N, uvec2 xy, vec3 pos, vec3 dir) {
+    vec4 v = vec4(pos, encodeNormal(dir));
+    if (N == SPEC_N_GEO) {
+        // use binding-specific buffer
+    }
+}
+// 为 reflect/refract 分别提供（binding 不同）
+void writeReflGeo(uvec2 xy, vec3 pos, vec3 R) {
+    reflectBuffer.data[addr(SPEC_N_GEO, xy)] = vec4(pos, encodeNormal(R));
+}
+void readReflGeo(uvec2 xy, out vec3 pos, out vec3 R) {
+    vec4 v = reflectBuffer.data[addr(SPEC_N_GEO, xy)];
+    pos = v.xyz; R = decodeNormal(v.w);
+}
+void writeRefrGeo(uvec2 xy, vec3 pos, vec3 T) {
+    refractBuffer.data[addr(SPEC_N_GEO, xy)] = vec4(pos, encodeNormal(T));
+}
+void readRefrGeo(uvec2 xy, out vec3 pos, out vec3 T) {
+    vec4 v = refractBuffer.data[addr(SPEC_N_GEO, xy)];
+    pos = v.xyz; T = decodeNormal(v.w);
+}
+
+// --- N=1: Current Light ---
+void writeReflLight(uvec2 xy, vec3 color, float vprojDist, float accumWeight) {
+    reflectBuffer.data[addr(SPEC_N_LIGHT, xy)] = vec4(
+        pack2HalfClamped(color.r, color.g),
+        pack2HalfClamped(color.b, vprojDist),
+        accumWeight,
+        0.0
+    );
+}
+void readReflLight(uvec2 xy, out vec3 color, out float vprojDist, out float accumWeight) {
+    vec4 v = reflectBuffer.data[addr(SPEC_N_LIGHT, xy)];
+    vec2 rg = unpackHalf2x16(floatBitsToUint(v.x));
+    vec2 bv = unpackHalf2x16(floatBitsToUint(v.y));
+    color      = vec3(rg.x, rg.y, bv.x);
+    vprojDist  = bv.y;
+    accumWeight = v.z;
+}
+void writeRefrLight(uvec2 xy, vec3 color, float vprojDist, float accumWeight) {
+    refractBuffer.data[addr(SPEC_N_LIGHT, xy)] = vec4(
+        pack2HalfClamped(color.r, color.g),
+        pack2HalfClamped(color.b, vprojDist),
+        accumWeight,
+        0.0
+    );
+}
+void readRefrLight(uvec2 xy, out vec3 color, out float vprojDist, out float accumWeight) {
+    vec4 v = refractBuffer.data[addr(SPEC_N_LIGHT, xy)];
+    vec2 rg = unpackHalf2x16(floatBitsToUint(v.x));
+    vec2 bv = unpackHalf2x16(floatBitsToUint(v.y));
+    color       = vec3(rg.x, rg.y, bv.x);
+    vprojDist   = bv.y;
+    accumWeight = v.z;
+}
+
+// --- N=2: History Geometry + Direction ---
+void writeReflHistGeo(uvec2 xy, vec3 pos, vec3 R) {
+    reflectBuffer.data[addr(SPEC_N_HISTGEO, xy)] = vec4(pos, encodeNormal(R));
+}
+void readReflHistGeo(uvec2 xy, out vec3 pos, out vec3 R) {
+    vec4 v = reflectBuffer.data[addr(SPEC_N_HISTGEO, xy)];
+    pos = v.xyz; R = decodeNormal(v.w);
+}
+void writeRefrHistGeo(uvec2 xy, vec3 pos, vec3 T) {
+    refractBuffer.data[addr(SPEC_N_HISTGEO, xy)] = vec4(pos, encodeNormal(T));
+}
+void readRefrHistGeo(uvec2 xy, out vec3 pos, out vec3 T) {
+    vec4 v = refractBuffer.data[addr(SPEC_N_HISTGEO, xy)];
+    pos = v.xyz; T = decodeNormal(v.w);
+}
+
+// --- N=3: History Light ---
+void writeReflHistLight(uvec2 xy, vec3 color, float vprojDist, float weight) {
+    reflectBuffer.data[addr(SPEC_N_HISTLIGHT, xy)] = vec4(
+        pack2HalfClamped(color.r, color.g),
+        pack2HalfClamped(color.b, vprojDist),
+        weight,
+        0.0
+    );
+}
+void readReflHistLight(uvec2 xy, out vec3 color, out float vprojDist, out float weight) {
+    vec4 v = reflectBuffer.data[addr(SPEC_N_HISTLIGHT, xy)];
+    vec2 rg = unpackHalf2x16(floatBitsToUint(v.x));
+    vec2 bv = unpackHalf2x16(floatBitsToUint(v.y));
+    color     = vec3(rg.x, rg.y, bv.x);
+    vprojDist = bv.y;
+    weight    = v.z;
+}
+void writeRefrHistLight(uvec2 xy, vec3 color, float vprojDist, float weight) {
+    refractBuffer.data[addr(SPEC_N_HISTLIGHT, xy)] = vec4(
+        pack2HalfClamped(color.r, color.g),
+        pack2HalfClamped(color.b, vprojDist),
+        weight,
+        0.0
+    );
+}
+void readRefrHistLight(uvec2 xy, out vec3 color, out float vprojDist, out float weight) {
+    vec4 v = refractBuffer.data[addr(SPEC_N_HISTLIGHT, xy)];
+    vec2 rg = unpackHalf2x16(floatBitsToUint(v.x));
+    vec2 bv = unpackHalf2x16(floatBitsToUint(v.y));
+    color     = vec3(rg.x, rg.y, bv.x);
+    vprojDist = bv.y;
+    weight    = v.z;
+}
+
+// ===========================================================================
+// 兼容旧接口的结构体（内存中解包表示，不影响存储）
+// ===========================================================================
+
+struct diffuseIlluminationData {
+    AliceEncoding data;
+    AliceEncoding data_swap;
+    vec3 pos;
+    lowp vec3 normal;
+    lowp vec3 normal2;
+    float weight;
+    float prev_weight;
+};
+
+struct DiffuseIlluminationWriteData {
+    AliceEncoding data_swap;
+    vec3 pos;
+    lowp vec3 normal;
+    lowp vec3 normal2;
+    float weight;
+};
+
+struct vec3IlluminationData {
+    vec3 data;
+    vec3 data_swap;
+    vec3 pos;
+    vec3 normal;
+    float weight;
+    float prev_weight;
+};
+
+// ===========================================================================
+// PackedLightSample — 保留给 colortex3/4 纹理 I/O（非 SSBO）
+// ===========================================================================
+
 struct PackedLightSample {
     vec4 data0;
     vec4 data1;
@@ -257,155 +535,159 @@ void unpackSpecularSample(PackedLightSample s,
     H = decodeNormal(s.data1.w);
 }
 
-struct diffuseIlluminationData {
-    AliceEncoding data;
-    AliceEncoding data_swap;
-    vec3 pos;
-    lowp vec3 normal;
-    lowp vec3 normal2;
-    float weight;
-    float prev_weight;
-};
-
 // ===========================================================================
-// Unified diffuse buffer — replaces old binding 2 + binding 6 + 4 custom images.
-// 20 floats = 80 bytes, normals oct-encoded into 1 float each and packed with positions.
-//
-// Layout rationale:
-//   - rt_* fields: ray0.rgen writes current frame RT output; temporal_diffuse.glsl reads via loadDiffuseInput
-//   - px/py/pz + oct_n: current geometry + oct-encoded normal packed together
-//   - oct_n2: oct-encoded normal2 (no position to pair with; 1 float vs old 3)
-//   - hist_px/hist_py/hist_pz + hist_oct_n: history geometry from swap3,
-//     read by temporal_diffuse.glsl via fetchDiffuse for reprojection edge-stopping.
-//     MUST be separate from px/py/pz because ray0.rgen overwrites those each frame.
+// SpecularRT pack/unpack — 兼容 raytrace_rgen 和 temporal 接口
 // ===========================================================================
-struct UnifiedDiffuseElement {
-    // --- RT output (ray0.rgen writes, temporal_diffuse.glsl reads) — half-packed AliceEncoding: 12B ---
-    float rt_aliceY_xy, rt_aliceY_zw, rt_CoCg;
-    // --- Current geometry: pos.xyz + oct(normal) + oct(normal2) — 20B ---
-    float px, py, pz, oct_n;    // position + oct-encoded current normal
-    float oct_n2;                // oct-encoded normal2
-    // --- History geometry: pos.xyz + oct(normal) — 16B ---
-    float hist_px, hist_py, hist_pz, hist_oct_n;
-    // --- Temporal history prev frame (swap3 writes, temporal_diffuse.glsl reads): 14B ---
-    float hist_aliceY_xy, hist_aliceY_zw, hist_CoCg, hist_weight;
-    // --- Temporal history swap frame (temporal_diffuse.glsl/swap3 write, swap2/fog read): 14B ---
-    float swap_aliceY_xy, swap_aliceY_zw, swap_CoCg, swap_weight;
-};  // 18 floats = 72 bytes (was 80 with variance)
 
-layout(std430, set = 3, binding = 2) buffer DiffuseBuffer {
-    UnifiedDiffuseElement data[];
-} diffuseIlluminationBuffer;
-
-// Keep old struct types for function interfaces (unpacked representation).
-// DiffuseIlluminationWriteData is still returned by fetchPrevDiffuse/samplePrevDiffuse.
-struct DiffuseIlluminationWriteData {
-    AliceEncoding data_swap;
+struct SpecularRTWriteData {
     vec3 pos;
-    lowp vec3 normal;
-    lowp vec3 normal2;
-    float weight;
+    vec3 R;
+    float virtualProjDist;
+    vec3 color;
 };
 
-// Helper: unpack RT output from unified SSBO into full-precision struct.
-// Used by temporal_diffuse.glsl to read the current frame's ray-traced input.
-DiffuseIlluminationWriteData loadDiffuseInput(uint idx) {
-    UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[idx];
-    DiffuseIlluminationWriteData t;
-    vec2 aliceY_xy = unpackHalf2x16(floatBitsToUint(e.rt_aliceY_xy));
-    vec2 aliceY_zw = unpackHalf2x16(floatBitsToUint(e.rt_aliceY_zw));
-    t.data_swap.aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-65504), vec4(65504));
-    t.data_swap.CoCg = unpackHalf2x16(floatBitsToUint(e.rt_CoCg));
-    t.pos = vec3(e.px, e.py, e.pz);
-    t.normal = decodeNormal(e.oct_n);
-    t.normal2 = decodeNormal(e.oct_n2);
-    t.weight = 1.0;  // not stored in RT output
-    return t;
-}
-
-struct vec3IlluminationData {
-    vec3 data;
-    vec3 data_swap;
-    vec3 pos;
-    vec3 normal;
-    float weight;
-    float prev_weight;
-};
-
-// ---------------------------------------------------------------------------
-// 镜面反射/折射 RT 输出 + 时域历史 (SSBO, 64B/元素) — ray0.rgen 写当前帧,
-// 101/102 写累积颜色+权重, swap5/7 写历史, swap4/6 读累积颜色.
-// 替代了原先 8 个独立的 rgba32f image (reflect+refract 各4个, 共~253MB VRAM).
-// 方向以八面体压缩存储, 虚拟投射距离单独存放, 颜色 f16 压缩.
-// normal = decodeNormal(oct_dir)*virtualProjDist 可按需重建 (dir*dist 语义).
-// H (GGX 主半向量) 不存于此 — 由 swap4/6 从 R+V 计算后写入 colortex4.w.
-// ---------------------------------------------------------------------------
-struct SpecularRTElement {
-    // === 当前帧 (32B) — ray0.rgen 写入 raw RT, 101/102 覆写为累积色 ===
-    float px, py, pz;    // 主命中点世界坐标 (12B)
-    float oct_dir;       // 八面体压缩主导方向 R (4B)
-    float virtualProjDist;     // 虚拟投射距离 (4B)
-    float color_rg;      // packHalf2x16: ray0→raw RT, 101/102→accumulated (4B)
-    float color_b;       // packHalf2x16: ray0→raw RT, 101/102→accumulated (4B)
-    float accum_weight;  // 时域累积权重 (4B, 101/102 写, swap4/5/6/7 读)
-    // [4B 隐式填充到 32B 对齐]
-
-    // === 时域历史 (32B) — swap5/7 写, 101/102 下帧读 ===
-    float hist_px, hist_py, hist_pz; // 上帧世界坐标 (12B)
-    float hist_oct_dir;  // 上帧八面体压缩方向 R (4B)
-    float hist_vprojdist;// 上帧虚拟投射距离 (4B)
-    float hist_color_rg; // packHalf2x16: 上帧 pre-denoise 累积色 (4B)
-    float hist_color_b;  // packHalf2x16 (4B)
-    float hist_weight;   // 上帧累积权重 (4B)
-}; // 64B 总计, 16B 对齐
-
-SpecularRTElement packSpecularRT(vec3 pos, vec3 R, float virtualProjDist, vec3 color) {
-    SpecularRTElement e;
-    e.px         = pos.x;
-    e.py         = pos.y;
-    e.pz         = pos.z;
-    e.oct_dir    = encodeNormal(R);
-    e.virtualProjDist  = virtualProjDist;
-    e.color_rg   = pack2HalfClamped(color.r, color.g);
-    e.color_b    = pack2HalfClamped(color.b, 0.0);
-    e.accum_weight = 0.0;
-    // hist_* fields left uninitialized (written later by swap5/7)
+SpecularRTWriteData packSpecularRT(vec3 pos, vec3 R, float virtualProjDist, vec3 color) {
+    SpecularRTWriteData e;
+    e.pos = pos;
+    e.R = R;
+    e.virtualProjDist = virtualProjDist;
+    e.color = color;
     return e;
 }
 
-void unpackSpecularRT(SpecularRTElement e, out vec3 pos, out vec3 R, out vec3 color, out float virtualProjDist) {
-    pos    = vec3(e.px, e.py, e.pz);
-    R = decodeNormal(e.oct_dir);
-    vec2 rg = unpackHalf2x16(floatBitsToUint(e.color_rg));
-    float b = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
-    color  = vec3(rg.x, rg.y, b);
-    virtualProjDist = e.virtualProjDist;
+void unpackSpecularRT_Refl(uvec2 xy, out vec3 pos, out vec3 R, out vec3 color, out float virtualProjDist) {
+    readReflGeo (xy, pos, R);
+    float accumW;
+    readReflLight(xy, color, virtualProjDist, accumW);
 }
 
-layout(std430, set = 3, binding = 3) buffer ReflectIlluminationDataBuffer {
-    SpecularRTElement data[];
-} reflectIlluminationBuffer;
+void unpackSpecularRT_Refr(uvec2 xy, out vec3 pos, out vec3 R, out vec3 color, out float virtualProjDist) {
+    readRefrGeo (xy, pos, R);
+    float accumW;
+    readRefrLight(xy, color, virtualProjDist, accumW);
+}
 
-layout(std430, set = 3, binding = 4) buffer RefractIlluminationDataBuffer {
-    SpecularRTElement data[];
-} refractIlluminationBuffer;
+// ===========================================================================
+// Diffuse load/fetch/write — 兼容 temporal_diffuse 和 composite
+// ===========================================================================
+
+// 从当前帧 RT 输出加载漫反射输入（temporal_diffuse 使用）
+DiffuseIlluminationWriteData loadDiffuseInput(ivec2 p) {
+    uvec2 xy = uvec2(p);
+    DiffuseIlluminationWriteData t;
+    AliceEncoding alice;
+    vec3 n2;
+    readDiffuseLightRT(xy, alice, n2);
+    t.data_swap = alice;
+    t.normal2 = n2;
+    vec3 normal;
+    readDiffuseGeo(xy, t.pos, normal);
+    t.normal = normal;
+    t.weight = 1.0;
+    return t;
+}
+
+// 读取历史漫反射光照（temporal_diffuse 使用）
+diffuseIlluminationData fetchDiffuse(ivec2 p) {
+    uvec2 xy = uvec2(p);
+    diffuseIlluminationData tmp;
+
+    // swap = 当前帧累积结果（N=4）
+    AliceEncoding alice;
+    float weight;
+    readDiffuseSwap(xy, alice, weight);
+    tmp.data_swap = alice;
+    tmp.weight = weight;
+
+#ifndef DIFFUSE_BUFFER_MIN2
+    // hist = 上一帧历史（N=2）
+    readDiffuseHist(xy, alice, weight);
+    tmp.data = alice;
+    tmp.prev_weight = weight;
+
+    // 历史几何（N=3）
+    vec3 normal;
+    readDiffuseHistGeo(xy, tmp.pos, normal);
+    tmp.normal = normal;
+#endif
+    return tmp;
+}
+
+diffuseIlluminationData blendDiffuse(diffuseIlluminationData A, diffuseIlluminationData B, float x) {
+    diffuseIlluminationData t;
+    t.data_swap = mix_alice(A.data_swap, B.data_swap, x);
+    t.weight = (B.weight - A.weight) * x + A.weight;
+#ifndef DIFFUSE_BUFFER_MIN2
+    t.data = mix_alice(A.data, B.data, x);
+    t.pos = mix(A.pos, B.pos, x);
+    t.normal = mix(A.normal, B.normal, x);
+    t.prev_weight = (B.prev_weight - A.prev_weight) * x + A.prev_weight;
+#endif
+    return t;
+}
+
+diffuseIlluminationData sampleDiffuse(vec2 p) {
+    ivec2 p1 = ivec2(p);
+    vec2 p2 = fract(p);
+    diffuseIlluminationData A = fetchDiffuse(p1);
+    diffuseIlluminationData B = fetchDiffuse(p1 + ivec2(1, 0));
+    diffuseIlluminationData C = fetchDiffuse(p1 + ivec2(0, 1));
+    diffuseIlluminationData D = fetchDiffuse(p1 + ivec2(1, 1));
+    diffuseIlluminationData data = blendDiffuse(blendDiffuse(A, B, p2.x), blendDiffuse(C, D, p2.x), p2.y);
+#ifndef DIFFUSE_BUFFER_MIN2
+    data.normal = normalize(data.normal);
+#endif
+    return data;
+}
+
+vec3 sampleDiffusePos(vec2 p) {
+    uvec2 xy = uvec2(ivec2(floor(p) + round(fract(p))));
+    vec3 pos, normal;
+    readDiffuseHistGeo(xy, pos, normal);
+    return pos;
+}
+
+void WriteDiffuse(diffuseIlluminationData data, ivec2 p) {
+    uvec2 xy = uvec2(p);
+
+    // Always write swap (N=4)
+    writeDiffuseSwap(xy, data.data_swap, data.weight);
+
+#if !defined(DIFFUSE_BUFFER_MIN) && !defined(DIFFUSE_BUFFER_MIN2)
+    // Full write: also update hist (N=2) + hist geometry (N=3)
+    writeDiffuseHist(xy, data.data, data.prev_weight);
+    writeDiffuseHistGeo(xy, data.pos, data.normal);
+#endif
+}
+
+// ===========================================================================
+// Diffuse prev-frame (ray0.rgen guiding)
+// ===========================================================================
 
 #if defined(PREV_DIFFUSE_BUFFER)
 
-// Read previous frame's accumulated AliceEncoding for ray guiding (ray0.rgen).
-// Only data_swap.aliceY fields are used by the caller; the rest are filled with
-// best-effort values from the history SSBO.
 DiffuseIlluminationWriteData fetchPrevDiffuse(ivec2 p) {
-    UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[getIndex(p)];
+    uvec2 xy = uvec2(p);
     DiffuseIlluminationWriteData t;
-    vec2 aliceY_xy = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_xy));
-    vec2 aliceY_zw = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_zw));
-    t.data_swap.aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-65504), vec4(65504));
-    t.data_swap.CoCg = unpackHalf2x16(floatBitsToUint(e.swap_CoCg));
-    t.pos = vec3(e.px, e.py, e.pz);
-    t.normal = decodeNormal(e.oct_n);
-    t.normal2 = decodeNormal(e.oct_n2);
-    t.weight = e.swap_weight;
+
+    // swap = 上一帧最终降噪结果（ray0.rgen 用其引导采样）
+    AliceEncoding alice;
+    float weight;
+    readDiffuseSwap(xy, alice, weight);
+    t.data_swap = alice;
+    t.weight = weight;
+
+    // 从当前几何读取位置+法线（它们不会被 ray0.rgen 改变，因为 ray0 只写 N=0,1）
+    vec3 normal;
+    readDiffuseGeo(xy, t.pos, normal);
+    t.normal = normal;
+
+    // normal2 从 N=0
+    vec3 n2;
+    AliceEncoding dummy;
+    readDiffuseLightRT(xy, dummy, n2);
+    t.normal2 = n2;
+
     return t;
 }
 
@@ -429,131 +711,33 @@ DiffuseIlluminationWriteData samplePrevDiffuse(vec2 p) {
 }
 
 void WritePrevDiffuse(DiffuseIlluminationWriteData data, ivec2 p) {
-    uint idx = getIndex(p);
-    diffuseIlluminationBuffer.data[idx].swap_aliceY_xy = uintBitsToFloat(packHalf2x16(data.data_swap.aliceY.xy));
-    diffuseIlluminationBuffer.data[idx].swap_aliceY_zw = uintBitsToFloat(packHalf2x16(data.data_swap.aliceY.zw));
-    diffuseIlluminationBuffer.data[idx].swap_CoCg   = uintBitsToFloat(packHalf2x16(data.data_swap.CoCg));
-    diffuseIlluminationBuffer.data[idx].swap_weight = data.weight;
+    uvec2 xy = uvec2(p);
+    writeDiffuseSwap(xy, data.data_swap, data.weight);
 }
 
 #endif
 
-#if defined(DIFFUSE_BUFFER) || defined(DIFFUSE_BUFFER_MIN) || defined(DIFFUSE_BUFFER_MIN2)
-
-// All diffuse temporal history now lives in unified diffuseIlluminationBuffer (binding 2).
-
-diffuseIlluminationData fetchDiffuse(ivec2 p) {
-    diffuseIlluminationData tmp;
-    UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[getIndex(p)];
-
-    // Unpack current frame (swap)
-    vec2 aliceY_xy = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_xy));
-    vec2 aliceY_zw = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_zw));
-    tmp.data_swap.aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-65504), vec4(65504));
-    tmp.data_swap.CoCg = unpackHalf2x16(floatBitsToUint(e.swap_CoCg));
-    tmp.weight = e.swap_weight;
-
-    #ifndef DIFFUSE_BUFFER_MIN2
-    // Unpack previous frame (hist)
-    aliceY_xy = unpackHalf2x16(floatBitsToUint(e.hist_aliceY_xy));
-    aliceY_zw = unpackHalf2x16(floatBitsToUint(e.hist_aliceY_zw));
-    tmp.data.aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-65504), vec4(65504));
-    tmp.data.CoCg = unpackHalf2x16(floatBitsToUint(e.hist_CoCg));
-    tmp.prev_weight = e.hist_weight;
-
-    tmp.pos = vec3(e.hist_px, e.hist_py, e.hist_pz);
-    tmp.normal = decodeNormal(e.hist_oct_n);
-    #endif
-    return tmp;
-}
-
-diffuseIlluminationData blendDiffuse(diffuseIlluminationData A, diffuseIlluminationData B, float x) {
-    diffuseIlluminationData t;
-    t.data_swap = mix_alice(A.data_swap, B.data_swap, x);
-    t.weight = (B.weight - A.weight) * x + A.weight;
-    #ifndef DIFFUSE_BUFFER_MIN2
-    t.data = mix_alice(A.data, B.data, x);
-    t.pos = mix(A.pos, B.pos, x);
-    t.normal = mix(A.normal, B.normal, x);
-    t.prev_weight = (B.prev_weight - A.prev_weight) * x + A.prev_weight;
-    #endif
-    return t;
-}
-
-diffuseIlluminationData sampleDiffuse(vec2 p) {
-    ivec2 p1 = ivec2(p);
-    vec2 p2 = fract(p);
-    diffuseIlluminationData A = fetchDiffuse(p1);
-    diffuseIlluminationData B = fetchDiffuse(p1 + ivec2(1, 0));
-    diffuseIlluminationData C = fetchDiffuse(p1 + ivec2(0, 1));
-    diffuseIlluminationData D = fetchDiffuse(p1 + ivec2(1, 1));
-    diffuseIlluminationData data = blendDiffuse(blendDiffuse(A, B, p2.x), blendDiffuse(C, D, p2.x), p2.y);
-    #ifndef DIFFUSE_BUFFER_MIN2
-    data.normal = normalize(data.normal);
-    #endif
-    return data;
-}
-vec3 sampleDiffusePos(vec2 p) {
-    UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[getIndex(ivec2(floor(p) + round(fract(p))))];
-    return vec3(e.hist_px, e.hist_py, e.hist_pz);
-}
-void WriteDiffuse(diffuseIlluminationData data, ivec2 p) {
-    uint idx = getIndex(p);
-
-    // Always write swap (current frame)
-    data.weight = clamp(data.weight, 0.0, 65504);
-
-    diffuseIlluminationBuffer.data[idx].swap_aliceY_xy = uintBitsToFloat(packHalf2x16(data.data_swap.aliceY.xy));
-    diffuseIlluminationBuffer.data[idx].swap_aliceY_zw = uintBitsToFloat(packHalf2x16(data.data_swap.aliceY.zw));
-    diffuseIlluminationBuffer.data[idx].swap_CoCg   = uintBitsToFloat(packHalf2x16(data.data_swap.CoCg));
-    diffuseIlluminationBuffer.data[idx].swap_weight = data.weight;
-
-    #if !defined(DIFFUSE_BUFFER_MIN) && !defined(DIFFUSE_BUFFER_MIN2)
-    // Full write: also update hist (history) and geometry
-    data.data.aliceY = clamp(data.data.aliceY, vec4(-65504), vec4(65504));
-    data.data.CoCg = clamp(data.data.CoCg, vec2(-65504), vec2(65504));
-    data.prev_weight = clamp(data.prev_weight, 0.0, 65504);
-
-    diffuseIlluminationBuffer.data[idx].hist_aliceY_xy = uintBitsToFloat(packHalf2x16(data.data.aliceY.xy));
-    diffuseIlluminationBuffer.data[idx].hist_aliceY_zw = uintBitsToFloat(packHalf2x16(data.data.aliceY.zw));
-    diffuseIlluminationBuffer.data[idx].hist_CoCg   = uintBitsToFloat(packHalf2x16(data.data.CoCg));
-    diffuseIlluminationBuffer.data[idx].hist_weight = data.prev_weight;
-
-    // Write history geometry for next frame's temporal reprojection.
-    // These survive ray0.rgen's next-frame overwrite of px/py/pz/oct_n.
-    diffuseIlluminationBuffer.data[idx].hist_px = data.pos.x;
-    diffuseIlluminationBuffer.data[idx].hist_py = data.pos.y;
-    diffuseIlluminationBuffer.data[idx].hist_pz = data.pos.z;
-    diffuseIlluminationBuffer.data[idx].hist_oct_n = encodeNormal(data.normal);
-    #endif
-}
-#endif
+// ===========================================================================
+// Reflect fetch/write — 兼容 temporal_reflect + composite
+// ===========================================================================
 
 #if defined(REFLECT_BUFFER) || defined(REFLECT_BUFFER_MIN) || defined(REFLECT_BUFFER_MIN2)
 
-// 时域历史全部存入 SSBO reflectIlluminationBuffer (SpecularRTElement.hist_*).
-// 原先的 4 个 rgba32f image (swap_color/color/lpos/lnormal, ~32MB) 已删除.
-
 vec3IlluminationData fetchReflect(ivec2 p) {
+    uvec2 xy = uvec2(clamp(p, ivec2(0), ivec2(resolution_global) - 1));
     vec3IlluminationData tmp;
-    uint i = getIndex(uvec2(clamp(p, ivec2(0), ivec2(resolution_global) - 1)));
-    SpecularRTElement e = reflectIlluminationBuffer.data[i];
 
-    // 当前帧累积颜色 + 权重 (101 写入, swap4/swap5 读取)
-    vec2 rg = unpackHalf2x16(floatBitsToUint(e.color_rg));
-    float b = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
-    tmp.data_swap = vec3(rg.x, rg.y, b);
-    tmp.weight = e.accum_weight;
+    // 当前帧累积（N=1）
+    float vproj;
+    readReflLight(xy, tmp.data_swap, vproj, tmp.weight);
 
-    #ifndef REFLECT_BUFFER_MIN2
-    // 时域历史 (swap5 写入, 101 下帧读取)
-    rg = unpackHalf2x16(floatBitsToUint(e.hist_color_rg));
-    b  = unpackHalf2x16(floatBitsToUint(e.hist_color_b)).x;
-    tmp.data = vec3(rg.x, rg.y, b);
-    tmp.prev_weight = e.hist_weight;
-    tmp.normal = decodeNormal(e.hist_oct_dir) * e.hist_vprojdist;
-    tmp.pos = vec3(e.hist_px, e.hist_py, e.hist_pz);
-    #endif
+#ifndef REFLECT_BUFFER_MIN2
+    // 历史（N=3 + N=2）
+    readReflHistLight(xy, tmp.data, vproj, tmp.prev_weight);
+    vec3 R;
+    readReflHistGeo(xy, tmp.pos, R);
+    tmp.normal = R * vproj;
+#endif
     return tmp;
 }
 
@@ -561,23 +745,24 @@ vec3IlluminationData blendReflect(vec3IlluminationData A, vec3IlluminationData B
     vec3IlluminationData t;
     t.data_swap = mix(A.data_swap, B.data_swap, x);
     t.weight = (B.weight - A.weight) * x + A.weight;
-    #ifndef REFLECT_BUFFER_MIN2
+#ifndef REFLECT_BUFFER_MIN2
     t.prev_weight = (B.prev_weight - A.prev_weight) * x + A.prev_weight;
     t.data = mix(A.data, B.data, x);
     t.pos = mix(A.pos, B.pos, x);
     t.normal = mix(A.normal, B.normal, x);
-    #endif
+#endif
     return t;
 }
 
-// 最近邻读取反射历史几何 (避免双线性插值破坏方向向量 R×vproj)
 bool fetchReflectHistoryGeometry(ivec2 p, out vec3 pos, out vec3 normal) {
-    ivec2 clamped_p = clamp(p, ivec2(0), ivec2(resolution_global) - 1);
-    uint i = getIndex(uvec2(clamped_p));
-    SpecularRTElement e = reflectIlluminationBuffer.data[i];
-    if (denoiseBuffer.data[i].distance < -0.5) return false;
-    pos    = vec3(e.hist_px, e.hist_py, e.hist_pz);
-    normal = decodeNormal(e.hist_oct_dir) * e.hist_vprojdist;
+    uvec2 xy = uvec2(clamp(p, ivec2(0), ivec2(resolution_global) - 1));
+    float dist;
+    readGeo0(GEO_N_GEO, xy, pos, dist);
+    if (dist < -0.5) return false;
+    vec3 R; float vproj;
+    readReflHistGeo(xy, pos, R);
+    readReflHistLight(xy, normal, vproj, dist); // dist reused as discard
+    normal = R * vproj;
     return true;
 }
 
@@ -591,50 +776,40 @@ vec3IlluminationData sampleReflect(vec2 p) {
     return blendReflect(blendReflect(A, B, p2.x), blendReflect(C, D, p2.x), p2.y);
 }
 
-// 101 调用: 写入累积颜色 + 权重到 SSBO 当前帧区段
 void WriteReflect(vec3IlluminationData data, ivec2 p) {
-    uint i = getIndex(uvec2(p));
-    reflectIlluminationBuffer.data[i].color_rg = pack2HalfClamped(data.data_swap.r, data.data_swap.g);
-    reflectIlluminationBuffer.data[i].color_b  = pack2HalfClamped(data.data_swap.b, 0.0);
-    reflectIlluminationBuffer.data[i].accum_weight = data.weight;
+    uvec2 xy = uvec2(p);
+    // 读取 vprojDist 保留，只更新 color + weight
+    vec3 color; float vproj, accumW;
+    readReflLight(xy, color, vproj, accumW);
+    writeReflLight(xy, data.data_swap, vproj, data.weight);
 }
 
-// swap5 调用: 写入时域历史到 SSBO hist_* 区段 (供 101 下帧读取)
 void WriteReflectHistory(vec3 preDenoiseColor, float prevWeight, vec3 pos, vec3 R, float virtualProjDist, ivec2 p) {
-    uint i = getIndex(uvec2(p));
-    reflectIlluminationBuffer.data[i].hist_px = pos.x;
-    reflectIlluminationBuffer.data[i].hist_py = pos.y;
-    reflectIlluminationBuffer.data[i].hist_pz = pos.z;
-    reflectIlluminationBuffer.data[i].hist_oct_dir = encodeNormal(R);
-    reflectIlluminationBuffer.data[i].hist_vprojdist = virtualProjDist;
-    reflectIlluminationBuffer.data[i].hist_color_rg = pack2HalfClamped(preDenoiseColor.r, preDenoiseColor.g);
-    reflectIlluminationBuffer.data[i].hist_color_b  = pack2HalfClamped(preDenoiseColor.b, 0.0);
-    reflectIlluminationBuffer.data[i].hist_weight = prevWeight;
+    uvec2 xy = uvec2(p);
+    writeReflHistGeo(xy, pos, R);
+    writeReflHistLight(xy, preDenoiseColor, virtualProjDist, prevWeight);
 }
 #endif
 
+// ===========================================================================
+// Refract fetch/write — 兼容 temporal_refract + composite
+// ===========================================================================
+
 #if defined(REFRACT_BUFFER) || defined(REFRACT_BUFFER_MIN) || defined(REFRACT_BUFFER_MIN2)
 
-// 时域历史全部存入 SSBO refractIlluminationBuffer (SpecularRTElement.hist_*).
-// 原先的 4 个 rgba32f image 已删除.
-
 vec3IlluminationData fetchRefract(ivec2 p) {
+    uvec2 xy = uvec2(clamp(p, ivec2(0), ivec2(resolution_global) - 1));
     vec3IlluminationData tmp;
-    uint i = getIndex(uvec2(clamp(p, ivec2(0), ivec2(resolution_global) - 1)));
-    SpecularRTElement e = refractIlluminationBuffer.data[i];
 
-    vec2 rg = unpackHalf2x16(floatBitsToUint(e.color_rg));
-    float b = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
-    tmp.data_swap = vec3(rg.x, rg.y, b);
-    tmp.weight = e.accum_weight;
+    float vproj;
+    readRefrLight(xy, tmp.data_swap, vproj, tmp.weight);
 
-    #ifndef REFRACT_BUFFER_MIN2
-    rg = unpackHalf2x16(floatBitsToUint(e.hist_color_rg));
-    b  = unpackHalf2x16(floatBitsToUint(e.hist_color_b)).x;
-    tmp.data = vec3(rg.x, rg.y, b);
-    tmp.normal = decodeNormal(e.hist_oct_dir) * e.hist_vprojdist;
-    tmp.pos = vec3(e.hist_px, e.hist_py, e.hist_pz);
-    #endif
+#ifndef REFRACT_BUFFER_MIN2
+    readRefrHistLight(xy, tmp.data, vproj, tmp.prev_weight);
+    vec3 T;
+    readRefrHistGeo(xy, tmp.pos, T);
+    tmp.normal = T * vproj;
+#endif
     return tmp;
 }
 
@@ -642,12 +817,11 @@ vec3IlluminationData blendRefract(vec3IlluminationData A, vec3IlluminationData B
     vec3IlluminationData t;
     t.data_swap = mix(A.data_swap, B.data_swap, x);
     t.weight = (B.weight - A.weight) * x + A.weight;
-
-    #ifndef REFRACT_BUFFER_MIN2
+#ifndef REFRACT_BUFFER_MIN2
     t.data = mix(A.data, B.data, x);
     t.pos = mix(A.pos, B.pos, x);
     t.normal = mix(A.normal, B.normal, x);
-    #endif
+#endif
     return t;
 }
 
@@ -662,21 +836,15 @@ vec3IlluminationData sampleRefract(vec2 p) {
 }
 
 void WriteRefract(vec3IlluminationData data, ivec2 p) {
-    uint i = getIndex(uvec2(p));
-    refractIlluminationBuffer.data[i].color_rg = pack2HalfClamped(data.data_swap.r, data.data_swap.g);
-    refractIlluminationBuffer.data[i].color_b  = pack2HalfClamped(data.data_swap.b, 0.0);
-    refractIlluminationBuffer.data[i].accum_weight = data.weight;
+    uvec2 xy = uvec2(p);
+    vec3 color; float vproj, accumW;
+    readRefrLight(xy, color, vproj, accumW);
+    writeRefrLight(xy, data.data_swap, vproj, data.weight);
 }
 
 void WriteRefractHistory(vec3 preDenoiseColor, float prevWeight, vec3 pos, vec3 R, float virtualProjDist, ivec2 p) {
-    uint i = getIndex(uvec2(p));
-    refractIlluminationBuffer.data[i].hist_px = pos.x;
-    refractIlluminationBuffer.data[i].hist_py = pos.y;
-    refractIlluminationBuffer.data[i].hist_pz = pos.z;
-    refractIlluminationBuffer.data[i].hist_oct_dir = encodeNormal(R);
-    refractIlluminationBuffer.data[i].hist_vprojdist = virtualProjDist;
-    refractIlluminationBuffer.data[i].hist_color_rg = pack2HalfClamped(preDenoiseColor.r, preDenoiseColor.g);
-    refractIlluminationBuffer.data[i].hist_color_b  = pack2HalfClamped(preDenoiseColor.b, 0.0);
-    refractIlluminationBuffer.data[i].hist_weight = prevWeight;
+    uvec2 xy = uvec2(p);
+    writeRefrHistGeo(xy, pos, R);
+    writeRefrHistLight(xy, preDenoiseColor, virtualProjDist, prevWeight);
 }
 #endif

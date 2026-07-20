@@ -109,7 +109,6 @@ struct TemporalFootprint {
 vec3 prevScreenPos;
 vec3 cameraDelta;
 float info_distance;
-uint idx;
 
 DiffuseIlluminationWriteData current_data;
 diffuseIlluminationData out_data;
@@ -393,18 +392,18 @@ void main() {
 
             ivec2 gc = ivec2(gl_WorkGroupID.xy * TILE_SIZE) - ivec2(AABB_HALO) + ivec2(col, row);
             ivec2 clamped = clamp(gc, ivec2(0), ivec2(resolution) - 1);
-            uint loadIdx = getIndex(uvec2(clamped));
+            uvec2 loadXY = uvec2(clamped);
 
-            float d = denoiseBuffer.data[loadIdx].distance;
+            vec3 _pos; float d;
+            readGeo0(GEO_N_GEO, loadXY, _pos, d);
             AABBTileSample s;
             s.dist = d;
 
             if (d > -0.5) {
-                UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[loadIdx];
-                vec2 ay_xy = unpackHalf2x16(floatBitsToUint(e.rt_aliceY_xy));
-                vec2 ay_zw = unpackHalf2x16(floatBitsToUint(e.rt_aliceY_zw));
-                s.aliceY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
-                s.CoCg = unpackHalf2x16(floatBitsToUint(e.rt_CoCg));
+                AliceEncoding alice; vec3 _n2;
+                readDiffuseLightRT(loadXY, alice, _n2);
+                s.aliceY = alice.aliceY;
+                s.CoCg = alice.CoCg;
             } else {
                 s.aliceY = vec4(0.0);
                 s.CoCg = vec2(0.0);
@@ -418,9 +417,20 @@ void main() {
 
     if (any(greaterThanEqual(pix, uvec2(resolution)))) return;
 
-    idx = getIndex(pix);
-    info_distance = denoiseBuffer.data[idx].distance;
-    current_data = loadDiffuseInput(idx);
+    { readGeo0(GEO_N_GEO, pix, current_data.pos, info_distance); }
+    {
+        // 从 DiffuseBuffer 只读 ALICE 光照 + normal2，pos 复用上面的 Geo0 结果
+        uvec2 _xy = uvec2(pix);
+        AliceEncoding alice; vec3 n2;
+        readDiffuseLightRT(_xy, alice, n2);
+        current_data.data_swap = alice;
+        current_data.normal2 = n2;
+        current_data.weight = 1.0;
+        // normal 也从 Geo1 取，避免再读 DiffuseBuffer
+        vec3 _n; float _r; int _it;
+        float _pr; readGeo1(GEO_N_NORMALS, pix, _n, _r, _it, _pr);
+        current_data.normal = _n;
+    }
 
     out_data.data_swap = current_data.data_swap;
     out_data.data = init_alice();

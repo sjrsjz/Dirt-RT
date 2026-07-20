@@ -63,14 +63,12 @@ float sanitizeVariance(float v) {
 }
 
 // Unpack swap AliceEncoding + weight from unified SSBO, return raw ALICE variance and omega.
-float computeRawVariance(uint idx, out float outOmega) {
-    UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[idx];
+float computeRawVariance(uvec2 xy, out float outOmega) {
+    AliceEncoding alice;
+    float weight;
+    readDiffuseSwap(xy, alice, weight);
 
-    mediump vec2 aliceY_xy = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_xy));
-    mediump vec2 aliceY_zw = unpackHalf2x16(floatBitsToUint(e.swap_aliceY_zw));
-
-    vec4 aliceY = clamp(vec4(aliceY_xy, aliceY_zw), vec4(-65504), vec4(65504));
-    float weight = e.swap_weight;
+    vec4 aliceY = alice.aliceY;
 
     if (any(isnan(aliceY)) || any(isinf(aliceY))) aliceY = vec4(0.0);
     if (isnan(weight) || isinf(weight)) weight = 0.0;
@@ -106,30 +104,57 @@ void main() {
     // =========================================================================
     uint threadIdx = lid.y * 16u + lid.x; // 线程在 Workgroup 内的 1D 索引 (0~255)
 
+    // Phase 1a: Binding 0 N=0 — 距离（天空判定）
     for (uint i = threadIdx; i < 400u; i += 256u) {
         uint row = i / 20u;
         uint col = i % 20u;
-
         ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(col, row);
         ivec2 clamped = clamp(gc, ivec2(0), texSize - ivec2(1));
-        uint loadIdx = getIndex(uvec2(clamped));
+        uvec2 loadXY = uvec2(clamped);
 
-        UnifiedDiffuseElement e = diffuseIlluminationBuffer.data[loadIdx];
-        float d = denoiseBuffer.data[loadIdx].distance;
-
-        TileSample s;
-        s.dist = d;
-        s.px = e.px;
-        s.py = e.py;
-        s.pz = e.pz;
-        s.oct_n = e.oct_n;
-        float om = 0.0;
-        s.rawVar = (d > -0.5) ? computeRawVariance(loadIdx, om) : 0.0;
-        s.omega = om;
-
-        sm_tile[row][col] = s;
+        vec3 dpos; float d;
+        readGeo0(GEO_N_GEO, loadXY, dpos, d);
+        sm_tile[row][col].dist = d;
+        sm_tile[row][col].px = dpos.x; sm_tile[row][col].py = dpos.y; sm_tile[row][col].pz = dpos.z;
+        sm_tile[row][col].oct_n = 0.0;
+        sm_tile[row][col].rawVar = 0.0;
+        sm_tile[row][col].omega = 0.0;
     }
+    barrier();
+    memoryBarrierShared();
 
+    // Phase 1b: Binding 2 N=1 — 漫反射几何（位置 + 法线）
+    for (uint i = threadIdx; i < 400u; i += 256u) {
+        uint row = i / 20u;
+        uint col = i % 20u;
+        if (sm_tile[row][col].dist > -0.5) {
+            ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(col, row);
+            ivec2 clamped = clamp(gc, ivec2(0), texSize - ivec2(1));
+            uvec2 loadXY = uvec2(clamped);
+
+            vec3 dgeoPos, dgeoN;
+            readDiffuseGeo(loadXY, dgeoPos, dgeoN);
+            sm_tile[row][col].px = dgeoPos.x; sm_tile[row][col].py = dgeoPos.y; sm_tile[row][col].pz = dgeoPos.z;
+            sm_tile[row][col].oct_n = encodeNormal(dgeoN);
+        }
+    }
+    barrier();
+    memoryBarrierShared();
+
+    // Phase 1c: Binding 2 N=4 — 漫反射 swap 光照（方差计算）
+    for (uint i = threadIdx; i < 400u; i += 256u) {
+        uint row = i / 20u;
+        uint col = i % 20u;
+        if (sm_tile[row][col].dist > -0.5) {
+            ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(col, row);
+            ivec2 clamped = clamp(gc, ivec2(0), texSize - ivec2(1));
+            uvec2 loadXY = uvec2(clamped);
+
+            float om = 0.0;
+            sm_tile[row][col].rawVar = computeRawVariance(loadXY, om);
+            sm_tile[row][col].omega = om;
+        }
+    }
     barrier();
     memoryBarrierShared();
 
@@ -154,16 +179,10 @@ void main() {
     // =========================================================================
     // Phase 3: Unpack center AliceEncoding, apply 3-sigma energy clamp on outAlice
     // =========================================================================
-    uint idx = getIndex(uvec2(clamp(ivec2(gid), ivec2(0), texSize - ivec2(1))));
-    UnifiedDiffuseElement ce = diffuseIlluminationBuffer.data[idx];
-    mediump vec2 c_aliceY_xy = unpackHalf2x16(floatBitsToUint(ce.swap_aliceY_xy));
-    mediump vec2 c_aliceY_zw = unpackHalf2x16(floatBitsToUint(ce.swap_aliceY_zw));
-    mediump vec2 c_CoCg = unpackHalf2x16(floatBitsToUint(ce.swap_CoCg));
-    float cWeight = ce.swap_weight;
-
+    uvec2 xy = uvec2(clamp(ivec2(gid), ivec2(0), texSize - ivec2(1)));
+    float cWeight;
     AliceEncoding outAlice;
-    outAlice.aliceY = vec4(c_aliceY_xy, c_aliceY_zw);
-    outAlice.CoCg = c_CoCg;
+    readDiffuseSwap(xy, outAlice, cWeight);
     outAlice = sanitizeAlice(outAlice);
 
     // --- 3-sigma energy clamp on output AliceEncoding ---

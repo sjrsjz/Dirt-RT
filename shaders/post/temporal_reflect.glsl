@@ -76,7 +76,6 @@ vec3 reproject(vec3 pos_rel) {
 // ---------------------------------------------------------------------------
 
 float info_distance; // 当前像素的主射线距离
-uint idx; // 当前像素 SSBO 索引
 
 vec3 surfaceN; // 反射表面法线 (G-buffer macroNormal)
 float disocclusionThreshold; // NRD 平面距离阈值 (世界单位)
@@ -182,7 +181,7 @@ void evalPath(vec2 prevUV, bool useGgx,
     float historyW = accumPrevWeight / sumWeight;
 
     // 天空判定
-    float validHit = float(denoiseBuffer.data[idx].distance > -0.5);
+    float validHit = float(info_distance > -0.5);
     float confidence = validHit * maxTapConf;
 
     // 正确的做法：用置信度动态限制“当前帧允许的最大历史长度”
@@ -212,14 +211,13 @@ void main() {
 
     vec2 texCoord = (vec2(pix) + 0.5) / vec2(resolution);
 
-    idx = getIndex(pix);
-    info_distance = denoiseBuffer.data[idx].distance;
+    { vec3 _pos; readGeo0(GEO_N_GEO, pix, _pos, info_distance); }
 
     // 从 SSBO (SpecularRTElement) 重建当前帧反射数据: normal = R*virtualProjDist
     float vproj;
     vec3IlluminationData curr_sample; // 当前像素的反射光照数据 (来自 SSBO)
 
-    unpackSpecularRT(reflectIlluminationBuffer.data[idx], curr_sample.pos, curr_sample.normal, curr_sample.data_swap, vproj);
+    unpackSpecularRT_Refl(pix, curr_sample.pos, curr_sample.normal, curr_sample.data_swap, vproj);
     curr_sample.data = vec3(0.0);
     curr_sample.weight = 0.0;
     curr_sample.prev_weight = 0.0;
@@ -237,8 +235,9 @@ void main() {
     vec3 pos = curr_sample.pos;
     vec3 normal = curr_sample.normal; // R
     vec3 curColor = curr_sample.data_swap; // 当前帧 raw RT (含噪)
-    vec3 N = denoiseBuffer.data[idx].macroNormal;
-    float roughness = denoiseBuffer.data[idx].roughness;
+    int _illumType; float roughness;
+    vec3 N;
+    float _pr; readGeo1(GEO_N_NORMALS, pix, N, roughness, _illumType, _pr);
     vec3 curVirtual = pos + normal * vproj; // 当前反射命中点 Q_C
     float posLen = max(length(pos), 0.001);
     vec3 viewDir = pos / posLen; // eye → surface (相机在原点)

@@ -58,37 +58,72 @@ void main() {
     ivec2 texSize = ivec2(resolution);
     uint tid = gl_LocalInvocationIndex;
 
+    // ---- Phase 1: 协作加载 tile 到共享内存（按 N 层级拆分 barrier）----
+    // Phase 1a: Binding 0 N=0 — 几何位置 + 距离
     for (uint i = tid; i < TILE_AREA; i += 256u) {
         uint tx = i % TILE;
         uint ty = i / TILE;
         ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(tx, ty);
         ivec2 cc = clamp(gc, ivec2(0), texSize - 1);
-        uint idx = getIndex(uvec2(cc));
+        uvec2 xy = uvec2(cc);
 
-        float dist = denoiseBuffer.data[idx].distance;
-        TileSample s;
-        if (dist > -0.5) {
-            SpecularRTElement e = refractIlluminationBuffer.data[idx];
-            vec2 rg = unpackHalf2x16(floatBitsToUint(e.color_rg));
-            float b = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
-            vec3 color = vec3(rg.x, rg.y, b);
-            if (any(isnan(color)) || any(isinf(color))) color = vec3(0.0);
-            vec3 R = decodeNormal(e.oct_dir);
-            vec3 epos = vec3(e.px, e.py, e.pz);
-            // Store the actual surface geometry normal (not the reconstructed V+R)
-            // for use as surface geometry weight in 301 edge-stopping
-            vec3 H = denoiseBuffer.data[idx].macroNormal;
-            s.pos_oct = vec4(epos, e.oct_dir);
-            s.color_vproj = vec4(color, e.virtualProjDist);
-            s.H_dist = vec4(H, dist);
-        } else {
-            s.pos_oct = vec4(0.0);
-            s.color_vproj = vec4(0.0);
-            s.H_dist = vec4(0.0, 0.0, 0.0, dist);
-        }
-        sm[i] = s;
+        vec3 dpos; float dist;
+        readGeo0(GEO_N_GEO, xy, dpos, dist);
+        sm[i].H_dist.w = dist;
+        sm[i].pos_oct.xyz = dpos;
     }
+    barrier();
+    memoryBarrierShared();
 
+    // Phase 1b: Binding 0 N=1 — 法线 + roughness（仅非天空像素）
+    for (uint i = tid; i < TILE_AREA; i += 256u) {
+        if (sm[i].H_dist.w > -0.5) {
+            uint tx = i % TILE;
+            uint ty = i / TILE;
+            ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(tx, ty);
+            ivec2 cc = clamp(gc, ivec2(0), texSize - 1);
+            uvec2 xy = uvec2(cc);
+
+            vec3 H; float rough_unused; int illumType_unused;
+            float _pr; readGeo1(GEO_N_NORMALS, xy, H, rough_unused, illumType_unused, _pr);
+            sm[i].H_dist.xyz = H;
+        }
+    }
+    barrier();
+    memoryBarrierShared();
+
+    // Phase 1c: Binding 4 N=0 — 折射几何（位置 + 方向 T）
+    for (uint i = tid; i < TILE_AREA; i += 256u) {
+        if (sm[i].H_dist.w > -0.5) {
+            uint tx = i % TILE;
+            uint ty = i / TILE;
+            ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(tx, ty);
+            ivec2 cc = clamp(gc, ivec2(0), texSize - 1);
+            uvec2 xy = uvec2(cc);
+
+            vec3 epos, T;
+            readRefrGeo(xy, epos, T);
+            sm[i].pos_oct = vec4(epos, encodeNormal(T));
+        }
+    }
+    barrier();
+    memoryBarrierShared();
+
+    // Phase 1d: Binding 4 N=1 — 折射光照（颜色 + 虚拟投射距离）
+    for (uint i = tid; i < TILE_AREA; i += 256u) {
+        if (sm[i].H_dist.w > -0.5) {
+            uint tx = i % TILE;
+            uint ty = i / TILE;
+            ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(tx, ty);
+            ivec2 cc = clamp(gc, ivec2(0), texSize - 1);
+            uvec2 xy = uvec2(cc);
+
+            vec3 color; float vprojDist, accumW;
+            readRefrLight(xy, color, vprojDist, accumW);
+            if (any(isnan(color)) || any(isinf(color))) color = vec3(0.0);
+            sm[i].color_vproj = vec4(color, vprojDist);
+        }
+    }
     barrier();
     memoryBarrierShared();
 
@@ -109,8 +144,9 @@ void main() {
     vec3 cH = c.H_dist.xyz;
     vec3 cColor = c.color_vproj.xyz;
     float cVproj = c.color_vproj.w;
-    uint cidx = getIndex(uvec2(clamp(ivec2(gid), ivec2(0), texSize - 1)));
-    float cRough = denoiseBuffer.data[cidx].pathRoughness; // PSR 累计路径粗糙度
+    uvec2 cxy = uvec2(clamp(ivec2(gid), ivec2(0), texSize - 1));
+    vec3 spec_unused, diff_unused; float cRough;
+    cRough = readPathRoughness(GEO_N_NORMALS, cxy);
 
     float sumW = 0.0, sumL = 0.0, sumL2 = 0.0;
     for (int ky = -2; ky <= 2; ky++) {

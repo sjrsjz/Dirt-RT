@@ -121,18 +121,15 @@ void main() {
 
 Payload tmp_Payload;
 
-float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse_0, int ignore_block_id, uint bounce_depth) {
+float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse_0, bool isNEE) {
     bool inside = !inverse_0;
-    uint ignoreEnc = payload_encodeIgnoreID(ignore_block_id);
-    payload_packFlags(payload.data, 0.0, inside, bounce_depth, false, ignoreEnc);
+    payload_packFlags(payload.data, 0.0, inside, false, isNEE);
     payload_packShadow(payload.data, vec3(1.0), 0);
     float tMin = 0;
     float tMax = 2048.0;
-    // Shadow rays (ignore_block_id≠0): disable back-face culling so both
-    // entry and exit faces of transmissive blocks are hit — extinction is
-    // accumulated at the exit face (inside→outside transition).
-    // Main trace (ignore_block_id=0): keep culling to stop at first front face.
-    uint rayFlags = (inverse_0 && ignore_block_id == 0) ? gl_RayFlagsCullBackFacingTrianglesEXT : 0u;
+    // Main trace: cull back faces (stop at first front face).
+    // NEE / underwater: disable culling (need both entry & exit faces for volume extinction).
+    uint rayFlags = (!isNEE && !inverse_0) ? gl_RayFlagsCullBackFacingTrianglesEXT : gl_RayFlagsNoneEXT;
     traceRayEXT(acc, rayFlags, 0xFF, 0, 0, 0, ro, tMin, rd, tMax, 6);
     Payload hitPayload = payload;
     float t;
@@ -143,7 +140,7 @@ float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse
 }
 
 float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse_0) {
-    return raycast(ro, rd, ro_o, rd_o, inverse_0, 0, 0u);
+    return raycast(ro, rd, ro_o, rd_o, inverse_0, false);
 }
 
 struct material {
@@ -175,12 +172,9 @@ Material evaluateMaterial(Payload pld, vec3 rd_i, uint bounce) {
     payload_unpackQuadExtras(pld.data, tint, skylight);
     int blockID;
     // vec3 _shadow = payload_unpackShadow(pld.data, blockID);
-    bool _inside;
-    uint _bounce;
-    bool handedness;
-    uint _ignore;
-    payload_unpackFlags(pld.data, _inside, _bounce, handedness, _ignore);
-    float bitangentSign = handedness ? 1.0 : -1.0;
+    bool _inside, _handedness, _isNEE;
+    payload_unpackFlags(pld.data, _inside, _handedness, _isNEE);
+    float bitangentSign = _handedness ? 1.0 : -1.0;
 
     // --- TBN ---
     vec3 bitangent = cross(tangent, geomN) * bitangentSign;
@@ -265,7 +259,7 @@ vec3 sampleSunlight(vec3 ro, vec3 normal, vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S, v
     vec3 sampleDir = cosbeta * Y + sqrt(1.0 - cosbeta * cosbeta) * (cos(alpha) * X + sin(alpha) * Z);
 
     vec3 ro_o, rd_o;
-    float t = raycast(ro, -sampleDir, ro_o, rd_o, !inside, BLOCK_GLASS, 1u); // POM skipped for shadow rays
+    float t = raycast(ro, -sampleDir, ro_o, rd_o, !inside, true); // isNEE
     if (t > -0.5) return vec3(0.0);
 
     vec3 wi = -sampleDir;
@@ -303,7 +297,7 @@ vec3 GetSpecularDominantDirection(vec3 N, vec3 V, float R) {
 // -----------------------------------------------------------------------------------
 void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     uint isEyeInWater = cam.flags & 3u;
-    uint idx = getIndex(coord);
+    uvec2 xy = coord;
 
     bool original_inverse_0 = isEyeInWater != 0;
     bool inverse_0 = original_inverse_0;
@@ -349,7 +343,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         vec4 fogA = float(inverse_0) * fogColor;
         vec3 emissionA = float(inverse_0) * global_emission;
 
-        float t = raycast(ro_i, rd_i, ro_o, rd_o, !inverse_0, 0, uint(depth));
+        float t = raycast(ro_i, rd_i, ro_o, rd_o, !inverse_0, false);
 
         // --- 1. Miss: sky / background ---
         if (t < -0.5) {
@@ -379,12 +373,9 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         }
 
         // --- 2. Geometry & material extraction ---
-        bool insideFlag;
-        uint bounceDepth;
-        bool handedness;
-        uint ignoreEnc;
-        payload_unpackFlags(tmp_Payload.data, insideFlag, bounceDepth, handedness, ignoreEnc);
-        Material surfaceMat = evaluateMaterial(tmp_Payload, rd_i, bounceDepth);
+        bool insideFlag, handedness, _isNEE;
+        payload_unpackFlags(tmp_Payload.data, insideFlag, handedness, _isNEE);
+        Material surfaceMat = evaluateMaterial(tmp_Payload, rd_i, uint(depth));
 
         // Geometry normal from payload (interpolated by rchit)
         vec3 geomN = payload_unpackGeomNormal(tmp_Payload.data);
@@ -392,7 +383,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
         vec3 normal = normalize(faceforward(surfaceMat.normal, surfaceMat.normal, rd_i));
         int blockID;
-        vec3 _shadow = payload_unpackShadow(tmp_Payload.data, blockID);
+        payload_unpackShadow(tmp_Payload.data, blockID); // blockID needed for materialFromEvaluated
         material surface = materialFromEvaluated(surfaceMat, blockID);
 
         vec3 microNormal = GGXNormal(normal, surface.R.x, ro_o);
@@ -552,7 +543,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                     for (int refr_depth = 0; refr_depth < MAX_REFRACTIVE_BOUNCES; refr_depth++) {
                         vec3 ro_next, rd_next;
                         float t_next = raycast(ro_chain + departN * (inside_chain ? -0.00025 : 0.00025),
-                                rd_chain, ro_next, rd_next, !inside_chain, 0, uint(depth + 1 + refr_depth));
+                                rd_chain, ro_next, rd_next, !inside_chain, false);
 
                         if (t_next < -0.5) {
                             // Sky — virtual image at infinity
@@ -849,112 +840,68 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
     // Shared G-Buffer (denoiseBuffer): only written by diffuse pass (ray0).
     // All three passes hit the same first surface → fields are fully deterministic.
+    vec3 pos_rel = first_p - ro;
     #if defined(FIRST_LOBE_DIFFUSE)
-    denoiseBuffer.data[idx].specularAlbedo = first_specularAlbedo;
-    denoiseBuffer.data[idx].diffuseAlbedo = first_diffuseAlbedo;
-    denoiseBuffer.data[idx].transmissionAlbedo = first_transmissionAlbedo;
-    denoiseBuffer.data[idx].distance = first_t;
-    denoiseBuffer.data[idx].light = first_light_surf;
-    denoiseBuffer.data[idx].macroNormal = first_macro_n;
-    denoiseBuffer.data[idx].illuminationType = first_type;
-    denoiseBuffer.data[idx].roughness = first_roughness;
-    denoiseBuffer.data[idx].pathRoughness = first_roughness; // default: surface roughness; overwritten by refraction pass with accumulated path roughness
-    denoiseBuffer.data[idx].absorption = first_absorption;
-    denoiseBuffer.data[idx].rd = first_rd_i;
+    // G-Buffer writes (Binding 0) — vec4-based abstract images
+    writeGeo0(GEO_N_GEO, xy, pos_rel, first_t);
+    writeGeo1(GEO_N_NORMALS, xy, first_macro_n, first_roughness, first_type, first_roughness); // pathRoughness default; overwritten by refraction pass
+    writeAlbedosPath(GEO_N_ALBEDOS, xy, first_specularAlbedo, first_diffuseAlbedo);
+    writeMisc(GEO_N_MISC, xy, first_transmissionAlbedo, first_emission_val, first_rd_i);
+    writeLightAbs(GEO_N_LIGHTABS, xy, first_light_surf, first_absorption);
     #endif
 
     // Each pass writes only its own illumination buffer.
     // Sky pixels (hit_sky_first / first_t < -0.5): color=0 + default geometry,
     // matching single-pass behaviour (fog sky branch, 100/101/102 reset on distance<-0.5).
-    vec3 pos_rel = first_p - ro;
 
     #if defined(FIRST_LOBE_DIFFUSE)
     {
-        // --- Diffuse pass: write diffuseIlluminationBuffer (Alice encoding + geometry) ---
-        diffuseIlluminationBuffer.data[idx].rt_aliceY_xy = 0.0;
-        diffuseIlluminationBuffer.data[idx].rt_aliceY_zw = 0.0;
-        diffuseIlluminationBuffer.data[idx].rt_CoCg = 0.0;
+        // --- Diffuse pass: write DiffuseBuffer (Binding 2) — vec4 abstract images ---
+        AliceEncoding combinedAlice = init_alice();
         if (!hit_sky_first && first_t > -0.5) {
-            // L_indirect: first-bounce throughput = guideWeight only (no BRDF).
-            //   Pure incident radiance — secondary bounces carry their surface
-            //   BRDFs, which is physically correct for interreflection colouring.
-            //
-            // L_direct_0: already stripped of Cd at the NEE site (depth==0,
-            //   FIRST_LOBE_DIFFUSE).  Pure incident irradiance from the sun.
-            //
-            // Both are encoded directly — no albedo demodulation needed.
-            // The full diffuse BRDF (nonSpecColor × diffuseSelector) is baked
-            // into denoiseBuffer.diffuseAlbedo and applied in fog.glsl.
             L_indirect = clamp(L_indirect, 0.0, 32000.0);
             L_direct_0 = clamp(L_direct_0, 0.0, 32000.0);
             AliceEncoding indAlice = irradiance_to_alice(L_indirect, first_rd_o);
             AliceEncoding dirAlice = irradiance_to_alice(L_direct_0, -lightDir);
             indAlice.CoCg += dirAlice.CoCg;
             indAlice.aliceY += dirAlice.aliceY;
-            diffuseIlluminationBuffer.data[idx].rt_aliceY_xy = uintBitsToFloat(packHalf2x16(indAlice.aliceY.xy));
-            diffuseIlluminationBuffer.data[idx].rt_aliceY_zw = uintBitsToFloat(packHalf2x16(indAlice.aliceY.zw));
-            diffuseIlluminationBuffer.data[idx].rt_CoCg = uintBitsToFloat(packHalf2x16(indAlice.CoCg));
+            combinedAlice = indAlice;
         }
-        diffuseIlluminationBuffer.data[idx].px = pos_rel.x;
-        diffuseIlluminationBuffer.data[idx].py = pos_rel.y;
-        diffuseIlluminationBuffer.data[idx].pz = pos_rel.z;
-        diffuseIlluminationBuffer.data[idx].oct_n = encodeNormal(first_macro_n);
-        diffuseIlluminationBuffer.data[idx].oct_n2 = encodeNormal(faceforward(first_n, first_n, -first_macro_n));
+        writeDiffuseLightRT(xy, combinedAlice, faceforward(first_n, first_n, -first_macro_n));
+        writeDiffuseGeo(xy, pos_rel, first_macro_n);
     }
     #elif defined(FIRST_LOBE_REFLECTION)
     {
-        // --- Reflection pass: write reflectIlluminationBuffer ---
-        // virtualProjDist: one extra raycast along the GGX dominant direction
+        // --- Reflection pass: write ReflectBuffer (Binding 3) — vec4 abstract images ---
         vec3 refl_R = first_rd_i;
         float refl_vprojdist = 0.0;
         vec3 refl_color = vec3(0.0);
         if (!hit_sky_first && first_t > -0.5) {
             vec3 r_rd, r_ro;
             vec3 r_rd_i = GetSpecularDominantDirection(first_n, first_rd_i, first_roughness);
-            float t_refl = raycast(first_p + first_macro_n * 0.00025, r_rd_i, r_ro, r_rd, false, 0, 1u);
+            float t_refl = raycast(first_p + first_macro_n * 0.00025, r_rd_i, r_ro, r_rd, false, false);
             refl_R = r_rd_i;
             refl_vprojdist = (t_refl > -0.5) ? t_refl : VPROJDIST_SKY;
             refl_color = clamp(total_illumination / max(first_specularAlbedo, vec3(1e-6)), 0.0, 200.0 * div_avgExposure);
         }
-        reflectIlluminationBuffer.data[idx].px = pos_rel.x;
-        reflectIlluminationBuffer.data[idx].py = pos_rel.y;
-        reflectIlluminationBuffer.data[idx].pz = pos_rel.z;
-        reflectIlluminationBuffer.data[idx].oct_dir = encodeNormal(refl_R);
-        reflectIlluminationBuffer.data[idx].virtualProjDist = refl_vprojdist;
-        reflectIlluminationBuffer.data[idx].color_rg = pack2HalfClamped(refl_color.r, refl_color.g);
-        reflectIlluminationBuffer.data[idx].color_b = pack2HalfClamped(refl_color.b, 0.0);
+        writeReflGeo(xy, pos_rel, refl_R);
+        writeReflLight(xy, refl_color, refl_vprojdist, 0.0);
     }
     #else
     {
-        // --- Refraction pass: write refractIlluminationBuffer (transmission only; TIR → reflection pass) ---
-        // PSR (Primary Surface Replacement):
-        //   oct_dir encodes the refracted direction T at the first surface (for edge-stopping lobe similarity,
-        //   analogous to the reflection pass storing the reflected direction R).
-        //   The view direction V is reconstructible from pos (camera-relative: pos = P_surf - C → V = normalize(pos)).
-        //   Virtual position: P_virtual = P_surf + V × virtualProjDist, where virtualProjDist = Σ(t_i × n_camera / n_i).
-        //
-        //   If the first surface is too rough (psrEnabled=false), first_t2_ior_adjusted=0
-        //   → virtualProjDist=0 → P_virtual = P_surf → falls back to first-surface temporal accumulation.
-        vec3 refr_R = first_refr_dir; // refracted direction T (TIR→reflect; for edge-stopping)
+        // --- Refraction pass: write RefractBuffer (Binding 4) — vec4 abstract images ---
+        vec3 refr_R = first_refr_dir;
         float refr_vprojdist = 0.0;
         vec3 refr_color = vec3(0.0);
         if (!hit_sky_first && first_t > -0.5) {
-            refr_vprojdist = first_t2_ior_adjusted; // IOR-adjusted Σ(t_i / n_i), 0 if PSR disabled
+            refr_vprojdist = first_t2_ior_adjusted;
             refr_color = clamp(total_illumination / max(first_transmissionAlbedo, vec3(1e-6)), 0.0, 200.0 * div_avgExposure);
         }
-        refractIlluminationBuffer.data[idx].px = pos_rel.x;
-        refractIlluminationBuffer.data[idx].py = pos_rel.y;
-        refractIlluminationBuffer.data[idx].pz = pos_rel.z;
-        refractIlluminationBuffer.data[idx].oct_dir = encodeNormal(refr_R);
-        refractIlluminationBuffer.data[idx].virtualProjDist = refr_vprojdist;
-        refractIlluminationBuffer.data[idx].color_rg = pack2HalfClamped(refr_color.r, refr_color.g);
-        refractIlluminationBuffer.data[idx].color_b = pack2HalfClamped(refr_color.b, 0.0);
-        // Write accumulated path roughness for the denoiser (overwrites the default set by diffuse pass)
-        denoiseBuffer.data[idx].pathRoughness = first_pathRoughness;
+        writeRefrGeo(xy, pos_rel, refr_R);
+        writeRefrLight(xy, refr_color, refr_vprojdist, 0.0);
+        // Overwrite pathRoughness in G-Buffer N=1.w (set by diffuse pass default) with accumulated PSR roughness
+        writePathRoughness(GEO_N_NORMALS, xy, first_pathRoughness);
     }
     #endif
 
-    #if defined(FIRST_LOBE_DIFFUSE)
-    denoiseBuffer.data[idx].emission = first_emission_val;
-    #endif
 }

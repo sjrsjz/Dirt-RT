@@ -72,18 +72,34 @@ void main() {
         uint tid = gl_LocalInvocationID.y * TILE_SIZE + gl_LocalInvocationID.x;
         uint total = SM_W * SM_H; // 324
 
+        // Phase 1a: Binding 0 N=0 — 距离（天空判定）
         for (uint i = tid; i < total; i += TILE_SIZE * TILE_SIZE) {
             uint row = i / SM_W;
             uint col = i % SM_W;
-
             ivec2 gc = ivec2(gl_WorkGroupID.xy * TILE_SIZE) - ivec2(HALO) + ivec2(col, row);
             ivec2 clamped = clamp(gc, ivec2(0), ivec2(resolution) - 1);
-            uint loadIdx = getIndex(uvec2(clamped));
+            uvec2 loadXY = uvec2(clamped);
 
-            TileSample s;
-            s.dist = denoiseBuffer.data[loadIdx].distance;
-            s.normal = denoiseBuffer.data[loadIdx].macroNormal;
-            sm_tile[row][col] = s;
+            vec3 pos_unused;
+            readGeo0(GEO_N_GEO, loadXY, pos_unused, sm_tile[row][col].dist);
+        }
+    }
+    memoryBarrierShared();
+    barrier();
+
+    {
+        uint tid = gl_LocalInvocationIndex;
+        uint total = SM_W * SM_H;
+        // Phase 1b: Binding 0 N=1 — 法线
+        for (uint i = tid; i < total; i += TILE_SIZE * TILE_SIZE) {
+            uint row = i / SM_W;
+            uint col = i % SM_W;
+            ivec2 gc = ivec2(gl_WorkGroupID.xy * TILE_SIZE) - ivec2(HALO) + ivec2(col, row);
+            ivec2 clamped = clamp(gc, ivec2(0), ivec2(resolution) - 1);
+            uvec2 loadXY = uvec2(clamped);
+
+            float rough_unused; int illumType_unused;
+            float _pr; readGeo1(GEO_N_NORMALS, loadXY, sm_tile[row][col].normal, rough_unused, illumType_unused, _pr);
         }
     }
     memoryBarrierShared();
@@ -96,7 +112,7 @@ void main() {
     uvec2 pix = gl_GlobalInvocationID.xy;
     if (any(greaterThanEqual(pix, uvec2(resolution)))) return;
 
-    uint idx = getIndex(pix);
+    uvec2 xy = pix;
 
     // ---- 读取中心 (从共享内存, 无 SSBO 读取) --------------------------------
     uint cx = gl_LocalInvocationID.x + HALO;
@@ -147,27 +163,29 @@ void main() {
 
     // ---- 修正 reflect buffer -----------------------------------------------
     {
-        float d = reflectIlluminationBuffer.data[idx].virtualProjDist;
+        vec3 reflColor; float d, accumW;
+        readReflLight(xy, reflColor, d, accumW);
         if (d > 0.0 && d < 0.5 * VPROJDIST_SKY) {
             float dCorr = applyThinLens(d, curvature);
             float lo = d * (1.0 - CURVATURE_MAX_CORRECTION_FRACTION);
             float hi = d * (1.0 + CURVATURE_MAX_CORRECTION_FRACTION);
             dCorr = clamp(dCorr, lo, hi);
             dCorr = max(dCorr, 0.0);
-            reflectIlluminationBuffer.data[idx].virtualProjDist = dCorr;
+            writeReflLight(xy, reflColor, dCorr, accumW);
         }
     }
 
     // ---- 修正 refract buffer -----------------------------------------------
     {
-        float d = refractIlluminationBuffer.data[idx].virtualProjDist;
+        vec3 refrColor; float d, accumW;
+        readRefrLight(xy, refrColor, d, accumW);
         if (d > 0.0 && d < 0.5 * VPROJDIST_SKY) {
             float dCorr = applyThinLens(d, curvature);
             float lo = d * (1.0 - CURVATURE_MAX_CORRECTION_FRACTION);
             float hi = d * (1.0 + CURVATURE_MAX_CORRECTION_FRACTION);
             dCorr = clamp(dCorr, lo, hi);
             dCorr = max(dCorr, 0.0);
-            refractIlluminationBuffer.data[idx].virtualProjDist = dCorr;
+            writeRefrLight(xy, refrColor, dCorr, accumW);
         }
     }
 }

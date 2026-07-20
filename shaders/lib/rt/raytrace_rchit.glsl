@@ -12,6 +12,7 @@
 #include "/lib/rt/data.glsl"
 #include "/lib/rt/payload.glsl"
 #include "/lib/rt/fragment_info.glsl"
+#include "/lib/rt/volume_extinction.glsl"
 
 layout(location = 6) rayPayloadInEXT Payload payload;
 
@@ -82,32 +83,17 @@ void main() {
     }
 
     // === Volume absorption (accumulated across intersections) ===
-    bool inside;
-    uint bounce;
-    bool handedness;
-    uint ignoreEnc;
-    float prevDist = payload_unpackFlags(payload.data, inside, bounce, handedness, ignoreEnc);
+    bool inside, handedness, isNEE;
+    float prevDist = payload_unpackFlags(payload.data, inside, handedness, isNEE);
     vec3 shadowTrans = payload_unpackShadow(payload.data);
 
     if (inside) {
         vec2 uv = getFragmentUV(quad, baryCoord);
         vec4 albedo = texture(blockTex, uv);
         float segDist = clamp(gl_HitTEXT - prevDist, 0.0, 100.0);
-        if (quad.vertices[0].block_id.x == BLOCK_WATER) {
-            // Physically-based water extinction (real absorption coefficients)
-            shadowTrans *= exp2(-segDist
-                        * vec3(0.14426950, 0.04328085, 0.05770780));
-        } else {
-            // LabPBR dielectric extinction:
-            //   albedo.rgb = base color (surface appearance → transmitted tint)
-            //   albedo.a   = translucent  (0=opaque, 1=fully transmitting)
-            //   T(d) = mix(0, albedo^d, translucent)
-            float translucency = albedo.a;
-            vec3 beersLambert = pow(max(albedo.rgb, 0.005), vec3(segDist));
-            shadowTrans *= mix(vec3(0.0), beersLambert, translucency);
-        }
+        shadowTrans = applyVolumeExtinction(shadowTrans, segDist, albedo, blockID);
     }
 
     payload_packShadow(payload.data, shadowTrans, blockID);
-    payload_packFlags(payload.data, prevDist, inside, bounce, bitangentSign > 0.0, ignoreEnc);
+    payload_packFlags(payload.data, prevDist, inside, bitangentSign > 0.0, isNEE);
 }

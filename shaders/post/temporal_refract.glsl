@@ -46,16 +46,19 @@ bool evalVirtualPath(vec2 prevUV, vec3 curVirtual, vec3 curNormal_dir, vec3 curC
 
     for (int i = 0; i < 4; i++) {
         ivec2 st = pt + ivec2(i & 1, i >> 1);
-        uint si = getIndex(uvec2(clamp(st, ivec2(0), ivec2(resolution_global) - 1)));
-        SpecularRTElement e = refractIlluminationBuffer.data[si];
+        uvec2 siXY = uvec2(clamp(st, ivec2(0), ivec2(resolution_global) - 1));
 
-        if (e.hist_weight < 1e-4) continue;
+        vec3 hPos, hT;
+        readRefrHistGeo(siXY, hPos, hT);
 
-        vec3 hPos = vec3(e.hist_px, e.hist_py, e.hist_pz);
+        vec3 hColor; float hVproj, histWeight;
+        readRefrHistLight(siXY, hColor, hVproj, histWeight);
+
+        if (histWeight < 1e-4) continue;
+
         vec3 hPosCur = hPos - cameraDelta;
 
         vec3 hV = length(hPosCur) > 0.001 ? normalize(hPosCur) : vec3(0, 0, 1);
-        float hVproj = e.hist_vprojdist;
 
         vec3 hVirtual = hPosCur + hV * hVproj;
 
@@ -64,7 +67,7 @@ bool evalVirtualPath(vec2 prevUV, vec3 curVirtual, vec3 curNormal_dir, vec3 curC
         // 软性置信度：随虚像距离差平滑衰减
         float posConf = exp2(-VIRT_POS_PARAM * distDiff * footprint);
 
-        vec3 hNormal_dir = decodeNormal(e.hist_oct_dir);
+        vec3 hNormal_dir = hT;
         float normDot = dot(hNormal_dir, curNormal_dir);
         // 如果法线差异过大(夹角>45度)，抛弃历史防止拖影
         if (normDot < 0.707) continue;
@@ -74,16 +77,11 @@ bool evalVirtualPath(vec2 prevUV, vec3 curVirtual, vec3 curNormal_dir, vec3 curC
         float bw = (1.0 - abs(ptc.x - sc.x)) * (1.0 - abs(ptc.y - sc.y));
         float w = bw * posConf;
 
-        // 颜色解包
-        vec2 rg = unpackHalf2x16(floatBitsToUint(e.hist_color_rg));
-        float b = unpackHalf2x16(floatBitsToUint(e.hist_color_b)).x;
-        vec3 hColor = vec3(rg.x, rg.y, b);
-
         if (any(isnan(hColor)) || any(isinf(hColor))) continue;
 
         accumColor += hColor * w;
         sumW += w;
-        sumPrevW += w * e.hist_weight;
+        sumPrevW += w * histWeight;
         maxConf = max(maxConf, posConf);
     }
 
@@ -98,21 +96,19 @@ bool evalVirtualPath(vec2 prevUV, vec3 curVirtual, vec3 curNormal_dir, vec3 curC
     return true;
 }
 
-uint idx;
-
 void main() {
     uvec2 pix = gl_GlobalInvocationID.xy;
     if (any(greaterThanEqual(pix, uvec2(resolution)))) return;
 
     vec2 texCoord = (vec2(pix) + 0.5) / vec2(resolution);
-    idx = getIndex(pix);
 
-    float info_distance = denoiseBuffer.data[idx].distance;
+    float info_distance;
+    { vec3 _pos; readGeo0(GEO_N_GEO, pix, _pos, info_distance); }
 
     float vproj;
     vec3IlluminationData curr_sample;
 
-    unpackSpecularRT(refractIlluminationBuffer.data[idx], curr_sample.pos, curr_sample.normal, curr_sample.data_swap, vproj);
+    unpackSpecularRT_Refr(pix, curr_sample.pos, curr_sample.normal, curr_sample.data_swap, vproj);
     curr_sample.data = vec3(0.0);
     curr_sample.weight = 0.0;
     curr_sample.prev_weight = 0.0;

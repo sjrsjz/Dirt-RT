@@ -33,12 +33,9 @@ void main() {
     if (vv.x < 0.0) return; // 天空 → 跳过, 保留 SSBO 原有值
 
     // 从 SSBO 读 101 写入的累积颜色 + 权重 (pre-denoise history 源)
-    uint idx = getIndex(uvec2(pix));
-    SpecularRTElement e = reflectIlluminationBuffer.data[idx];
-    vec2 erg = unpackHalf2x16(floatBitsToUint(e.color_rg));
-    float eb = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
-    vec3 preDenoise = vec3(erg.x, erg.y, eb);
-    float weight = e.accum_weight;
+    uvec2 xy = uvec2(pix);
+    vec3 preDenoise; float vproj, weight;
+    readReflLight(xy, preDenoise, vproj, weight);
     if (any(isnan(preDenoise))) preDenoise = vec3(0.0);
 
     // 写回降噪颜色到 SSBO 当前帧区段 (fog.fsh 通过 fetchReflect 读取)
@@ -46,8 +43,7 @@ void main() {
     vec2 dbr = unpackHalf2x16(floatBitsToUint(light.y));
     vec3 denoised = vec3(drg.x, drg.y, dbr.x);
     if (any(isnan(denoised))) denoised = vec3(0.0);
-    reflectIlluminationBuffer.data[idx].color_rg = pack2HalfClamped(denoised.r, denoised.g);
-    reflectIlluminationBuffer.data[idx].color_b  = pack2HalfClamped(denoised.b, 0.0);
+    writeReflLight(xy, denoised, vproj, weight);
 
     // 写时域历史到 SSBO hist_* 区段 (替代原先 4 个 rgba32f image write)
     vec3 R = decodeNormal(geom.w);

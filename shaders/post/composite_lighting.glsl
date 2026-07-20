@@ -33,74 +33,69 @@ in vec2 texCoord;
 layout(location = 0) out vec4 fragColor;
 
 void main() {
-    uint idx = getIndex(uvec2(gl_FragCoord.xy));
-    bufferData data = denoiseBuffer.data[idx];
+    uvec2 xy = uvec2(gl_FragCoord.xy);
+    ivec2 pix = ivec2(gl_FragCoord.xy);
+
+    // 只读 dist 判定天空（pos 顺带读出不浪费）
+    vec3 worldPos; float dist;
+    readGeo0(GEO_N_GEO, xy, worldPos, dist);
 
     // =========================================================================
-    // 分支 1: 天空像素 (无几何体命中)
+    // 分支 1: 天空像素 — 只读 N=3 + N=4（跳过 N=1,N=2 省 3 次 vec4 读）
     // =========================================================================
-    if (data.distance < -0.5) {
-        setSkyVars(); // 初始化天空散射参数 (原由 init_sky 预计算, 现改为分析式)
-        // 天空颜色 = 大气散射 × 透射率 + 发光项
-        fragColor.xyz = data.absorption * sampleSky(camPos.y, data.rd, -lightDir_global) + data.emission;
+    if (dist < -0.5) {
+        vec3 emisVal, rdVal, absorptionVal; // ignore transAlbedo, lightVal
+        vec3 transAlbedo_unused, lightVal_unused;
+        readMisc(GEO_N_MISC, xy, transAlbedo_unused, emisVal, rdVal);
+        readLightAbs(GEO_N_LIGHTABS, xy, lightVal_unused, absorptionVal);
 
-        // 重置漫反射历史 (避免天空像素使用上一帧地面数据)
-        diffuseIlluminationBuffer.data[idx].rt_aliceY_xy = 0.0;
-        diffuseIlluminationBuffer.data[idx].rt_aliceY_zw = 0.0;
-        diffuseIlluminationBuffer.data[idx].rt_CoCg = 0.0;
+        setSkyVars();
+        fragColor.xyz = absorptionVal * sampleSky(camPos.y, rdVal, -lightDir_global) + emisVal;
+        writeDiffuseLightRTSky(xy);
+        return;
     }
+
     // =========================================================================
-    // 分支 2: 表面像素 — 组合所有光照分量
+    // 分支 2: 表面像素 — 读剩余 G-Buffer + 所有光照
     // =========================================================================
-    else {
-        ivec2 pix = ivec2(gl_FragCoord.xy);
+    vec3 macroN, specAlbedo, diffAlbedo, transAlbedo, emisVal, lightVal, absorptionVal, rdVal;
+    float rough, pathR; int illumType;
+    readGeo1(GEO_N_NORMALS, xy, macroN, rough, illumType, pathR);
+    readAlbedosPath(GEO_N_ALBEDOS, xy, specAlbedo, diffAlbedo);
+    readMisc(GEO_N_MISC, xy, transAlbedo, emisVal, rdVal);
+    readLightAbs(GEO_N_LIGHTABS, xy, lightVal, absorptionVal);
 
-        // 读取各光照类型的数据
-        diffuseIlluminationData tmp = fetchDiffuse(pix);
-        vec3IlluminationData tmp2 = fetchReflect(pix);
-        vec3IlluminationData tmp3 = fetchRefract(pix);
+    diffuseIlluminationData tmp = fetchDiffuse(pix);
+    vec3IlluminationData tmp2 = fetchReflect(pix);
+    vec3IlluminationData tmp3 = fetchRefract(pix);
 
-        // 保存当前漫反射数据到历史缓冲区 (供下一帧 temporal_diffuse.glsl 使用)
-        // Temporal history now lives in unified diffuseIlluminationBuffer (binding 2).
-        // swap3 already wrote the final filtered AliceEncoding + weight to the swap fields;
-        // ray0.rgen reads from there via samplePrevDiffuse. No additional write needed.
+    AliceEncoding dummy; vec3 n2;
+    readDiffuseLightRT(xy, dummy, n2);
 
-        // ---- Debug view selector ----
-        // Full disentanglement: each denoised buffer holds a material-independent incident
-        // light field (divided by stable per-lobe albedo in rgen using normal, not microNormal).
-        // Composite multiplies each back by its stable material multiplier from denoiseBuffer.
-        // Stable divisor = no temporal noise amplification (unlike microNormal-based division).
-        #if DEBUG_VIEW == 0
-        // Normal: full composition
-        //   color = absorption × [
-        //       diffuse_irradiance × diffuseAlbedo
-        //     + refract_incident   × transmissionAlbedo
-        //     + reflect_incident   × specularAlbedo
-        //     + direct_light
-        //   ] + emission
-        fragColor.xyz = data.absorption
-                * (project_alice_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2))
-                    * data.diffuseAlbedo
-                    + tmp3.data_swap * data.transmissionAlbedo
-                    + tmp2.data_swap * data.specularAlbedo
-                    + data.light)
-                + data.emission;
+    #if DEBUG_VIEW == 0
+    fragColor.xyz = absorptionVal
+            * (project_alice_irradiance(tmp.data_swap, n2)
+                * diffAlbedo
+                + tmp3.data_swap * transAlbedo
+                + tmp2.data_swap * specAlbedo
+                + lightVal)
+            + emisVal;
 
         #elif DEBUG_VIEW == 1
         // Diffuse only: irradiance × diffuseAlbedo
-        fragColor.xyz = project_alice_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2)) * data.diffuseAlbedo;
+        fragColor.xyz = project_alice_irradiance(tmp.data_swap, decodeNormal(n2)) * diffAlbedo;
 
         #elif DEBUG_VIEW == 2
         // Refract only
-        fragColor.xyz = tmp3.data_swap * data.transmissionAlbedo;
+        fragColor.xyz = tmp3.data_swap * transAlbedo;
 
         #elif DEBUG_VIEW == 3
         // Reflect only
-        fragColor.xyz = tmp2.data_swap * data.specularAlbedo;
+        fragColor.xyz = tmp2.data_swap * specAlbedo;
 
         #elif DEBUG_VIEW == 4
         // White model: diffuse irradiance only, no albedo
-        fragColor.xyz = project_alice_irradiance(tmp.data_swap, decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2));
+        fragColor.xyz = project_alice_irradiance(tmp.data_swap, decodeNormal(n2));
 
         #elif DEBUG_VIEW == 5
         // Light field: ALICE normalized dominant direction × energy
@@ -108,28 +103,26 @@ void main() {
 
         #elif DEBUG_VIEW == 6
         // Normals: world-space normal as RGB
-        vec3 dbg_n = decodeNormal(diffuseIlluminationBuffer.data[idx].oct_n2);
+        vec3 dbg_n = decodeNormal(n2);
         fragColor.xyz = dbg_n * 0.5 + 0.5;
 
         #elif DEBUG_VIEW == 7
         // Absorption / atmospheric transmission
-        fragColor.xyz = data.absorption;
+        fragColor.xyz = absorptionVal;
 
         #elif DEBUG_VIEW == 8
         // Reflection dominant direction R as RGB (oct-decoded)
         {
-            SpecularRTElement re = reflectIlluminationBuffer.data[getIndex(uvec2(gl_FragCoord.xy))];
-            vec3 R = decodeNormal(re.oct_dir);
+            vec3 Rpos, R;
+            readReflGeo(xy, Rpos, R);
             fragColor.xyz = R * 0.5 + 0.5;
         }
 
         #elif DEBUG_VIEW == 9
         // Reflection virtual projection distance (rainbow colormap, log scale)
-        //   blue → cyan → green → yellow → red → white(sky)
-        //   near 0              20              60      VPROJDIST_SKY
         {
-            SpecularRTElement re = reflectIlluminationBuffer.data[getIndex(uvec2(gl_FragCoord.xy))];
-            float d = re.virtualProjDist;
+            vec3 dummyColor; float d, dummyW;
+            readReflLight(xy, dummyColor, d, dummyW);
             if (d >= VPROJDIST_SKY * 0.99) {
                 fragColor.xyz = vec3(1.0, 1.0, 1.0);  // sky / no hit → white
             } else {
@@ -145,11 +138,11 @@ void main() {
 
         #elif DEBUG_VIEW == 10
         // Specular albedo (rC.rgb * S.x) — the reflection material multiplier
-        fragColor.xyz = data.specularAlbedo;
+        fragColor.xyz = specAlbedo;
 
         #elif DEBUG_VIEW == 11
         // Roughness as grayscale
-        fragColor.xyz = vec3(data.roughness);
+        fragColor.xyz = vec3(rough);
 
         #elif DEBUG_VIEW == 12
         // Raw reflection incident (before specularAlbedo modulation)
@@ -189,24 +182,21 @@ void main() {
 
         #elif DEBUG_VIEW == 16
         // Direct light only — raw direct illumination component
-        fragColor.xyz = data.light;
+        fragColor.xyz = lightVal;
 
         #elif DEBUG_VIEW == 17
         // Emission only — self-illuminating surfaces (glowstone, lava, etc.)
-        fragColor.xyz = data.emission;
+        fragColor.xyz = emisVal;
 
         #elif DEBUG_VIEW == 18
         // Diffuse albedo — per-pixel diffuse material multiplier
-        fragColor.xyz = data.diffuseAlbedo;
+        fragColor.xyz = diffAlbedo;
 
         #elif DEBUG_VIEW == 19
         // Refraction virtual projection distance (IOR-adjusted, rainbow colormap, log scale)
-        //   blue → cyan → green → yellow → red → white(sky)
-        //   near 0              10              40      VPROJDIST_SKY
-        //   virtualProjDist = Σ(t_i × n_camera / n_segment) — IOR 修正后的虚像距离
         {
-            SpecularRTElement re = refractIlluminationBuffer.data[getIndex(uvec2(gl_FragCoord.xy))];
-            float d = re.virtualProjDist;
+            vec3 dummyColor; float d, dummyW;
+            readRefrLight(xy, dummyColor, d, dummyW);
             if (d >= VPROJDIST_SKY * 0.99) {
                 fragColor.xyz = vec3(1.0, 1.0, 1.0);  // sky / no hit → white
             } else {
@@ -219,5 +209,4 @@ void main() {
         }
 
         #endif
-    }
 }

@@ -32,20 +32,18 @@ void main() {
     float virtualProjDist = vv.y;
     if (vv.x < 0.0) return; // 天空
 
-    uint idx = getIndex(uvec2(pix));
-    SpecularRTElement e = refractIlluminationBuffer.data[idx];
-    vec2 erg = unpackHalf2x16(floatBitsToUint(e.color_rg));
-    float eb = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
-    vec3 preDenoise = vec3(erg.x, erg.y, eb);
-    float weight = e.accum_weight;
+    // 从 SSBO 读 102 写入的累积颜色 + 权重 (pre-denoise history 源)
+    uvec2 xy = uvec2(pix);
+    vec3 preDenoise; float vproj, weight;
+    readRefrLight(xy, preDenoise, vproj, weight);
     if (any(isnan(preDenoise))) preDenoise = vec3(0.0);
 
+    // 写回降噪颜色到 SSBO 当前帧区段
     vec2 drg = unpackHalf2x16(floatBitsToUint(light.x));
     vec2 dbr = unpackHalf2x16(floatBitsToUint(light.y));
     vec3 denoised = vec3(drg.x, drg.y, dbr.x);
     if (any(isnan(denoised))) denoised = vec3(0.0);
-    refractIlluminationBuffer.data[idx].color_rg = pack2HalfClamped(denoised.r, denoised.g);
-    refractIlluminationBuffer.data[idx].color_b  = pack2HalfClamped(denoised.b, 0.0);
+    writeRefrLight(xy, denoised, vproj, weight);
 
     vec3 R = decodeNormal(geom.w);
     WriteRefractHistory(preDenoise, weight, geom.xyz, R, virtualProjDist, pix);

@@ -40,29 +40,54 @@ void main() {
     uint tid = gl_LocalInvocationIndex;
 
     // ---- Phase 1: 加载到共享内存 ----
+    // Phase 1a: Binding 0 N=0 — 距离（天空判定）
     for (uint i = tid; i < TILE_AREA; i += 256u) {
         uint tx = i % TILE;
         uint ty = i / TILE;
         ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(tx, ty);
         ivec2 cc = clamp(gc, ivec2(0), texSize - 1);
-        uint idx = getIndex(uvec2(cc));
+        uvec2 xy = uvec2(cc);
 
-        TileSample s;
-        float dist = denoiseBuffer.data[idx].distance;
-        if (dist > -0.5) {
-            SpecularRTElement e = reflectIlluminationBuffer.data[idx];
-            vec2 rg = unpackHalf2x16(floatBitsToUint(e.color_rg));
-            float b = unpackHalf2x16(floatBitsToUint(e.color_b)).x;
-            s.color = vec3(rg.x, rg.y, b);
-            if (any(isnan(s.color)) || any(isinf(s.color))) s.color = vec3(0.0);
-            s.materialID = denoiseBuffer.data[idx].roughness;
-        } else {
-            s.color = vec3(0.0);
-            s.materialID = -1.0; // 天空
-        }
-        sm[i] = s;
+        vec3 pos_unused; float dist;
+        readGeo0(GEO_N_GEO, xy, pos_unused, dist);
+        sm[i].materialID = (dist > -0.5) ? 0.0 : -1.0;
+        sm[i].color = vec3(0.0);
     }
+    barrier();
+    memoryBarrierShared();
 
+    // Phase 1b: Binding 0 N=1 — roughness（材质区分）
+    for (uint i = tid; i < TILE_AREA; i += 256u) {
+        if (sm[i].materialID > -0.5) {
+            uint tx = i % TILE;
+            uint ty = i / TILE;
+            ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(tx, ty);
+            ivec2 cc = clamp(gc, ivec2(0), texSize - 1);
+            uvec2 xy = uvec2(cc);
+
+            vec3 macroN_unused; float rough; int illumType_unused;
+            float _pr; readGeo1(GEO_N_NORMALS, xy, macroN_unused, rough, illumType_unused, _pr);
+            sm[i].materialID = rough;
+        }
+    }
+    barrier();
+    memoryBarrierShared();
+
+    // Phase 1c: Binding 3 N=1 — 反射光照颜色
+    for (uint i = tid; i < TILE_AREA; i += 256u) {
+        if (sm[i].materialID > -0.5) {
+            uint tx = i % TILE;
+            uint ty = i / TILE;
+            ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(tx, ty);
+            ivec2 cc = clamp(gc, ivec2(0), texSize - 1);
+            uvec2 xy = uvec2(cc);
+
+            vec3 color; float vproj_unused, accumW_unused;
+            readReflLight(xy, color, vproj_unused, accumW_unused);
+            if (any(isnan(color)) || any(isinf(color))) color = vec3(0.0);
+            sm[i].color = color;
+        }
+    }
     barrier();
     memoryBarrierShared();
 
@@ -124,9 +149,8 @@ void main() {
     }
 
     // 写回 (仅更新颜色，保留其他字段)
-    uint idx = getIndex(gid);
-    SpecularRTElement e = reflectIlluminationBuffer.data[idx];
-    e.color_rg = uintBitsToFloat(packHalf2x16(outColor.rg));
-    e.color_b = uintBitsToFloat(packHalf2x16(vec2(outColor.b, 0.0)));
-    reflectIlluminationBuffer.data[idx] = e;
+    uvec2 outXY = gid;
+    vec3 oldColor; float vproj, accumW;
+    readReflLight(outXY, oldColor, vproj, accumW);
+    writeReflLight(outXY, outColor, vproj, accumW);
 }
