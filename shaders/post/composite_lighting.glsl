@@ -83,7 +83,7 @@ void main() {
 
         #elif DEBUG_VIEW == 1
         // Diffuse only: irradiance × diffuseAlbedo
-        fragColor.xyz = project_alice_irradiance(tmp.data_swap, decodeNormal(n2)) * diffAlbedo;
+        fragColor.xyz = project_alice_irradiance(tmp.data_swap, n2) * diffAlbedo;
 
         #elif DEBUG_VIEW == 2
         // Refract only
@@ -95,7 +95,7 @@ void main() {
 
         #elif DEBUG_VIEW == 4
         // White model: diffuse irradiance only, no albedo
-        fragColor.xyz = project_alice_irradiance(tmp.data_swap, decodeNormal(n2));
+        fragColor.xyz = project_alice_irradiance(tmp.data_swap, n2);
 
         #elif DEBUG_VIEW == 5
         // Light field: ALICE normalized dominant direction × energy
@@ -103,7 +103,7 @@ void main() {
 
         #elif DEBUG_VIEW == 6
         // Normals: world-space normal as RGB
-        vec3 dbg_n = decodeNormal(n2);
+        vec3 dbg_n = n2;
         fragColor.xyz = dbg_n * 0.5 + 0.5;
 
         #elif DEBUG_VIEW == 7
@@ -205,6 +205,19 @@ void main() {
                 float g = clamp(min(4.0 * t - 0.5, -4.0 * t + 3.5), 0.0, 1.0);
                 float b = clamp(min(4.0 * t + 0.5, -4.0 * t + 2.5), 0.0, 1.0);
                 fragColor.xyz = vec3(r, g, b);
+            }
+        }
+
+        #elif DEBUG_VIEW == 20
+        // Path guide ALICE direction as RGB (蓄水池+降噪投票结果, N=5)
+        {
+            vec4 guideY; float guideEnergy;
+            readPathGuide(xy, guideY, guideEnergy);
+            if (guideEnergy < 1e-6) {
+                fragColor.xyz = vec3(0.0); // 无效/天空 → 黑
+            } else {
+                vec3 dir = guideY.xyz / max(length(guideY.xyz), 1e-6);
+                fragColor.xyz = dir * 0.5 + 0.5; // 方向→RGB
             }
         }
 

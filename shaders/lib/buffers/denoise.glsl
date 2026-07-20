@@ -258,6 +258,7 @@ AliceEncoding unpackAlice(float s0, float s1, float s2) {
 // N=2: History Light  — vec4(hist_aliceY_xy_f16, hist_aliceY_zw_f16, hist_CoCg_f16, hist_weight)
 // N=3: History Geo    — vec4(hist_worldPos.xyz, oct(hist_normal))
 // N=4: Swap Light     — vec4(swap_aliceY_xy_f16, swap_aliceY_zw_f16, swap_CoCg_f16, swap_weight)
+// N=5: Path Guide     — vec4(pathGuide_aliceY.xyz, energy)  蓄水池抽样选出，供下一帧光线追踪引导
 
 #define DIF_N_LIGHT   0u
 #define DIF_N_GEO     1u
@@ -345,6 +346,51 @@ void readDiffuseSwap(uvec2 xy, out AliceEncoding alice, out float weight) {
     alice.aliceY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
     alice.CoCg = cocg;
     weight = v.w;
+}
+
+// ===========================================================================
+// Binding 2 N=5 — Path Guide（路径引导参考）
+// ===========================================================================
+// N=5: vec4(pathGuide_aliceY.xyz, energy)
+//   aliceY.xyz = 主导方向 × 亮度, energy = ω（0 = 天空/无效）
+//   由 path_guide_select pass 在时域累积后写入，下一帧 ray0.rgen 通过
+//   samplePathGuide 做 2×2 双线性采样（含有效性 mask 修正）用于路径引导。
+
+#define DIF_N_PATHGUIDE 5u
+
+void writePathGuide(uvec2 xy, vec4 aliceY) {
+    diffuseBuffer.data[addr(DIF_N_PATHGUIDE, xy)] = aliceY;
+}
+void readPathGuide(uvec2 xy, out vec4 aliceY, out float energy) {
+    vec4 v = diffuseBuffer.data[addr(DIF_N_PATHGUIDE, xy)];
+    aliceY = v;
+    energy = v.w;
+}
+
+// 2×2 双线性采样路径引导，含有效性 mask 修正
+// prevCoord: 重投影到上一帧的像素坐标（可以是亚像素）
+// 返回: 采样到的 aliceY vec4（无效样本的权重被归零）
+vec4 samplePathGuide(vec2 prevCoord) {
+    ivec2 p0 = ivec2(floor(prevCoord));
+    vec2  pf = prevCoord - vec2(p0);
+
+    vec4 y00, y10, y01, y11;
+    float e00, e10, e01, e11;
+    readPathGuide(uvec2(clamp(p0 + ivec2(0, 0), ivec2(0), ivec2(resolution_global) - 1)), y00, e00);
+    readPathGuide(uvec2(clamp(p0 + ivec2(1, 0), ivec2(0), ivec2(resolution_global) - 1)), y10, e10);
+    readPathGuide(uvec2(clamp(p0 + ivec2(0, 1), ivec2(0), ivec2(resolution_global) - 1)), y01, e01);
+    readPathGuide(uvec2(clamp(p0 + ivec2(1, 1), ivec2(0), ivec2(resolution_global) - 1)), y11, e11);
+
+    // 有效性 mask: energy > 0 表示有效引导
+    float w00 = (e00 > 0.0) ? (1.0 - pf.x) * (1.0 - pf.y) : 0.0;
+    float w10 = (e10 > 0.0) ? pf.x * (1.0 - pf.y) : 0.0;
+    float w01 = (e01 > 0.0) ? (1.0 - pf.x) * pf.y : 0.0;
+    float w11 = (e11 > 0.0) ? pf.x * pf.y : 0.0;
+
+    float sumW = w00 + w10 + w01 + w11;
+    if (sumW < 1e-8) return vec4(0.0);
+
+    return (y00 * w00 + y10 * w10 + y01 * w01 + y11 * w11) / sumW;
 }
 
 // ===========================================================================

@@ -75,6 +75,7 @@ value.DEBUG_VIEW.16 = Direct Light
 value.DEBUG_VIEW.17 = Emission
 value.DEBUG_VIEW.18 = Diffuse Albedo
 value.DEBUG_VIEW.19 = Refr. VirtDist
+value.DEBUG_VIEW.20 = Path Guide
 
 # -- ReSTIR --
 option.useReSTIR = Use ReSTIR

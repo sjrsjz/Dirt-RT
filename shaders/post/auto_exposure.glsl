@@ -40,12 +40,12 @@ float solveBaseline(float expected) {
     float k = EXPOSURE_CURVE_K;
     float x = expected;
 
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 8; i++) {
         float curved = applyExposureCurve(x, k);
         float f_x = TonyMcMapface_LumaApprox(curved) - expected;
 
         // 链式法则: d/dx tonemap(curve(x)) = tonemap'(curve) · curve'(x)
-        float t_deriv = (TonyMcMapface_LumaApprox(curved + 1e-5) - TonyMcMapface_LumaApprox(curved - 1e-5)) / (2e-5);
+        float t_deriv = TonyMcMapface_LumaApprox_Deriv(curved);
         float c_deriv = exposureCurveDerivative(x, k);
         float f_prime_x = t_deriv * c_deriv;
 
@@ -90,7 +90,7 @@ void main() {
         vec2 uv = vec2(0.5) + vec2(cos(theta), sin(theta)) * r * 0.45; 
         
         vec3 c = texture(colortex1, uv).rgb;
-        float luma = max(luma(c), 1e-4);
+        float luma = max(luma(c), 1e-10);
         float logL = log2(luma);
         
         logLumas[i] = logL;
@@ -133,7 +133,7 @@ void main() {
             1.0 - exp2(-dTime_global * adaptSpeed * LOG2_E)
         ));
     }
-    div_avgExposure = 1.0 / max(avgExposure, 1e-6);
+    div_avgExposure = 1.0 / max(avgExposure, 1e-20);
 
     // --- Save camera matrices ---
     prevRaytracingCamPos = camPos;     // 光线追踪相机 (供下一帧时域 cameraDelta)

@@ -444,10 +444,9 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                 bool validPrev = all(greaterThanEqual(prev_coord, vec2(0.0))) &&
                         all(lessThanEqual(prev_coord, vec2(1.0)));
                 if (validPrev) {
-                    DiffuseIlluminationWriteData data0 =
-                        samplePrevDiffuse(prev_coord * resolution_global);
-                    vec3 x = data0.data_swap.aliceY.xyz;
-                    float omega = data0.data_swap.aliceY.w;
+                    vec4 guideY = samplePathGuide(prev_coord * vec2(resolution_global));
+                    vec3 x = guideY.xyz;
+                    float omega = guideY.w;
                     float length_x = max(length(x), 1e-20);
                     omega = max(omega, length_x);
                     reflAxis = x / length_x;
@@ -620,10 +619,9 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             bool validPrev = all(greaterThanEqual(prev_coord, vec2(0.0))) &&
                     all(lessThanEqual(prev_coord, vec2(1.0)));
             if (validPrev) {
-                DiffuseIlluminationWriteData data0 =
-                    samplePrevDiffuse(prev_coord * resolution_global);
-                vec3 x = data0.data_swap.aliceY.xyz;
-                float omega = data0.data_swap.aliceY.w;
+                vec4 guideY = samplePathGuide(prev_coord * vec2(resolution_global));
+                vec3 x = guideY.xyz;
+                float omega = guideY.w;
                 float length_x = max(length(x), 1e-20);
                 omega = max(omega, length_x);
                 axis = x / length_x;

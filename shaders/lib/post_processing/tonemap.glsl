@@ -96,6 +96,28 @@ float TonyMcMapface_LumaApprox(float x) {
     return min(reinhard + residual, 1.0);
 }
 
+float TonyMcMapface_LumaApprox_Deriv(float x) {
+    if (x <= 1e-20) return 0.0;
+
+    float inv_one_plus_x = 1.0 / (1.0 + x);
+    float reinhard = x * inv_one_plus_x;
+    
+    float lnx = log(x);
+    float diff = lnx - 2.901905;
+    float exponent = -(diff * diff) / 5.355152;
+    float residual = (0.185418 / x) * exp(exponent);
+
+    if (reinhard + residual >= 1.0) {
+        return 0.0;
+    }
+
+    float d_reinhard = inv_one_plus_x * inv_one_plus_x;
+    
+    float d_residual = (residual / x) * (diff * -0.3734721 - 1.0);
+
+    return d_reinhard + d_residual;
+}
+
 vec3 linear_to_srgb(vec3 linear_color) {
     // 限制在 0.0 - 1.0 范围内
     vec3 clapped = clamp(linear_color, 0.0, 1.0);
