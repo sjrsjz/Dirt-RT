@@ -221,5 +221,13 @@ void main() {
             }
         }
 
+        #elif DEBUG_VIEW == 21
+        // 原始时域累积白模 (N=4 swap ALICE × normal2, 降噪前)
+        {
+            AliceEncoding raw; float w;
+            readDiffuseHist(xy, raw, w);
+            fragColor.xyz = project_alice_irradiance(raw, n2);
+        }
+
         #endif
 }

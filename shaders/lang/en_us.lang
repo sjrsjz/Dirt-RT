@@ -76,6 +76,7 @@ value.DEBUG_VIEW.17 = Emission
 value.DEBUG_VIEW.18 = Diffuse Albedo
 value.DEBUG_VIEW.19 = Refr. VirtDist
 value.DEBUG_VIEW.20 = Path Guide
+value.DEBUG_VIEW.21 = Temporal Raw
 
 # -- ReSTIR --
 option.useReSTIR = Use ReSTIR

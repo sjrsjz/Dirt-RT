@@ -19,7 +19,7 @@
 #define REFLECT_GGX_CONFIDENCE 25.0 // GGX lobe similarity strictness for specular temporal accumulation. Lower = more tolerant of normal/roughness mismatch → smoother but more ghosting. Higher = stricter lobe match → less ghosting but noisier on curved surfaces. [1.0 2.0 5.0 10.0 20.0 25.0 50.0 75.0 100.0]
 
 // -- Diffuse temporal accumulation (temporal_diffuse.glsl) --
-#define TEMPORAL_MAX_HISTORY 32.0 // Maximum effective sample count clamped per pixel. Higher = smoother but more ghosting. [1 2 4 8 16 32 64 128]
+#define TEMPORAL_MAX_HISTORY 32 // Maximum effective sample count clamped per pixel. Higher = smoother but more ghosting. [1 2 4 8 16 32 64 128]
 #define TEMPORAL_CONFIDENCE_POWER 1.0 // Reprojection confidence exponent. Higher = more aggressive rejection of mismatched history. [0.1 0.25 0.5 1.0 2.0 4.0]
 #define TEMPORAL_HISTORY_MIN_WEIGHT 0.0001 // Weight threshold below which history is discarded and reset. [0.000001 0.00001 0.0001 0.001 0.01]
 #define TEMPORAL_AABB_ENABLE 1 // AABB clamp in ALICE augmented space to prevent ghosting. 0 = fall back to raw EMA blend. [0 1]
@@ -59,7 +59,7 @@
 #define CURVATURE_CORRECTION_STRENGTH 1.0 // NRD curvature correction strength for specular virtual distance. 1.0 = standard NRD, 0.0 = off (planar assumption). Corrects virtual reprojection distance based on local surface curvature to reduce ghosting on curved surfaces. [0.0 0.25 0.5 0.75 1.0 1.25 1.5]
 
 // -- Debug view --
-#define DEBUG_VIEW 0 // Debug output mode. 0=Normal 1=Diffuse 2=Refract 3=Reflect 4=WhiteModel 5=LightField 6=Normals 7=Absorption 8=ReflDir 9=ReflDist 10=SpecAlbedo 11=Roughness 12=ReflRaw 13=DiffuseWeight 14=ReflectWeight 15=RefractWeight 16=DirectLight 17=Emission 18=DiffuseAlbedo 19=RefrVProjDist 20=PathGuide [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20]
+#define DEBUG_VIEW 0 // Debug output mode. 0=Normal 1=Diffuse 2=Refract 3=Reflect 4=WhiteModel 5=LightField 6=Normals 7=Absorption 8=ReflDir 9=ReflDist 10=SpecAlbedo 11=Roughness 12=ReflRaw 13=DiffuseWeight 14=ReflectWeight 15=RefractWeight 16=DirectLight 17=Emission 18=DiffuseAlbedo 19=RefrVProjDist 20=PathGuide 21=TemporalRaw [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21]
 
 #define SUN_PATH_ROTATION 45.0 // Sun path rotation angle (degrees around X axis). Adjusts the sun's apparent path in the sky. [0 15 30 45 60 75 90]
 

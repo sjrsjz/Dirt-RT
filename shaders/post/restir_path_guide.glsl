@@ -3,6 +3,8 @@
 // ===========================================================================
 // Pass: ReSTIR 空域+时域加权蓄水池 (composite58)
 // ===========================================================================
+// 8 点 Poisson 盘空间采样 (无共享内存) + 降噪先验 + 时域重投影
+// ===========================================================================
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
@@ -10,62 +12,72 @@ layout(local_size_x = 16, local_size_y = 16) in;
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/denoise.glsl"
 #include "/lib/common.glsl"
+#include "/lib/lighting/alice.glsl"
 
 uniform sampler2D colortex4; // atrous 降噪 ALICE (packAlice 格式)
 uniform sampler2D colortex6; // temporal_diffuse validKernelWeight
 
 layout(rgba32f) uniform writeonly image2D colorimg6;
 
-const uint HALO = 2u;
-const uint TILE = 16u + 2u * HALO;
-const uint TILE_AREA = TILE * TILE;
+const uint POISSON_N = 8u;
+const float POISSON_R0 = 16.0;
 const float GUIDE_MAX_M = 64.0;
 
+// NRD Poisson 盘: .xy=偏移 .z=length .w=高斯权重
+const vec4 POISSON[8] = {
+    vec4(-0.4706069, -0.4427112, +0.6461146, +0.81170),
+    vec4(-0.9057375, +0.3003471, +0.9542373, +0.63422),
+    vec4(-0.3487388, +0.4037880, +0.5335386, +0.86734),
+    vec4(+0.1023042, +0.6439373, +0.6520134, +0.80847),
+    vec4(+0.5699277, +0.3513750, +0.6695386, +0.79925),
+    vec4(+0.2939128, -0.1131226, +0.3149309, +0.95161),
+    vec4(+0.7836658, -0.4208784, +0.8895339, +0.67328),
+    vec4(+0.1564120, -0.8198990, +0.8346850, +0.70589)
+    };
+
+// ---------------------------------------------------------------------------
+// PCG RNG
+// ---------------------------------------------------------------------------
 uint pcg_hash(uint seed) {
     uint state = seed * 747796405u + 2891336453u;
     uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
     return (word >> 22u) ^ word;
 }
-
 float nextFloat(inout uint seed) {
     seed = pcg_hash(seed);
-    return float(seed) * (1.0 / 4294967296.0); // 除以 2^32
+    return float(seed) / 4294967296.0;
 }
 
+// ---------------------------------------------------------------------------
+// 蓄水池
+// ---------------------------------------------------------------------------
 struct Reservoir {
     vec4 y;
     float weightSum;
     float M;
     float target;
 };
-
 void reservoirInit(out Reservoir r) {
     r.y = vec4(0.0);
     r.weightSum = 0.0;
     r.M = 0.0;
     r.target = 0.0;
 }
-
 void reservoirUpdate(inout Reservoir r, vec4 candidate, float w, float m, inout uint seed) {
     r.weightSum += w;
     r.M += m;
-    // 只有当随机命中时才更新样本，避开 0 权重的非法样本
     if (nextFloat(seed) * r.weightSum < w) {
         r.y = candidate;
         r.target = w;
     }
 }
-
 float reservoirW(Reservoir r) {
     return r.weightSum / max(r.M * r.target, 1e-20);
 }
 
 // ---------------------------------------------------------------------------
-// ALICE 编码辅助函数
+// 工具
 // ---------------------------------------------------------------------------
-float aliceOmega(vec4 y) {
-    return y.w;
-}
 bool isSky(vec4 y) {
     return y.w <= 1e-8;
 }
@@ -77,53 +89,62 @@ vec4 unpackAliceHalf(vec2 p) {
     return vec4(unpackHalf2x16(floatBitsToUint(p.x)), unpackHalf2x16(floatBitsToUint(p.y)));
 }
 
-float guideTarget(vec4 y) {
-    return aliceOmega(y);
+float guideTarget(vec4 y, vec3 N) {
+    return alice_irradiance(y, N);
 }
 
 // ---------------------------------------------------------------------------
-// 共享内存
+// Phase 2: 8 点 Poisson 盘空间蓄水池 (直接 SSBO 读)
 // ---------------------------------------------------------------------------
-shared vec4 sm_aliceY[TILE_AREA];
-
-void loadTile(ivec2 texSize, uint tid) {
-    // 优化：256 线程协同加载 400 个数据，逻辑保持不变但边界安全
-    for (uint i = tid; i < TILE_AREA; i += 256u) {
-        ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(i % TILE, i / TILE);
-        AliceEncoding alice;
-        float weight;
-        readDiffuseSwap(uvec2(clamp(gc, ivec2(0), texSize - 1)), alice, weight);
-        sm_aliceY[i] = alice.aliceY;
-    }
-    barrier();
-    memoryBarrierShared();
-}
-
-// ---------------------------------------------------------------------------
-// Phase 2: 5×5 WRS 空域蓄水池
-// ---------------------------------------------------------------------------
-Reservoir spatialReservoir(uvec2 lid, inout uint seed) {
+Reservoir spatialReservoir(uvec2 gid, vec3 centerNormal, float centerDist, inout uint seed) {
     Reservoir r;
     reservoirInit(r);
-    uint cx = lid.x + HALO;
-    uint cy = lid.y + HALO;
+    ivec2 texSize = ivec2(resolution_global);
 
-    // 展平分支逻辑，让 GPU 跑满算力
-    for (int ky = -2; ky <= 2; ky++) {
-        for (int kx = -2; kx <= 2; kx++) {
-            vec4 y = sm_aliceY[(cy + uint(ky)) * TILE + (cx + uint(kx))];
-            float w = guideTarget(y);
-            // 只要 target > 0 且不是天空，就参与更新
-            if (w > 1e-8) {
-                reservoirUpdate(r, y, w, 1.0, seed);
-            }
-        }
+    float theta = 2.0 * PI * nextFloat(seed);
+    mat2 rot = mat2(cos(theta), -sin(theta), sin(theta), cos(theta)) * POISSON_R0;
+
+    for (uint k = 0u; k < POISSON_N; k++) {
+        vec4 ps = POISSON[k];
+        ivec2 off = ivec2(round(rot * ps.xy));
+        ivec2 sc = ivec2(gid) + off;
+        if (any(lessThan(sc, ivec2(0))) || any(greaterThanEqual(sc, texSize))) continue;
+
+        uvec2 xy = uvec2(sc);
+        AliceEncoding alice;
+        vec3 n2;
+        readDiffuseLightRT(xy, alice, n2);
+        vec4 y = alice.aliceY;
+        if (isSky(y)) continue;
+
+        // 深度不连续拒绝
+        vec3 pos;
+        float dist;
+        readGeo0(GEO_N_GEO, xy, pos, dist);
+        float depthDiff = abs(dist - centerDist) / max(abs(centerDist) + 1e-4, 1.0);
+        float geomW = exp2(-depthDiff * float(SVGF_POSITION_PARAM));
+        if (geomW <= 1e-4) continue;
+
+        float w = guideTarget(y, centerNormal) * geomW;
+        if (w > 1e-8) reservoirUpdate(r, y, w, 1.0, seed);
     }
     return r;
 }
 
 // ---------------------------------------------------------------------------
-// Phase 4: 2×2 随机重投影历史蓄水池 (Stochastic Bilinear Filter)
+// Phase 3: 降噪先验
+// ---------------------------------------------------------------------------
+void addDenoisedPrior(inout Reservoir r, ivec2 pix, vec3 centerNormal, inout uint seed) {
+    vec4 raw = texelFetch(colortex4, pix, 0);
+    AliceEncoding a = unpackAlice(raw.x, raw.y, raw.z);
+    vec4 y = a.aliceY;
+    if (isSky(y)) return;
+    float w = guideTarget(y, centerNormal);
+    if (w > 1e-8) reservoirUpdate(r, y, w, 1.0, seed);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: 2×2 随机重投影历史蓄水池
 // ---------------------------------------------------------------------------
 struct StoredReservoir {
     vec4 y;
@@ -132,8 +153,12 @@ struct StoredReservoir {
 };
 
 StoredReservoir loadStored(ivec2 pix) {
-    vec4 raw = diffuseBuffer.data[addr(DIF_N_PATHGUIDE, pix)];
-    return StoredReservoir(unpackAliceHalf(raw.xy), raw.z, raw.w);
+    vec4 raw = diffuseBuffer.data[addr(DIF_N_PATHGUIDE, uvec2(pix))];
+    StoredReservoir s;
+    s.y = unpackAliceHalf(raw.xy);
+    s.W = raw.z;
+    s.M = raw.w;
+    return s;
 }
 
 bool sampleHistory(uvec2 gxy, inout uint seed, out StoredReservoir result) {
@@ -156,10 +181,7 @@ bool sampleHistory(uvec2 gxy, inout uint seed, out StoredReservoir result) {
     ivec2 p0 = ivec2(floor(prevCoord));
     vec2 f = fract(prevCoord);
 
-    // 神奇的 2 行代码：小数部分 f 越大，越容易命中 +1 偏移
-    ivec2 offset = ivec2(nextFloat(seed) < f.x ? 1 : 0,
-            nextFloat(seed) < f.y ? 1 : 0);
-
+    ivec2 offset = ivec2(nextFloat(seed) < f.x ? 1 : 0, nextFloat(seed) < f.y ? 1 : 0);
     result = loadStored(clamp(p0 + offset, ivec2(0), ivec2(resolution_global) - 1));
     return result.W > 0.0 && result.M > 0.0;
 }
@@ -167,17 +189,14 @@ bool sampleHistory(uvec2 gxy, inout uint seed, out StoredReservoir result) {
 // ---------------------------------------------------------------------------
 // Phase 5: 历史 RIS 合并
 // ---------------------------------------------------------------------------
-void combineWithHistory(inout Reservoir r, StoredReservoir hist, float temporalConf, inout uint seed) {
-    float targetNow = guideTarget(hist.y);
+void combineWithHistory(inout Reservoir r, StoredReservoir hist, float temporalConf, vec3 centerNormal, inout uint seed) {
+    float targetNow = guideTarget(hist.y, centerNormal);
     if (targetNow <= 1e-8) return;
 
     float reusedM = min(hist.M, GUIDE_MAX_M) * clamp(temporalConf, 0.0, 1.0);
     if (reusedM <= 0.0) return;
 
-    // [优化 3]: 严格无偏权重计算！
-    // 既然 M 被截断为 reusedM，权重就必须用 reusedM 来算，否则能量不守恒！
     float candidateWeight = targetNow * hist.W * reusedM;
-
     reservoirUpdate(r, hist.y, candidateWeight, reusedM, seed);
 }
 
@@ -187,34 +206,38 @@ void combineWithHistory(inout Reservoir r, StoredReservoir hist, float temporalC
 void main() {
     uvec2 gid = gl_GlobalInvocationID.xy;
     ivec2 texSize = ivec2(resolution_global);
-
-    uint seed = pcg_hash(gid.x ^ pcg_hash(gid.y ^ pcg_hash(frame_id)));
-
-    // Phase 1
-    loadTile(texSize, gl_LocalInvocationIndex);
-
     if (any(greaterThanEqual(gid, uvec2(texSize)))) return;
 
-    // Phase 2
-    Reservoir r = spatialReservoir(gl_LocalInvocationID.xy, seed);
+    uvec2 gxy = gid;
+    ivec2 pix = ivec2(gid);
+    uint seed = pcg_hash(gid.x ^ pcg_hash(gid.y ^ pcg_hash(frame_id)));
 
-    // Phase 3
-    vec4 rawDenoised = texelFetch(colortex4, ivec2(gid), 0);
-    AliceEncoding a = unpackAlice(rawDenoised.x, rawDenoised.y, rawDenoised.z);
-    if (!isSky(a.aliceY)) {
-        float wDenoised = guideTarget(a.aliceY);
-        if (wDenoised > 1e-8) reservoirUpdate(r, a.aliceY, wDenoised, 1.0, seed);
+    // 中心像素数据
+    vec3 centerNormal, centerPos;
+    float centerDist;
+    {
+        readGeo0(GEO_N_GEO, gxy, centerPos, centerDist);
+        float rough, pathR;
+        int it;
+        readGeo1(GEO_N_NORMALS, gxy, centerNormal, rough, it, pathR);
     }
 
-    // Phase 4
+    // Phase 2: Poisson 盘空间蓄水池
+    Reservoir r = spatialReservoir(gid, centerNormal, centerDist, seed);
+
+    // Phase 3: 降噪先验
+    addDenoisedPrior(r, pix, centerNormal, seed);
+
+    // Phase 4+5: 历史重投影 + RIS 合并
     StoredReservoir hist;
-    if (sampleHistory(gid, seed, hist)) {
-        float temporalConf = clamp(texelFetch(colortex6, ivec2(gid), 0).r, 0.0, 1.0);
-        combineWithHistory(r, hist, temporalConf, seed);
+    if (sampleHistory(gxy, seed, hist)) {
+        float temporalConf = clamp(texelFetch(colortex6, pix, 0).r, 0.0, 1.0);
+        combineWithHistory(r, hist, temporalConf, centerNormal, seed);
     }
 
-    // 最终规范化与输出
     r.M = min(r.M, GUIDE_MAX_M);
+    float W = reservoirW(r);
 
-    imageStore(colorimg6, ivec2(gid), vec4(packAliceHalf(r.y), reservoirW(r), r.M));
+    vec2 halfY = packAliceHalf(r.y);
+    imageStore(colorimg6, pix, vec4(halfY, W, r.M));
 }

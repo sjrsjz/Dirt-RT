@@ -23,7 +23,7 @@ layout(rgba32f) uniform writeonly image2D colorimg3;
 layout(rgba32f) uniform writeonly image2D colorimg4;
 
 // --- Kernel constants ---
-const float hw[3] = float[](1.0, 0.25, 0.075);
+const float hw[3] = float[](1.0, 0.66667, 0.44444);
 
 #ifndef VAR_FILTER_NORMAL_POWER
 #define VAR_FILTER_NORMAL_POWER SVGF_NORMAL_POWER

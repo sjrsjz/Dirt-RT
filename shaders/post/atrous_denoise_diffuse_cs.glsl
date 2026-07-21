@@ -178,7 +178,7 @@ void main() {
         float delta_omega = c_omega - s_enc.w;
         float z_energy = abs(delta_omega) * c_inv_sqrt_var_omega * PHI_ENERGY;
 
-        float w_luma = SVGF_PHI_L * sqrt(z_bures * z_bures + z_energy * z_energy);
+        float w_luma = 5.0 * SVGF_PHI_L * sqrt(z_bures * z_bures + z_energy * z_energy);
 
         // ---- 组合权重 -------------------------------------------------
         float w0 = w_kernel *  exp2(-(w_geometry + w_luma) * LOG2_E);
