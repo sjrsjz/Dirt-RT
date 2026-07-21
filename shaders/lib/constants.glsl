@@ -27,7 +27,6 @@ const float SPEC_GEOM_NORMAL_POWER = 4.0; // cf. SVGF_NORMAL_POWER=32
 const float SPEC_GEOM_DEPTH_PARAM = 0.1; // cf. SVGF_POSITION_PARAM=0.0025
 
 // Curvature-guided geometry skip (swap2 → 300)
-const float CURVATURE_THRESHOLD = 0.01; // |K| > this → omega negated → skip geometry edge-stop
 
 //Vulkanite
 const int WORLD_OVERWORLD = 0;

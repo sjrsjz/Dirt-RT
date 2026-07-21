@@ -47,12 +47,9 @@ screen.SVGF_DENOISER = SVGF 降噪
 option.VAR_FILTER_RADIUS = 方差滤波半径
 option.VARIANCE_SCALE = 方差缩放
 option.SVGF_NORMAL_POWER = SVGF 法线边缘灵敏度
-option.SVGF_PHI_L = SVGF 亮度边缘灵敏度
+option.SVGF_PHI_L_SMALL = SVGF 亮度灵敏度 (小核)
+option.SVGF_PHI_L_LARGE = SVGF 亮度灵敏度 (大核)
 option.SVGF_POSITION_PARAM = SVGF 深度边缘灵敏度
-option.ENABLE_GAUSSIAN_FILTER = 几何引导滤波
-value.ENABLE_GAUSSIAN_FILTER.1 = 开启
-value.ENABLE_GAUSSIAN_FILTER.0 = 关闭
-
 screen.DEBUG = 调试
 option.DEBUG_VIEW = 调试视图
 value.DEBUG_VIEW.0 = 正常

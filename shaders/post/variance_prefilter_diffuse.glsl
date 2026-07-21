@@ -108,10 +108,13 @@ void main() {
         ivec2 clamped = clamp(gc, ivec2(0), texSize - ivec2(1));
         uvec2 loadXY = uvec2(clamped);
 
-        vec3 dgeoPos; float mask;
+        vec3 dgeoPos;
+        float mask;
         readDiffuseGeo(loadXY, dgeoPos, mask);
         sm_tile[row][col].valid = mask > 0.5;
-        sm_tile[row][col].px = dgeoPos.x; sm_tile[row][col].py = dgeoPos.y; sm_tile[row][col].pz = dgeoPos.z;
+        sm_tile[row][col].px = dgeoPos.x;
+        sm_tile[row][col].py = dgeoPos.y;
+        sm_tile[row][col].pz = dgeoPos.z;
         sm_tile[row][col].rawVar = 0.0;
         sm_tile[row][col].omega = 0.0;
     }
@@ -156,7 +159,9 @@ void main() {
     // 从 Geo1 读取中心法线（仅中心像素，非整 tile）
     vec3 centerNormal;
     {
-        float _r; int _it; float _pr;
+        float _r;
+        int _it;
+        float _pr;
         readGeo1(GEO_N_NORMALS, uvec2(clamp(ivec2(gid), ivec2(0), texSize - ivec2(1))), centerNormal, _r, _it, _pr);
     }
 
@@ -247,46 +252,7 @@ void main() {
     filteredVariance = sanitizeVariance(filteredVariance);
 
     // =========================================================================
-    // Phase 5: 高斯曲率 → omega 符号标记 (3×3 有限差分, 复用 LDS)
-    // =========================================================================
-    // |K| > threshold → 几何边缘不可靠(棱/角) → 标记 omega 为负
-    // 300 降噪 pass 检测到负 omega 时跳过几何权重
-    #if ENABLE_GAUSSIAN_FILTER == 1
-    {
-        // 中心 + 邻域位置 (复用 Phase 1 加载的 sm_tile 2D 数组)
-        int scx = int(cx), scy = int(cy);
-        #define P(dx,dy) vec3(sm_tile[scy+(dy)][scx+(dx)].px, \
-                                      sm_tile[scy+(dy)][scx+(dx)].py, \
-        #define P(dx,dy) vec3(sm_tile[scy+(dy)][scx+(dx)].px, \
-                              sm_tile[scy+(dy)][scx+(dx)].py, \
-                              sm_tile[scy+(dy)][scx+(dx)].pz)
-        vec3 Pc = P(0, 0);
-
-        vec3 Dx = (P(1, 0) - P(-1, 0)) * 0.5;
-        vec3 Dy = (P(0, 1) - P(0, -1)) * 0.5;
-        vec3 Dxx = P(1, 0) - 2.0 * Pc + P(-1, 0);
-        vec3 Dyy = P(0, 1) - 2.0 * Pc + P(0, -1);
-        vec3 Dxy = (P(1, 1) - P(1, -1) - P(-1, 1) + P(-1, -1)) * 0.25;
-        #undef P
-
-        float E = dot(Dx, Dx);
-        float F = dot(Dx, Dy);
-        float G = dot(Dy, Dy);
-        float L = dot(Dxx, centerNormal);
-        float M = dot(Dxy, centerNormal);
-        float N2 = dot(Dyy, centerNormal);
-
-        float denom = max(E * G - F * F, 1e-8);
-        float K = (L * N2 - M * M) / denom;
-
-        // 分支无关: 曲率超阈值 → omega 取负 (标记跳过几何权重)
-        float kMask = float(abs(K) > CURVATURE_THRESHOLD);
-        outAlice.aliceY.w = abs(outAlice.aliceY.w) * (1.0 - 2.0 * kMask);
-    }
-    #endif // ENABLE_GAUSSIAN_FILTER
-
-    // =========================================================================
-    // Phase 6: Write outputs
+    // Phase 5: Write outputs
     // =========================================================================
     // colortex3: pos.xyz + oct(centerNormal) — normal for plane-projected depth in atrous
     imageStore(colorimg3, ivec2(gid), vec4(centerPos, encodeNormal(centerNormal)));

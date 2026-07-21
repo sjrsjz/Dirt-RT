@@ -10,9 +10,9 @@
 // Pass 300: 空间滤波器 — 漫反射 (ALICE) 降噪
 // 修改版: Bures 距离 + 能量感知权重
 //
-// 管线 (6 级 à-trous 迭代):
-//   STEP=1 R0=1   STEP=2 R0=2   STEP=3 R0=4   (compute)
-//   STEP=4 R0=8   STEP=5 R0=16  STEP=6 R0=32  (fragment)
+// 管线 (6 级迭代):
+//   à‑trous:  STEP=1 R0=1   STEP=2 R0=2   STEP=3 R0=4   (compute)
+//   Poisson:  STEP=4 R0=8   STEP=5 R0=16  STEP=6 R0=32  (fragment)
 // ==========================================================================
 
 uniform sampler2D colortex3; // 几何 (pos + normal)
@@ -100,17 +100,8 @@ void main() {
     //   c_inv_sqrt_var       → v-space z-score 归一化 (标量估计量标准差逆)
     //   c_inv_sqrt_var_omega → ω-space z-score 归一化 (径向估计量标准差逆)
     float c_var_omega_est = alice_radial_est_var_from_scalar(center_var_est, c_kappa);
-    float c_inv_sqrt_var = inversesqrt(max(center_var_est, 1e-12));
-    float c_inv_sqrt_var_omega = inversesqrt(max(c_var_omega_est, 1e-12));
-
-    // 高斯曲率标记
-    #if ENABLE_GAUSSIAN_FILTER == 1
-    float geomValid = float(c_omega >= 0.0);
-    center_alice.aliceY.w = abs(c_omega);
-    c_omega = center_alice.aliceY.w;
-    #else
-    const float geomValid = 1.0;
-    #endif
+    float c_inv_var = 1.0 / max(center_var_est, 1e-12);
+    float c_inv_var_omega = 1.0 / max(c_var_omega_est, 1e-12);
 
     float dist_to_cam = max(length(center_pos), 0.001);
     float inv_pixel_footprint = 1.0 / (SVGF_POSITION_PARAM
@@ -121,8 +112,8 @@ void main() {
     float sumVarEnergy = center_var_est;
     AliceEncoding accumAlice = center_alice;
 
-    // ---- Poisson 圆盘采样 (NRD, STEP>=4) -----------------------------------
-    // 旋转器 + 高斯核权重, 替代 3×3 网格 → 更均匀的圆盘覆盖
+    // ---- Poisson 圆盘采样 (大核 R0=8,16,32) -----------------------------------
+    // 旋转器 + 高斯核权重, 均匀圆盘覆盖替代 3×3 网格
     float theta = 2.0 * PI * fract(rand(vec2(pix)) + R0 * 0.6180339887498949);
     mat2 rotM = mat2(cos(theta), -sin(theta), sin(theta), cos(theta)) * R0 * 1.75;
 
@@ -133,8 +124,6 @@ void main() {
         ivec2 sample_coord = pix + ivec2(round(offset));
 
         if (sample_coord != clamp(sample_coord, ivec2(0), texSize)) continue;
-
-        float w_kernel = ps.w; // 预计算: exp(-z^2/2)
 
         // ---- 加载邻居样本 ------------------------------------------------
         vec3 sample_world_pos;
@@ -149,8 +138,7 @@ void main() {
 
         // ---- 几何权重 (平面投影深度 — ALICE Bures 距离替代法线边缘) ----
         vec3 delta = (sample_world_pos - center_pos) * inv_pixel_footprint;
-        float depthTerm = abs(dot(delta, center_normal));
-        float w_geometry = depthTerm * geomValid;
+        float w_geometry = abs(dot(delta, center_normal));
 
         // ---- Bures 距离 + 能量感知 -------------------------------------
         vec4 s_enc = sample_alice.aliceY;
@@ -158,15 +146,16 @@ void main() {
         float s_kappa = alice_kappa(s_len_v, s_enc.w);
 
         float d_bures_sq = alice_bures_distance_sq(c_enc, c_kappa, s_enc, s_kappa);
-        float z_bures = sqrt(d_bures_sq) * c_inv_sqrt_var;
+        float z_bures_2 = d_bures_sq * c_inv_var;
 
         float delta_omega = c_omega - s_enc.w;
-        float z_energy = abs(delta_omega) * c_inv_sqrt_var_omega * PHI_ENERGY;
+        float z_energy_2 = delta_omega * delta_omega * c_inv_var_omega * PHI_ENERGY;
 
-        float w_luma = SVGF_PHI_L * sqrt(z_bures * z_bures + z_energy * z_energy);
+        float w_luma = SVGF_PHI_L_LARGE * (z_bures_2 + z_energy_2);
 
         // ---- 组合权重 -----------------------------------------------
-        float w0 = w_kernel * exp2(-(w_geometry + w_luma) * LOG2_E);
+        const float w_kernel = ps.w; // 预计算: exp(-z^2/2)
+        float w0 = w_kernel * exp(-w_geometry) / (1 + w_luma);
 
         // ---- 累积 ----------------------------------------------------
         accumulate_alice(accumAlice, sample_alice, w0);
@@ -178,12 +167,6 @@ void main() {
 
     // ---- 归一化并输出 ----------------------------------------------------
     accumAlice = scale_alice(accumAlice, inv_sumWeight);
-
-    #if ENABLE_GAUSSIAN_FILTER == 1
-    #ifndef FINAL_DENOISE_PASS
-    accumAlice.aliceY.w *= (2.0 * geomValid - 1.0);
-    #endif
-    #endif
 
     float varEnergyOut = sumVarEnergy * inv_sumWeight * inv_sumWeight;
     out_light_sample = vec4(packAlice(accumAlice), varEnergyOut);

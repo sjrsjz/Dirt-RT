@@ -7,8 +7,8 @@
 #include "/lib/lighting/alice.glsl"
 
 // ===========================================================================
-// Pass 300 CS: SVGF 空间滤波器 (计算着色器变体) — 前 3 级 à‑trous (R0=1,2,4)
-// 修改版: Bures 距离 + 能量感知权重
+// Pass 300 CS: 前 3 级 à‑trous (3×3 扩张网格, R0=1,2,4)
+// Bures 距离 + 能量感知权重
 // ===========================================================================
 
 layout(local_size_x = 16, local_size_y = 16) in;
@@ -112,16 +112,8 @@ void main() {
     float c_kappa = alice_kappa(c_len_v, c_omega);
 
     float c_var_omega_est = alice_radial_est_var_from_scalar(center_var_est, c_kappa);
-    float c_inv_sqrt_var = inversesqrt(max(center_var_est, 1e-5));
-    float c_inv_sqrt_var_omega = inversesqrt(max(c_var_omega_est, 1e-5));
-
-    #if ENABLE_GAUSSIAN_FILTER == 1
-    float geomValid = float(c_omega >= 0.0);
-    center_alice.aliceY.w = abs(c_omega);
-    c_omega = center_alice.aliceY.w;
-    #else
-    const float geomValid = 1.0;
-    #endif
+    float c_inv_var = 1.0 / max(center_var_est, 1e-12);
+    float c_inv_var_omega = 1.0 / max(c_var_omega_est, 1e-12);
 
     float dist_to_cam = max(length(center_pos), 0.001);
     float inv_pixel_footprint = 1.0 / (SVGF_POSITION_PARAM
@@ -132,8 +124,7 @@ void main() {
     float sumVarEnergy = center_var_est;
     AliceEncoding accumAlice = center_alice;
 
-    // 3×3 网格采样核 (预计算权重, 归一化偏移 → 单循环)
-    // 权重 = hw[|dx|] * hw[|dy|]; hw[0]=1.0, hw[1]=0.66667
+    // 3×3 网格采样核 (小核 R0=1,2,4, 权重预计算)
     const vec3 GRID_3x3[8] = {
         vec3(-1, -1, 0.44445), vec3(-1, 0, 0.66667), vec3(-1, 1, 0.44445),
         vec3(0, -1, 0.66667), vec3(0, 1, 0.66667),
@@ -146,7 +137,6 @@ void main() {
     for (int k = 0; k < 8; k++) {
         int dx = int(GRID_3x3[k].x);
         int dy = int(GRID_3x3[k].y);
-        float w_kernel = GRID_3x3[k].z;
 
         uint sx = cx + uint(dx * R0);
         uint sy = cy + uint(dy * R0);
@@ -165,25 +155,24 @@ void main() {
 
         // ---- 几何权重 (平面投影深度 — ALICE Bures 距离替代法线边缘) ----
         vec3 delta = (sample_world_pos - center_pos) * inv_pixel_footprint;
-        float depthTerm = abs(dot(delta, center_normal));
-        float w_geometry = depthTerm * geomValid;
+        float w_geometry = abs(dot(delta, center_normal));
 
-        // ---- Bures 距离 + 能量感知 -------------------------------------
+        // ---- Bures 距离 + 能量感知 (平方形式, 避免 sqrt/abs) --------
         vec4 s_enc = sample_alice.aliceY;
         float s_len_v = length(s_enc.xyz);
         float s_kappa = alice_kappa(s_len_v, s_enc.w);
 
         float d_bures_sq = alice_bures_distance_sq(c_enc, c_kappa, s_enc, s_kappa);
-
-        float z_bures = sqrt(d_bures_sq) * c_inv_sqrt_var;
+        float z_bures_2 = d_bures_sq * c_inv_var;
 
         float delta_omega = c_omega - s_enc.w;
-        float z_energy = abs(delta_omega) * c_inv_sqrt_var_omega * PHI_ENERGY;
+        float z_energy_2 = delta_omega * delta_omega * c_inv_var_omega * PHI_ENERGY;
 
-        float w_luma = 5.0 * SVGF_PHI_L * sqrt(z_bures * z_bures + z_energy * z_energy);
+        float w_luma = SVGF_PHI_L_SMALL * (z_bures_2 + z_energy_2);
 
         // ---- 组合权重 -------------------------------------------------
-        float w0 = w_kernel * exp2(-(w_geometry + w_luma) * LOG2_E);
+        const float w_kernel = GRID_3x3[k].z;
+        float w0 = w_kernel * exp(-w_geometry) / (1 + w_luma);
 
         // ---- 累积 ------------------------------------------------------
         accumulate_alice(accumAlice, sample_alice, w0);
@@ -193,12 +182,6 @@ void main() {
 
     float inv_sumWeight = 1.0 / sumWeight;
     accumAlice = scale_alice(accumAlice, inv_sumWeight);
-
-    #if ENABLE_GAUSSIAN_FILTER == 1
-    #ifndef FINAL_DENOISE_PASS
-    accumAlice.aliceY.w *= (2.0 * geomValid - 1.0);
-    #endif
-    #endif
 
     float varEnergyOut = sumVarEnergy * inv_sumWeight * inv_sumWeight;
     imageStore(colorimg4, pix, vec4(packAlice(accumAlice), varEnergyOut));

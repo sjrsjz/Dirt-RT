@@ -47,12 +47,9 @@ screen.SVGF_DENOISER = SVGF Denoiser
 option.VAR_FILTER_RADIUS = Variance Filter Radius
 option.VARIANCE_SCALE = Variance Scale
 option.SVGF_NORMAL_POWER = SVGF Normal Edge Sensitivity
-option.SVGF_PHI_L = SVGF Luminance Edge Sensitivity
+option.SVGF_PHI_L_SMALL = SVGF Luma Sensitivity (Small Kernel)
+option.SVGF_PHI_L_LARGE = SVGF Luma Sensitivity (Large Kernel)
 option.SVGF_POSITION_PARAM = SVGF Depth Edge Sensitivity
-option.ENABLE_GAUSSIAN_FILTER = Geometry-Guided Filter
-value.ENABLE_GAUSSIAN_FILTER.1 = On
-value.ENABLE_GAUSSIAN_FILTER.0 = Off
-
 screen.DEBUG = Debug
 option.DEBUG_VIEW = Debug View
 value.DEBUG_VIEW.0 = Normal
