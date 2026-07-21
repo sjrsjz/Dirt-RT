@@ -22,7 +22,7 @@ uniform mat4 gbufferModelViewInverse;
 const int NUM_SAMPLES = 128;
 
 // 曝光曲线: f(x) = ln(k + e^x) - ln(1 + k)
-// 应用于 tonemap 之前作为高光压缩
+// 应用于 tonemap 之前作为暗部压缩
 float applyExposureCurve(float x, float k) {
     if (k <= 0.0) return x;
     return log(k + exp(x)) - log(1.0 + k);
@@ -119,7 +119,7 @@ void main() {
     
     float currentLuma = exp2(final_log_luma);
 
-    float targetExposure = clamp(calculateExposure(currentLuma), 1e-10, 10.0);
+    float targetExposure = clamp(calculateExposure(currentLuma), 1.25e-2, 10.0);
 
     avgExposure = ensurePositive(avgExposure, targetExposure);
 
