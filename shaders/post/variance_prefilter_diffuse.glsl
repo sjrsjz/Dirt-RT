@@ -41,9 +41,8 @@ const uint SM_H = 20u;
 const uint HALO = 2u;
 
 struct TileSample {
-    float dist;
+    bool valid;
     float px, py, pz;
-    float oct_n;
     float rawVar;
     float omega; // aliceY.w = total ALICE energy, for 3-sigma clamping
 };
@@ -77,21 +76,18 @@ float computeRawVariance(uvec2 xy, out float outOmega) {
     return sanitizeVariance(alice_estimator_variance(aliceY, max(weight, 1.0)));
 }
 
+// Depth-only geometry weight — ALICE Bures distance replaces normal-based edge-stopping
 float varianceGeometryWeight(
     vec3 centerPos, vec3 centerNormal,
-    vec3 samplePos, vec3 sampleNormal
+    vec3 samplePos
 ) {
-    float nd = clamp(dot(centerNormal, sampleNormal), 0.0, 1.0);
-    float wNormal = pow(nd, VAR_FILTER_NORMAL_POWER);
-
     float distToCam = max(length(centerPos), 0.01);
     float pixelFootprint = max(distToCam / max(resolution.y, 1.0), 1e-4);
 
     float planeDist = abs(dot(samplePos - centerPos, centerNormal));
     float depthTerm = planeDist / max(VAR_FILTER_POSITION_PARAM * pixelFootprint, 1e-6);
 
-    float wDepth = exp2(-depthTerm * LOG2_E);
-    return wNormal * wDepth;
+    return exp2(-depthTerm * LOG2_E);
 }
 
 void main() {
@@ -100,11 +96,11 @@ void main() {
     ivec2 texSize = ivec2(resolution);
 
     // =========================================================================
-    // Phase 1: Cooperative load into shared memory
+    // Phase 1: Cooperative load into shared memory (2 phases, was 3)
     // =========================================================================
     uint threadIdx = lid.y * 16u + lid.x; // 线程在 Workgroup 内的 1D 索引 (0~255)
 
-    // Phase 1a: Binding 0 N=0 — 距离（天空判定）
+    // Phase 1a: Binding 2 N=1 — 漫反射几何（位置 + surfaceMask 替代 dist+normal）
     for (uint i = threadIdx; i < 400u; i += 256u) {
         uint row = i / 20u;
         uint col = i % 20u;
@@ -112,40 +108,21 @@ void main() {
         ivec2 clamped = clamp(gc, ivec2(0), texSize - ivec2(1));
         uvec2 loadXY = uvec2(clamped);
 
-        vec3 dpos; float d;
-        readGeo0(GEO_N_GEO, loadXY, dpos, d);
-        sm_tile[row][col].dist = d;
-        sm_tile[row][col].px = dpos.x; sm_tile[row][col].py = dpos.y; sm_tile[row][col].pz = dpos.z;
-        sm_tile[row][col].oct_n = 0.0;
+        vec3 dgeoPos; float mask;
+        readDiffuseGeo(loadXY, dgeoPos, mask);
+        sm_tile[row][col].valid = mask > 0.5;
+        sm_tile[row][col].px = dgeoPos.x; sm_tile[row][col].py = dgeoPos.y; sm_tile[row][col].pz = dgeoPos.z;
         sm_tile[row][col].rawVar = 0.0;
         sm_tile[row][col].omega = 0.0;
     }
     barrier();
     memoryBarrierShared();
 
-    // Phase 1b: Binding 2 N=1 — 漫反射几何（位置 + 法线）
+    // Phase 1b: Binding 2 N=4 — 漫反射 swap 光照（方差计算）
     for (uint i = threadIdx; i < 400u; i += 256u) {
         uint row = i / 20u;
         uint col = i % 20u;
-        if (sm_tile[row][col].dist > -0.5) {
-            ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(col, row);
-            ivec2 clamped = clamp(gc, ivec2(0), texSize - ivec2(1));
-            uvec2 loadXY = uvec2(clamped);
-
-            vec3 dgeoPos, dgeoN;
-            readDiffuseGeo(loadXY, dgeoPos, dgeoN);
-            sm_tile[row][col].px = dgeoPos.x; sm_tile[row][col].py = dgeoPos.y; sm_tile[row][col].pz = dgeoPos.z;
-            sm_tile[row][col].oct_n = encodeNormal(dgeoN);
-        }
-    }
-    barrier();
-    memoryBarrierShared();
-
-    // Phase 1c: Binding 2 N=4 — 漫反射 swap 光照（方差计算）
-    for (uint i = threadIdx; i < 400u; i += 256u) {
-        uint row = i / 20u;
-        uint col = i % 20u;
-        if (sm_tile[row][col].dist > -0.5) {
+        if (sm_tile[row][col].valid) {
             ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(col, row);
             ivec2 clamped = clamp(gc, ivec2(0), texSize - ivec2(1));
             uvec2 loadXY = uvec2(clamped);
@@ -168,12 +145,19 @@ void main() {
 
     TileSample centerTile = sm_tile[cy][cx];
 
-    if (centerTile.dist < -0.5) {
+    if (!centerTile.valid) {
         imageStore(colorimg3, ivec2(gid), vec4(0.0));
         // 天空像素: 写入负值方差作为天空 mask, 供 300/300_cs 使用
         // (方差合法值为非负数, 负值可安全复用为天空标记)
         imageStore(colorimg4, ivec2(gid), vec4(0.0, 0.0, 0.0, -1.0));
         return;
+    }
+
+    // 从 Geo1 读取中心法线（仅中心像素，非整 tile）
+    vec3 centerNormal;
+    {
+        float _r; int _it; float _pr;
+        readGeo1(GEO_N_NORMALS, uvec2(clamp(ivec2(gid), ivec2(0), texSize - ivec2(1))), centerNormal, _r, _it, _pr);
     }
 
     // =========================================================================
@@ -188,7 +172,7 @@ void main() {
     // --- 3-sigma energy clamp on output AliceEncoding ---
     // Compute neighborhood mean & sigma of ω, clamp center outAlice if outlier.
     vec3 centerPos = vec3(centerTile.px, centerTile.py, centerTile.pz);
-    vec3 centerNormal = decodeNormal(centerTile.oct_n);
+    // centerNormal already loaded from Geo1 in Phase 2
 
     float sumOmega = 0.0;
     float sumOmega2 = 0.0;
@@ -199,13 +183,12 @@ void main() {
             int sx = int(cx) + kx;
             int sy = int(cy) + ky;
             TileSample s = sm_tile[sy][sx];
-            if (s.dist < -0.5) continue;
+            if (!s.valid) continue;
 
             vec3 sPos = vec3(s.px, s.py, s.pz);
-            vec3 sNrm = decodeNormal(s.oct_n);
 
             float wK = hw[abs(kx)] * hw[abs(ky)];
-            float wG = varianceGeometryWeight(centerPos, centerNormal, sPos, sNrm);
+            float wG = varianceGeometryWeight(centerPos, centerNormal, sPos);
             float w = wK * wG;
 
             sumOmega += w * s.omega;
@@ -241,13 +224,12 @@ void main() {
             int sx = int(cx) + kx;
             int sy = int(cy) + ky;
             TileSample s = sm_tile[sy][sx];
-            if (s.dist < -0.5) continue;
+            if (!s.valid) continue;
 
             vec3 sPos = vec3(s.px, s.py, s.pz);
-            vec3 sNrm = decodeNormal(s.oct_n);
 
             float wKernel = hw[abs(kx)] * hw[abs(ky)];
-            float wGeom = varianceGeometryWeight(centerPos, centerNormal, sPos, sNrm);
+            float wGeom = varianceGeometryWeight(centerPos, centerNormal, sPos);
             float w = wKernel * wGeom;
 
             sumVar += w * s.rawVar;
@@ -306,8 +288,8 @@ void main() {
     // =========================================================================
     // Phase 6: Write outputs
     // =========================================================================
-    // colortex3: pos.xyz + oct-encoded normal (matches old swap2 geometry layout)
-    imageStore(colorimg3, ivec2(gid), vec4(centerPos, centerTile.oct_n));
+    // colortex3: pos.xyz + oct(centerNormal) — normal for plane-projected depth in atrous
+    imageStore(colorimg3, ivec2(gid), vec4(centerPos, encodeNormal(centerNormal)));
     // colortex4: packed AliceEncoding + filtered variance (matches old swap2 light_sample layout)
     imageStore(colorimg4, ivec2(gid), vec4(packAlice(outAlice), filteredVariance));
 }

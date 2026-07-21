@@ -92,12 +92,12 @@ The operator satisfies the following algebraic axioms:
     *Signal perspective:* Monte Carlo samples form an unordered data stream; statistical extracted quantities should not depend on sample arrival order. Mathematically, this axiom provides Lie group symmetry guarantees for the underlying topology of the accumulation operation.
   ]
 
-+ *Axiom 2 — Irradiance Conservation (L1 amplitude additivity)* \
-  The total irradiance of the system is strictly conserved before and after synthesis. Irradiance is defined as the L1 norm of the signal. For any sample list $cal(L) = {bold(x)_i}$:
++ *Axiom 2 — Radiance Conservation (L1 amplitude additivity)* \
+  The total radiance of the system is strictly conserved before and after synthesis. Radiance is defined as the L1 norm of the signal. For any sample list $cal(L) = {bold(x)_i}$:
   $ omega(T(cal(L))) = sum_(bold(x)_i in cal(L)) |bold(x)_i| $
 
   #text(size: 10pt, fill: luma(100))[
-    *Signal perspective:* this is L1-norm additivity — the most fundamental amplitude conservation law in signal processing. In the Monte Carlo context, the total irradiance of the synthesized lighting equals the sum of irradiances from all sampled rays.
+    *Signal perspective:* this is L1-norm additivity — the most fundamental amplitude conservation law in signal processing. In the Monte Carlo context, the total radiance of the synthesized lighting equals the sum of radiance values from all sampled rays.
   ]
 
 + *Axiom 3 — Directional Moment Fidelity (first-moment additivity)* \
@@ -125,7 +125,7 @@ We define the auxiliary mean operator $ T_"avg" (cal(L)) = 1/(|cal(L)|) T(cal(L)
 
 === Direct Derivation
 
-From Axiom 2 (Irradiance Conservation) and Axiom 3 (Directional Moment Fidelity), the analytic form of the synthesis operator $T$ is *directly and uniquely determined*:
+From Axiom 2 (Radiance Conservation) and Axiom 3 (Directional Moment Fidelity), the analytic form of the synthesis operator $T$ is *directly and uniquely determined*:
 
 $ T(cal(L)) = (sum_(bold(x)_i in cal(L)) bold(x)_i, sum_(bold(x)_i in cal(L)) |bold(x)_i|) in cal(C) $
 
@@ -155,7 +155,7 @@ $ T_"avg"(cal(L)) = E[tilde(bold(x))] $
 
 The uniqueness of the synthesis operator is *independently and completely* guaranteed by Axiom 2 and Axiom 3:
 
-- *Axiom 2* independently and completely locks the scalar component: $omega(T(cal(L))) = sum |bold(x)_i|$ is the unique scalar assignment satisfying Irradiance Conservation.
+- *Axiom 2* independently and completely locks the scalar component: $omega(T(cal(L))) = sum |bold(x)_i|$ is the unique scalar assignment satisfying Radiance Conservation.
 - *Axiom 3* independently and completely locks the vector component: $bold(v)(T(cal(L))) = sum bold(x)_i$ is the unique vector assignment satisfying Directional Moment Fidelity.
 - Axiom 1 (Associativity \& Commutativity) provides Lie group symmetry guarantees for the accumulation operation, ruling out any non-commutative or non-associative synthesis schemes.
 - Axiom 4 (Positive Homogeneity) rules out any nonlinear dependence on sample count or magnitude.
@@ -198,7 +198,7 @@ This section elaborates the engineering value of the above algebraic structure f
 
 In computer graphics and real-time rendering, spatial filtering and denoising algorithms (such as SVGF and its derivative architectures) inherently rely heavily on various linear or convex combination operations (weighted summation, convolution, etc.).
 
-The mathematical derivation above provides a powerful proof: *the synthesis operator $T$ is pure vector addition in the augmented signal space*. In a real-world pipeline, we only need to perform extremely low-cost ordinary linear blending of samples in the augmented representation $tilde(bold(x)) = (bold(x), |bold(x)|)$ (computing $T_"avg"$), and the final filtered result will rigorously conform to all algebraic axioms and the Irradiance Conservation law.
+The mathematical derivation above provides a powerful proof: *the synthesis operator $T$ is pure vector addition in the augmented signal space*. In a real-world pipeline, we only need to perform extremely low-cost ordinary linear blending of samples in the augmented representation $tilde(bold(x)) = (bold(x), |bold(x)|)$ (computing $T_"avg"$), and the final filtered result will rigorously conform to all algebraic axioms and the Radiance Conservation law.
 
 Because $T$ is inherently linear, *no post-hoc nonlinear correction is needed* — every operation in the filtering loop is a strict linear combination, and irradiance reconstruction $E(hat(arrow(n)))$ is deferred to a single pass at the shading output stage. This lays a solid theoretical foundation for designing lighting denoising pipelines that achieve both "mathematically rigorous unbiasedness" and "extremely high shading execution efficiency."
 
@@ -419,7 +419,7 @@ The above algebraically restructured formula contains only basic arithmetic inst
 // High-precision O(1) diffuse irradiance reconstruction based on maximum entropy distribution
 // Parameters:
 //   v     - direction vector of the lighting after spatial filtering (v = L.v)
-//   omega - total irradiance after spatial filtering
+//   omega - total incident radiance after spatial filtering
 //   N     - surface unit normal vector of the current pixel
 float ReconstructDiffuseLighting(float3 v, float omega, float3 N)
 {
@@ -808,7 +808,7 @@ In compressed representation, the spatial filtering stage of the ALICE denoiser 
 This lighting encoding scheme is named Asymmetric Laplace Isomorphic Conic Encoding (abbreviated as ALICE). The name reflects its core mathematical and physical structure:
 
 - *Asymmetric Laplace*: the probability distribution derived from the maximum entropy principle belongs to the asymmetric Laplace distribution family;
-- *Isomorphic*: the encoding space $cal(C)$ is strictly isomorphic to the thermodynamic state space of a drifting massless photon gas in natural units ($c = 1$) — ALICE's directional moment is the photon gas's collective momentum, irradiance is the photon gas's total energy, and the maximum entropy distribution is the Maxwell-Jüttner distribution;
+- *Isomorphic*: the encoding space $cal(C)$ is strictly isomorphic to the thermodynamic state space of a drifting massless photon gas in natural units ($c = 1$) — ALICE's directional moment is the photon gas's collective momentum, radiance is the photon gas's total energy, and the maximum entropy distribution is the Maxwell-Jüttner distribution;
 - *Conic*: the state space is the convex cone $cal(C) = {(bold(v), omega) | omega >= |bold(v)|}$, whose cone constraint is naturally guaranteed by Jensen's inequality $E[ |bold(x)| ] >= |E[bold(x)]|$.
 
 = Physical Correspondence

@@ -39,12 +39,12 @@ shared vec4 sm_light[TILE_AREA];
 // 辅助函数
 // ---------------------------------------------------------------------------
 
-void unpackLightSampleSM(uint tile_idx, out vec3 pos, out vec3 normal,
+void unpackLightSampleSM(uint tile_idx, out vec3 pos,
     out AliceEncoding encoded, out float variance) {
     vec4 geom = sm_geometry[tile_idx];
     vec4 light = sm_light[tile_idx];
     pos = geom.xyz;
-    normal = decodeNormal(geom.w);
+    // geom.w is now surfaceMask — normal not needed for ALICE edge-stopping
     encoded = unpackAlice(light.x, light.y, light.z);
     variance = light.w;
 }
@@ -95,12 +95,15 @@ void main() {
 
     if (sm_light[center_idx].w < 0.0) return;
 
-    vec3 center_pos, center_normal;
+    vec3 center_pos;
     AliceEncoding center_alice;
     float center_var_est;
-    unpackLightSampleSM(center_idx, center_pos, center_normal, center_alice, center_var_est);
+    unpackLightSampleSM(center_idx, center_pos, center_alice, center_var_est);
 
     center_var_est = max(center_var_est, 1e-12);
+
+    // ---- 从共享内存解码中心法线（colortex3.w = oct(centerNormal)）-------
+    vec3 center_normal = decodeNormal(sm_geometry[center_idx].w);
 
     // ---- 预计算中心像素的统计特征 -----------------------------------------
     vec4 c_enc = center_alice.aliceY;
@@ -152,19 +155,18 @@ void main() {
         if (sm_light[sample_idx].w < 0.0) continue;
 
         // ---- 解包邻域样本 (共享内存读取) ------------------------------
-        vec3 sample_world_pos, sample_normal;
+        vec3 sample_world_pos;
         AliceEncoding sample_alice;
         float sample_var_est;
-        unpackLightSampleSM(sample_idx, sample_world_pos, sample_normal,
+        unpackLightSampleSM(sample_idx, sample_world_pos,
             sample_alice, sample_var_est);
 
         sample_alice.aliceY.w = abs(sample_alice.aliceY.w);
 
-        // ---- 几何权重 (不变) --------------------------------------------
+        // ---- 几何权重 (平面投影深度 — ALICE Bures 距离替代法线边缘) ----
         vec3 delta = (sample_world_pos - center_pos) * inv_pixel_footprint;
         float depthTerm = abs(dot(delta, center_normal));
-        float w_geometry = SVGF_NORMAL_POWER * (1.0 - dot(center_normal, sample_normal))
-                + depthTerm * geomValid;
+        float w_geometry = depthTerm * geomValid;
 
         // ---- Bures 距离 + 能量感知 -------------------------------------
         vec4 s_enc = sample_alice.aliceY;
@@ -181,7 +183,7 @@ void main() {
         float w_luma = 5.0 * SVGF_PHI_L * sqrt(z_bures * z_bures + z_energy * z_energy);
 
         // ---- 组合权重 -------------------------------------------------
-        float w0 = w_kernel *  exp2(-(w_geometry + w_luma) * LOG2_E);
+        float w0 = w_kernel * exp2(-(w_geometry + w_luma) * LOG2_E);
 
         // ---- 累积 ------------------------------------------------------
         accumulate_alice(accumAlice, sample_alice, w0);

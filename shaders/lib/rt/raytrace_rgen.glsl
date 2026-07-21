@@ -743,7 +743,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             if (depth == 0) {
                 #if defined(FIRST_LOBE_DIFFUSE)
                 // sampleSunlight returns Cd * Li * dω_sun; strip Cd so the ALICE
-                // probe encodes pure incident irradiance.  The full diffuse BRDF
+                // probe encodes pure incident radiance.  The full diffuse BRDF
                 // (nonSpecColor × diffuseSelector) is applied in fog.glsl.
                 L_direct_0 = sunL / max(surface.Cd, vec3(1e-3));
                 #else
@@ -843,6 +843,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     // G-Buffer writes (Binding 0) — vec4-based abstract images
     writeGeo0(GEO_N_GEO, xy, pos_rel, first_t);
     writeGeo1(GEO_N_NORMALS, xy, first_macro_n, first_roughness, first_type, first_roughness); // pathRoughness default; overwritten by refraction pass
+    writeMicroNormal(GEO_N_MICRONORMAL, xy, first_n);
     writeAlbedosPath(GEO_N_ALBEDOS, xy, first_specularAlbedo, first_diffuseAlbedo);
     writeMisc(GEO_N_MISC, xy, first_transmissionAlbedo, first_emission_val, first_rd_i);
     writeLightAbs(GEO_N_LIGHTABS, xy, first_light_surf, first_absorption);
@@ -859,14 +860,15 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         if (!hit_sky_first && first_t > -0.5) {
             L_indirect = clamp(L_indirect, 0.0, 32000.0);
             L_direct_0 = clamp(L_direct_0, 0.0, 32000.0);
-            AliceEncoding indAlice = irradiance_to_alice(L_indirect, first_rd_o);
-            AliceEncoding dirAlice = irradiance_to_alice(L_direct_0, -lightDir);
+            AliceEncoding indAlice = radiance_to_alice(L_indirect, first_rd_o);
+            AliceEncoding dirAlice = radiance_to_alice(L_direct_0, -lightDir);
             indAlice.CoCg += dirAlice.CoCg;
             indAlice.aliceY += dirAlice.aliceY;
             combinedAlice = indAlice;
         }
-        writeDiffuseLightRT(xy, combinedAlice, faceforward(first_n, first_n, -first_macro_n));
-        writeDiffuseGeo(xy, pos_rel, first_macro_n);
+        float mask = (!hit_sky_first && first_t > -0.5) ? 1.0 : 0.0;
+        writeDiffuseLightRT(xy, combinedAlice, mask);
+        writeDiffuseGeo(xy, pos_rel, mask);
     }
     #elif defined(FIRST_LOBE_REFLECTION)
     {

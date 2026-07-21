@@ -112,8 +112,8 @@ Reservoir spatialReservoir(uvec2 gid, vec3 centerNormal, float centerDist, inout
 
         uvec2 xy = uvec2(sc);
         AliceEncoding alice;
-        vec3 n2;
-        readDiffuseLightRT(xy, alice, n2);
+        float mask;
+        readDiffuseLightRT(xy, alice, mask);
         vec4 y = alice.aliceY;
         if (isSky(y)) continue;
 

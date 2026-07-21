@@ -136,12 +136,21 @@ void readLightAbs(uint N, uvec2 xy, out vec3 light, out vec3 absorption) {
     absorption = vec3(la.y, ab.x, ab.y);
 }
 
-// N=0..4 常量（语义化）
-#define GEO_N_GEO       0u
-#define GEO_N_NORMALS   1u
-#define GEO_N_ALBEDOS   2u
-#define GEO_N_MISC      3u
-#define GEO_N_LIGHTABS  4u
+// N=0..5 常量（语义化）
+#define GEO_N_GEO          0u
+#define GEO_N_NORMALS      1u
+#define GEO_N_ALBEDOS      2u
+#define GEO_N_MISC         3u
+#define GEO_N_LIGHTABS     4u
+#define GEO_N_MICRONORMAL  5u  // oct(microNormal) — surface normal with detail map
+
+// --- N=5 ---
+void writeMicroNormal(uint N, uvec2 xy, vec3 microN) {
+    geomBuffer.data[addr(N, xy)] = vec4(encodeNormal(microN), 0.0, 0.0, 0.0);
+}
+vec3 readMicroNormal(uint N, uvec2 xy) {
+    return decodeNormal(geomBuffer.data[addr(N, xy)].x);
+}
 
 // ===========================================================================
 // pack2Half / unpack2Half — 保留现有工具
@@ -173,7 +182,7 @@ struct AliceEncoding {
     vec2 CoCg;
 };
 
-AliceEncoding irradiance_to_alice(vec3 color, vec3 dir)
+AliceEncoding radiance_to_alice(vec3 color, vec3 dir)
 {
     AliceEncoding result;
     float Y = dot(color, vec3(0.2126, 0.7152, 0.0722));
@@ -253,12 +262,16 @@ AliceEncoding unpackAlice(float s0, float s1, float s2) {
 // ===========================================================================
 // Binding 2 — DiffuseBuffer pack/unpack
 // ===========================================================================
-// N=0: Current Light  — vec4(aliceY_xy_f16, aliceY_zw_f16, CoCg_f16, oct(normal2))
-// N=1: Current Geo    — vec4(worldPos.xyz, oct(normal))
+// N=0: Current Light  — vec4(aliceY_xy_f16, aliceY_zw_f16, CoCg_f16, surfaceMask)
+// N=1: Current Geo    — vec4(worldPos.xyz, surfaceMask)
 // N=2: History Light  — vec4(hist_aliceY_xy_f16, hist_aliceY_zw_f16, hist_CoCg_f16, hist_weight)
-// N=3: History Geo    — vec4(hist_worldPos.xyz, oct(hist_normal))
+// N=3: History Geo    — vec4(hist_worldPos.xyz, surfaceMask)
 // N=4: Swap Light     — vec4(swap_aliceY_xy_f16, swap_aliceY_zw_f16, swap_CoCg_f16, swap_weight)
 // N=5: Path Guide     — vec4(packHalf(aliceY.xy), packHalf(aliceY.zw), W, M)  同 colorimg6 布局
+//
+// surfaceMask: 1.0 = valid surface, 0.0 = sky/invalid.
+// Replaces oct(normal) — ALICE encodes the demodulated incident light field;
+// normals are only needed at final composite (macroNormal from Geo1 suffices).
 
 #define DIF_N_LIGHT   0u
 #define DIF_N_GEO     1u
@@ -267,37 +280,37 @@ AliceEncoding unpackAlice(float s0, float s1, float s2) {
 #define DIF_N_SWAP    4u
 
 // --- N=0: Current RT Light ---
-void writeDiffuseLightRT(uvec2 xy, AliceEncoding alice, vec3 n2) {
+void writeDiffuseLightRT(uvec2 xy, AliceEncoding alice, float surfaceMask) {
     diffuseBuffer.data[addr(DIF_N_LIGHT, xy)] = vec4(
         uintBitsToFloat(packHalf2x16(clamp(alice.aliceY.xy, vec2(-65504.0), vec2(65504.0)))),
         uintBitsToFloat(packHalf2x16(clamp(alice.aliceY.zw, vec2(-65504.0), vec2(65504.0)))),
         uintBitsToFloat(packHalf2x16(clamp(alice.CoCg, vec2(-65504.0), vec2(65504.0)))),
-        encodeNormal(n2)
+        surfaceMask
     );
 }
-void readDiffuseLightRT(uvec2 xy, out AliceEncoding alice, out vec3 n2) {
+void readDiffuseLightRT(uvec2 xy, out AliceEncoding alice, out float surfaceMask) {
     vec4 v = diffuseBuffer.data[addr(DIF_N_LIGHT, xy)];
     vec2 ay_xy = unpackHalf2x16(floatBitsToUint(v.x));
     vec2 ay_zw = unpackHalf2x16(floatBitsToUint(v.y));
     vec2 cocg  = unpackHalf2x16(floatBitsToUint(v.z));
     alice.aliceY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
     alice.CoCg = cocg;
-    n2 = decodeNormal(v.w);
+    surfaceMask = v.w;
 }
 
-// Helper: write zero light (sky reset)
+// Helper: write zero light (sky reset — surfaceMask=0.0 implicit)
 void writeDiffuseLightRTSky(uvec2 xy) {
     diffuseBuffer.data[addr(DIF_N_LIGHT, xy)] = vec4(0.0);
 }
 
 // --- N=1: Current Geometry ---
-void writeDiffuseGeo(uvec2 xy, vec3 pos, vec3 normal) {
-    diffuseBuffer.data[addr(DIF_N_GEO, xy)] = vec4(pos, encodeNormal(normal));
+void writeDiffuseGeo(uvec2 xy, vec3 pos, float surfaceMask) {
+    diffuseBuffer.data[addr(DIF_N_GEO, xy)] = vec4(pos, surfaceMask);
 }
-void readDiffuseGeo(uvec2 xy, out vec3 pos, out vec3 normal) {
+void readDiffuseGeo(uvec2 xy, out vec3 pos, out float surfaceMask) {
     vec4 v = diffuseBuffer.data[addr(DIF_N_GEO, xy)];
     pos = v.xyz;
-    normal = decodeNormal(v.w);
+    surfaceMask = v.w;
 }
 
 // --- N=2: History Light ---
@@ -320,13 +333,13 @@ void readDiffuseHist(uvec2 xy, out AliceEncoding alice, out float weight) {
 }
 
 // --- N=3: History Geometry ---
-void writeDiffuseHistGeo(uvec2 xy, vec3 pos, vec3 normal) {
-    diffuseBuffer.data[addr(DIF_N_HISTGEO, xy)] = vec4(pos, encodeNormal(normal));
+void writeDiffuseHistGeo(uvec2 xy, vec3 pos, float surfaceMask) {
+    diffuseBuffer.data[addr(DIF_N_HISTGEO, xy)] = vec4(pos, surfaceMask);
 }
-void readDiffuseHistGeo(uvec2 xy, out vec3 pos, out vec3 normal) {
+void readDiffuseHistGeo(uvec2 xy, out vec3 pos, out float surfaceMask) {
     vec4 v = diffuseBuffer.data[addr(DIF_N_HISTGEO, xy)];
     pos = v.xyz;
-    normal = decodeNormal(v.w);
+    surfaceMask = v.w;
 }
 
 // --- N=4: Swap Light ---
@@ -529,8 +542,8 @@ struct diffuseIlluminationData {
     AliceEncoding data;
     AliceEncoding data_swap;
     vec3 pos;
-    lowp vec3 normal;
-    lowp vec3 normal2;
+    float surfaceMask;   // was: lowp vec3 normal
+    float histSurfaceMask; // was: lowp vec3 normal2
     float weight;
     float prev_weight;
 };
@@ -538,8 +551,7 @@ struct diffuseIlluminationData {
 struct DiffuseIlluminationWriteData {
     AliceEncoding data_swap;
     vec3 pos;
-    lowp vec3 normal;
-    lowp vec3 normal2;
+    float surfaceMask;   // was: lowp vec3 normal
     float weight;
 };
 
@@ -630,13 +642,11 @@ DiffuseIlluminationWriteData loadDiffuseInput(ivec2 p) {
     uvec2 xy = uvec2(p);
     DiffuseIlluminationWriteData t;
     AliceEncoding alice;
-    vec3 n2;
-    readDiffuseLightRT(xy, alice, n2);
+    float mask;
+    readDiffuseLightRT(xy, alice, mask);
     t.data_swap = alice;
-    t.normal2 = n2;
-    vec3 normal;
-    readDiffuseGeo(xy, t.pos, normal);
-    t.normal = normal;
+    readDiffuseGeo(xy, t.pos, mask);
+    t.surfaceMask = mask;
     t.weight = 1.0;
     return t;
 }
@@ -659,10 +669,10 @@ diffuseIlluminationData fetchDiffuse(ivec2 p) {
     tmp.data = alice;
     tmp.prev_weight = weight;
 
-    // 历史几何（N=3）
-    vec3 normal;
-    readDiffuseHistGeo(xy, tmp.pos, normal);
-    tmp.normal = normal;
+    // 历史几何（N=3）— surfaceMask replaces oct(normal)
+    float mask;
+    readDiffuseHistGeo(xy, tmp.pos, mask);
+    tmp.histSurfaceMask = mask;
 #endif
     return tmp;
 }
@@ -674,7 +684,6 @@ diffuseIlluminationData blendDiffuse(diffuseIlluminationData A, diffuseIlluminat
 #ifndef DIFFUSE_BUFFER_MIN2
     t.data = mix_alice(A.data, B.data, x);
     t.pos = mix(A.pos, B.pos, x);
-    t.normal = mix(A.normal, B.normal, x);
     t.prev_weight = (B.prev_weight - A.prev_weight) * x + A.prev_weight;
 #endif
     return t;
@@ -687,17 +696,13 @@ diffuseIlluminationData sampleDiffuse(vec2 p) {
     diffuseIlluminationData B = fetchDiffuse(p1 + ivec2(1, 0));
     diffuseIlluminationData C = fetchDiffuse(p1 + ivec2(0, 1));
     diffuseIlluminationData D = fetchDiffuse(p1 + ivec2(1, 1));
-    diffuseIlluminationData data = blendDiffuse(blendDiffuse(A, B, p2.x), blendDiffuse(C, D, p2.x), p2.y);
-#ifndef DIFFUSE_BUFFER_MIN2
-    data.normal = normalize(data.normal);
-#endif
-    return data;
+    return blendDiffuse(blendDiffuse(A, B, p2.x), blendDiffuse(C, D, p2.x), p2.y);
 }
 
 vec3 sampleDiffusePos(vec2 p) {
     uvec2 xy = uvec2(ivec2(floor(p) + round(fract(p))));
-    vec3 pos, normal;
-    readDiffuseHistGeo(xy, pos, normal);
+    vec3 pos; float mask;
+    readDiffuseHistGeo(xy, pos, mask);
     return pos;
 }
 
@@ -710,7 +715,7 @@ void WriteDiffuse(diffuseIlluminationData data, ivec2 p) {
 #if !defined(DIFFUSE_BUFFER_MIN) && !defined(DIFFUSE_BUFFER_MIN2)
     // Full write: also update hist (N=2) + hist geometry (N=3)
     writeDiffuseHist(xy, data.data, data.prev_weight);
-    writeDiffuseHistGeo(xy, data.pos, data.normal);
+    writeDiffuseHistGeo(xy, data.pos, data.histSurfaceMask);
 #endif
 }
 
@@ -731,16 +736,10 @@ DiffuseIlluminationWriteData fetchPrevDiffuse(ivec2 p) {
     t.data_swap = alice;
     t.weight = weight;
 
-    // 从当前几何读取位置+法线（它们不会被 ray0.rgen 改变，因为 ray0 只写 N=0,1）
-    vec3 normal;
-    readDiffuseGeo(xy, t.pos, normal);
-    t.normal = normal;
-
-    // normal2 从 N=0
-    vec3 n2;
-    AliceEncoding dummy;
-    readDiffuseLightRT(xy, dummy, n2);
-    t.normal2 = n2;
+    // 从当前几何读取位置+mask（它们不会被 ray0.rgen 改变，因为 ray0 只写 N=0,1）
+    float mask;
+    readDiffuseGeo(xy, t.pos, mask);
+    t.surfaceMask = mask;
 
     return t;
 }
@@ -749,7 +748,6 @@ DiffuseIlluminationWriteData blendPrevDiffuse(DiffuseIlluminationWriteData A, Di
     DiffuseIlluminationWriteData t;
     t.data_swap = mix_alice(A.data_swap, B.data_swap, x);
     t.pos = mix(A.pos, B.pos, x);
-    t.normal = normalize(mix(A.normal, B.normal, x));
     t.weight = mix(A.weight, B.weight, x);
     return t;
 }

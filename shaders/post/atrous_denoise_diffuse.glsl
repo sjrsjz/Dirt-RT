@@ -56,12 +56,12 @@ const vec4 POISSON_8[8] = {
 // 辅助函数
 // ---------------------------------------------------------------------------
 
-void unpackLightSample(ivec2 coord, out vec3 pos, out vec3 normal,
+void unpackLightSample(ivec2 coord, out vec3 pos, out float oct_normal,
     out AliceEncoding encoded, out float variance) {
     vec4 sample_data0 = texelFetch(colortex3, coord, 0);
     vec4 sample_data1 = texelFetch(colortex4, coord, 0);
     pos = sample_data0.xyz;
-    normal = decodeNormal(sample_data0.w);
+    oct_normal = sample_data0.w;
     encoded = unpackAlice(sample_data1.x, sample_data1.y, sample_data1.z);
     variance = sample_data1.w;
 }
@@ -75,15 +75,19 @@ void main() {
     ivec2 pix = ivec2(gl_FragCoord.xy);
 
     // ---- 中心像素基础数据 -------------------------------------------------
-    vec3 center_pos, center_normal;
+    vec3 center_pos;
+    float center_oct_n;
     AliceEncoding center_alice;
     float center_var_est;
-    unpackLightSample(pix, center_pos, center_normal, center_alice, center_var_est);
+    unpackLightSample(pix, center_pos, center_oct_n, center_alice, center_var_est);
 
     // 天空像素跳过 (方差被 swap2 复用作天空 mask)
     if (center_var_est < 0.0) return;
 
     center_var_est = max(center_var_est, 4e-9);
+
+    // ---- 从 colortex3.w 解码中心法线（方差滤波写入，零额外读取）-------
+    vec3 center_normal = decodeNormal(center_oct_n);
 
     // ---- 预计算中心像素的统计特征 -----------------------------------------
     // 中心 ALICE 编码: aliceY = vec4(v, ω)
@@ -133,20 +137,20 @@ void main() {
         float w_kernel = ps.w; // 预计算: exp(-z^2/2)
 
         // ---- 加载邻居样本 ------------------------------------------------
-        vec3 sample_world_pos, sample_normal;
+        vec3 sample_world_pos;
+        float sample_oct_n;
         AliceEncoding sample_alice;
         float sample_var_est;
-        unpackLightSample(sample_coord, sample_world_pos, sample_normal,
+        unpackLightSample(sample_coord, sample_world_pos, sample_oct_n,
             sample_alice, sample_var_est);
 
         if (sample_var_est < 0.0) continue; // 天空
         sample_alice.aliceY.w = abs(sample_alice.aliceY.w);
 
-        // ---- 几何权重 (不变) --------------------------------------------
+        // ---- 几何权重 (平面投影深度 — ALICE Bures 距离替代法线边缘) ----
         vec3 delta = (sample_world_pos - center_pos) * inv_pixel_footprint;
         float depthTerm = abs(dot(delta, center_normal));
-        float w_geometry = SVGF_NORMAL_POWER * (1.0 - dot(center_normal, sample_normal))
-                + depthTerm * geomValid;
+        float w_geometry = depthTerm * geomValid;
 
         // ---- Bures 距离 + 能量感知 -------------------------------------
         vec4 s_enc = sample_alice.aliceY;

@@ -15,12 +15,12 @@ uniform sampler2D colortex4;
 uniform sampler2D colortex5;
 uniform sampler2D colortex6;
 
-void unpackLightSample(ivec2 coord, out vec3 pos, out vec3 normal, out AliceEncoding encoded, out AliceEncoding blurred_alice) {
+void unpackLightSample(ivec2 coord, out vec3 pos, out float surfaceMask, out AliceEncoding encoded, out AliceEncoding blurred_alice) {
     vec4 d0 = texelFetch(colortex3, coord, 0);
     vec4 d1 = texelFetch(colortex4, coord, 0);
     vec4 d2 = texelFetch(colortex5, coord, 0);
     pos = d0.xyz;
-    normal = decodeNormal(d0.w);
+    surfaceMask = d0.w; // was oct(normal), now surfaceMask
     encoded = unpackAlice(d1.x, d1.y, d1.z);
     blurred_alice = unpackAlice(d2.x, d2.y, d2.z);
 }
@@ -39,11 +39,15 @@ void main() {
     tmp.data = tmp.data_swap;
 
     AliceEncoding blurred_alice, encoded;
-    vec3 pos, nrm;
-    unpackLightSample(pix, pos, nrm, encoded, blurred_alice);
-    tmp.pos = pos; tmp.normal = nrm; tmp.data_swap = encoded;
+    vec3 pos;
+    float mask;
+    unpackLightSample(pix, pos, mask, encoded, blurred_alice);
+    tmp.pos = pos;
+    tmp.surfaceMask = mask;
+    tmp.histSurfaceMask = mask;
+    tmp.data_swap = encoded;
     tmp.data = mix_alice(tmp.data, blurred_alice,
-        clamp(NRD_BLEND_STRENGTH * exp(-NRD_BLEND_STRENGTH * clamp(tmp.weight, 0.0, 100.0)), 0.0, 1.0));
+            clamp(NRD_BLEND_STRENGTH * exp(-NRD_BLEND_STRENGTH * clamp(tmp.weight, 0.0, 100.0)), 0.0, 1.0));
     WriteDiffuse(tmp, pix);
 
     // Phase 2: colortex6 → N=5 原样拷贝

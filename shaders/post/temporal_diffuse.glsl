@@ -85,7 +85,7 @@ uniform vec2 resolution;
 #define AABB_SM_H (TILE_SIZE + 2u * AABB_HALO)
 
 struct AABBTileSample {
-    float dist;
+    bool valid;
     vec4 aliceY;
     vec2 CoCg;
 };
@@ -110,6 +110,7 @@ struct TemporalFootprint {
 vec3 prevScreenPos;
 vec3 cameraDelta;
 float info_distance;
+vec3 currentNormal; // from Geo1, for buildTemporalFootprint tangent frame
 
 DiffuseIlluminationWriteData current_data;
 diffuseIlluminationData out_data;
@@ -177,7 +178,7 @@ bool buildTemporalFootprint(uvec2 pix, vec3 currentPos, vec3 geometricNormal, ve
     return true;
 }
 
-bool strictHistoryGeometryTest(vec3 histPos, vec3 histNormal, TemporalFootprint fp) {
+bool strictHistoryGeometryTest(vec3 histPos, TemporalFootprint fp) {
     vec3 delta = histPos - fp.origin;
     if (abs(dot(delta, fp.normal)) > fp.depthHalfExtent) return false;
 
@@ -194,11 +195,7 @@ bool strictHistoryGeometryTest(vec3 histPos, vec3 histNormal, TemporalFootprint 
         return false;
     }
 
-    #if TEMPORAL_REQUIRE_SAME_NORMAL_HEMISPHERE
-    // 疑似存在一些小问题，主要是历史权重判定各向异性导致墙缝权重清零
-    if (dot(histNormal, fp.normal) < -0.015) return false;
-    #endif
-
+    // ALICE 编码的方向信息已隐含法线一致性 — 移除显式半球检查
     return true;
 }
 
@@ -226,7 +223,7 @@ void computeAABB_CS(out vec4 minAY, out vec4 maxAY, out vec2 minCC, out vec2 max
             if (dx == 0 && dy == 0) continue;
 
             AABBTileSample s = sm_aabbTile[cy + dy][cx + dx];
-            if (s.dist < -0.5) continue;
+            if (!s.valid) continue;
 
             minAY = min(minAY, s.aliceY);
             maxAY = max(maxAY, s.aliceY);
@@ -297,7 +294,7 @@ void MixDiffuse() {
     }
 
     TemporalFootprint fp;
-    if (!buildTemporalFootprint(uvec2(gl_GlobalInvocationID.xy), current_data.pos, current_data.normal, cameraDelta, fp)) {
+    if (!buildTemporalFootprint(uvec2(gl_GlobalInvocationID.xy), current_data.pos, currentNormal, cameraDelta, fp)) {
         resetToCurrentSample();
         return;
     }
@@ -324,8 +321,8 @@ void MixDiffuse() {
 
         diffuseIlluminationData tap = fetchDiffuse(sampleTexel);
         if (tap.prev_weight < TEMPORAL_HISTORY_MIN_WEIGHT) continue;
-        // 几何一致性测试
-        if (!strictHistoryGeometryTest(tap.pos, tap.normal, fp)) continue;
+        // 几何一致性测试（纯位置，ALICE 方向编码隐式保证法线一致性）
+        if (!strictHistoryGeometryTest(tap.pos, fp)) continue;
 
         float d1_sq = dot(tap.pos, tap.pos);
         vec3 histPosCur = tap.pos - cameraDelta;
@@ -398,16 +395,12 @@ void main() {
             ivec2 clamped = clamp(gc, ivec2(0), ivec2(resolution) - 1);
             uvec2 loadXY = uvec2(clamped);
 
-            vec3 _pos;
-            float d;
-            readGeo0(GEO_N_GEO, loadXY, _pos, d);
             AABBTileSample s;
-            s.dist = d;
-
-            if (d > -0.5) {
-                AliceEncoding alice;
-                vec3 _n2;
-                readDiffuseLightRT(loadXY, alice, _n2);
+            AliceEncoding alice;
+            float mask;
+            readDiffuseLightRT(loadXY, alice, mask);
+            s.valid = mask > 0.5;
+            if (s.valid) {
                 s.aliceY = alice.aliceY;
                 s.CoCg = alice.CoCg;
             } else {
@@ -427,27 +420,24 @@ void main() {
         readGeo0(GEO_N_GEO, pix, current_data.pos, info_distance);
     }
     {
-        // 从 DiffuseBuffer 只读 ALICE 光照 + normal2，pos 复用上面的 Geo0 结果
+        // 从 DiffuseBuffer N=0 读 ALICE + surfaceMask，pos 复用 Geo0
         uvec2 _xy = uvec2(pix);
         AliceEncoding alice;
-        vec3 n2;
-        readDiffuseLightRT(_xy, alice, n2);
+        float mask;
+        readDiffuseLightRT(_xy, alice, mask);
         current_data.data_swap = alice;
-        current_data.normal2 = n2;
+        current_data.surfaceMask = mask;
         current_data.weight = 1.0;
-        // normal 也从 Geo1 取，避免再读 DiffuseBuffer
-        vec3 _n;
+        // 从 Geo1 取 macroNormal（仅用于 buildTemporalFootprint 切空间）
         float _r;
         int _it;
         float _pr;
-        readGeo1(GEO_N_NORMALS, pix, _n, _r, _it, _pr);
-        current_data.normal = _n;
+        readGeo1(GEO_N_NORMALS, pix, currentNormal, _r, _it, _pr);
     }
 
     out_data.data_swap = current_data.data_swap;
     out_data.data = init_alice();
-    out_data.normal = current_data.normal;
-    out_data.normal2 = current_data.normal2;
+    out_data.surfaceMask = current_data.surfaceMask;
     out_data.pos = current_data.pos;
     output_weight = 1.0;
 
