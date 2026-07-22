@@ -246,20 +246,443 @@ vec3 reproject(vec3 worldPos) {
 }
 
 // -----------------------------------------------------------------------------------
-// Subsurface-scatter direct-lighting sample (NEE)
-// -----------------------------------------------------------------------------------
-vec3 sampleSunlight(vec3 ro, vec3 normal, vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S, vec4 R, vec3 lightDir, bool night, int type, vec3 macroNormal, bool inside) {
+// Direct-lighting (NEE) moved to evalDirectDiffuse() / evalDirectSpecular() below
+// ---------------------------------------------------------------------------
+
+vec3 GetSpecularDominantDirection(vec3 N, vec3 V, float R) {
+    float f = (1.0 - R) * (sqrt(1.0 - R) + R);
+    vec3 R0 = reflect(V, N);
+    return normalize(mix(N, R0, f));
+}
+
+// ===========================================================================
+// Data Structures
+// ===========================================================================
+
+struct HalfVector {
+    vec3 H;
+    bool valid;
+};
+
+struct LobeProbs {
+    float P_spec, P_refr, P_diff;
+    vec3 specWeight, refrWeight, diffWeight;
+    float F;
+};
+
+struct MediumResult {
+    vec3 absorption;
+    vec3 emission;
+};
+
+struct GuideInfo {
+    vec3 axis;
+    float kappa;
+    float prob;
+    bool valid;
+};
+
+struct PSRResult {
+    float virtualDist;
+    float pathRoughness;
+    vec3 refrDir;
+};
+
+struct FirstBounceData {
+    vec3 p, n, macro_n, micro_n, rd_o, rd_i, refr_dir;
+    vec3 specularAlbedo, diffuseAlbedo, transmissionAlbedo;
+    vec3 emission_val, light_surf, absorption;
+    float t, roughness, n_i, n_o, t2_ior_adjusted, pathRoughness;
+    int type;
+};
+
+// ===========================================================================
+// Half-Vector Computation
+// ===========================================================================
+
+HalfVector computeHalfVector(vec3 wo, vec3 wi) {
+    vec3 Hsum = wo + wi;
+    float Hlen2 = dot(Hsum, Hsum);
+    HalfVector hv;
+    if (Hlen2 <= 1e-12) {
+        hv.H = vec3(0.0);
+        hv.valid = false;
+        return hv;
+    }
+    hv.H = Hsum * inversesqrt(Hlen2);
+    hv.valid = true;
+    return hv;
+}
+
+// ===========================================================================
+// GGX Microfacet BRDF Evaluation
+// ===========================================================================
+
+// Evaluate GGX microfacet BRDF: f(wo, wi) × NoL, and NDF sampling PDF.
+// Returns false if any degenerate angle; caller treats as bsdf_weight = 0.
+// The caller applies MIS weighting externally (pdfMix or pdfNDF×P_spec).
+bool evaluateSpecularBRDF(
+    vec3 wo, vec3 wi, vec3 normal, vec3 Cs, float Sx, float roughness,
+    out vec3 fSpecTimesNoL, out float pdfNDF
+) {
+    float NoV = abs(dot(normal, wo));
+    float NoL = dot(normal, wi);
+    if (NoV <= 1e-6 || NoL <= 1e-6) return false;
+
+    HalfVector hv = computeHalfVector(wo, wi);
+    if (!hv.valid) return false;
+
+    float NoH = abs(dot(normal, hv.H));
+    float VoH = abs(dot(wo, hv.H));
+    if (NoH <= 1e-6 || VoH <= 1e-6) return false;
+
+    float rough = max(roughness, 1e-4);
+    float D_NoH = GGXpdf(NoH, 0.0, rough);
+    float D = D_NoH / NoH;
+    float G2 = GGX_G2_standard(NoV, NoL, rough);
+    vec3 Fh = reflectanceColor(Cs, VoH).rgb;
+
+    fSpecTimesNoL = Fh * Sx * D * G2 * NoL / max(4.0 * NoV * NoL, 1e-8);
+    pdfNDF = GGX_ndf_pdf(wo, wi, normal, rough);
+
+    return true;
+}
+
+// ===========================================================================
+// BSDF Lobe Probabilities
+// ===========================================================================
+
+LobeProbs computeLobeProbs(material surf, vec3 rd_i, vec3 microNormal, float rs) {
+    LobeProbs p;
+    p.F = clamp(fresnel(-rd_i, microNormal, rs), 0.0, 1.0);
+    vec4 rC = reflectanceColor(surf.Cs, dot(rd_i, microNormal));
+
+    float transmissionSelector = clamp(surf.S.y, 0.0, 1.0);
+    float diffuseSelector = 1.0 - transmissionSelector;
+
+    p.P_spec = clamp(rC.w * surf.S.x, 0.0, 1.0);
+    p.P_refr = (1.0 - p.P_spec) * transmissionSelector;
+    p.P_diff = (1.0 - p.P_spec) * diffuseSelector;
+
+    vec3 nonSpecColor = surf.Cd * max(vec3(0.0), vec3(1.0) - rC.rgb * surf.S.x);
+    p.specWeight = rC.rgb * surf.S.x / max(p.P_spec, 1e-5);
+    p.refrWeight = nonSpecColor * transmissionSelector / max(p.P_refr, 1e-5);
+    p.diffWeight = nonSpecColor * diffuseSelector / max(p.P_diff, 1e-5);
+
+    return p;
+}
+
+// ===========================================================================
+// Volumetric Medium
+// ===========================================================================
+
+MediumResult evalMedium(float t, vec3 rd_i, float ro_i_y, bool inside,
+    vec4 fogColor, vec3 globalEmission) {
+    MediumResult m;
+    if (inside) {
+        m.absorption = exp2(-t * fogColor.yzw * LOG2_E);
+        m.emission = (1.0 - m.absorption) / (fogColor.yzw + 1e-5) * globalEmission;
+    } else {
+        m.absorption = exp2(-max(b_Q * (b_P.x - ro_i_y) * t
+                        - 0.5 * b_Q * t * t * rd_i.y, 0.0) * LOG2_E);
+        m.emission = vec3(0.0);
+    }
+    return m;
+}
+
+// ===========================================================================
+// ALICE Path Guiding
+// ===========================================================================
+
+GuideInfo computeAliceGuide(vec3 ro_o, float strengthMultiplier) {
+    GuideInfo g;
+    g.axis = vec3(0.0, 1.0, 0.0);
+    g.kappa = 0.0;
+    g.prob = 0.0;
+    g.valid = false;
+
+    vec2 prev_coord = reproject(ro_o).xy;
+    bool validPrev = all(greaterThanEqual(prev_coord, vec2(0.0)))
+            && all(lessThanEqual(prev_coord, vec2(1.0)));
+    if (!validPrev) return g;
+
+    vec4 guideY = samplePathGuide(prev_coord * vec2(resolution_global));
+    vec3 x = guideY.xyz;
+    float omega = guideY.w;
+    float length_x = max(length(x), 1e-20);
+    omega = max(omega, length_x);
+    g.axis = x / length_x;
+    float rho = clamp(length_x / omega, 0.0, 1.0);
+    g.kappa = alice_kappa(length_x, omega);
+    g.valid = length_x > 1e-8;
+    g.prob = g.valid ? strengthMultiplier * rho : 0.0;
+    return g;
+}
+
+// ===========================================================================
+// Diffuse Direction Sampling with ALICE MIS
+// ===========================================================================
+
+vec3 sampleDiffuseWithGuide(vec3 macroNormal, vec3 ro_o, GuideInfo guide,
+    out vec3 next_rd, out float guideWeight) {
+    bool useGuide = getRandom() < guide.prob;
+    if (useGuide) {
+        next_rd = sample_alice_guiding(guide.axis, guide.kappa, vec2(getRandom(), getRandom()));
+    } else {
+        next_rd = DiffuseNormal(macroNormal, ro_o);
+    }
+    float NoL = max(0.0, dot(macroNormal, next_rd));
+    float pdfCos = NoL / PI;
+    float pdfAlice = guide.prob > 0.0 ? alice_guiding_pdf(next_rd, guide.axis, guide.kappa) : 0.0;
+    float pdfMix = (1.0 - guide.prob) * pdfCos + guide.prob * pdfAlice;
+    guideWeight = (NoL > 0.0 && pdfMix > 1e-8) ? (pdfCos / pdfMix) : 0.0;
+    return vec3(guideWeight);
+}
+
+// ===========================================================================
+// PSR (Primary Surface Replacement) Refractive Chain
+// ===========================================================================
+
+PSRResult tracePSRChain(vec3 ro, vec3 rd, vec3 macroNormal, float firstRoughness,
+    bool wasInside, int baseDepth) {
+    PSRResult result;
+    result.virtualDist = 0.0;
+    result.pathRoughness = 0.0;
+    result.refrDir = rd;
+
+    float r_accum2 = firstRoughness * firstRoughness;
+    float n_camera = wasInside ? REFRACTIVE_INDEX : 1.0;
+
+    vec3 ro_chain = ro;
+    vec3 rd_chain = rd;
+    bool inside_chain = !wasInside;
+    vec3 departN = macroNormal;
+
+    for (int i = 0; i < MAX_REFRACTIVE_BOUNCES; i++) {
+        float offsetSign = inside_chain ? -1.0 : 1.0;
+        vec3 ro_next, rd_next;
+        float t_next = raycast(ro_chain + departN * offsetSign * 0.00025,
+                rd_chain, ro_next, rd_next, !inside_chain, false);
+
+        if (t_next < -0.5) {
+            result.virtualDist = VPROJDIST_SKY;
+            break;
+        }
+
+        Material hitMat = evaluateMaterial(tmp_Payload, rd_chain, uint(baseDepth + 1 + i));
+        int hitBlockID;
+        payload_unpackShadow(tmp_Payload.data, hitBlockID);
+        material hitSurf = materialFromEvaluated(hitMat, hitBlockID);
+
+        float n_segment = inside_chain ? REFRACTIVE_INDEX : 1.0;
+        result.virtualDist += t_next * n_camera / n_segment;
+
+        r_accum2 += hitSurf.R.x * hitSurf.R.x;
+
+        if (!isTransmissiveBlock(hitBlockID)) break;
+
+        vec3 hitGeomN = payload_unpackGeomNormal(tmp_Payload.data);
+        hitGeomN = faceforward(hitGeomN, hitGeomN, rd_chain);
+
+        float n_from = inside_chain ? REFRACTIVE_INDEX : 1.0;
+        float n_to = inside_chain ? 1.0 : REFRACTIVE_INDEX;
+        vec3 next_refract = refract(rd_chain, hitGeomN, n_from / n_to);
+
+        if (dot(next_refract, next_refract) <= 0.0) break;
+
+        rd_chain = next_refract;
+        ro_chain = ro_next;
+        inside_chain = !inside_chain;
+        departN = hitGeomN;
+
+        if (sqrt(r_accum2) > PATH_ROUGHNESS_TERMINATE) break;
+    }
+
+    result.pathRoughness = sqrt(r_accum2);
+    return result;
+}
+
+// ===========================================================================
+// First-Bounce Handlers (compile-time dispatched via #if defined)
+// ===========================================================================
+
+void handleFirstBounce_Reflection(
+    vec3 rd_i, vec3 ro_o, vec3 normal, vec3 macroNormal, vec3 microNormal,
+    material surf, LobeProbs lobes,
+    out vec3 bsdf_weight, out vec3 next_rd
+) {
+    GuideInfo guide = computeAliceGuide(ro_o, PATH_GUIDING_SPECULAR_STRENGTH * surf.R.x);
+    float reflGuideProb = guide.valid ? guide.prob : 0.0;
+
+    vec3 reflGGX_wi = reflect(rd_i, microNormal);
+    bool useReflGuide = surf.R.x > 0.01 && reflGuideProb > 0.0 && getRandom() < reflGuideProb;
+
+    if (useReflGuide) {
+        next_rd = sample_alice_guiding(guide.axis, guide.kappa, vec2(getRandom(), getRandom()));
+    } else {
+        next_rd = reflGGX_wi;
+    }
+
+    vec3 wo = -rd_i;
+    vec3 wi = next_rd;
+    vec3 fSpecTimesNoL_val;
+    float pdfNDF;
+    if (evaluateSpecularBRDF(wo, wi, normal, surf.Cs, surf.S.x, surf.R.x,
+            fSpecTimesNoL_val, pdfNDF)) {
+        float pdfAlice = alice_guiding_pdf(wi, guide.axis, guide.kappa);
+        float pdfMix = (1.0 - reflGuideProb) * pdfNDF + reflGuideProb * pdfAlice;
+        bsdf_weight = (pdfMix > 1e-8) ? (fSpecTimesNoL_val / pdfMix) : vec3(0.0);
+    } else {
+        bsdf_weight = vec3(0.0);
+    }
+}
+
+void handleFirstBounce_Refraction(
+    vec3 rd_i, vec3 ro_o, vec3 normal, vec3 macroNormal, vec3 microNormal,
+    material surf, LobeProbs lobes, float rs,
+    out vec3 bsdf_weight, out vec3 next_rd, inout bool inside_state,
+    out PSRResult psr, bool wasInside, int baseDepth
+) {
+    vec3 refract_dir = refract(rd_i, microNormal, rs);
+    vec3 psr_refract_dir = refract(rd_i, macroNormal, rs);
+
+    if (dot(refract_dir, refract_dir) > 0.0) {
+        next_rd = refract_dir;
+        bool was_inverse_0 = inside_state;
+        inside_state = !inside_state;
+
+        bool psrEnabled = surf.R.x < PSR_ROUGHNESS_THRESHOLD;
+        if (psrEnabled) {
+            vec3 chain_rd = dot(psr_refract_dir, psr_refract_dir) > 0.0 ? psr_refract_dir : refract_dir;
+            psr = tracePSRChain(ro_o, chain_rd, macroNormal, surf.R.x, was_inverse_0, baseDepth);
+        } else {
+            psr.virtualDist = 0.0;
+            psr.pathRoughness = surf.R.x;
+            psr.refrDir = dot(psr_refract_dir, psr_refract_dir) > 0.0 ? psr_refract_dir : refract_dir;
+        }
+
+        bsdf_weight = lobes.P_refr * lobes.refrWeight * (1.0 - lobes.F);
+    } else {
+        // TIR
+        next_rd = reflect(rd_i, microNormal);
+        psr.virtualDist = 0.0;
+        psr.pathRoughness = surf.R.x;
+        psr.refrDir = next_rd;
+        bsdf_weight = vec3(0.0);
+    }
+}
+
+void handleFirstBounce_Diffuse(
+    vec3 rd_i, vec3 ro_o, vec3 normal, vec3 macroNormal,
+    material surf, LobeProbs lobes,
+    out vec3 bsdf_weight, out vec3 next_rd
+) {
+    GuideInfo guide = computeAliceGuide(ro_o, PATH_GUIDING_STRENGTH);
+    float guideWeight;
+    bsdf_weight = sampleDiffuseWithGuide(macroNormal, ro_o, guide, next_rd, guideWeight);
+}
+
+// ===========================================================================
+// Secondary Bounce Handler (stochastic mixture)
+// ===========================================================================
+
+void handleSecondaryBounce(
+    vec3 rd_i, vec3 ro_o, vec3 normal, vec3 macroNormal, vec3 microNormal,
+    material surf, LobeProbs lobes,
+    out vec3 bsdf_weight, out vec3 next_rd, out int lobeType, inout bool inside_state
+) {
+    float rnd_lobe = getRandom();
+
+    if (rnd_lobe < lobes.P_spec) {
+        // Reflection
+        lobeType = REFLECTION;
+        next_rd = reflect(rd_i, microNormal);
+        if (dot(next_rd, normal) > 0.0) {
+            vec3 wo = -rd_i;
+            vec3 wi = next_rd;
+            vec3 fSpecTimesNoL_val;
+            float pdfNDF;
+            if (evaluateSpecularBRDF(wo, wi, normal, surf.Cs, surf.S.x, surf.R.x,
+                    fSpecTimesNoL_val, pdfNDF)) {
+                bsdf_weight = (pdfNDF > 1e-8)
+                    ? (fSpecTimesNoL_val / (pdfNDF * lobes.P_spec)) : vec3(0.0);
+            } else {
+                bsdf_weight = vec3(0.0);
+            }
+        } else {
+            bsdf_weight = vec3(0.0);
+        }
+    } else if (rnd_lobe < lobes.P_spec + lobes.P_refr) {
+        // Refraction
+        lobeType = REFRACTION;
+        bool chooseTransmission = getRandom() < (1.0 - lobes.F);
+        float n_i = inside_state ? REFRACTIVE_INDEX : 1.0;
+        float n_o = inside_state ? 1.0 : REFRACTIVE_INDEX;
+        float rs = n_i / n_o;
+        if (chooseTransmission) {
+            vec3 refract_dir = refract(rd_i, microNormal, rs);
+            if (dot(refract_dir, refract_dir) > 0.0) {
+                next_rd = refract_dir;
+                inside_state = !inside_state;
+            } else {
+                next_rd = reflect(rd_i, microNormal);
+                lobeType = REFLECTION;
+            }
+        } else {
+            next_rd = reflect(rd_i, microNormal);
+            lobeType = REFLECTION;
+        }
+        bsdf_weight = lobes.refrWeight;
+    } else {
+        // Diffuse
+        lobeType = DIFFUSION;
+        next_rd = DiffuseNormal(macroNormal, ro_o);
+        bsdf_weight = lobes.diffWeight;
+    }
+}
+
+// ===========================================================================
+// NEE: Direct Sunlight (branch-free per lobe type)
+// ===========================================================================
+
+vec3 evalDirectDiffuse(vec3 ro, vec3 macroNormal, vec3 Cd, vec3 rd_i,
+    vec3 lightDir, bool inside) {
     ro += (dot(lightDir, macroNormal) > 0.15 ? lightDir : macroNormal) * 0.001;
 
     vec3 X, Y, Z;
     XYZ(lightDir, X, Y, Z);
     float r1 = getRandom();
-    float alpha = getRandom() * 2 * PI;
+    float alpha = getRandom() * 2.0 * PI;
     float cosbeta = 1.0 - r1 * (1.0 - cosD_S);
     vec3 sampleDir = cosbeta * Y + sqrt(1.0 - cosbeta * cosbeta) * (cos(alpha) * X + sin(alpha) * Z);
 
     vec3 ro_o, rd_o;
-    float t = raycast(ro, -sampleDir, ro_o, rd_o, !inside, true); // isNEE
+    float t = raycast(ro, -sampleDir, ro_o, rd_o, !inside, true);
+    if (t > -0.5) return vec3(0.0);
+
+    vec3 wi = -sampleDir;
+    vec3 Li = sampleSky(ro.y, wi, lightDir).xyz * payload_unpackShadow(tmp_Payload.data);
+
+    float IoN = abs(dot(rd_i, macroNormal));
+    float OiN = dot(wi, macroNormal);
+    if (OiN <= 0.0) return vec3(0.0);
+
+    return max(vec3(0.0), Cd * Li * (2.0 * OiN * (1.0 - cosD_S)));
+}
+
+vec3 evalDirectSpecular(vec3 ro, vec3 normal, vec3 Cs, float Sx, float roughness,
+    vec3 rd_i, vec3 lightDir, bool inside) {
+    ro += (dot(lightDir, normal) > 0.15 ? lightDir : normal) * 0.001;
+
+    vec3 X, Y, Z;
+    XYZ(lightDir, X, Y, Z);
+    float r1 = getRandom();
+    float alpha = getRandom() * 2.0 * PI;
+    float cosbeta = 1.0 - r1 * (1.0 - cosD_S);
+    vec3 sampleDir = cosbeta * Y + sqrt(1.0 - cosbeta * cosbeta) * (cos(alpha) * X + sin(alpha) * Z);
+
+    vec3 ro_o, rd_o;
+    float t = raycast(ro, -sampleDir, ro_o, rd_o, !inside, true);
     if (t > -0.5) return vec3(0.0);
 
     vec3 wi = -sampleDir;
@@ -269,38 +692,151 @@ vec3 sampleSunlight(vec3 ro, vec3 normal, vec3 Cs, vec3 Cd, vec3 rd_i, vec2 S, v
     float OiN = dot(wi, normal);
     if (OiN <= 0.0) return vec3(0.0);
 
-    if (type == DIFFUSION) {
-        return max(vec3(0.0), Cd * Li * (2.0 * OiN * (1.0 - cosD_S)));
-    }
+    float a = max(roughness, 1e-6);
+    vec3 H = normalize(wi - rd_i);
+    float cosThetaH = clamp(dot(H, normal), 0.0, 1.0);
+    float D = GGXpdf(cosThetaH, 0.0, a) / max(cosThetaH, 1e-6);
+    float G2 = GGX_G2(IoN, OiN, a);
+    vec3 F = reflectanceColor(Cs, abs(dot(rd_i, H))).xyz;
 
-    if (type == REFLECTION) {
-        float a = max(R.x, 1e-6);
-        vec3 H = normalize(wi - rd_i);
-        float cosThetaH = clamp(dot(H, normal), 0.0, 1.0);
-        float D = GGXpdf(cosThetaH, 0.0, a) / max(cosThetaH, 1e-6);
-        float G2 = GGX_G2(IoN, OiN, a);
-        vec3 F = reflectanceColor(Cs, abs(dot(rd_i, H))).xyz;
-        return max(vec3(0.0), D * G2 * F * Li * (PI * 0.5 * (1.0 - cosD_S) / max(IoN, 1e-6)) * S.x);
-    }
-
-    return vec3(0.0);
+    return max(vec3(0.0), D * G2 * F * Li * (PI * 0.5 * (1.0 - cosD_S) / max(IoN, 1e-6)) * Sx);
 }
 
-vec3 GetSpecularDominantDirection(vec3 N, vec3 V, float R) {
-    float f = (1.0 - R) * (sqrt(1.0 - R) + R);
-    vec3 R0 = reflect(V, N);
-    return normalize(mix(N, R0, f));
+// ===========================================================================
+// G-Buffer & Output
+// ===========================================================================
+
+FirstBounceData initFirstBounceData(vec3 ro, vec3 rd) {
+    FirstBounceData fb;
+    fb.p = ro;
+    fb.n = -rd;
+    fb.macro_n = -rd;
+    fb.micro_n = -rd;
+    fb.rd_o = rd;
+    fb.rd_i = rd;
+    fb.refr_dir = rd;
+    fb.specularAlbedo = vec3(0.0);
+    fb.diffuseAlbedo = vec3(0.0);
+    fb.transmissionAlbedo = vec3(0.0);
+    fb.emission_val = vec3(0.0);
+    fb.light_surf = vec3(0.0);
+    fb.absorption = vec3(1.0);
+    fb.t = -1.0;
+    fb.roughness = 1.0;
+    fb.n_i = 1.0;
+    fb.n_o = 1.0;
+    fb.t2_ior_adjusted = 0.0;
+    fb.pathRoughness = 0.0;
+    fb.type = -1;
+    return fb;
+}
+
+void recordFirstBounceGBuffer(
+    vec3 ro_o, vec3 ro, vec3 normal, vec3 macroNormal, vec3 microNormal,
+    material surf, vec3 rd_i, vec3 next_rd, float t,
+    float n_i, float n_o, int lobeType, vec3 segmentEmission,
+    vec3 currentAbsorption, inout FirstBounceData fb
+) {
+    fb.p = ro_o;
+    fb.n = normal;
+    fb.macro_n = macroNormal;
+    fb.micro_n = microNormal;
+    fb.t = t;
+    fb.type = lobeType;
+    fb.n_i = n_i;
+    fb.n_o = n_o;
+    fb.rd_i = rd_i;
+    fb.rd_o = next_rd;
+    fb.emission_val = segmentEmission;
+    fb.light_surf = surf.light;
+    fb.roughness = surf.R.x;
+    fb.absorption = currentAbsorption;
+
+    // Specular albedo (analytic fit, matching original lines 778-797)
+    vec4 rC_stable = reflectanceColor(surf.Cs, abs(dot(rd_i, normal)));
+    vec3 nonSpecColor_stable = surf.Cd * max(vec3(0.0), vec3(1.0) - rC_stable.rgb * surf.S.x * 0.5);
+    {
+        vec3 F0 = surf.Cs * surf.S.x;
+        float NoV = clamp(abs(dot(rd_i, normal)), 0.0, 1.0);
+        float rough = surf.R.x;
+        vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
+        vec4 c1 = vec4(1.0, 0.0425, 1.040, -0.040);
+        vec4 r = rough * c0 + c1;
+        float a004 = min(r.x * r.x, exp2(-9.28 * NoV)) * r.x + r.y;
+        vec2 AB = vec2(-1.04, 1.04) * a004 + r.zw;
+        fb.specularAlbedo = max(F0 * AB.x + vec3(AB.y * surf.S.x), vec3(1e-5));
+    }
+    float transmissionSelector = clamp(surf.S.y, 0.0, 1.0);
+    fb.diffuseAlbedo = nonSpecColor_stable * (1.0 - transmissionSelector);
+    fb.transmissionAlbedo = nonSpecColor_stable * transmissionSelector;
+}
+
+void writeDiffuseOutput(uvec2 xy, FirstBounceData fb, vec3 L_indirect, vec3 L_direct_0,
+    vec3 lightDir, vec3 ro) {
+    vec3 pos_rel = fb.p - ro;
+    writeGeo0(GEO_N_GEO, xy, pos_rel, fb.t);
+    writeGeo1(GEO_N_NORMALS, xy, fb.macro_n, fb.roughness, fb.type, fb.roughness);
+    writeMicroNormal(GEO_N_MICRONORMAL, xy, fb.n);
+    writeAlbedosPath(GEO_N_ALBEDOS, xy, fb.specularAlbedo, fb.diffuseAlbedo);
+    writeMisc(GEO_N_MISC, xy, fb.transmissionAlbedo, fb.emission_val, fb.rd_i);
+    writeLightAbs(GEO_N_LIGHTABS, xy, fb.light_surf, fb.absorption);
+
+    AliceEncoding combinedAlice = init_alice();
+    float mask = 0.0;
+    if (fb.t > -0.5) {
+        L_indirect = clamp(L_indirect, 0.0, 32000.0);
+        L_direct_0 = clamp(L_direct_0, 0.0, 32000.0);
+        AliceEncoding indAlice = radiance_to_alice(L_indirect, fb.rd_o);
+        AliceEncoding dirAlice = radiance_to_alice(L_direct_0, -lightDir);
+        indAlice.CoCg += dirAlice.CoCg;
+        indAlice.aliceY += dirAlice.aliceY;
+        combinedAlice = indAlice;
+        mask = 1.0;
+    }
+    writeDiffuseLightRT(xy, combinedAlice, mask);
+    writeDiffuseGeo(xy, pos_rel, mask);
+}
+
+void writeReflectionOutput(uvec2 xy, FirstBounceData fb, vec3 totalIllumination, vec3 ro) {
+    vec3 pos_rel = fb.p - ro;
+    vec3 refl_R = fb.rd_i;
+    float refl_vprojdist = 0.0;
+    vec3 refl_color = vec3(0.0);
+    if (fb.t > -0.5) {
+        vec3 r_rd_i = GetSpecularDominantDirection(fb.n, fb.rd_i, fb.roughness);
+        vec3 r_ro, r_rd;
+        float t_refl = raycast(fb.p + fb.macro_n * 0.00025, r_rd_i, r_ro, r_rd, false, false);
+        refl_R = r_rd_i;
+        refl_vprojdist = (t_refl > -0.5) ? t_refl : VPROJDIST_SKY;
+        refl_color = clamp(totalIllumination / max(fb.specularAlbedo, vec3(1e-6)), 0.0, 200.0 * div_avgExposure);
+    }
+    writeReflGeo(xy, pos_rel, refl_R);
+    writeReflLight(xy, refl_color, refl_vprojdist, 0.0);
+}
+
+void writeRefractionOutput(uvec2 xy, FirstBounceData fb, vec3 totalIllumination, vec3 ro) {
+    vec3 pos_rel = fb.p - ro;
+    vec3 refr_R = fb.refr_dir;
+    float refr_vprojdist = 0.0;
+    vec3 refr_color = vec3(0.0);
+    if (fb.t > -0.5) {
+        refr_vprojdist = fb.t2_ior_adjusted;
+        refr_color = clamp(totalIllumination / max(fb.transmissionAlbedo, vec3(1e-6)), 0.0, 200.0 * div_avgExposure);
+    }
+    writeRefrGeo(xy, pos_rel, refr_R);
+    writeRefrLight(xy, refr_color, refr_vprojdist, 0.0);
+    writePathRoughness(GEO_N_NORMALS, xy, fb.pathRoughness);
 }
 
 // -----------------------------------------------------------------------------------
 // Core: Forward Path Tracing
 // -----------------------------------------------------------------------------------
 void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
+    // === SETUP ===
     uint isEyeInWater = cam.flags & 3u;
     uvec2 xy = coord;
-
-    bool original_inverse_0 = isEyeInWater != 0;
-    bool inverse_0 = original_inverse_0;
+    bool originalInside = isEyeInWater != 0;
+    bool inside = originalInside;
 
     vec3 ro_i = ro;
     vec3 rd_i = rd;
@@ -308,600 +844,217 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     vec3 throughput = vec3(1.0);
     vec3 L_indirect = vec3(0.0);
     vec3 L_direct_0 = vec3(0.0);
-    vec3 current_absorption = vec3(1.0);
+    vec3 currentAbsorption = vec3(1.0);
 
     vec4 fogColor = (isEyeInWater == 2u) ? vec4(0, 0.05, 0.075, 0.1) * 5.0 : vec4(0, 0.325, 0.295, 0.3);
-    vec3 global_emission = (isEyeInWater == 2u) ? vec3(1, 0.25, 0.05) * 10.0 : vec3(0);
+    vec3 globalEmission = (isEyeInWater == 2u) ? vec3(1, 0.25, 0.05) * 10.0 : vec3(0);
 
     float fireflyCap = FIREFLY_SUPPRESSION_MULTIPLIER * div_avgExposure;
 
-    bool hit_sky_first = false;
-    vec3 first_p = ro;
-    vec3 first_n = -rd;
-    vec3 first_macro_n = -rd;
-    vec3 first_specularAlbedo = vec3(0.0);
-    vec3 first_diffuseAlbedo = vec3(0.0);
-    vec3 first_transmissionAlbedo = vec3(0.0);
-    vec3 first_rd_o = rd;
-    float first_t = -1.0;
-    float first_roughness = 1.0;
-    int first_type = -1;
-    vec3 first_rd_i = rd;
-    float first_n_i = 1.0;
-    float first_n_o = 1.0;
-    vec3 first_micro_n = -rd;
-    vec3 first_absorption = vec3(1.0);
-    vec3 first_emission_val = vec3(0.0);
-    vec3 first_light_surf = vec3(0.0);
-    float first_t2_ior_adjusted = 0.0; // IOR-adjusted virtual distance through refractive chain (PSR)
-    float first_pathRoughness = 0.0; // accumulated sqrt(Σ r_i²) through refractive chain
-    vec3 first_refr_dir = rd; // refracted direction at first surface (for edge-stopping)
+    FirstBounceData fb = initFirstBounceData(ro, rd);
 
-    int depth = 0;
-    for (; depth < MaxRay; depth++) {
-        vec3 ro_o, rd_o;
-        vec4 fogA = float(inverse_0) * fogColor;
-        vec3 emissionA = float(inverse_0) * global_emission;
+    // ===== FIRST BOUNCE =====
+    vec3 ro_o, rd_o;
+    float t = raycast(ro_i, rd_i, ro_o, rd_o, !inside, false);
 
-        float t = raycast(ro_i, rd_i, ro_o, rd_o, !inverse_0, false);
-
-        // --- 1. Miss: sky / background ---
-        if (t < -0.5) {
-            if (depth == 0) {
-                hit_sky_first = true;
-                first_t = -1.0;
-                first_n = -rd_i;
-                first_macro_n = -rd_i;
-                first_rd_o = rd_i;
-                first_absorption = original_inverse_0 ? vec3(0.0) : vec3(1.0);
-            }
-
-            bool skipFirstBounceSky = false;
-            if (!skipFirstBounceSky) {
-                vec3 sky = sampleSkyNoSun(ro_i.y, rd_i, lightDir).xyz;
-                vec3 sky_contrib = throughput * sky * current_absorption;
-
-                if (depth >= 2) {
-                    float lum_sky = dot(sky_contrib, vec3(0.2126, 0.7152, 0.0722));
-                    sky_contrib *= fireflyCap / max(lum_sky, fireflyCap);
-                }
-
-                L_indirect += sky_contrib;
-            }
-
-            break;
-        }
-
-        // --- 2. Geometry & material extraction ---
-        bool insideFlag, handedness, _isNEE;
-        payload_unpackFlags(tmp_Payload.data, insideFlag, handedness, _isNEE);
-        Material surfaceMat = evaluateMaterial(tmp_Payload, rd_i, uint(depth));
-
-        // Geometry normal from payload (interpolated by rchit)
+    if (t < -0.5) {
+        // Primary ray hit sky
+        vec3 sky = sampleSkyNoSun(ro_i.y, rd_i, lightDir).xyz;
+        L_indirect += throughput * sky * currentAbsorption;
+        fb.t = -1.0;
+        fb.absorption = originalInside ? vec3(0.0) : vec3(1.0);
+    } else {
+        // --- Material evaluation ---
+        Material surfaceMat = evaluateMaterial(tmp_Payload, rd_i, 0u);
         vec3 geomN = payload_unpackGeomNormal(tmp_Payload.data);
         vec3 macroNormal = faceforward(geomN, geomN, rd_i);
-
         vec3 normal = normalize(faceforward(surfaceMat.normal, surfaceMat.normal, rd_i));
         int blockID;
-        payload_unpackShadow(tmp_Payload.data, blockID); // blockID needed for materialFromEvaluated
-        material surface = materialFromEvaluated(surfaceMat, blockID);
-
-        vec3 microNormal = GGXNormal(normal, surface.R.x, ro_o);
-        float n_i = inverse_0 ? REFRACTIVE_INDEX : 1.0;
-        float n_o = inverse_0 ? 1.0 : REFRACTIVE_INDEX;
+        payload_unpackShadow(tmp_Payload.data, blockID);
+        material surf = materialFromEvaluated(surfaceMat, blockID);
+        vec3 microNormal = GGXNormal(normal, surf.R.x, ro_o);
+        float n_i = inside ? REFRACTIVE_INDEX : 1.0;
+        float n_o = inside ? 1.0 : REFRACTIVE_INDEX;
         float rs = n_i / n_o;
 
-        // --- 3. Medium absorption & emission ---
-        vec3 segment_absorption = exp2(-(inverse_0 ? t * fogA.yzw : max(b_Q * (b_P.x - ro_i.y) * t - 0.5 * b_Q * t * t * rd_i.y, 0.0)) * LOG2_E);
-        current_absorption *= segment_absorption;
+        // --- Medium absorption ---
+        MediumResult medium = evalMedium(t, rd_i, ro_i.y, inside, fogColor, globalEmission);
+        currentAbsorption *= medium.absorption;
+        L_indirect += throughput * medium.emission;
 
-        vec3 segment_emission = (1.0 - segment_absorption) / (fogA.yzw + 1e-5) * emissionA;
+        // --- Lobe probabilities ---
+        LobeProbs lobes = computeLobeProbs(surf, rd_i, microNormal, rs);
 
-        bool suppressSurfaceLight = (depth == 0);
-        vec3 local_emission = (suppressSurfaceLight ? vec3(0.0) : surface.light) + segment_emission;
-
-        vec3 bounce_emission = throughput * local_emission;
-        if (depth >= 2) {
-            float lum_emit = dot(bounce_emission, vec3(0.2126, 0.7152, 0.0722));
-            bounce_emission *= fireflyCap / max(lum_emit, fireflyCap);
-        }
-        L_indirect += bounce_emission;
-
-        // --- 4. BSDF lobe probabilities & weights ---
-        float F = clamp(fresnel(-rd_i, microNormal, rs), 0.0, 1.0);
-        vec4 rC = reflectanceColor(surface.Cs, dot(rd_i, microNormal));
-
-        float P_spec = clamp(rC.w * surface.S.x, 0.0, 1.0);
-        float transmissionSelector = clamp(surface.S.y, 0.0, 1.0);
-        float diffuseSelector = 1.0 - transmissionSelector;
-        float P_refr = (1.0 - P_spec) * transmissionSelector;
-        float P_diff = (1.0 - P_spec) * diffuseSelector;
-
-        vec3 nonSpecColor = surface.Cd * max(vec3(0.0), vec3(1.0) - rC.rgb * surface.S.x);
-        vec3 specLobeWeight = rC.rgb * surface.S.x / max(P_spec, 1e-5);
-        vec3 refrLobeWeight = nonSpecColor * transmissionSelector / max(P_refr, 1e-5);
-        vec3 diffLobeWeight = nonSpecColor * diffuseSelector / max(P_diff, 1e-5);
-
-        int current_type = -1;
-        vec3 next_rd = rd_i;
+        // --- First bounce direction: compile-time dispatched ---
         vec3 bsdf_weight = vec3(0.0);
+        vec3 next_rd = rd_i;
+        int current_type = -1;
+        PSRResult psr;
+        psr.virtualDist = 0.0;
+        psr.pathRoughness = 0.0;
+        psr.refrDir = rd;
 
-        if (depth == 0) {
-            // --- First bounce: compile-time forced lobe (#if defined) ---
-            // Weight = P_lobe * <lobeWeight>: removes single-pass mixture /P_lobe compensation,
-            // making each buffer an unbiased per-lobe estimate (E = L_lobe) every frame.
-            // P_lobe=0 → weight=0 → path ends cleanly.
-            #if defined(FIRST_LOBE_REFLECTION)
-            current_type = REFLECTION;
-
-            // ---- ALICE 引导概率 (clamp!) ----
-            float reflGuideProb = 0.0;
-            float reflKappa = 0.0;
-            vec3 reflAxis = macroNormal;
-
-            {
-                vec2 prev_coord = reproject(ro_o).xy;
-                bool validPrev = all(greaterThanEqual(prev_coord, vec2(0.0))) &&
-                        all(lessThanEqual(prev_coord, vec2(1.0)));
-                if (validPrev) {
-                    vec4 guideY = samplePathGuide(prev_coord * vec2(resolution_global));
-                    vec3 x = guideY.xyz;
-                    float omega = guideY.w;
-                    float length_x = max(length(x), 1e-20);
-                    omega = max(omega, length_x);
-                    reflAxis = x / length_x;
-                    float rho = clamp(length_x / omega, 0.0, 1.0);
-                    reflKappa = alice_kappa(length_x, omega);
-                    reflGuideProb = length_x > 1e-8
-                        ? PATH_GUIDING_SPECULAR_STRENGTH * surface.R.x * rho : 0.0;
-                }
-            }
-
-            // ---- 采样：NDF 或 ALICE ----
-            vec3 reflGGX_wi = reflect(rd_i, microNormal); // microNormal 由 GGXNormal() 生成
-            bool useReflGuide = surface.R.x > 0.01 && reflGuideProb > 0.0 && getRandom() < reflGuideProb;
-
-            if (useReflGuide) {
-                next_rd = sample_alice_guiding(reflAxis, reflKappa, vec2(getRandom(), getRandom()));
-            } else {
-                next_rd = reflGGX_wi;
-            }
-
-            // ---- 统一 evaluate BRDF 并除以 mixture PDF ----
-            vec3 wo = -rd_i;
-            vec3 wi = next_rd;
-
-            float NoV = dot(normal, wo);
-            float NoL = dot(normal, wi);
-
-            if (NoV > 1e-6 && NoL > 1e-6) {
-                vec3 Hsum = wo + wi;
-                float Hlen2 = dot(Hsum, Hsum);
-
-                if (Hlen2 > 1e-12) {
-                    vec3 H = Hsum * inversesqrt(Hlen2);
-
-                    float NoH = dot(normal, H);
-                    float VoH = dot(wo, H);
-
-                    if (NoH > 1e-6 && VoH > 1e-6) {
-                        float rough = max(surface.R.x, 1e-4);
-
-                        float D_NoH = GGXpdf(NoH, 0.0, rough);
-                        float D = D_NoH / NoH;
-                        float G2 = GGX_G2_standard(NoV, NoL, rough);
-                        vec3 Fh = reflectanceColor(surface.Cs, VoH).rgb;
-
-                        // 标准 microfacet BRDF
-                        vec3 fSpec = Fh * surface.S.x * D * G2 / max(4.0 * NoV * NoL, 1e-8);
-
-                        float pdfNDF = GGX_ndf_pdf(wo, wi, normal, rough);
-                        float pdfAlice = alice_guiding_pdf(wi, reflAxis, reflKappa);
-                        float pdfMix = (1.0 - reflGuideProb) * pdfNDF + reflGuideProb * pdfAlice;
-
-                        bsdf_weight = (pdfMix > 1e-8) ? (fSpec * NoL / pdfMix) : vec3(0.0);
-                    }
-                }
-            }
-
-            #elif defined(FIRST_LOBE_REFRACTION)
-            // [Refraction: transmission only, no Fresnel sub-event]
-            // TIR (total internal reflection) → bsdf_weight=0 — that energy is covered by the
-            // reflection pass's F term.  Transmission direction driven by GGX microNormal.
-            //
-            // PSR (Primary Surface Replacement):
-            //   Trace through the refractive chain to find the first non-refractive surface.
-            //   Accumulate IOR-adjusted virtual distance: t_virtual = Σ(t_i / n_i).
-            //   Virtual image position: P_virtual = C + V × (t1 + Σ[t_i / n_i]).
-            //   If the first surface is too rough, disable PSR and fall back to first-surface
-            //   temporal accumulation (virtualProjDist = 0).
-            current_type = REFRACTION;
-            // ---- 用于实际路径追踪的 BSDF 方向 (POM 细节) ----
-            vec3 refract_dir = refract(rd_i, microNormal, rs);
-            // ---- 用于 PSR 链追踪的稳定折射方向 (几何宏法线, 不受 POM/jitter 影响) ----
-            vec3 psr_refract_dir = refract(rd_i, macroNormal, rs);
-            if (dot(refract_dir, refract_dir) > 0.0) {
-                next_rd = refract_dir;
-                // oct_dir 也存几何折射方向 → 时域边缘停止更稳定
-                first_refr_dir = dot(psr_refract_dir, psr_refract_dir) > 0.0 ? psr_refract_dir : refract_dir;
-                bool was_inverse_0 = inverse_0;
-                inverse_0 = !inverse_0;
-
-                // ---- PSR roughness gate ----
-                float r_accum2 = surface.R.x * surface.R.x;
-                bool psrEnabled = surface.R.x < PSR_ROUGHNESS_THRESHOLD;
-
-                if (psrEnabled) {
-                    vec3 ro_chain = ro_o;
-                    vec3 rd_chain = dot(psr_refract_dir, psr_refract_dir) > 0.0 ? psr_refract_dir : refract_dir;
-                    bool inside_chain = !was_inverse_0; // medium state after first refract
-                    vec3 departN = macroNormal; // normal of surface we're departing from
-                    // n_camera: original camera medium IOR (constant; derivation → t_virtual = t × n_camera / n_segment)
-                    float n_camera = was_inverse_0 ? REFRACTIVE_INDEX : 1.0;
-
-                    for (int refr_depth = 0; refr_depth < MAX_REFRACTIVE_BOUNCES; refr_depth++) {
-                        vec3 ro_next, rd_next;
-                        float t_next = raycast(ro_chain + departN * (inside_chain ? -0.00025 : 0.00025),
-                                rd_chain, ro_next, rd_next, !inside_chain, false);
-
-                        if (t_next < -0.5) {
-                            // Sky — virtual image at infinity
-                            first_t2_ior_adjusted = VPROJDIST_SKY;
-                            break;
-                        }
-
-                        // Evaluate hit material
-                        Material hitMat = evaluateMaterial(tmp_Payload, rd_chain, uint(depth + 1 + refr_depth));
-                        int hitBlockID;
-                        payload_unpackShadow(tmp_Payload.data, hitBlockID);
-                        material hitSurf = materialFromEvaluated(hitMat, hitBlockID);
-
-                        // IOR-adjusted virtual distance for this segment.
-                        // Derivation: from Snell's law, t_virtual = t_segment × n_camera / n_segment
-                        // where n_segment is the medium the ray traveled through for this segment.
-                        float n_segment = inside_chain ? REFRACTIVE_INDEX : 1.0;
-                        first_t2_ior_adjusted += t_next * n_camera / n_segment;
-
-                        // Accumulate roughness (variance-additive)
-                        r_accum2 += hitSurf.R.x * hitSurf.R.x;
-
-                        // PSR anchor: only continue through water / glass surfaces.
-                        if (!isTransmissiveBlock(hitBlockID)) {
-                            // Non-transmissive surface (diffuse/reflective) — PSR anchor found
-                            break;
-                        }
-
-                        // Transmissive surface — continue through with GEOMETRIC normal
-                        // (PSR chain uses geometric normals exclusively — no GGX, no POM —
-                        //  so virtualProjDist is deterministic frame to frame)
-                        vec3 hitGeomN = payload_unpackGeomNormal(tmp_Payload.data);
-                        hitGeomN = faceforward(hitGeomN, hitGeomN, rd_chain);
-
-                        // IOR ratio for Snell's refraction: n_from / n_to
-                        float n_from_refr = inside_chain ? REFRACTIVE_INDEX : 1.0; // medium ray is coming FROM
-                        float n_to_refr = inside_chain ? 1.0 : REFRACTIVE_INDEX; // medium ray is going TO
-                        float rs_chain = n_from_refr / n_to_refr;
-                        vec3 next_refract = refract(rd_chain, hitGeomN, rs_chain);
-
-                        if (dot(next_refract, next_refract) <= 0.0) {
-                            // TIR — chain terminates
-                            break;
-                        }
-
-                        rd_chain = next_refract;
-                        ro_chain = ro_next;
-                        inside_chain = !inside_chain;
-                        departN = hitGeomN; // surface normal we'll offset from next iteration
-
-                        // Early termination: path too diffuse
-                        if (sqrt(r_accum2) > PATH_ROUGHNESS_TERMINATE) break;
-                    }
-                }
-                // else: psrEnabled=false → first_t2_ior_adjusted stays 0.0 → fall back to
-                //       first-surface temporal accumulation (virtualProjDist=0).
-
-                first_pathRoughness = sqrt(r_accum2);
-                bsdf_weight = P_refr * refrLobeWeight * (1.0 - F);
-            } else {
-                // TIR — transmission impossible, zero contribution; pick valid next_rd
-                next_rd = reflect(rd_i, microNormal);
-                first_refr_dir = next_rd; // TIR → oct_dir uses reflected direction
-            }
-            #else
-            // [Diffuse + ALICE screen-space path guiding]
-            current_type = DIFFUSION;
-            float guideWeight = 1.0;
-            float guideProb = 0.0;
-            float kappa = 0.0;
-            vec3 axis = macroNormal;
-
-            vec2 prev_coord = reproject(ro_o).xy;
-            bool validPrev = all(greaterThanEqual(prev_coord, vec2(0.0))) &&
-                    all(lessThanEqual(prev_coord, vec2(1.0)));
-            if (validPrev) {
-                vec4 guideY = samplePathGuide(prev_coord * vec2(resolution_global));
-                vec3 x = guideY.xyz;
-                float omega = guideY.w;
-                float length_x = max(length(x), 1e-20);
-                omega = max(omega, length_x);
-                axis = x / length_x;
-                float rho = clamp(length_x / omega, 0.0, 1.0);
-                kappa = alice_kappa(length_x, omega);
-                // If length_x is too small, skip guiding — tiny values destabilize axis → NaN.
-                guideProb = length_x > 1e-8 ? PATH_GUIDING_STRENGTH * rho : 0.0;
-            }
-            bool useGuide = getRandom() < guideProb;
-            if (useGuide) {
-                next_rd = sample_alice_guiding(axis, kappa, vec2(getRandom(), getRandom()));
-            } else {
-                next_rd = DiffuseNormal(macroNormal, ro_o);
-            }
-            float NoL = max(0.0, dot(macroNormal, next_rd));
-            float pdfCos = NoL / PI;
-            float pdfAlice = guideProb > 0.0 ? alice_guiding_pdf(next_rd, axis, kappa) : 0.0;
-            float pdfMix = (1.0 - guideProb) * pdfCos + guideProb * pdfAlice;
-            guideWeight = (NoL > 0.0 && pdfMix > 1e-8) ? (pdfCos / pdfMix) : 0.0;
-            // ALICE probe: first-bounce throughput = MIS weight only (no BRDF).
-            // The diffuse BSDF is deferred to the composite pass so the ALICE
-            // encoding captures the material-independent incident light field.
-            // guideWeight = pdfCos / pdfMix already provides unbiased MIS weighting.
-            bsdf_weight = vec3(guideWeight);
-            #endif
-        } else {
-            // --- Secondary bounces: stochastic mixture with correct MC estimator ---
-            float rnd_lobe = getRandom();
-            if (rnd_lobe < P_spec) {
-                current_type = REFLECTION;
-                // NDF-sampled reflection direction (same as first-bounce GGX sampling)
-                next_rd = reflect(rd_i, microNormal);
-                if (dot(next_rd, normal) > 0.0) {
-                    vec3 wo = -rd_i;
-                    vec3 wi = next_rd;
-                    float NoV = abs(dot(normal, wo));
-                    float NoL = dot(normal, wi);
-
-                    if (NoV > 1e-6 && NoL > 1e-6) {
-                        vec3 Hsum = wo + wi;
-                        float Hlen2 = dot(Hsum, Hsum);
-                        if (Hlen2 > 1e-12) {
-                            vec3 H = Hsum * inversesqrt(Hlen2);
-                            float NoH = abs(dot(normal, H));
-                            float VoH = abs(dot(wo, H));
-
-                            if (NoH > 1e-6 && VoH > 1e-6) {
-                                float rough = max(surface.R.x, 1e-4);
-                                float D_NoH = GGXpdf(NoH, 0.0, rough);
-                                float D = D_NoH / NoH;
-                                float G2 = GGX_G2_standard(NoV, NoL, rough);
-                                vec3 Fh = reflectanceColor(surface.Cs, VoH).rgb;
-
-                                // Full microfacet BRDF → f × NoL / pdf_ndf
-                                // = Fh × S.x × G2 × VoH / (NoV × NoH)  (D cancels with pdf)
-                                vec3 fSpec = Fh * surface.S.x * D * G2 / max(4.0 * NoV * NoL, 1e-8);
-                                float pdfNDF = GGX_ndf_pdf(wo, wi, normal, rough);
-
-                                // Stochastic-lobe MIS: divide by P_spec (lobe selection probability)
-                                bsdf_weight = (pdfNDF > 1e-8)
-                                    ? (fSpec * NoL / (pdfNDF * P_spec)) : vec3(0.0);
-                            }
-                        }
-                    }
-                }
-            } else if (rnd_lobe < P_spec + P_refr) {
-                current_type = REFRACTION;
-                bool chooseTransmission = getRandom() < (1.0 - F);
-                if (chooseTransmission) {
-                    vec3 refract_dir = refract(rd_i, microNormal, rs);
-                    if (dot(refract_dir, refract_dir) > 0.0) {
-                        next_rd = refract_dir;
-                        inverse_0 = !inverse_0;
-                    } else {
-                        next_rd = reflect(rd_i, microNormal);
-                        current_type = REFLECTION;
-                    }
-                } else {
-                    next_rd = reflect(rd_i, microNormal);
-                    current_type = REFLECTION;
-                }
-                bsdf_weight = refrLobeWeight;
-            } else {
-                current_type = DIFFUSION;
-                next_rd = DiffuseNormal(macroNormal, ro_o);
-                bsdf_weight = diffLobeWeight;
-            }
-        }
-
-        // --- 5. NEE: direct sunlight ---
-        // At depth 0, guard with P_first>0: inactive forced lobes must not inject spurious
-        // direct sun (never chosen in single-pass, weight=0 → path ends before NEE).
-        // Reflection pass: P_spec + P_refr*F (both reflection mechanisms).
-        // Refraction pass: P_refr (transmission only; TIR→weight=0 in pass itself).
         #if defined(FIRST_LOBE_REFLECTION)
-        float P_first = P_spec + P_refr * F;
+        {
+            current_type = REFLECTION;
+            handleFirstBounce_Reflection(rd_i, ro_o, normal, macroNormal, microNormal,
+                surf, lobes, bsdf_weight, next_rd);
+        }
         #elif defined(FIRST_LOBE_REFRACTION)
-        float P_first = P_refr;
+        {
+            current_type = REFRACTION;
+            bool wasInside = inside;
+            handleFirstBounce_Refraction(rd_i, ro_o, normal, macroNormal, microNormal,
+                surf, lobes, rs, bsdf_weight, next_rd,
+                inside, psr, wasInside, 0);
+            fb.refr_dir = psr.refrDir;
+            fb.t2_ior_adjusted = psr.virtualDist;
+            fb.pathRoughness = psr.pathRoughness;
+        }
         #else
-        float P_first = P_diff;
+        {
+            current_type = DIFFUSION;
+            handleFirstBounce_Diffuse(rd_i, ro_o, normal, macroNormal,
+                surf, lobes, bsdf_weight, next_rd);
+        }
         #endif
-        if (current_type >= 0 && dot(macroNormal, lightDir) < 0.0 && !isDarkened
-                && (depth > 0 || P_first > 0.0)) {
-            vec3 sunL = sampleSunlight(
-                    ro_o,
-                    current_type == DIFFUSION ? macroNormal : normal,
-                    surface.Cs,
-                    surface.Cd,
-                    rd_i,
-                    surface.S,
-                    surface.R,
-                    lightDir,
-                    lightDir.y > 0.0,
-                    current_type,
-                    macroNormal,
-                    inverse_0
-                );
 
-            if (depth == 0) {
-                #if defined(FIRST_LOBE_DIFFUSE)
-                // sampleSunlight returns Cd * Li * dω_sun; strip Cd so the ALICE
-                // probe encodes pure incident radiance.  The full diffuse BRDF
-                // (nonSpecColor × diffuseSelector) is applied in fog.glsl.
-                L_direct_0 = sunL / max(surface.Cd, vec3(1e-3));
-                #else
-                L_direct_0 = sunL;
-                #endif
-            } else {
-                vec3 nee_contrib = throughput * sunL;
-                if (depth >= 2) {
-                    float lum_nee = dot(nee_contrib, vec3(0.2126, 0.7152, 0.0722));
-                    nee_contrib *= fireflyCap / max(lum_nee, fireflyCap);
-                }
-                L_indirect += nee_contrib;
+        // --- NEE at depth 0 ---
+        #if defined(FIRST_LOBE_REFLECTION)
+        float P_first = lobes.P_spec + lobes.P_refr * lobes.F;
+        #elif defined(FIRST_LOBE_REFRACTION)
+        float P_first = lobes.P_refr;
+        #else
+        float P_first = lobes.P_diff;
+        #endif
+        if (dot(macroNormal, lightDir) < 0.0 && !isDarkened && P_first > 0.0) {
+            vec3 sunL = vec3(0.0);
+            if (current_type == DIFFUSION) {
+                sunL = evalDirectDiffuse(ro_o, macroNormal, surf.Cd, rd_i, lightDir, inside);
+            } else if (current_type == REFLECTION) {
+                sunL = evalDirectSpecular(ro_o, normal, surf.Cs, surf.S.x, surf.R.x,
+                        rd_i, lightDir, inside);
             }
-        }
-
-        // --- 6. Record G-Buffer ---
-        if (depth == 0) {
-            first_p = ro_o;
-            first_n = normal;
-            first_macro_n = macroNormal;
-            first_t = t;
-            #if defined(FIRST_LOBE_REFLECTION)
-            first_type = REFLECTION;
-            #elif defined(FIRST_LOBE_REFRACTION)
-            first_type = REFRACTION;
+            #if defined(FIRST_LOBE_DIFFUSE)
+            L_direct_0 = sunL / max(surf.Cd, vec3(1e-3));
             #else
-            first_type = DIFFUSION;
+            L_direct_0 = sunL;
             #endif
-            // G-Buffer material multipliers: use normal (texture detail normal) for stability.
-            // microNormal (GGX-perturbed) is noisy per-frame; macroNormal (block face) loses detail.
-            // normal captures the normal-map spatial variation while staying deterministic each frame.
-            vec4 rC_stable = reflectanceColor(surface.Cs, abs(dot(rd_i, normal)));
-            vec3 nonSpecColor_stable = surface.Cd * max(vec3(0.0), vec3(1.0) - rC_stable.rgb * surface.S.x * 0.5);
-            {
-                vec3 F0 = surface.Cs * surface.S.x;
-                float NoV = clamp(abs(dot(rd_i, normal)), 0.0, 1.0);
-                float rough = surface.R.x;
-                vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
-                vec4 c1 = vec4(1.0, 0.0425, 1.040, -0.040);
-                vec4 r = rough * c0 + c1;
-                float a004 = min(r.x * r.x, exp2(-9.28 * NoV)) * r.x + r.y;
-                vec2 AB = vec2(-1.04, 1.04) * a004 + r.zw;
-                first_specularAlbedo = max(F0 * AB.x + vec3(AB.y * surface.S.x), vec3(1e-5));
-            }
-            // Deferred diffuse BRDF for composite (fog.glsl):
-            //   nonSpecColor × diffuseSelector = Cd × (1−rC.rgb×S.x) × (1−S.y)
-            // The first bounce no longer carries BRDF in throughput; the full
-            // diffuse reflectance factor is applied at composite time instead.
-            // This keeps the ALICE encoding material-independent.
-            first_diffuseAlbedo = nonSpecColor_stable * (1.0 - clamp(surface.S.y, 0.0, 1.0));
-            first_transmissionAlbedo = nonSpecColor_stable * transmissionSelector;
-            first_roughness = surface.R.x;
-            first_rd_o = next_rd;
-            first_n_i = n_i;
-            first_n_o = current_type == REFRACTION ? n_o : n_i;
-            first_micro_n = microNormal;
-            first_emission_val = segment_emission;
-            first_light_surf = surface.light;
-            first_absorption = current_absorption;
         }
 
-        // --- 7. Update throughput ---
+        // --- Record G-Buffer ---
+        recordFirstBounceGBuffer(ro_o, ro, normal, macroNormal, microNormal,
+            surf, rd_i, next_rd, t, n_i,
+            (current_type == REFRACTION) ? n_o : n_i,
+            current_type, medium.emission,
+            currentAbsorption, fb);
+
+        // --- Update throughput ---
         throughput *= bsdf_weight;
 
-        if (any(isnan(throughput))) {
-            throughput = vec3(0.0);
-            break;
-        }
-
-        if (max(throughput.r, max(throughput.g, throughput.b)) <= 0.0) {
-            break;
-        }
-
-        // --- 8. Russian Roulette ---
-        if (depth >= 2) {
-            float p_survive = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05, 0.95);
-            if (getRandom() > p_survive) break;
-            throughput /= p_survive;
-        }
-
-        ro_i = ro_o + macroNormal * (current_type == REFRACTION ? -0.001 : 0.001);
+        // --- Advance ray ---
+        ro_i = ro_o + macroNormal * ((current_type == REFRACTION) ? -0.001 : 0.001);
         rd_i = next_rd;
     }
 
-    // -----------------------------------------------------------------------------------
-    // Final G-Buffer & denoising buffer write
-    // -----------------------------------------------------------------------------------
+    // ===== SECONDARY LOOP =====
+    if (max(throughput.r, max(throughput.g, throughput.b)) > 0.0 && !any(isnan(throughput))) {
+        for (int depth = 1; depth < MaxRay; depth++) {
+            // --- Ray cast ---
+            float t2 = raycast(ro_i, rd_i, ro_o, rd_o, !inside, false);
 
-    vec3 total_illumination = L_indirect + L_direct_0;
-    if (any(isnan(total_illumination))) total_illumination = vec3(0.0);
-    total_illumination = clamp(total_illumination, 0.0, 65504.0);
+            // --- Miss -> sky ---
+            if (t2 < -0.5) {
+                vec3 sky = sampleSkyNoSun(ro_i.y, rd_i, lightDir).xyz;
+                vec3 skyContrib = throughput * sky * currentAbsorption;
+                if (depth >= 2) {
+                    float lum = dot(skyContrib, vec3(0.2126, 0.7152, 0.0722));
+                    skyContrib *= fireflyCap / max(lum, fireflyCap);
+                }
+                L_indirect += skyContrib;
+                break;
+            }
 
-    // Shared G-Buffer (denoiseBuffer): only written by diffuse pass (ray0).
-    // All three passes hit the same first surface → fields are fully deterministic.
-    vec3 pos_rel = first_p - ro;
-    #if defined(FIRST_LOBE_DIFFUSE)
-    // G-Buffer writes (Binding 0) — vec4-based abstract images
-    writeGeo0(GEO_N_GEO, xy, pos_rel, first_t);
-    writeGeo1(GEO_N_NORMALS, xy, first_macro_n, first_roughness, first_type, first_roughness); // pathRoughness default; overwritten by refraction pass
-    writeMicroNormal(GEO_N_MICRONORMAL, xy, first_n);
-    writeAlbedosPath(GEO_N_ALBEDOS, xy, first_specularAlbedo, first_diffuseAlbedo);
-    writeMisc(GEO_N_MISC, xy, first_transmissionAlbedo, first_emission_val, first_rd_i);
-    writeLightAbs(GEO_N_LIGHTABS, xy, first_light_surf, first_absorption);
-    #endif
+            // --- Material ---
+            Material surfaceMat = evaluateMaterial(tmp_Payload, rd_i, uint(depth));
+            vec3 geomN = payload_unpackGeomNormal(tmp_Payload.data);
+            vec3 macroNormal = faceforward(geomN, geomN, rd_i);
+            vec3 normal = normalize(faceforward(surfaceMat.normal, surfaceMat.normal, rd_i));
+            int blockID;
+            payload_unpackShadow(tmp_Payload.data, blockID);
+            material surf = materialFromEvaluated(surfaceMat, blockID);
+            vec3 microNormal = GGXNormal(normal, surf.R.x, ro_o);
+            float n_i2 = inside ? REFRACTIVE_INDEX : 1.0;
+            float n_o2 = inside ? 1.0 : REFRACTIVE_INDEX;
+            float rs2 = n_i2 / n_o2;
 
-    // Each pass writes only its own illumination buffer.
-    // Sky pixels (hit_sky_first / first_t < -0.5): color=0 + default geometry,
-    // matching single-pass behaviour (fog sky branch, 100/101/102 reset on distance<-0.5).
+            // --- Medium ---
+            MediumResult medium = evalMedium(t2, rd_i, ro_i.y, inside, fogColor, globalEmission);
+            currentAbsorption *= medium.absorption;
+            vec3 bounceEmission = throughput * (surf.light + medium.emission);
+            if (depth >= 2) {
+                float lum = dot(bounceEmission, vec3(0.2126, 0.7152, 0.0722));
+                bounceEmission *= fireflyCap / max(lum, fireflyCap);
+            }
+            L_indirect += bounceEmission;
 
-    #if defined(FIRST_LOBE_DIFFUSE)
-    {
-        // --- Diffuse pass: write DiffuseBuffer (Binding 2) — vec4 abstract images ---
-        AliceEncoding combinedAlice = init_alice();
-        if (!hit_sky_first && first_t > -0.5) {
-            L_indirect = clamp(L_indirect, 0.0, 32000.0);
-            L_direct_0 = clamp(L_direct_0, 0.0, 32000.0);
-            AliceEncoding indAlice = radiance_to_alice(L_indirect, first_rd_o);
-            AliceEncoding dirAlice = radiance_to_alice(L_direct_0, -lightDir);
-            indAlice.CoCg += dirAlice.CoCg;
-            indAlice.aliceY += dirAlice.aliceY;
-            combinedAlice = indAlice;
+            // --- Lobe probabilities ---
+            LobeProbs lobes = computeLobeProbs(surf, rd_i, microNormal, rs2);
+
+            // --- Secondary bounce: stochastic mixture ---
+            vec3 bsdf_weight;
+            vec3 next_rd;
+            int current_type;
+            handleSecondaryBounce(rd_i, ro_o, normal, macroNormal, microNormal,
+                surf, lobes, bsdf_weight, next_rd,
+                current_type, inside);
+
+            // --- NEE ---
+            if (dot(macroNormal, lightDir) < 0.0 && !isDarkened) {
+                vec3 sunL = vec3(0.0);
+                if (current_type == DIFFUSION) {
+                    sunL = evalDirectDiffuse(ro_o, macroNormal, surf.Cd, rd_i, lightDir, inside);
+                } else if (current_type == REFLECTION) {
+                    sunL = evalDirectSpecular(ro_o, normal, surf.Cs, surf.S.x, surf.R.x,
+                            rd_i, lightDir, inside);
+                }
+                vec3 neeContrib = throughput * sunL;
+                if (depth >= 2) {
+                    float lum = dot(neeContrib, vec3(0.2126, 0.7152, 0.0722));
+                    neeContrib *= fireflyCap / max(lum, fireflyCap);
+                }
+                L_indirect += neeContrib;
+            }
+
+            // --- Throughput update ---
+            throughput *= bsdf_weight;
+            if (any(isnan(throughput))) {
+                throughput = vec3(0.0);
+                break;
+            }
+            if (max(throughput.r, max(throughput.g, throughput.b)) <= 0.0) break;
+
+            // --- Russian Roulette ---
+            if (depth >= 2) {
+                float p = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05, 0.95);
+                if (getRandom() > p) break;
+                throughput /= p;
+            }
+
+            // --- Advance ---
+            ro_i = ro_o + macroNormal * ((current_type == REFRACTION) ? -0.001 : 0.001);
+            rd_i = next_rd;
         }
-        float mask = (!hit_sky_first && first_t > -0.5) ? 1.0 : 0.0;
-        writeDiffuseLightRT(xy, combinedAlice, mask);
-        writeDiffuseGeo(xy, pos_rel, mask);
     }
+
+    // ===== OUTPUT =====
+    vec3 totalIllumination = clamp(L_indirect + L_direct_0, 0.0, 65504.0);
+
+    #if defined(FIRST_LOBE_DIFFUSE)
+    writeDiffuseOutput(xy, fb, L_indirect, L_direct_0, lightDir, ro);
     #elif defined(FIRST_LOBE_REFLECTION)
-    {
-        // --- Reflection pass: write ReflectBuffer (Binding 3) — vec4 abstract images ---
-        vec3 refl_R = first_rd_i;
-        float refl_vprojdist = 0.0;
-        vec3 refl_color = vec3(0.0);
-        if (!hit_sky_first && first_t > -0.5) {
-            vec3 r_rd, r_ro;
-            vec3 r_rd_i = GetSpecularDominantDirection(first_n, first_rd_i, first_roughness);
-            float t_refl = raycast(first_p + first_macro_n * 0.00025, r_rd_i, r_ro, r_rd, false, false);
-            refl_R = r_rd_i;
-            refl_vprojdist = (t_refl > -0.5) ? t_refl : VPROJDIST_SKY;
-            refl_color = clamp(total_illumination / max(first_specularAlbedo, vec3(1e-6)), 0.0, 200.0 * div_avgExposure);
-        }
-        writeReflGeo(xy, pos_rel, refl_R);
-        writeReflLight(xy, refl_color, refl_vprojdist, 0.0);
-    }
+    writeReflectionOutput(xy, fb, totalIllumination, ro);
     #else
-    {
-        // --- Refraction pass: write RefractBuffer (Binding 4) — vec4 abstract images ---
-        vec3 refr_R = first_refr_dir;
-        float refr_vprojdist = 0.0;
-        vec3 refr_color = vec3(0.0);
-        if (!hit_sky_first && first_t > -0.5) {
-            refr_vprojdist = first_t2_ior_adjusted;
-            refr_color = clamp(total_illumination / max(first_transmissionAlbedo, vec3(1e-6)), 0.0, 200.0 * div_avgExposure);
-        }
-        writeRefrGeo(xy, pos_rel, refr_R);
-        writeRefrLight(xy, refr_color, refr_vprojdist, 0.0);
-        // Overwrite pathRoughness in G-Buffer N=1.w (set by diffuse pass default) with accumulated PSR roughness
-        writePathRoughness(GEO_N_NORMALS, xy, first_pathRoughness);
-    }
+    writeRefractionOutput(xy, fb, totalIllumination, ro);
     #endif
-
 }
