@@ -1,6 +1,5 @@
 #version 430
 // 上采样合成: bloomAtlas L0..L8 -> colortex1 
-// 特性: 亚像素中心精准对齐 (size-1.0) + 越界严格零截断 + B-Spline无分支滤波
 #include "/lib/post_processing/bloom.glsl"
 
 in vec2 texCoord;
@@ -25,10 +24,9 @@ vec4 getBSplineWeights(float x) {
 }
 
 // ===========================================================================
-// 高质量 16-Tap B-Spline (严格使用 size - 1.0 亚像素对齐 + 边界截断)
+// 高质量 16-Tap B-Spline
 // ===========================================================================
 vec3 sampleBloom4x4_Exact(sampler2D tex, vec2 screenUV, ivec2 origin, ivec2 levelSize) {
-    // 严格匹配你的 align_corners 坐标映射 (使用 max 防止负数或NaN)
     vec2 scf = screenUV * max(vec2(levelSize) - 1.0, vec2(0.0));
     ivec2 tBase = ivec2(floor(scf));
     vec2 frac = scf - vec2(tBase);
@@ -59,7 +57,7 @@ vec3 sampleBloom4x4_Exact(sampler2D tex, vec2 screenUV, ivec2 origin, ivec2 leve
 }
 
 // ===========================================================================
-// 降级 4-Tap Bilinear (同等严苛的亚像素对齐)
+// 降级 4-Tap Bilinear
 // ===========================================================================
 vec3 sampleBloom2x2_Exact(sampler2D tex, vec2 screenUV, ivec2 origin, ivec2 levelSize) {
     vec2 scf = screenUV * max(vec2(levelSize) - 1.0, vec2(0.0));
@@ -96,7 +94,6 @@ void main() {
     ivec2 pix = ivec2(gl_FragCoord.xy);
     ivec2 atlasSize = textureSize(bloomAtlas_Sampler, 0);
     
-    // 【关键修复】：screenUV 同样使用 resolution - 1.0 对齐屏幕像素中心范式
     vec2 screenUV = vec2(pix) / max(resolution - 1.0, vec2(1e-6));
 
     vec3 bloom = vec3(0.0);

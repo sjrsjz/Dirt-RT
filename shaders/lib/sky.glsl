@@ -3,6 +3,7 @@
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/common.glsl"
+#include "/lib/end_sky.glsl"
 
 float S_R = 0.0;
 float cosD_S = 0.0;
@@ -62,6 +63,7 @@ float distance_to_surface(float R, float y, float A) {
 
 // 分析式大气天空 (含日盘) — NEE 光源采样用
 vec3 sampleSky(float pos_y, in vec3 n, in vec3 lightDir) {
+    if (world_type_global == WORLD_THE_END) return sampleEndSky(n); // no sun disc in End, NEE disabled via isDarkened
     lightDir = -normalize(lightDir);
     vec3 moonDir = -lightDir;
     vec3 n0 = n;
@@ -111,6 +113,7 @@ vec3 sampleSky(float pos_y, in vec3 n, in vec3 lightDir) {
 
 // 无日盘天空 — PT pass 非 NEE 光线天空命中用
 vec3 sampleSkyNoSun(float pos_y, in vec3 n, in vec3 lightDir) {
+    if (world_type_global == WORLD_THE_END) return sampleEndSky(n);
     lightDir = -normalize(lightDir);
     vec3 moonDir = -lightDir;
 

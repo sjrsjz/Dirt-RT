@@ -72,7 +72,7 @@ void main() {
     vec3 direction = normalize((cam.viewInverse * vec4(target.xyz, 0.0)).xyz);
 
     setFrame(cam.frameId);
-    isDarkened = world_type_global != WORLD_OVERWORLD && world_type_global != WORLD_THE_END && world_type_global != WORLD_THE_NETHER;
+    isDarkened = world_type_global != WORLD_OVERWORLD && world_type_global != WORLD_THE_NETHER;
 
     wseed = floatBitsToUint(rand(direction * cam.frameId));
 
