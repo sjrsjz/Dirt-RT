@@ -36,8 +36,8 @@
 
 // -- SVGF spatial filter (atrous_denoise_diffuse.glsl) --
 #define SVGF_NORMAL_POWER 32.0 // Normal edge-stopping sensitivity in à-trous wavelet filter. Higher = sharper normal edges preserved. [1 2 4 8 16 32 64 128]
-#define SVGF_PHI_L_SMALL 0.0005 // Luma sensitivity for à-trous passes (CS, 3×3 dilated grid, R0=1,2,4). Higher = more aggressive denoising. [0.00001 0.00005 0.0001 0.0005 0.001 0.005 0.01]
-#define SVGF_PHI_L_LARGE 0.00005 // Luma sensitivity for Poisson disk passes (fragment, 8 samples, R0=8,16,32). Lower = more conservative at coarse scales. [0.000001 0.000005 0.00001 0.00005 0.0001 0.0005 0.001]
+#define SVGF_PHI_L_SMALL 0.00075 // Luma sensitivity for à-trous passes (CS, 3×3 dilated grid, R0=1,2,4). Higher = more aggressive denoising. [0.00001 0.00005 0.0001 0.0005 0.00075 0.001 0.005 0.01]
+#define SVGF_PHI_L_LARGE 0.025 // Luma sensitivity for Poisson disk passes (fragment, 8 samples, R0=8,16,32). Lower = more conservative at coarse scales. [0.0025 0.005 0.0075 0.01 0.015 0.02 0.025 0.03 0.04 0.05]
 #define SVGF_POSITION_PARAM 0.0025 // Depth edge-stopping sensitivity. Higher = sharper depth boundaries preserved. [0.00075 0.00125 0.0025 0.005 0.01 0.02 0.04 0.08]
 
 // -- Bloom --

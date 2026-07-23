@@ -22,8 +22,6 @@ uniform vec2 resolution;
 layout(rgba32f) uniform writeonly image2D colorimg3;
 layout(rgba32f) uniform writeonly image2D colorimg4;
 
-// --- Kernel constants ---
-const float hw[3] = float[](1.0, 0., 0.);
 
 #ifndef VAR_FILTER_NORMAL_POWER
 #define VAR_FILTER_NORMAL_POWER SVGF_NORMAL_POWER
@@ -40,9 +38,9 @@ const uint HALO = 2u;
 
 struct TileSample {
     bool valid;
-    float px, py, pz;
-    float rawVar;
+    vec3 p;
     float weight;
+    vec4 aliceY;
 };
 shared TileSample sm_tile[SM_H][SM_W];
 
@@ -54,22 +52,21 @@ AliceEncoding sanitizeAlice(AliceEncoding encoded) {
     return encoded;
 }
 
+vec4 sanitizeAliceY(vec4 aliceY) {
+    if (any(isnan(aliceY)) || any(isinf(aliceY))) aliceY = vec4(0.0);
+    return aliceY;
+}
+
 float sanitizeVariance(float v) {
     if (isnan(v) || isinf(v)) return 0.0;
     return max(v, 0.0);
 }
 
 // Unpack swap AliceEncoding + weight from unified SSBO, return raw ALICE variance.
-float computeRawVariance(uvec2 xy, out float weight) {
+void loadAliceY(uvec2 xy, out vec4 aliceY, out float weight) {
     AliceEncoding alice;
     readDiffuseSwap(xy, alice, weight);
-
-    vec4 aliceY = alice.aliceY;
-
-    if (any(isnan(aliceY)) || any(isinf(aliceY))) aliceY = vec4(0.0);
-    if (isnan(weight) || isinf(weight)) weight = 0.0;
-
-    return sanitizeVariance(alice_estimator_variance(aliceY, max(weight, 1e-3)));
+    aliceY = sanitizeAliceY(alice.aliceY);
 }
 
 // Depth-only geometry weight — ALICE Bures distance replaces normal-based edge-stopping
@@ -104,13 +101,9 @@ void main() {
         ivec2 clamped = clamp(gc, ivec2(0), texSize);
         uvec2 loadXY = uvec2(clamped);
 
-        vec3 dgeoPos;
         float mask;
-        readDiffuseGeo(loadXY, dgeoPos, mask);
+        readDiffuseGeo(loadXY, sm_tile[row][col].p, mask);
         sm_tile[row][col].valid = mask > 0.5 && gc == clamped; // 仅当像素有效且未被裁剪时才标记为有效
-        sm_tile[row][col].px = dgeoPos.x;
-        sm_tile[row][col].py = dgeoPos.y;
-        sm_tile[row][col].pz = dgeoPos.z;
     }
     barrier();
     memoryBarrierShared();
@@ -123,10 +116,7 @@ void main() {
             ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(col, row);
             ivec2 clamped = clamp(gc, ivec2(0), texSize);
             uvec2 loadXY = uvec2(clamped);
-
-            float weight;
-            sm_tile[row][col].rawVar = computeRawVariance(loadXY, weight);
-            sm_tile[row][col].weight = weight;
+            loadAliceY(loadXY, sm_tile[row][col].aliceY, sm_tile[row][col].weight);
         }
     }
     barrier();
@@ -165,12 +155,12 @@ void main() {
     AliceEncoding outAlice;
     readDiffuseSwap(xy, outAlice, cWeight);
     outAlice = sanitizeAlice(outAlice);
-    vec3 centerPos = vec3(centerTile.px, centerTile.py, centerTile.pz);
 
     // =========================================================================
     // Phase 4: 5x5 geometry-aware bilateral variance filter
     // =========================================================================
-    float sumVar = 0.0;
+    vec4 sumAliceY = vec4(0.0);
+    float sumHistW = 0.0;
     float sumW = 0.0;
 
     for (int ky = -2; ky <= 2; ky++) {
@@ -179,29 +169,25 @@ void main() {
             int sy = int(cy) + ky;
             TileSample s = sm_tile[sy][sx];
             if (!s.valid) continue;
+            float wKernel = exp(-0.75 * float(kx * kx + ky * ky)); // 高斯核权重
+            float wGeom = varianceGeometryWeight(centerTile.p, centerNormal, s.p);
 
-            vec3 sPos = vec3(s.px, s.py, s.pz);
-
-            float wKernel = hw[abs(kx)] * hw[abs(ky)];
-            float wGeom = varianceGeometryWeight(centerPos, centerNormal, sPos);
-            // 当且仅当中心像素的权重低于邻域像素时，才允许邻域像素的方差贡献到中心像素
-            float weightGate = exp(-max(cWeight - s.weight, 0.0) * 64.0);
-            float w = wKernel * wGeom * weightGate;
-
-            sumVar += w * s.rawVar;
+            float w = wKernel * wGeom;
+            sumAliceY += w * s.aliceY;
+            sumHistW += w * s.weight;
             sumW += w;
         }
     }
 
-    float filteredVariance = sumVar / max(sumW, 1e-3);
-
-    filteredVariance = sanitizeVariance(filteredVariance);
+    vec4 filteredAliceY = sumAliceY / max(sumW, 1e-20);
+    float filteredHistW = sumHistW / max(sumW, 1e-20);
+    float filteredVariance = alice_estimator_variance(filteredAliceY, filteredHistW);
 
     // =========================================================================
     // Phase 5: Write outputs
     // =========================================================================
     // colortex3: pos.xyz + oct(centerNormal) — normal for plane-projected depth in atrous
-    imageStore(colorimg3, ivec2(gid), vec4(centerPos, encodeNormal(centerNormal)));
+    imageStore(colorimg3, ivec2(gid), vec4(centerTile.p, encodeNormal(centerNormal)));
     // colortex4: packed AliceEncoding + filtered variance (matches old swap2 light_sample layout)
     imageStore(colorimg4, ivec2(gid), vec4(packAlice(outAlice), filteredVariance));
 }

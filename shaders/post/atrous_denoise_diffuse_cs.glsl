@@ -103,7 +103,7 @@ void main() {
     float c_omega = c_enc.w;
     float c_kappa = alice_kappa(c_len_v, c_omega);
 
-    float c_inv_var = 1.0 / max(center_var_est, 1e-12);
+    float c_inv_var = 1.0 / max(center_var_est, 1e-10);
 
     float dist_to_cam = max(length(center_pos), 0.001);
     float inv_pixel_footprint = 1.0 / (SVGF_POSITION_PARAM
@@ -157,12 +157,14 @@ void main() {
 
         accumulate_alice(accumAlice, sample_alice, w0);
         sumWeight += w0;
-        sumVarEnergy += w0 * w0 * sample_var_est;
+
+        // 100% 统计关联（小核局部光场）假设下的方差传播
+        sumVarEnergy += w0 * sample_var_est;
     }
 
     float inv_sumWeight = 1.0 / sumWeight;
     accumAlice = scale_alice(accumAlice, inv_sumWeight);
 
-    float varEnergyOut = sumVarEnergy * inv_sumWeight * inv_sumWeight;
+    float varEnergyOut = sumVarEnergy * inv_sumWeight;
     imageStore(colorimg4, pix, vec4(packAlice(accumAlice), varEnergyOut));
 }

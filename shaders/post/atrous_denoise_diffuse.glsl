@@ -74,7 +74,7 @@ void main() {
     // 天空像素跳过 (方差被 swap2 复用作天空 mask)
     if (center_var_est < 0.0) return;
 
-    center_var_est = max(center_var_est, 1e-9);
+    center_var_est = max(center_var_est, 1e-12);
 
     // ---- 从 colortex3.w 解码中心法线（方差滤波写入，零额外读取）-------
     vec3 center_normal = decodeNormal(center_oct_n);
@@ -86,7 +86,7 @@ void main() {
     float c_omega = c_enc.w;
     float c_kappa = alice_kappa(c_len_v, c_omega);
 
-    float c_inv_var = 1.0 / max(center_var_est, 1e-12);
+    float c_inv_var = 1.0 / max(center_var_est, 1e-6);
 
     float dist_to_cam = max(length(center_pos), 0.001);
     float inv_pixel_footprint = 1.0 / (SVGF_POSITION_PARAM
@@ -134,6 +134,8 @@ void main() {
         // ---- 累积 ----------------------------------------------------
         accumulate_alice(accumAlice, sample_alice, w0);
         sumWeight += w0;
+
+        // 100% 统计独立（大核大跨度光场）假设下的方差传播
         sumVarEnergy += w0 * w0 * sample_var_est;
     }
 
