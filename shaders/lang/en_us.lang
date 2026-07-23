@@ -3,6 +3,9 @@ option.ACCUMULATION_LENGTH = Accumulation Length
 option.RAY_BOUNCES = Ray Bounces
 option.PATH_GUIDING_STRENGTH = Path Guiding Strength
 option.PATH_GUIDING_SPECULAR_STRENGTH = Specular Guiding Strength
+option.END_SKYBOX = End Skybox
+value.END_SKYBOX.1 = Rune Rings + Nebula
+value.END_SKYBOX.0 = Atmospheric Scatter
 
 screen.MATERIAL = Material
 option.REFRACTIVE_INDEX = Water IOR

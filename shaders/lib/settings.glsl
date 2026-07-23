@@ -63,6 +63,8 @@
 
 #define SUN_PATH_ROTATION 45.0 // Sun path rotation angle (degrees around X axis). Adjusts the sun's apparent path in the sky. [0 15 30 45 60 75 90]
 
+#define END_SKYBOX 1 // End skybox rendering. 1 = custom rune-ring skybox with FBM nebula background (higher GPU cost). 0 = fall back to atmospheric scattering + NEE (faster). [0 1]
+
 /*
 const int depthtex0Format = RGBA32F;
 const int colortex0Format = RGBA32F;

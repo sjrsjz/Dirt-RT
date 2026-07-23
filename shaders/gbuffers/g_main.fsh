@@ -4,28 +4,38 @@
 uniform sampler2D gtexture;
 in vec2 texCoord;
 in vec3 normal;
+in vec3 viewPos; // view-space position (camera at origin), length = linear distance
 
-/* RENDERTARGETS: 7 */ // 仅输出到 colortex7，杜绝 9 号缓冲的读写冲突
+/* RENDERTARGETS: 7,8 */ // colortex7=entity colour, colortex8=entity linear depth (positive = entity)
 layout(location = 0) out vec4 fragColor;
+layout(location = 1) out vec4 depthOut;
 
 void main() {
-    // 1. 提前进行 Discard 判定，防止垃圾数据写入
+    // 1. Discard terrain/block fragments — geometry handled by ray tracing.
+    #if defined(GBUFFERS_TERRAIN) || defined(GBUFFERS_BLOCK)
+    discard;
+    #endif
+
+    // 2. Alpha discard for transparent pixels
     vec4 texVal = texture(gtexture, texCoord);
     if (texVal.a < 0.01) {
         discard;
     }
 
-    // 2. 正常计算光照
+    // 3. Simple directional lighting
     float intensity = dot(lightDir_global, normal);
     vec3 sun = vec3(10.0);
     vec3 final = clamp(sun * intensity, 0.2, 1.0) * 2.0;
-    
+
     fragColor = pow(texVal, vec4(2.2, 2.2, 2.2, 1.0)) * vec4(final, 1.0);
-    
+
     #ifdef LIGHT
     fragColor.xyz *= 200.0;
-    fragColor.a = 0.5; // 写入半透明度用于后期混合
+    fragColor.a = 0.5; // semi-transparent overlay
     #else
-    fragColor.a = 1.0; // 实心实体写入 1.0 遮罩
+    fragColor.a = 1.0; // opaque
     #endif
+
+    // 4. Write positive linear distance to colortex8 (>0 = entity present)
+    depthOut = vec4(length(viewPos), 0.0, 0.0, 1.0);
 }

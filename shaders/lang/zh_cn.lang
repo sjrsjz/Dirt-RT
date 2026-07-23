@@ -3,6 +3,9 @@ option.ACCUMULATION_LENGTH = 累积帧数
 option.RAY_BOUNCES = 光线弹射次数
 option.PATH_GUIDING_STRENGTH = 路径引导强度
 option.PATH_GUIDING_SPECULAR_STRENGTH = 镜面引导强度
+option.END_SKYBOX = 末地天空盒
+value.END_SKYBOX.1 = 符文环 + 星云
+value.END_SKYBOX.0 = 大气散射
 
 screen.MATERIAL = 材质
 option.REFRACTIVE_INDEX = 水折射率

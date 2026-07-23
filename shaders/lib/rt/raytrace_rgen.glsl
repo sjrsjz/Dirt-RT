@@ -72,7 +72,11 @@ void main() {
     vec3 direction = normalize((cam.viewInverse * vec4(target.xyz, 0.0)).xyz);
 
     setFrame(cam.frameId);
+    #if END_SKYBOX == 1
     isDarkened = world_type_global != WORLD_OVERWORLD && world_type_global != WORLD_THE_NETHER;
+    #else
+    isDarkened = world_type_global != WORLD_OVERWORLD && world_type_global != WORLD_THE_END && world_type_global != WORLD_THE_NETHER;
+    #endif
 
     wseed = floatBitsToUint(rand(direction * cam.frameId));
 
@@ -127,10 +131,7 @@ float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse
     payload_packShadow(payload.data, vec3(1.0), 0);
     float tMin = 0;
     float tMax = 2048.0;
-    // Main trace: cull back faces (stop at first front face).
-    // NEE / underwater: disable culling (need both entry & exit faces for volume extinction).
-    uint rayFlags = (!isNEE && !inverse_0) ? gl_RayFlagsCullBackFacingTrianglesEXT : gl_RayFlagsNoneEXT;
-    traceRayEXT(acc, rayFlags, 0xFF, 0, 0, 0, ro, tMin, rd, tMax, 6);
+    traceRayEXT(acc, gl_RayFlagsNoneEXT, 0xFF, 0, 0, 0, ro, tMin, rd, tMax, 6);
     Payload hitPayload = payload;
     float t;
     ro_o = payload_unpackHitPos(hitPayload.data, t);
@@ -172,9 +173,9 @@ Material evaluateMaterial(Payload pld, vec3 rd_i, uint bounce) {
     payload_unpackQuadExtras(pld.data, tint, skylight);
     int blockID;
     // vec3 _shadow = payload_unpackShadow(pld.data, blockID);
-    bool _inside, _handedness, _isNEE;
-    payload_unpackFlags(pld.data, _inside, _handedness, _isNEE);
-    float bitangentSign = _handedness ? 1.0 : -1.0;
+    bool _inside, handedness, _isNEE;
+    payload_unpackFlags(pld.data, _inside, handedness, _isNEE);
+    float bitangentSign = handedness ? 1.0 : -1.0;
 
     // --- TBN ---
     vec3 bitangent = cross(tangent, geomN) * bitangentSign;

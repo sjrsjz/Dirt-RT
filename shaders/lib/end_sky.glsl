@@ -142,6 +142,7 @@ float endRuneRing(
 
     // Local grid coordinate for glyph SDF
     vec2 cp = vec2(q.y, angleInCell) / halfCell;
+    cp.y = -cp.y; // Flip Y for SDF glyphs
 
     // Strict grid boundary mask — clean seams between glyphs
     float cellMask = step(max(abs(cp.x), abs(cp.y)), 0.98);
@@ -152,7 +153,7 @@ float endRuneRing(
     float aaGlyph = max(0.015 / halfCell, 1e-4);
 
     // Per-glyph animation: local random timeline prevents sync
-    float localTime = t * 2.0 + endHash11(float(cellId) * 13.37 + seed) * 100.0;
+    float localTime = t * 0.5 + endHash11(float(cellId) * 13.37 + seed) * 100.0;
     float tick = floor(localTime);
 
     // Random glyph selection (0-25 → A-Z)
@@ -164,8 +165,8 @@ float endRuneRing(
     float occupied = step(0.30, randBlank);
 
     // Render glyph
-    float skeletonDist = sdf_sga(glyph, cp * 1.18);
-    float glyphSdf = skeletonDist - 0.18;
+    float skeletonDist = sdf_sga(glyph, cp * 1.25);
+    float glyphSdf = skeletonDist - 0.1;
     float glyphCoverage = endSdfCoverage(glyphSdf, aaGlyph);
 
     return glyphCoverage * occupied * insideStrip * cellMask;
@@ -191,16 +192,12 @@ vec3 sampleEndFbmBackground(vec3 rd) {
     vec3 purpleOffset1 = vec3(t * 0.015, t * 0.035, t * -0.012);
     vec3 purpleOffset2 = vec3(-t * 0.01, t * 0.025, t * 0.018);
 
-    float purpleBase = endFbm(rd * purpleScale + purpleOffset1);
-    float purpleDetail = endFbm(rd * (purpleScale * 2.15) + purpleOffset2);
-    float purpleDensity = purpleBase * 0.72 + purpleDetail * 0.28;
+    float purpleBase = endFbm(normalize(vec3(rd.x, 0.0, rd.z)) * purpleScale + purpleOffset1);
+    float purpleDensity = purpleBase;
 
-    float purpleMask = smoothstep(0.5, 0.75, purpleDensity);
+    purpleDensity = smoothstep(0.5, 0.75, purpleDensity);
 
-    float equatorMask = exp(-30.0 * abs(rd.y));
-    purpleMask *= equatorMask;
-
-    purpleMask *= (1.0 - greenMask * 0.5);
+    float equatorMask = exp(-30.0 * abs(atan(clamp(rd.y, -0.999, 0.999)))) * purpleDensity;
 
     vec3 blackColor = vec3(0.0003, 0.0001, 0.0005);
     vec3 greenColor = vec3(0.0015, 0.022, 0.008);
@@ -208,7 +205,7 @@ vec3 sampleEndFbmBackground(vec3 rd) {
 
     vec3 col = blackColor;
     col += greenColor * greenMask;
-    col += purpleColor * purpleMask;
+    col += purpleColor * equatorMask;
 
     return col;
 }
@@ -222,21 +219,21 @@ vec3 sampleEndSky(vec3 rd) {
             rd,
             normalize(vec3(0.10, 0.96, 0.27)),
             normalize(vec3(0.20, 1.00, 0.10)),
-            80, 0.070, 0.025, 0.0, 11.0
+            80, 0.070, 0.051, 0.0, 11.0
         );
 
     float ring1 = endRuneRing(
             rd,
             normalize(vec3(-0.70, 0.26, 0.66)),
             normalize(vec3(0.00, 1.00, 0.22)),
-            48, -0.052, -0.018, 1.7, 37.0
+            48, -0.052, -0.084, 1.7, 37.0
         );
 
     float ring2 = endRuneRing(
             rd,
             normalize(vec3(0.69, 0.15, 0.71)),
             normalize(vec3(-0.18, 1.00, 0.05)),
-            56, 0.036, 0.014, 3.1, 83.0
+            56, 0.036, 0.043, 3.1, 83.0
         );
 
     // Tint each ring with its own color
