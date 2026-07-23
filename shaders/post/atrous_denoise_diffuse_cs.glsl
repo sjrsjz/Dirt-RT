@@ -19,14 +19,6 @@ uniform sampler2D colortex4;
 layout(rgba32f) uniform image2D colorimg4;
 
 // ---------------------------------------------------------------------------
-// 可调参数
-// ---------------------------------------------------------------------------
-
-#ifndef PHI_ENERGY
-#define PHI_ENERGY 1.0
-#endif
-
-// ---------------------------------------------------------------------------
 // 共享内存
 // ---------------------------------------------------------------------------
 #define TILE_SIZE (16 + 2 * R0)
@@ -111,9 +103,7 @@ void main() {
     float c_omega = c_enc.w;
     float c_kappa = alice_kappa(c_len_v, c_omega);
 
-    float c_var_omega_est = alice_radial_est_var_from_scalar(center_var_est, c_kappa);
     float c_inv_var = 1.0 / max(center_var_est, 1e-12);
-    float c_inv_var_omega = 1.0 / max(c_var_omega_est, 1e-12);
 
     float dist_to_cam = max(length(center_pos), 0.001);
     float inv_pixel_footprint = 1.0 / (SVGF_POSITION_PARAM
@@ -144,7 +134,6 @@ void main() {
 
         if (sm_light[sample_idx].w < 0.0) continue;
 
-        // ---- 解包邻域样本 (共享内存读取) ------------------------------
         vec3 sample_world_pos;
         AliceEncoding sample_alice;
         float sample_var_est;
@@ -153,28 +142,19 @@ void main() {
 
         sample_alice.aliceY.w = abs(sample_alice.aliceY.w);
 
-        // ---- 几何权重 (平面投影深度 — ALICE Bures 距离替代法线边缘) ----
         vec3 delta = (sample_world_pos - center_pos) * inv_pixel_footprint;
         float w_geometry = abs(dot(delta, center_normal));
 
-        // ---- Bures 距离 + 能量感知 (平方形式, 避免 sqrt/abs) --------
         vec4 s_enc = sample_alice.aliceY;
         float s_len_v = length(s_enc.xyz);
         float s_kappa = alice_kappa(s_len_v, s_enc.w);
 
         float d_bures_sq = alice_bures_distance_sq(c_enc, c_kappa, s_enc, s_kappa);
-        float z_bures_2 = d_bures_sq * c_inv_var;
+        float w_luma = SVGF_PHI_L_SMALL * d_bures_sq * c_inv_var;
 
-        float delta_omega = c_omega - s_enc.w;
-        float z_energy_2 = delta_omega * delta_omega * c_inv_var_omega * PHI_ENERGY;
-
-        float w_luma = SVGF_PHI_L_SMALL * (z_bures_2 + z_energy_2);
-
-        // ---- 组合权重 -------------------------------------------------
         const float w_kernel = GRID_3x3[k].z;
         float w0 = w_kernel * exp(-w_geometry) / (1 + w_luma);
 
-        // ---- 累积 ------------------------------------------------------
         accumulate_alice(accumAlice, sample_alice, w0);
         sumWeight += w0;
         sumVarEnergy += w0 * w0 * sample_var_est;

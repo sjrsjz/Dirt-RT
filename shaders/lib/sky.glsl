@@ -110,6 +110,7 @@ vec3 sampleSky(float pos_y, in vec3 n, in vec3 lightDir) {
     c_moon *= abs((exp(-t * n_distance) - exp(-t * m_distance)) / (n.y - moonDir.y)) * max(dot(moonDir, moon_normal), 0.0);
 
     // 月盘
+    disc = celestial_strength * exp(-t * n_distance) * smoothstep(cosD_S, disc_core, -dot(n0, lightDir));
     c_moon += Moon * disc;
 
     return max(c_sun + c_moon, 0.0);

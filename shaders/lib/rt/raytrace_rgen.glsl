@@ -191,8 +191,6 @@ Material evaluateMaterial(Payload pld, vec3 rd_i, uint bounce) {
     if (bounce == 0u) {
         sampleUV = computeParallaxUV(blockTexNormal, localCoord, atlas, rd_i, tbn, derivatives);
     } else {
-        vec2 rcpRes = 1.0 / res;
-        derivatives = pom_computeDerivatives(blockTexNormal, localCoord, atlas, res, rcpRes);
         sampleUV = uv;
     }
 
@@ -223,19 +221,23 @@ bool isTransmissiveBlock(int blockID) {
 
 // Convert Material (from getMaterial) to BSDF material struct
 material materialFromEvaluated(Material mat, int blockID) {
+    // Precompute block-type flags once (each was compared 3-5× before)
+    bool isWater  = blockID == BLOCK_WATER;
+    bool isGlass  = blockID == BLOCK_GLASS;
+    bool isPortal = blockID == BLOCK_PORTAL;
+
     float metallic = mat.metallic;
-    float trans = float(blockID != BLOCK_WATER && 0.9 < mat.translucent && blockID != BLOCK_GLASS);
-    trans = blockID == BLOCK_PORTAL ? 0.25 : trans;
-    float roughness = blockID == BLOCK_WATER ? 0.0 : mat.roughness;
-    roughness = blockID == BLOCK_PORTAL ? 0.0 : roughness;
-    vec3 albedo = blockID == BLOCK_WATER ? vec3(1.0) : mat.albedo;
-    vec3 emission = blockID == BLOCK_PORTAL ? albedo * (1.0 - trans) : mat.emission;
-    float specSelector = blockID == BLOCK_WATER ? 1.0 : mix(trans, 1.0, metallic);
+    float trans = float(!isWater && mat.translucent > 0.9 && !isGlass);
+    trans = isPortal ? 0.25 : trans;
+    float roughness = (isWater || isPortal) ? 0.0 : mat.roughness;
+    vec3 albedo = isWater ? vec3(1.0) : mat.albedo;
+    vec3 emission = isPortal ? albedo * (1.0 - trans) : mat.emission;
+    float specSelector = isWater ? 1.0 : mix(trans, 1.0, metallic);
 
     return newMaterial(clamp(mat.F0, 0.0, 1.0), albedo,
         vec2(specSelector, 1.0 - trans),
         vec4(roughness > 0.01 ? max(roughness, 0.0125) : 0.0, trans,
-            blockID == BLOCK_WATER, mat.subsurface_scattering),
+            isWater, mat.subsurface_scattering),
         emission);
 }
 
@@ -304,14 +306,10 @@ struct FirstBounceData {
 HalfVector computeHalfVector(vec3 wo, vec3 wi) {
     vec3 Hsum = wo + wi;
     float Hlen2 = dot(Hsum, Hsum);
+    float valid = float(Hlen2 > 1e-12);
     HalfVector hv;
-    if (Hlen2 <= 1e-12) {
-        hv.H = vec3(0.0);
-        hv.valid = false;
-        return hv;
-    }
-    hv.H = Hsum * inversesqrt(Hlen2);
-    hv.valid = true;
+    hv.H = Hsum * inversesqrt(max(Hlen2, 1e-12)) * valid;
+    hv.valid = valid > 0.5;
     return hv;
 }
 
@@ -328,25 +326,27 @@ bool evaluateSpecularBRDF(
 ) {
     float NoV = abs(dot(normal, wo));
     float NoL = dot(normal, wi);
-    if (NoV <= 1e-6 || NoL <= 1e-6) return false;
-
     HalfVector hv = computeHalfVector(wo, wi);
-    if (!hv.valid) return false;
-
     float NoH = abs(dot(normal, hv.H));
     float VoH = abs(dot(wo, hv.H));
-    if (NoH <= 1e-6 || VoH <= 1e-6) return false;
 
-    float rough = max(roughness, 1e-4);
-    float D_NoH = GGXpdf(NoH, 0.0, rough);
-    float D = D_NoH / NoH;
-    float G2 = GGX_G2_standard(NoV, NoL, rough);
-    vec3 Fh = reflectanceColor(Cs, VoH).rgb;
+    // Single consolidated validity check (replaces 3 scattered early returns)
+    bool valid = NoV > 1e-6 && NoL > 1e-6 && hv.valid && NoH > 1e-6 && VoH > 1e-6;
 
-    fSpecTimesNoL = Fh * Sx * D * G2 * NoL / max(4.0 * NoV * NoL, 1e-8);
-    pdfNDF = GGX_ndf_pdf(wo, wi, normal, rough);
+    if (valid) {
+        float rough = max(roughness, 1e-4);
+        float D_NoH = GGXpdf(NoH, 0.0, rough);
+        float D = D_NoH / NoH;
+        float G2 = GGX_G2_standard(NoV, NoL, rough);
+        vec3 Fh = reflectanceColor(Cs, VoH).rgb;
+        fSpecTimesNoL = Fh * Sx * D * G2 * NoL / max(4.0 * NoV * NoL, 1e-8);
+        pdfNDF = GGX_ndf_pdf(wo, wi, normal, rough);
+    } else {
+        fSpecTimesNoL = vec3(0.0);
+        pdfNDF = 0.0;
+    }
 
-    return true;
+    return valid;
 }
 
 // ===========================================================================
@@ -416,7 +416,7 @@ GuideInfo computeAliceGuide(vec3 ro_o, float strengthMultiplier) {
     float rho = clamp(length_x / omega, 0.0, 1.0);
     g.kappa = alice_kappa(length_x, omega);
     g.valid = length_x > 1e-8;
-    g.prob = g.valid ? strengthMultiplier * rho : 0.0;
+    g.prob = float(g.valid) * strengthMultiplier * rho;
     return g;
 }
 
@@ -453,6 +453,7 @@ PSRResult tracePSRChain(vec3 ro, vec3 rd, vec3 macroNormal, float firstRoughness
 
     float r_accum2 = firstRoughness * firstRoughness;
     float n_camera = wasInside ? REFRACTIVE_INDEX : 1.0;
+    float r_term2 = PATH_ROUGHNESS_TERMINATE * PATH_ROUGHNESS_TERMINATE; // compare squared
 
     vec3 ro_chain = ro;
     vec3 rd_chain = rd;
@@ -496,7 +497,7 @@ PSRResult tracePSRChain(vec3 ro, vec3 rd, vec3 macroNormal, float firstRoughness
         inside_chain = !inside_chain;
         departN = hitGeomN;
 
-        if (sqrt(r_accum2) > PATH_ROUGHNESS_TERMINATE) break;
+        if (r_accum2 > r_term2) break; // branchless: r_accum2 vs squared threshold
     }
 
     result.pathRoughness = sqrt(r_accum2);
@@ -513,7 +514,7 @@ void handleFirstBounce_Reflection(
     out vec3 bsdf_weight, out vec3 next_rd
 ) {
     GuideInfo guide = computeAliceGuide(ro_o, PATH_GUIDING_SPECULAR_STRENGTH * surf.R.x);
-    float reflGuideProb = guide.valid ? guide.prob : 0.0;
+    float reflGuideProb = guide.prob; // already 0 when !valid (set in computeAliceGuide)
 
     vec3 reflGGX_wi = reflect(rd_i, microNormal);
     bool useReflGuide = surf.R.x > 0.01 && reflGuideProb > 0.0 && getRandom() < reflGuideProb;
@@ -664,11 +665,10 @@ vec3 evalDirectDiffuse(vec3 ro, vec3 macroNormal, vec3 Cd, vec3 rd_i,
     vec3 wi = -sampleDir;
     vec3 Li = sampleSky(ro.y, wi, lightDir).xyz * payload_unpackShadow(tmp_Payload.data);
 
-    float IoN = abs(dot(rd_i, macroNormal));
     float OiN = dot(wi, macroNormal);
-    if (OiN <= 0.0) return vec3(0.0);
+    float oiNWeight = float(OiN > 0.0); // branchless: 0 if back-facing, 1 otherwise
 
-    return max(vec3(0.0), Cd * Li * (2.0 * OiN * (1.0 - cosD_S)));
+    return max(vec3(0.0), Cd * Li * (2.0 * OiN * oiNWeight * (1.0 - cosD_S)));
 }
 
 vec3 evalDirectSpecular(vec3 ro, vec3 normal, vec3 Cs, float Sx, float roughness,
@@ -691,16 +691,17 @@ vec3 evalDirectSpecular(vec3 ro, vec3 normal, vec3 Cs, float Sx, float roughness
 
     float IoN = abs(dot(rd_i, normal));
     float OiN = dot(wi, normal);
-    if (OiN <= 0.0) return vec3(0.0);
+    float oiNWeight = float(OiN > 0.0); // branchless: 0 if back-facing, 1 otherwise
+    float safeOiN = max(OiN, 1e-6);
 
     float a = max(roughness, 1e-6);
     vec3 H = normalize(wi - rd_i);
     float cosThetaH = clamp(dot(H, normal), 0.0, 1.0);
     float D = GGXpdf(cosThetaH, 0.0, a) / max(cosThetaH, 1e-6);
-    float G2 = GGX_G2(IoN, OiN, a);
+    float G2 = GGX_G2(IoN, safeOiN, a);
     vec3 F = reflectanceColor(Cs, abs(dot(rd_i, H))).xyz;
 
-    return max(vec3(0.0), D * G2 * F * Li * (PI * 0.5 * (1.0 - cosD_S) / max(IoN, 1e-6)) * Sx);
+    return max(vec3(0.0), D * G2 * F * Li * (PI * 0.5 * (1.0 - cosD_S) / max(IoN, 1e-6)) * Sx) * oiNWeight;
 }
 
 // ===========================================================================
@@ -754,18 +755,19 @@ void recordFirstBounceGBuffer(
     fb.absorption = currentAbsorption;
 
     // Specular albedo (analytic fit, matching original lines 778-797)
-    vec4 rC_stable = reflectanceColor(surf.Cs, abs(dot(rd_i, normal)));
-    vec3 nonSpecColor_stable = surf.Cd * max(vec3(0.0), vec3(1.0) - rC_stable.rgb * surf.S.x * 0.5);
+    float NoV = clamp(abs(dot(rd_i, normal)), 0.0, 1.0);
+    float Sx = surf.S.x;
+    vec4 rC_stable = reflectanceColor(surf.Cs, NoV);
+    vec3 nonSpecColor_stable = surf.Cd * max(vec3(0.0), vec3(1.0) - rC_stable.rgb * Sx * 0.5);
     {
-        vec3 F0 = surf.Cs * surf.S.x;
-        float NoV = clamp(abs(dot(rd_i, normal)), 0.0, 1.0);
+        vec3 F0 = surf.Cs * Sx;
         float rough = surf.R.x;
         vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
         vec4 c1 = vec4(1.0, 0.0425, 1.040, -0.040);
-        vec4 r = rough * c0 + c1;
+        vec4 r = fma(vec4(rough), c0, c1);
         float a004 = min(r.x * r.x, exp2(-9.28 * NoV)) * r.x + r.y;
-        vec2 AB = vec2(-1.04, 1.04) * a004 + r.zw;
-        fb.specularAlbedo = max(F0 * AB.x + vec3(AB.y * surf.S.x), vec3(1e-5));
+        vec2 AB = fma(vec2(-1.04, 1.04), vec2(a004), r.zw);
+        fb.specularAlbedo = max(F0 * AB.x + vec3(AB.y * Sx), vec3(1e-5));
     }
     float transmissionSelector = clamp(surf.S.y, 0.0, 1.0);
     fb.diffuseAlbedo = nonSpecColor_stable * (1.0 - transmissionSelector);

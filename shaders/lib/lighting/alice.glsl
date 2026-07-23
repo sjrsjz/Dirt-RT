@@ -165,27 +165,63 @@ float alice_radial_est_var_from_scalar(float stored_scalar_var, float kappa) {
 }
 
 // ------------------------------------------------------------
-// Bures 距离平方 (同轴近似, n=3)
+// 精确 Bures-Wasserstein 距离平方 (完全解析解, n=3)
 //
-// d_B² = |Δv|² + (n-1)(σ_⊥,₁ - σ_⊥,₂)² + (σ_∥,₁ - σ_∥,₂)²
+// 抛弃同轴近似，支持任意夹角状态。
+// d_B² = |Δv|² + Tr(Σ₁) + Tr(Σ₂) - 2 Tr( (Σ₁^1/2 Σ₂ Σ₁^1/2)^1/2 )
+// 
+// 解析降维原理：由于秩-1 摄动的协方差矩阵，开方迹操作在
+// v1 和 v2 张成的 2D 子空间内封闭，降维为关于夹角余弦 c 的代数式：
+// Tr(交叉) = σ_⊥,₁*σ_⊥,₂ + √((σ_⊥,₁*σ_∥,₂ + σ_⊥,₂*σ_∥,₁)² + c²(σ_∥,₁²-σ_⊥,₁²)(σ_∥,₂²-σ_⊥,₂²))
 //
-// 同轴近似: 假设两分布主轴方向接近 (由几何权重保证)
-//
-// 与 Jeffreys 散度的关键区别:
-//   Jeffreys: β ∝ 1/(1-κ²) → κ→1 时指数爆炸
-//   Bures:    σ_⊥ ∝ √(1-κ²) → κ→1 时多项式收敛到 0
-// 两个同向尖锐分布的 Bures 距离趋零 (正确), Jeffreys 趋无穷 (错误)
+// 性能：无复杂的特征值分解，完全由多项式和单次 sqrt 构成。
 // ------------------------------------------------------------
 float alice_bures_distance_sq(vec4 enc1, float kappa1, vec4 enc2, float kappa2) {
+    // 获取垂直与平行标准差 (x = σ_⊥, y = σ_∥)
     vec2 std1 = alice_eigen_std(enc1.w, kappa1);
     vec2 std2 = alice_eigen_std(enc2.w, kappa2);
 
-    vec3 delta_v = enc1.xyz - enc2.xyz;
-    float d_perp = std1.x - std2.x;
-    float d_para = std1.y - std2.y;
+    vec3 v1 = enc1.xyz;
+    vec3 v2 = enc2.xyz;
+    vec3 delta_v = v1 - v2;
 
-    // n=3: 2 个垂直方向 + 1 个平行方向
-    return dot(delta_v, delta_v) + 2.0 * d_perp * d_perp + d_para * d_para;
+    // 分别计算两分布协方差矩阵的迹: Tr(Σ) = 2σ_⊥² + σ_∥²
+    float tr1 = 2.0 * std1.x * std1.x + std1.y * std1.y;
+    float tr2 = 2.0 * std2.x * std2.x + std2.y * std2.y;
+
+    // 计算两分布均值方向的夹角余弦平方: c² = (v1·v2)² / (|v1|²|v2|²)
+    float len1_sq = dot(v1, v1);
+    float len2_sq = dot(v2, v2);
+    
+    float c_sq = 0.0;
+    // 保护除零，若极小则 c_sq 退化为 0 (正交)
+    if (len1_sq > 1e-16 && len2_sq > 1e-16) {
+        float dot_v = dot(v1, v2);
+        c_sq = min(1.0, (dot_v * dot_v) / (len1_sq * len2_sq));
+    }
+
+    // --- 开始 2x2 降维迹公式求值 ---
+    // 变量映射以对齐数学公式: a = σ_⊥, b = σ_∥
+    
+    // 交叉混合项: a1*b2 + a2*b1
+    float cross_ab = std1.x * std2.y + std2.x * std1.y;
+    
+    // 协方差各向异性强度: b² - a² (即 σ_∥² - σ_⊥²)
+    float diff1 = std1.y * std1.y - std1.x * std1.x;
+    float diff2 = std2.y * std2.y - std2.x * std2.x;
+
+    // 2D 子空间内的开方迹: T_2D = √((a1*b2 + a2*b1)² + c²(b1²-a1²)(b2²-a2²))
+    float T2D_sq = cross_ab * cross_ab + c_sq * diff1 * diff2;
+    float T2D = sqrt(max(0.0, T2D_sq)); // max(0.0) 防止浮点精度导致的负数
+
+    // 总体交叉迹: 三维空间的第三轴贡献了纯标量 a1*a2
+    float cross_trace = std1.x * std2.x + T2D;
+
+    // 最终 Bures 距离公式: d_B² = |μ1-μ2|² + Tr(Σ1) + Tr(Σ2) - 2 * Tr_cross
+    float bw_sq = dot(delta_v, delta_v) + tr1 + tr2 - 2.0 * cross_trace;
+    
+    // 保护截断输出
+    return max(0.0, bw_sq);
 }
 
 
