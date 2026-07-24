@@ -22,7 +22,7 @@ uniform vec2 resolution;
 #endif
 
 #ifndef TEMPORAL_CLIP_PIXEL_RADIUS
-#define TEMPORAL_CLIP_PIXEL_RADIUS 1.5
+#define TEMPORAL_CLIP_PIXEL_RADIUS 1.0
 #endif
 
 #ifndef TEMPORAL_GEOMETRY_EPSILON

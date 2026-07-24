@@ -65,10 +65,6 @@ bool isDarkened = false;
 
 void main() {
     vec2 px = vec2(gl_LaunchIDEXT.xy);
-    #if defined(FIRST_LOBE_DIFFUSE)
-    vec2 jitter = hash23(vec3(px, float(cam.frameId)));
-    px += jitter - 0.5;
-    #endif
     vec2 p = px / vec2(gl_LaunchSizeEXT.xy);
 
     vec3 origin = cam.viewInverse[3].xyz;
@@ -82,7 +78,7 @@ void main() {
     isDarkened = world_type_global != WORLD_OVERWORLD && world_type_global != WORLD_THE_END && world_type_global != WORLD_THE_NETHER;
     #endif
 
-    wseed = floatBitsToUint(rand(direction * cam.frameId));
+    wseed = floatBitsToUint(hash12(px + fract(cam.frameId * vec2(0.6180339887498949, 0.4142135623730950))));
 
     vec3 seed0 = vec3(randcore4(), randcore4(), randcore4());
     wseed3.x = floatBitsToUint(seed0.x);
@@ -226,8 +222,8 @@ bool isTransmissiveBlock(int blockID) {
 // Convert Material (from getMaterial) to BSDF material struct
 material materialFromEvaluated(Material mat, int blockID) {
     // Precompute block-type flags once (each was compared 3-5× before)
-    bool isWater  = blockID == BLOCK_WATER;
-    bool isGlass  = blockID == BLOCK_GLASS;
+    bool isWater = blockID == BLOCK_WATER;
+    bool isGlass = blockID == BLOCK_GLASS;
     bool isPortal = blockID == BLOCK_PORTAL;
 
     float metallic = mat.metallic;
@@ -432,7 +428,7 @@ vec3 sampleDiffuseWithGuide(vec3 geometryNormal, vec3 ro_o, GuideInfo guide,
     out vec3 next_rd, out float guideWeight) {
     bool useGuide = getRandom() < guide.prob;
     if (useGuide) {
-        next_rd = sample_alice_guiding(guide.axis, guide.kappa, vec2(getRandom(), getRandom()));
+        next_rd = sample_alice_guiding(guide.axis, guide.kappa, rand2(ro_o));
     } else {
         next_rd = DiffuseNormal(geometryNormal, ro_o);
     }
@@ -440,7 +436,7 @@ vec3 sampleDiffuseWithGuide(vec3 geometryNormal, vec3 ro_o, GuideInfo guide,
     float pdfCos = NoL / PI;
     float pdfAlice = guide.prob > 0.0 ? alice_guiding_pdf(next_rd, guide.axis, guide.kappa) : 0.0;
     float pdfMix = (1.0 - guide.prob) * pdfCos + guide.prob * pdfAlice;
-    guideWeight = (NoL > 0.0 && pdfMix > 1e-8) ? (pdfCos / pdfMix) : 0.0;
+    guideWeight = (NoL > 0.0 && pdfMix > 1e-20) ? (pdfCos / pdfMix) : 0.0;
     return vec3(guideWeight);
 }
 

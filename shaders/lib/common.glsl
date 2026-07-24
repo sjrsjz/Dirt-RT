@@ -33,7 +33,8 @@ float randcore4()
 {
     wseed = whash(wseed);
 
-    return float(wseed) * (1.0 / 4294967296.0);
+    uint m = (wseed >> 9) | 0x3F800000u;
+    return uintBitsToFloat(m) - 1.0;
 }
 
 void XYZ(vec3 n, out vec3 X, out vec3 Y, out vec3 Z) {
@@ -58,19 +59,19 @@ float weyl_idx = 0.0;
 
 float weyl() {
     weyl_idx += 1.0;
-    return fract(float(iFrame) * WEYL_FRAME + weyl_idx * WEYL_SAMPLE);
+    return float(iFrame) * WEYL_FRAME + weyl_idx * WEYL_SAMPLE;
 }
 
 float rand(vec3 p3)
 {
-    p3 += weyl();
+    p3 += fract(weyl());
     p3 = fract(p3 * .1031);
     p3 += dot(p3, p3.zyx + 31.32);
     return fract((p3.x + p3.y) * p3.z);
 }
 float rand(vec2 p)
 {
-    p += weyl();
+    p += fract(weyl());
     vec3 p3 = fract(vec3(p.xyx) * .1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return fract((p3.x + p3.y) * p3.z);
@@ -89,7 +90,7 @@ float weyl2_idx = 0.0;
 
 vec2 weyl2() {
     weyl2_idx += 1.0;
-    return fract(float(iFrame) * WEYL2_FRAME + weyl2_idx * WEYL2_STEP);
+    return float(iFrame) * WEYL2_FRAME + weyl2_idx * WEYL2_STEP;
 }
 
 // Dedicated 2D quasi-random sampler for importance sampling.
@@ -119,12 +120,9 @@ float getRandom() {
     uint m = (wseed3.x >> 9) | 0x3F800000u;
     
     // 3. 将其解释为浮点数，然后减去 1.0，得到严格在 [0.0, 1.0) 之间无损、均匀的随机数
-    return uintBitsToFloat(m) - 1.0;
+    return fract(uintBitsToFloat(m) - 1.0 + weyl());
 }
 
-vec3 randomDirection(vec3 pos) {
-    return normalize(tan(vec3(rand(pos) - 0.5, rand(pos) - 0.5, rand(pos) - 0.5)));
-}
 float luma(vec3 c) {
     return dot(c, vec3(0.299, 0.587, 0.114));
 }

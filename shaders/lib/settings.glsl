@@ -5,8 +5,6 @@
 #define REFRACTIVE_INDEX 1.331 // Water Index of Refraction (IOR). Affects caustics, underwater distortion and specular. [1.30 1.31 1.32 1.33 1.34 1.35 1.36 1.37 1.38 1.39 1.40 1.41 1.42 1.43 1.44 1.45 1.46 1.47 1.48 1.49 1.50]
 #define ACCUMULATION_LENGTH 20 // Frames to accumulate via reprojection. Higher = smoother image, more ghosting on moving lights/camera. [1 2 3 4 5 6 7 8 9 10 20 50 100]
 #define MAX_WETNESS 0.4 // Maximum surface wetness from rain or water. Controls specular reflection on wet blocks. [0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
-#define SHARP_VOLUMETRIC_LIGHT 1 // Volumetric light quality. ON = sharp analytic falloff. OFF = realistic soft scattering. [0 1]
-#define VOLUMETRIC_LIGHT_SAMPLES 8 // Samples per volumetric light ray. Higher = less noise, lower FPS. [1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 18 20 22 24 28 32]
 
 // -- Temporal history rejection (temporal_diffuse.glsl) --
 #define TEMPORAL_NORMAL_PARAM 4.0 // How strictly normal differences reject history. Higher = less ghosting on curved surfaces, more noise. [0.5 1 2 4 8 16 32 64]
@@ -19,7 +17,7 @@
 #define REFLECT_GGX_CONFIDENCE 25.0 // GGX lobe similarity strictness for specular temporal accumulation. Lower = more tolerant of normal/roughness mismatch → smoother but more ghosting. Higher = stricter lobe match → less ghosting but noisier on curved surfaces. [1.0 2.0 5.0 10.0 20.0 25.0 50.0 75.0 100.0]
 
 // -- Diffuse temporal accumulation (temporal_diffuse.glsl) --
-#define TEMPORAL_MAX_HISTORY 32 // Maximum effective sample count clamped per pixel. Higher = smoother but more ghosting. [1 2 4 8 16 32 64 128]
+#define TEMPORAL_MAX_HISTORY 32 // Maximum effective sample count clamped per pixel. Higher = smoother but more ghosting. [1 2 4 8 16 32 64 128 256 512 1024 8192 16384]
 #define TEMPORAL_CONFIDENCE_POWER 1.0 // Reprojection confidence exponent. Higher = more aggressive rejection of mismatched history. [0.1 0.25 0.5 1.0 2.0 4.0]
 #define TEMPORAL_HISTORY_MIN_WEIGHT 0.0001 // Weight threshold below which history is discarded and reset. [0.000001 0.00001 0.0001 0.001 0.01]
 #define TEMPORAL_AABB_ENABLE 1 // AABB clamp in ALICE augmented space to prevent ghosting. 0 = fall back to raw EMA blend. [0 1]
@@ -36,10 +34,9 @@
 
 // -- SVGF spatial filter (atrous_denoise_diffuse.glsl) --
 #define SVGF_NORMAL_POWER 32.0 // Normal edge-stopping sensitivity in à-trous wavelet filter. Higher = sharper normal edges preserved. [1 2 4 8 16 32 64 128]
-#define SVGF_PHI_L_SMALL 0.00075 // Luma sensitivity for à-trous passes (CS, 3×3 dilated grid, R0=1,2,4). Higher = more aggressive denoising. [0.00001 0.00005 0.0001 0.0005 0.00075 0.001 0.005 0.01]
-#define SVGF_PHI_L_LARGE 0.025 // Luma sensitivity for Poisson disk passes (fragment, 8 samples, R0=8,16,32). Lower = more conservative at coarse scales. [0.0025 0.005 0.0075 0.01 0.015 0.02 0.025 0.03 0.04 0.05]
+#define SVGF_PHI_L 0.0015 // Luma sensitivity. Higher = more aggressive denoising. [0.00001 0.00005 0.0001 0.0005 0.00075 0.001 0.005 0.01]
 #define SVGF_POSITION_PARAM 0.0025 // Depth edge-stopping sensitivity. Higher = sharper depth boundaries preserved. [0.00075 0.00125 0.0025 0.005 0.01 0.02 0.04 0.08]
-#define SVGF_PHI_GAMMA 0.125
+#define SVGF_PHI_GAMMA 0.0875
 
 // -- Bloom --
 #define BLOOM_MIX 0.15 // Bloom blend strength. 0 = off (scene only), 1 = full bloom. [0.0 0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5 0.6 0.8 1.0]

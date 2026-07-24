@@ -92,6 +92,7 @@ void main() {
     float c_len_v = length(c_enc.xyz);
     float c_omega = c_enc.w;
     float c_kappa = alice_kappa(c_len_v, c_omega);
+    vec2 c_std = alice_eigen_std(c_omega, c_kappa);
 
     float c_inv_var = 1.0 / max(center_var_est, 1e-8);
 
@@ -132,8 +133,9 @@ void main() {
         vec4 s_enc = sample_alice.aliceY;
         float s_len_v = length(s_enc.xyz);
         float s_kappa = alice_kappa(s_len_v, s_enc.w);
-        float d_bures_sq = alice_bures_distance_sq(c_enc, c_kappa, s_enc, s_kappa);
-        float w_luma = SVGF_PHI_L_SMALL * R0 * d_bures_sq * c_inv_var;
+        vec2 s_std = alice_eigen_std(s_enc.w, s_kappa);
+        float d_bures_sq = alice_bures_distance_sq_precomputed(c_enc.xyz, c_std, s_enc.xyz, s_std);
+        float w_luma = SVGF_PHI_L * R0 * d_bures_sq * c_inv_var;
 
         const float w_kernel = ps.w;
         float w0 = w_kernel * exp(-w_geometry) / (1 + w_luma);

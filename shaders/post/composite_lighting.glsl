@@ -118,7 +118,7 @@ void main() {
 
     #elif DEBUG_VIEW == 4
     // White model: diffuse irradiance only, no albedo
-    fragColor.xyz = project_alice_irradiance(tmp.data_swap, microN);
+    fragColor.xyz = project_alice_irradiance(tmp.data_swap, geometryNormal);
 
     #elif DEBUG_VIEW == 5
     // Light field: ALICE normalized dominant direction × energy
@@ -162,8 +162,8 @@ void main() {
     fragColor.xyz = tmp2.data_swap;
 
     #elif DEBUG_VIEW == 13
-    // Diffuse temporal accumulation weight (heatmap) — N_eff / ACCUMULATION_LENGTH
-    fragColor.xyz = jetColormap(clamp(tmp.weight / ACCUMULATION_LENGTH, 0.0, 1.0));
+    // Diffuse temporal accumulation weight (heatmap) — N_eff / TEMPORAL_MAX_HISTORY
+    fragColor.xyz = jetColormap(clamp(tmp.weight / TEMPORAL_MAX_HISTORY, 0.0, 1.0));
 
     #elif DEBUG_VIEW == 14
     // Reflect temporal accumulation weight (heatmap)
@@ -209,12 +209,12 @@ void main() {
     }
 
     #elif DEBUG_VIEW == 21
-    // 原始时域累积白模 (N=2 hist ALICE × microNormal, 降噪前)
+    // 原始时域累积白模 (N=2 hist ALICE × geometryNormal, 降噪前)
     {
         AliceEncoding raw;
         float w;
         readDiffuseHist(xy, raw, w);
-        fragColor.xyz = project_alice_irradiance(raw, microN);
+        fragColor.xyz = project_alice_irradiance(raw, geometryNormal);
     }
 
     #endif

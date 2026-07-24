@@ -224,6 +224,51 @@ float alice_bures_distance_sq(vec4 enc1, float kappa1, vec4 enc2, float kappa2) 
     return max(0.0, bw_sq);
 }
 
+// ------------------------------------------------------------
+// 特化 Bures-Wasserstein 距离平方 (预计算 eigen_std)
+//
+// 与 alice_bures_distance_sq 完全等价，但接收预计算的 eigen_std
+// (σ_⊥, σ_∥) = alice_eigen_std(omega, kappa)，跳过 4 次 sqrt。
+// 调用方在共享内存加载阶段批量预计算 eigen_std，采样循环中直接
+// 查表使用，大幅降低 atrous 内核的 ALU 调度压力。
+// ------------------------------------------------------------
+float alice_bures_distance_sq_precomputed(vec3 v1, vec2 std1, vec3 v2, vec2 std2) {
+    vec3 delta_v = v1 - v2;
+
+    // 分别计算两分布协方差矩阵的迹: Tr(Σ) = 2σ_⊥² + σ_∥²
+    float tr1 = 2.0 * std1.x * std1.x + std1.y * std1.y;
+    float tr2 = 2.0 * std2.x * std2.x + std2.y * std2.y;
+
+    // 计算两分布均值方向的夹角余弦平方: c² = (v1·v2)² / (|v1|²|v2|²)
+    float len1_sq = dot(v1, v1);
+    float len2_sq = dot(v2, v2);
+
+    float c_sq = 0.0;
+    if (len1_sq > 1e-16 && len2_sq > 1e-16) {
+        float dot_v = dot(v1, v2);
+        c_sq = min(1.0, (dot_v * dot_v) / (len1_sq * len2_sq));
+    }
+
+    // 交叉混合项: a1*b2 + a2*b1   (a = σ_⊥, b = σ_∥)
+    float cross_ab = std1.x * std2.y + std2.x * std1.y;
+
+    // 协方差各向异性强度: b² - a²
+    float diff1 = std1.y * std1.y - std1.x * std1.x;
+    float diff2 = std2.y * std2.y - std2.x * std2.x;
+
+    // 2D 子空间内的开方迹
+    float T2D_sq = cross_ab * cross_ab + c_sq * diff1 * diff2;
+    float T2D = sqrt(max(0.0, T2D_sq));
+
+    // 总体交叉迹
+    float cross_trace = std1.x * std2.x + T2D;
+
+    // 最终 Bures 距离公式
+    float bw_sq = dot(delta_v, delta_v) + tr1 + tr2 - 2.0 * cross_trace;
+
+    return max(0.0, bw_sq);
+}
+
 
 // 计算最大熵分布的自然参数 (θ, β) 用于散度计算
 // 返回 vec4(theta.xyz, beta), 其中 θ = ( (3+κ²)² / (4 ω² (1-κ²)) ) * v

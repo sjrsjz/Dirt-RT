@@ -26,6 +26,7 @@ layout(rgba32f) uniform image2D colorimg4;
 
 shared vec4 sm_geometry[TILE_AREA];
 shared vec4 sm_light[TILE_AREA];
+shared vec2 sm_std[TILE_AREA]; // precomputed eigen_std (σ_⊥, σ_∥) per tile pixel
 
 // ---------------------------------------------------------------------------
 // 辅助函数
@@ -71,9 +72,20 @@ void main() {
         sm_geometry[i] = texelFetch(colortex3, cc, 0);
 
         if (gc == cc) {
-            sm_light[i] = texelFetch(colortex4, cc, 0);
+            vec4 light = texelFetch(colortex4, cc, 0);
+            sm_light[i] = light;
+
+            // 在共享内存加载阶段立即预计算 eigen_std，
+            // 消除 atrous 采样循环中 alice_eigen_std 的冗余 sqrt
+            AliceEncoding pre_enc = unpackAlice(light.x, light.y, light.z);
+            vec4 pre_y = pre_enc.aliceY;
+            float pre_omega = abs(pre_y.w);
+            float pre_len = length(pre_y.xyz);
+            float pre_kappa = alice_kappa(pre_len, pre_omega);
+            sm_std[i] = alice_eigen_std(pre_omega, pre_kappa);
         } else {
             sm_light[i] = vec4(0.0, 0.0, 0.0, -1.0); // 天空标记
+            sm_std[i] = vec2(0.0);
         }
     }
 
@@ -105,9 +117,7 @@ void main() {
 
     // ---- 预计算中心像素的统计特征 -----------------------------------------
     vec4 c_enc = center_alice.aliceY;
-    float c_len_v = length(c_enc.xyz);
-    float c_omega = c_enc.w;
-    float c_kappa = alice_kappa(c_len_v, c_omega);
+    vec2 c_std = sm_std[center_idx]; // 共享内存加载阶段已预计算 eigen_std
 
     float c_inv_var = 1.0 / max(center_var_est, 1e-4);
 
@@ -151,12 +161,11 @@ void main() {
         vec3 delta = (sample_world_pos - center_pos) * inv_pixel_footprint;
         float w_geometry = abs(dot(delta, center_normal));
 
-        vec4 s_enc = sample_alice.aliceY;
-        float s_len_v = length(s_enc.xyz);
-        float s_kappa = alice_kappa(s_len_v, s_enc.w);
+        vec3 s_v = sample_alice.aliceY.xyz;
+        vec2 s_std = sm_std[sample_idx]; // 共享内存预计算的 eigen_std
 
-        float d_bures_sq = alice_bures_distance_sq(c_enc, c_kappa, s_enc, s_kappa);
-        float w_luma = SVGF_PHI_L_SMALL * R0 * d_bures_sq * c_inv_var;
+        float d_bures_sq = alice_bures_distance_sq_precomputed(c_enc.xyz, c_std, s_v, s_std);
+        float w_luma = SVGF_PHI_L * R0 * d_bures_sq * c_inv_var;
 
         const float w_kernel = GRID_3x3[k].z;
         float w0 = w_kernel * exp(-w_geometry) / (1 + w_luma);

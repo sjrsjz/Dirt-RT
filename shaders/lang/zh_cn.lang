@@ -11,12 +11,6 @@ screen.MATERIAL = 材质
 option.REFRACTIVE_INDEX = 水折射率
 option.MAX_WETNESS = 最大湿度
 
-screen.VOLUMETRIC_LIGHT = 体积光
-option.SHARP_VOLUMETRIC_LIGHT = 体积光质量
-value.SHARP_VOLUMETRIC_LIGHT.1 = 锐利
-value.SHARP_VOLUMETRIC_LIGHT.0 = 柔和
-option.VOLUMETRIC_LIGHT_SAMPLES = 体积光采样数
-
 screen.EXPOSURE_DISPLAY = 曝光与显示
 option.DISPLAY_MAX_LUMINANCE = 显示器峰值亮度
 option.DISPLAY_PAPER_WHITE_LUMINANCE = sRGB 纸白亮度
@@ -50,8 +44,7 @@ screen.SVGF_DENOISER = SVGF 降噪
 option.VAR_FILTER_RADIUS = 方差滤波半径
 option.VARIANCE_SCALE = 方差缩放
 option.SVGF_NORMAL_POWER = SVGF 法线边缘灵敏度
-option.SVGF_PHI_L_SMALL = SVGF 亮度灵敏度 (小核)
-option.SVGF_PHI_L_LARGE = SVGF 亮度灵敏度 (大核)
+option.SVGF_PHI_L = SVGF 亮度灵敏度
 option.SVGF_POSITION_PARAM = SVGF 深度边缘灵敏度
 screen.DEBUG = 调试
 option.DEBUG_VIEW = 调试视图
