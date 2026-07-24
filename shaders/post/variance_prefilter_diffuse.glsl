@@ -3,9 +3,9 @@
 // ===========================================================================
 // Pass swap2_c: Diffuse Variance Filter → Colortex Push (Compute)
 // ===========================================================================
-// 16x16 workgroups + 2px halo = 20x20 shared memory tile
+// 16x16 workgroups + 3px halo = 22x22 shared memory tile
 // Precomputed raw ALICE variance loaded into shared memory
-// 5x5 geometry-aware bilateral variance filter
+// 7x7 geometry-aware bilateral variance filter
 // imageStore output to colorimg3 (geometry) and colorimg4 (AliceEncoding+variance)
 
 layout(local_size_x = 16, local_size_y = 16) in;
@@ -169,7 +169,7 @@ void main() {
             int sy = int(cy) + ky;
             TileSample s = sm_tile[sy][sx];
             if (!s.valid) continue;
-            float wKernel = exp(-0.75 * float(kx * kx + ky * ky)); // 高斯核权重
+            float wKernel = exp(-0.5 * float(kx * kx + ky * ky)); // 高斯核权重
             float wGeom = varianceGeometryWeight(centerTile.p, centerNormal, s.p);
 
             float w = wKernel * wGeom;

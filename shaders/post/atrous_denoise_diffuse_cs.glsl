@@ -41,6 +41,10 @@ void unpackLightSampleSM(uint tile_idx, out vec3 pos,
     variance = light.w;
 }
 
+float relavant_power(const float R, const float gamma) {
+    return 2.0 - log2(1.0 + exp2(-gamma * R));
+}
+
 // ---------------------------------------------------------------------------
 // 主函数
 // ---------------------------------------------------------------------------
@@ -87,6 +91,8 @@ void main() {
 
     if (sm_light[center_idx].w < 0.0) return;
 
+    const float power = relavant_power(float(R0), SVGF_PHI_GAMMA);
+
     vec3 center_pos;
     AliceEncoding center_alice;
     float center_var_est;
@@ -103,7 +109,7 @@ void main() {
     float c_omega = c_enc.w;
     float c_kappa = alice_kappa(c_len_v, c_omega);
 
-    float c_inv_var = 1.0 / max(center_var_est, 1e-10);
+    float c_inv_var = 1.0 / max(center_var_est, 1e-4);
 
     float dist_to_cam = max(length(center_pos), 0.001);
     float inv_pixel_footprint = 1.0 / (SVGF_POSITION_PARAM
@@ -150,7 +156,7 @@ void main() {
         float s_kappa = alice_kappa(s_len_v, s_enc.w);
 
         float d_bures_sq = alice_bures_distance_sq(c_enc, c_kappa, s_enc, s_kappa);
-        float w_luma = SVGF_PHI_L_SMALL * d_bures_sq * c_inv_var;
+        float w_luma = SVGF_PHI_L_SMALL * R0 * d_bures_sq * c_inv_var;
 
         const float w_kernel = GRID_3x3[k].z;
         float w0 = w_kernel * exp(-w_geometry) / (1 + w_luma);
@@ -158,13 +164,12 @@ void main() {
         accumulate_alice(accumAlice, sample_alice, w0);
         sumWeight += w0;
 
-        // 100% 统计关联（小核局部光场）假设下的方差传播
-        sumVarEnergy += w0 * sample_var_est;
+        sumVarEnergy += pow(w0, power) * sample_var_est;
     }
 
     float inv_sumWeight = 1.0 / sumWeight;
     accumAlice = scale_alice(accumAlice, inv_sumWeight);
 
-    float varEnergyOut = sumVarEnergy * inv_sumWeight;
+    float varEnergyOut = sumVarEnergy * pow(inv_sumWeight, power);
     imageStore(colorimg4, pix, vec4(packAlice(accumAlice), varEnergyOut));
 }

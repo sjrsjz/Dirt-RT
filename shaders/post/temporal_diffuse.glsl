@@ -33,16 +33,12 @@ uniform vec2 resolution;
 #define TEMPORAL_DEPTH_FOOTPRINT_SCALE 1.0
 #endif
 
+#ifndef TEMPORAL_CLIP_PIXEL_RADIUS
+#define TEMPORAL_CLIP_PIXEL_RADIUS 1.5
+#endif
+
 #ifndef TEMPORAL_GEOMETRY_EPSILON
 #define TEMPORAL_GEOMETRY_EPSILON 1e-5
-#endif
-
-#ifndef TEMPORAL_REQUIRE_SAME_NORMAL_HEMISPHERE
-#define TEMPORAL_REQUIRE_SAME_NORMAL_HEMISPHERE 1
-#endif
-
-#ifndef TEMPORAL_USE_KERNEL_COVERAGE
-#define TEMPORAL_USE_KERNEL_COVERAGE 1
 #endif
 
 #ifndef TEMPORAL_AABB_ENABLE
@@ -153,8 +149,8 @@ bool buildTemporalFootprint(uvec2 pix, vec3 currentPos, vec3 geometricNormal, ve
 
     mat4 invVP = inverse(rtProjection * rtModelView);
     vec2 curRes = vec2(resolution);
-    vec2 uvMin = (vec2(pix) - 1.0) / curRes * 2.0 - 1.0;
-    vec2 uvMax = (vec2(pix) + 1.0) / curRes * 2.0 - 1.0;
+    vec2 uvMin = (vec2(pix) - TEMPORAL_CLIP_PIXEL_RADIUS) / curRes * 2.0 - 1.0;
+    vec2 uvMax = (vec2(pix) + TEMPORAL_CLIP_PIXEL_RADIUS) / curRes * 2.0 - 1.0;
 
     bool v0, v1, v2, v3;
     fp.origin = currentPos + camDelta;
@@ -314,6 +310,8 @@ void MixDiffuse() {
         prevFrac.x * prevFrac.y
         };
 
+    float currVoN = dot(normalize(current_data.pos), currentNormal);
+
     for (int i = 0; i < 4; i++) {
         ivec2 sampleTexel = prevBase + ivec2(i & 1, i >> 1);
 
@@ -327,8 +325,9 @@ void MixDiffuse() {
         float d1_sq = dot(tap.pos, tap.pos);
         vec3 histPosCur = tap.pos - cameraDelta;
         float d2_sq = dot(histPosCur, histPosCur);
+        float histVoN = dot(normalize(histPosCur), currentNormal);
 
-        float scale = clamp(d2_sq / max(d1_sq, 1e-4), 0.0, 4.0);
+        float scale = clamp(d2_sq * abs(histVoN) / max(d1_sq * abs(currVoN), 1e-3), 0.0, 1.0);
         float correctedTapW = min(tap.prev_weight * scale, float(TEMPORAL_MAX_HISTORY));
 
         accumulate_alice(accumAlice, tap.data, w[i]);
@@ -344,10 +343,6 @@ void MixDiffuse() {
 
     AliceEncoding histAlice = scale_alice(accumAlice, 1.0 / validKernelWeight);
     float histWeight = accumHistWeight / validKernelWeight;
-
-    #if TEMPORAL_USE_KERNEL_COVERAGE
-    histWeight *= clamp(validKernelWeight, 0.0, 1.0);
-    #endif
 
     histWeight = clamp(histWeight, 0.0, float(TEMPORAL_MAX_HISTORY));
     if (histWeight <= TEMPORAL_HISTORY_MIN_WEIGHT) {

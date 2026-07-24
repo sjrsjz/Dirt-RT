@@ -65,6 +65,10 @@ bool isDarkened = false;
 
 void main() {
     vec2 px = vec2(gl_LaunchIDEXT.xy);
+    #if defined(FIRST_LOBE_DIFFUSE)
+    vec2 jitter = hash23(vec3(px, float(cam.frameId)));
+    px += jitter - 0.5;
+    #endif
     vec2 p = px / vec2(gl_LaunchSizeEXT.xy);
 
     vec3 origin = cam.viewInverse[3].xyz;

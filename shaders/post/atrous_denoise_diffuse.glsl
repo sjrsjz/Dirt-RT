@@ -56,6 +56,11 @@ void unpackLightSample(ivec2 coord, out vec3 pos, out float oct_normal,
     variance = sample_data1.w;
 }
 
+
+float relavant_power(const float R, const float gamma) {
+    return 2.0 - log2(1.0 + exp2(-gamma * R));
+}
+
 // ---------------------------------------------------------------------------
 // 主函数
 // ---------------------------------------------------------------------------
@@ -74,6 +79,8 @@ void main() {
     // 天空像素跳过 (方差被 swap2 复用作天空 mask)
     if (center_var_est < 0.0) return;
 
+    const float power = relavant_power(float(R0), SVGF_PHI_GAMMA);
+
     center_var_est = max(center_var_est, 1e-12);
 
     // ---- 从 colortex3.w 解码中心法线（方差滤波写入，零额外读取）-------
@@ -86,7 +93,7 @@ void main() {
     float c_omega = c_enc.w;
     float c_kappa = alice_kappa(c_len_v, c_omega);
 
-    float c_inv_var = 1.0 / max(center_var_est, 1e-6);
+    float c_inv_var = 1.0 / max(center_var_est, 1e-8);
 
     float dist_to_cam = max(length(center_pos), 0.001);
     float inv_pixel_footprint = 1.0 / (SVGF_POSITION_PARAM
@@ -126,7 +133,7 @@ void main() {
         float s_len_v = length(s_enc.xyz);
         float s_kappa = alice_kappa(s_len_v, s_enc.w);
         float d_bures_sq = alice_bures_distance_sq(c_enc, c_kappa, s_enc, s_kappa);
-        float w_luma = SVGF_PHI_L_LARGE * d_bures_sq * c_inv_var;
+        float w_luma = SVGF_PHI_L_SMALL * R0 * d_bures_sq * c_inv_var;
 
         const float w_kernel = ps.w;
         float w0 = w_kernel * exp(-w_geometry) / (1 + w_luma);
@@ -135,8 +142,7 @@ void main() {
         accumulate_alice(accumAlice, sample_alice, w0);
         sumWeight += w0;
 
-        // 100% 统计独立（大核大跨度光场）假设下的方差传播
-        sumVarEnergy += w0 * w0 * sample_var_est;
+        sumVarEnergy += pow(w0, power) * sample_var_est;
     }
 
     float inv_sumWeight = 1.0 / sumWeight;
@@ -144,7 +150,7 @@ void main() {
     // ---- 归一化并输出 ----------------------------------------------------
     accumAlice = scale_alice(accumAlice, inv_sumWeight);
 
-    float varEnergyOut = sumVarEnergy * inv_sumWeight * inv_sumWeight;
+    float varEnergyOut = sumVarEnergy * pow(inv_sumWeight, power);
     out_light_sample = vec4(packAlice(accumAlice), varEnergyOut);
 
     #if FINAL_DENOISE_PASS
