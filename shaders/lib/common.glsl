@@ -157,32 +157,32 @@ float GGX_G2_standard(float NoV, float NoL, float a) {
     return 1.0 / (1.0 + lambdaV + lambdaL);
 }
 
-vec3 GGXNormal(vec3 normal, float roughness, vec3 pos) {
+vec3 GGXNormal(vec3 macroNormal, float roughness, vec3 pos) {
     vec3 randN0;
-    randN0.y = -length(normal.xz);
-    if (normal.y > 0.99 || normal.y < -0.99)
+    randN0.y = -length(macroNormal.xz);
+    if (macroNormal.y > 0.99 || macroNormal.y < -0.99)
         randN0.xz = vec2(1, 0);
     else
-        randN0.xz = normal.xz * normal.y * inversesqrt(1 - normal.y * normal.y);
-    vec3 randN1 = cross(normal, randN0);
+        randN0.xz = macroNormal.xz * macroNormal.y * inversesqrt(1 - macroNormal.y * macroNormal.y);
+    vec3 randN1 = cross(macroNormal, randN0);
     vec2 xi = rand2(pos);
     float alpha = xi.x * 2 * PI;
     float cosbeta = min(sqrt(max(0., (1. - xi.y) / (1. + xi.y * (roughness * roughness - 1.)))), 1.);
 
-    return cosbeta * normal + sqrt(1 - cosbeta * cosbeta) * (cos(alpha) * randN0 + sin(alpha) * randN1);
+    return cosbeta * macroNormal + sqrt(1 - cosbeta * cosbeta) * (cos(alpha) * randN0 + sin(alpha) * randN1);
 }
 
-vec3 DiffuseNormal(vec3 normal, vec3 pos) {
+vec3 DiffuseNormal(vec3 macroNormal, vec3 pos) {
     vec3 randN0;
-    randN0.y = -length(normal.xz);
-    if (normal.y > 0.99 || normal.y < -0.99)
+    randN0.y = -length(macroNormal.xz);
+    if (macroNormal.y > 0.99 || macroNormal.y < -0.99)
         randN0.xz = vec2(1, 0);
     else
-        randN0.xz = normal.xz * normal.y * inversesqrt(1 - normal.y * normal.y);
-    vec3 randN1 = cross(normal, randN0);
+        randN0.xz = macroNormal.xz * macroNormal.y * inversesqrt(1 - macroNormal.y * macroNormal.y);
+    vec3 randN1 = cross(macroNormal, randN0);
     vec2 xi = rand2(pos);
     float alpha = xi.x * 2 * PI;
-    return sqrt(1 - xi.y) * normal + sqrt(xi.y) * (cos(alpha) * randN0 + sin(alpha) * randN1);
+    return sqrt(1 - xi.y) * macroNormal + sqrt(xi.y) * (cos(alpha) * randN0 + sin(alpha) * randN1);
 }
 
 float GGXpdf(float costheta, float fai, float a) {
@@ -193,9 +193,9 @@ float GGXpdf(float costheta, float fai, float a) {
 
 // NDF-sampled reflection direction PDF for GGX.
 // Assumes GGXpdf(NoH, ...) returns D(H) * NoH.
-float GGX_ndf_pdf(vec3 wo, vec3 wi, vec3 n, float roughness) {
-    float NoV = dot(n, wo);
-    float NoL = dot(n, wi);
+float GGX_ndf_pdf(vec3 wo, vec3 wi, vec3 macroNormal, float roughness) {
+    float NoV = dot(macroNormal, wo);
+    float NoL = dot(macroNormal, wi);
 
     if (NoV <= 1e-6 || NoL <= 1e-6)
         return 0.0;
@@ -207,7 +207,7 @@ float GGX_ndf_pdf(vec3 wo, vec3 wi, vec3 n, float roughness) {
 
     vec3 H = Hsum * inversesqrt(Hlen2);
 
-    float NoH = dot(n, H);
+    float NoH = dot(macroNormal, H);
     float VoH = dot(wo, H);
     if (NoH <= 1e-6 || VoH <= 1e-6)
         return 0.0;
@@ -291,4 +291,4 @@ vec4 fbm3D(in vec3 x, int n)
 
     return vec4(a, d);
 }
-#endif COMMON_GLSL
+#endif // COMMON_GLSL

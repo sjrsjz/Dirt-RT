@@ -44,7 +44,7 @@ layout(std430, set = 3, binding = 4) buffer RefractBuffer {
 // Binding 0 — GeometryMaterialBuffer pack/unpack
 // ===========================================================================
 // N=0: vec4(worldPos.xyz, distance)
-// N=1: vec4(oct(macroNormal), roughness, float(illumType), pathRoughness)
+// N=1: vec4(oct(geometryNormal), roughness, float(illumType), pathRoughness)
 // N=2: vec4(packHalf(spR,spG), packHalf(spB,dfR), packHalf(dfG,dfB), pad)
 // N=3: vec4(packHalf(trR,trG), packHalf(trB,emR), packHalf(emG,emB), oct(rd))
 // N=4: vec4(packHalf(ltR,ltG), packHalf(ltB,abR), packHalf(abG,abB), pad)
@@ -59,12 +59,12 @@ void readGeo0(uint N, uvec2 xy, out vec3 pos, out float dist) {
 }
 
 // --- N=1 ---
-void writeGeo1(uint N, uvec2 xy, vec3 macroN, float rough, int illumType, float pathRoughness) {
-    geomBuffer.data[addr(N, xy)] = vec4(encodeNormal(macroN), rough, float(illumType), pathRoughness);
+void writeGeo1(uint N, uvec2 xy, vec3 geometryNormal, float rough, int illumType, float pathRoughness) {
+    geomBuffer.data[addr(N, xy)] = vec4(encodeNormal(geometryNormal), rough, float(illumType), pathRoughness);
 }
-void readGeo1(uint N, uvec2 xy, out vec3 macroN, out float rough, out int illumType, out float pathRoughness) {
+void readGeo1(uint N, uvec2 xy, out vec3 geometryNormal, out float rough, out int illumType, out float pathRoughness) {
     vec4 v = geomBuffer.data[addr(N, xy)];
-    macroN = decodeNormal(v.x);
+    geometryNormal = decodeNormal(v.x);
     rough = v.y;
     illumType = int(v.z);
     pathRoughness = v.w;
@@ -142,7 +142,7 @@ void readLightAbs(uint N, uvec2 xy, out vec3 light, out vec3 absorption) {
 #define GEO_N_ALBEDOS      2u
 #define GEO_N_MISC         3u
 #define GEO_N_LIGHTABS     4u
-#define GEO_N_MICRONORMAL  5u  // oct(microNormal) — surface normal with detail map
+#define GEO_N_MICRONORMAL  5u  // oct(macroNormal) — surface normal with detail map
 
 // --- N=5 ---
 void writeMicroNormal(uint N, uvec2 xy, vec3 microN) {
@@ -270,8 +270,8 @@ AliceEncoding unpackAlice(float s0, float s1, float s2) {
 // N=5: Path Guide     — vec4(packHalf(aliceY.xy), packHalf(aliceY.zw), W, M)  同 colorimg6 布局
 //
 // surfaceMask: 1.0 = valid surface, 0.0 = sky/invalid.
-// Replaces oct(normal) — ALICE encodes the demodulated incident light field;
-// normals are only needed at final composite (macroNormal from Geo1 suffices).
+// Replaces oct(macroNormal) — ALICE encodes the demodulated incident light field;
+// normals are only needed at final composite (geometryNormal from Geo1 suffices).
 
 #define DIF_N_LIGHT   0u
 #define DIF_N_GEO     1u
@@ -542,7 +542,7 @@ struct diffuseIlluminationData {
     AliceEncoding data;
     AliceEncoding data_swap;
     vec3 pos;
-    float surfaceMask;   // was: lowp vec3 normal
+    float surfaceMask;   // was: lowp vec3 macroNormal
     float histSurfaceMask; // was: lowp vec3 normal2
     float weight;
     float prev_weight;
@@ -551,7 +551,7 @@ struct diffuseIlluminationData {
 struct DiffuseIlluminationWriteData {
     AliceEncoding data_swap;
     vec3 pos;
-    float surfaceMask;   // was: lowp vec3 normal
+    float surfaceMask;   // was: lowp vec3 macroNormal
     float weight;
 };
 
@@ -669,7 +669,7 @@ diffuseIlluminationData fetchDiffuse(ivec2 p) {
     tmp.data = alice;
     tmp.prev_weight = weight;
 
-    // 历史几何（N=3）— surfaceMask replaces oct(normal)
+    // 历史几何（N=3）— surfaceMask replaces oct(macroNormal)
     float mask;
     readDiffuseHistGeo(xy, tmp.pos, mask);
     tmp.histSurfaceMask = mask;
@@ -706,7 +706,7 @@ vec3 sampleDiffusePos(vec2 p) {
     return pos;
 }
 
-void WriteDiffuse(diffuseIlluminationData data, ivec2 p) {
+void writeDiffuse(diffuseIlluminationData data, ivec2 p) {
     uvec2 xy = uvec2(p);
 
     // Always write swap (N=4)
@@ -762,7 +762,7 @@ DiffuseIlluminationWriteData samplePrevDiffuse(vec2 p) {
     return blendPrevDiffuse(blendPrevDiffuse(A, B, p2.x), blendPrevDiffuse(C, D, p2.x), p2.y);
 }
 
-void WritePrevDiffuse(DiffuseIlluminationWriteData data, ivec2 p) {
+void writePrevDiffuse(DiffuseIlluminationWriteData data, ivec2 p) {
     uvec2 xy = uvec2(p);
     writeDiffuseSwap(xy, data.data_swap, data.weight);
 }
@@ -828,7 +828,7 @@ vec3IlluminationData sampleReflect(vec2 p) {
     return blendReflect(blendReflect(A, B, p2.x), blendReflect(C, D, p2.x), p2.y);
 }
 
-void WriteReflect(vec3IlluminationData data, ivec2 p) {
+void writeReflect(vec3IlluminationData data, ivec2 p) {
     uvec2 xy = uvec2(p);
     // 读取 vprojDist 保留，只更新 color + weight
     vec3 color; float vproj, accumW;
@@ -836,7 +836,7 @@ void WriteReflect(vec3IlluminationData data, ivec2 p) {
     writeReflLight(xy, data.data_swap, vproj, data.weight);
 }
 
-void WriteReflectHistory(vec3 preDenoiseColor, float prevWeight, vec3 pos, vec3 R, float virtualProjDist, ivec2 p) {
+void writeReflectHistory(vec3 preDenoiseColor, float prevWeight, vec3 pos, vec3 R, float virtualProjDist, ivec2 p) {
     uvec2 xy = uvec2(p);
     writeReflHistGeo(xy, pos, R);
     writeReflHistLight(xy, preDenoiseColor, virtualProjDist, prevWeight);
@@ -887,14 +887,14 @@ vec3IlluminationData sampleRefract(vec2 p) {
     return blendRefract(blendRefract(A, B, p2.x), blendRefract(C, D, p2.x), p2.y);
 }
 
-void WriteRefract(vec3IlluminationData data, ivec2 p) {
+void writeRefract(vec3IlluminationData data, ivec2 p) {
     uvec2 xy = uvec2(p);
     vec3 color; float vproj, accumW;
     readRefrLight(xy, color, vproj, accumW);
     writeRefrLight(xy, data.data_swap, vproj, data.weight);
 }
 
-void WriteRefractHistory(vec3 preDenoiseColor, float prevWeight, vec3 pos, vec3 R, float virtualProjDist, ivec2 p) {
+void writeRefractHistory(vec3 preDenoiseColor, float prevWeight, vec3 pos, vec3 R, float virtualProjDist, ivec2 p) {
     uvec2 xy = uvec2(p);
     writeRefrHistGeo(xy, pos, R);
     writeRefrHistLight(xy, preDenoiseColor, virtualProjDist, prevWeight);

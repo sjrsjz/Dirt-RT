@@ -47,5 +47,5 @@ void main() {
 
     // 写时域历史到 SSBO hist_* 区段 (替代原先 4 个 rgba32f image write)
     vec3 R = decodeNormal(geom.w);
-    WriteReflectHistory(preDenoise, weight, geom.xyz, R, virtualProjDist, pix);
+    writeReflectHistory(preDenoise, weight, geom.xyz, R, virtualProjDist, pix);
 }

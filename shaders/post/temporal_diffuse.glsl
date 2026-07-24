@@ -15,19 +15,7 @@ layout(rgba32f) uniform writeonly image2D colorimg6;
 #include "/lib/buffers/denoise.glsl"
 #include "/lib/lighting/alice.glsl"
 
-// ===========================================================================
-// Uniform 输入 & 宏定义
-// ===========================================================================
-
 uniform vec2 resolution;
-
-#ifndef TEMPORAL_MAX_HISTORY
-#define TEMPORAL_MAX_HISTORY 32.0
-#endif
-
-#ifndef TEMPORAL_HISTORY_MIN_WEIGHT
-#define TEMPORAL_HISTORY_MIN_WEIGHT 1e-4
-#endif
 
 #ifndef TEMPORAL_DEPTH_FOOTPRINT_SCALE
 #define TEMPORAL_DEPTH_FOOTPRINT_SCALE 1.0
@@ -39,34 +27,6 @@ uniform vec2 resolution;
 
 #ifndef TEMPORAL_GEOMETRY_EPSILON
 #define TEMPORAL_GEOMETRY_EPSILON 1e-5
-#endif
-
-#ifndef TEMPORAL_AABB_ENABLE
-#define TEMPORAL_AABB_ENABLE 1
-#endif
-
-#ifndef TEMPORAL_AABB_NEIGHBOR_RADIUS
-#define TEMPORAL_AABB_NEIGHBOR_RADIUS 2
-#endif
-
-#ifndef TEMPORAL_AABB_EXPAND
-#define TEMPORAL_AABB_EXPAND 2.0
-#endif
-
-#ifndef TEMPORAL_AABB_SIGMA_SCALE
-#define TEMPORAL_AABB_SIGMA_SCALE 3.0
-#endif
-
-#ifndef TEMPORAL_AABB_MIN_EXTENT
-#define TEMPORAL_AABB_MIN_EXTENT 1.0
-#endif
-
-#ifndef TEMPORAL_AABB_BOX_SCALE
-#define TEMPORAL_AABB_BOX_SCALE 1.0
-#endif
-
-#ifndef TEMPORAL_AABB_MIN_VALID_NEIGHBORS
-#define TEMPORAL_AABB_MIN_VALID_NEIGHBORS 2
 #endif
 
 // ===========================================================================
@@ -95,7 +55,7 @@ shared AABBTileSample sm_aabbTile[AABB_SM_H][AABB_SM_W];
 
 struct TemporalFootprint {
     vec3 origin;
-    vec3 normal;
+    vec3 geometryNormal;
     vec3 tangent;
     vec3 bitangent;
     vec2 plane0, plane1, plane2, plane3;
@@ -106,7 +66,7 @@ struct TemporalFootprint {
 vec3 prevScreenPos;
 vec3 cameraDelta;
 float info_distance;
-vec3 currentNormal; // from Geo1, for buildTemporalFootprint tangent frame
+vec3 geometryNormal; // from Geo1, for buildTemporalFootprint tangent frame
 
 DiffuseIlluminationWriteData current_data;
 diffuseIlluminationData out_data;
@@ -130,21 +90,21 @@ vec3 intersectCorner(vec2 ndc, mat4 invVP, vec3 planeO, vec3 planeN, out bool va
     return ro + rd * (dot(planeO - ro, planeN) / denom);
 }
 
-bool buildTemporalFootprint(uvec2 pix, vec3 currentPos, vec3 geometricNormal, vec3 camDelta, out TemporalFootprint fp) {
-    float nLenSq = dot(geometricNormal, geometricNormal);
+bool buildTemporalFootprint(uvec2 pix, vec3 currentPos, vec3 geometryNormal, vec3 camDelta, out TemporalFootprint fp) {
+    float nLenSq = dot(geometryNormal, geometryNormal);
     if (nLenSq < 1e-8) return false;
 
-    fp.normal = geometricNormal * inversesqrt(nLenSq);
+    fp.geometryNormal = geometryNormal * inversesqrt(nLenSq);
 
     // Frisvad 标准正交基
-    if (fp.normal.z < -0.999999) {
+    if (fp.geometryNormal.z < -0.999999) {
         fp.tangent = vec3(0.0, -1.0, 0.0);
         fp.bitangent = vec3(-1.0, 0.0, 0.0);
     } else {
-        float a = 1.0 / (1.0 + fp.normal.z);
-        float c = -fp.normal.x * fp.normal.y * a;
-        fp.tangent = vec3(1.0 - fp.normal.x * fp.normal.x * a, c, -fp.normal.x);
-        fp.bitangent = vec3(c, 1.0 - fp.normal.y * fp.normal.y * a, -fp.normal.y);
+        float a = 1.0 / (1.0 + fp.geometryNormal.z);
+        float c = -fp.geometryNormal.x * fp.geometryNormal.y * a;
+        fp.tangent = vec3(1.0 - fp.geometryNormal.x * fp.geometryNormal.x * a, c, -fp.geometryNormal.x);
+        fp.bitangent = vec3(c, 1.0 - fp.geometryNormal.y * fp.geometryNormal.y * a, -fp.geometryNormal.y);
     }
 
     mat4 invVP = inverse(rtProjection * rtModelView);
@@ -155,10 +115,10 @@ bool buildTemporalFootprint(uvec2 pix, vec3 currentPos, vec3 geometricNormal, ve
     bool v0, v1, v2, v3;
     fp.origin = currentPos + camDelta;
 
-    vec3 w0 = intersectCorner(vec2(uvMin.x, uvMin.y), invVP, currentPos, fp.normal, v0) + camDelta;
-    vec3 w1 = intersectCorner(vec2(uvMax.x, uvMin.y), invVP, currentPos, fp.normal, v1) + camDelta;
-    vec3 w2 = intersectCorner(vec2(uvMax.x, uvMax.y), invVP, currentPos, fp.normal, v2) + camDelta;
-    vec3 w3 = intersectCorner(vec2(uvMin.x, uvMax.y), invVP, currentPos, fp.normal, v3) + camDelta;
+    vec3 w0 = intersectCorner(vec2(uvMin.x, uvMin.y), invVP, currentPos, fp.geometryNormal, v0) + camDelta;
+    vec3 w1 = intersectCorner(vec2(uvMax.x, uvMin.y), invVP, currentPos, fp.geometryNormal, v1) + camDelta;
+    vec3 w2 = intersectCorner(vec2(uvMax.x, uvMax.y), invVP, currentPos, fp.geometryNormal, v2) + camDelta;
+    vec3 w3 = intersectCorner(vec2(uvMin.x, uvMax.y), invVP, currentPos, fp.geometryNormal, v3) + camDelta;
 
     if (!(v0 && v1 && v2 && v3)) return false;
 
@@ -176,7 +136,7 @@ bool buildTemporalFootprint(uvec2 pix, vec3 currentPos, vec3 geometricNormal, ve
 
 bool strictHistoryGeometryTest(vec3 histPos, TemporalFootprint fp) {
     vec3 delta = histPos - fp.origin;
-    if (abs(dot(delta, fp.normal)) > fp.depthHalfExtent) return false;
+    if (abs(dot(delta, fp.geometryNormal)) > fp.depthHalfExtent) return false;
 
     vec2 p = vec2(dot(delta, fp.tangent), dot(delta, fp.bitangent));
 
@@ -290,7 +250,7 @@ void MixDiffuse() {
     }
 
     TemporalFootprint fp;
-    if (!buildTemporalFootprint(uvec2(gl_GlobalInvocationID.xy), current_data.pos, currentNormal, cameraDelta, fp)) {
+    if (!buildTemporalFootprint(uvec2(gl_GlobalInvocationID.xy), current_data.pos, geometryNormal, cameraDelta, fp)) {
         resetToCurrentSample();
         return;
     }
@@ -310,7 +270,7 @@ void MixDiffuse() {
         prevFrac.x * prevFrac.y
         };
 
-    float currVoN = dot(normalize(current_data.pos), currentNormal);
+    float currVoN = dot(normalize(current_data.pos), geometryNormal);
 
     for (int i = 0; i < 4; i++) {
         ivec2 sampleTexel = prevBase + ivec2(i & 1, i >> 1);
@@ -325,7 +285,7 @@ void MixDiffuse() {
         float d1_sq = dot(tap.pos, tap.pos);
         vec3 histPosCur = tap.pos - cameraDelta;
         float d2_sq = dot(histPosCur, histPosCur);
-        float histVoN = dot(normalize(histPosCur), currentNormal);
+        float histVoN = dot(normalize(histPosCur), geometryNormal);
 
         float scale = clamp(d2_sq * abs(histVoN) / max(d1_sq * abs(currVoN), 1e-3), 0.0, 1.0);
         float correctedTapW = min(tap.prev_weight * scale, float(TEMPORAL_MAX_HISTORY));
@@ -423,11 +383,11 @@ void main() {
         current_data.data_swap = alice;
         current_data.surfaceMask = mask;
         current_data.weight = 1.0;
-        // 从 Geo1 取 macroNormal（仅用于 buildTemporalFootprint 切空间）
+        // 从 Geo1 取 geometryNormal（仅用于 buildTemporalFootprint 切空间）
         float _r;
         int _it;
         float _pr;
-        readGeo1(GEO_N_NORMALS, pix, currentNormal, _r, _it, _pr);
+        readGeo1(GEO_N_NORMALS, pix, geometryNormal, _r, _it, _pr);
     }
 
     out_data.data_swap = current_data.data_swap;
@@ -438,7 +398,7 @@ void main() {
 
     if (info_distance < -0.5) {
         out_data.weight = 0.0;
-        WriteDiffuse(out_data, ivec2(pix));
+        writeDiffuse(out_data, ivec2(pix));
         imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), vec4(0.0, 0.0, 0.0, 0.0));
         return;
     }
@@ -451,5 +411,5 @@ void main() {
     MixDiffuse();
 
     out_data.weight = output_weight;
-    WriteDiffuse(out_data, ivec2(pix));
+    writeDiffuse(out_data, ivec2(pix));
 }

@@ -20,7 +20,7 @@ void unpackLightSample(ivec2 coord, out vec3 pos, out float surfaceMask, out Ali
     vec4 d1 = texelFetch(colortex4, coord, 0);
     vec4 d2 = texelFetch(colortex5, coord, 0);
     pos = d0.xyz;
-    surfaceMask = d0.w; // was oct(normal), now surfaceMask
+    surfaceMask = d0.w; // was oct(macroNormal), now surfaceMask
     encoded = unpackAlice(d1.x, d1.y, d1.z);
     blurred_alice = unpackAlice(d2.x, d2.y, d2.z);
 }
@@ -48,7 +48,7 @@ void main() {
     tmp.data_swap = encoded;
     tmp.data = mix_alice(tmp.data, blurred_alice,
             clamp(NRD_BLEND_STRENGTH * exp(-NRD_BLEND_STRENGTH * clamp(tmp.weight, 0.0, 100.0)), 0.0, 1.0));
-    WriteDiffuse(tmp, pix);
+    writeDiffuse(tmp, pix);
 
     // Phase 2: colortex6 → N=5 原样拷贝
     diffuseBuffer.data[addr(DIF_N_PATHGUIDE, gxy)] = texelFetch(colortex6, pix, 0);

@@ -22,7 +22,7 @@ struct Material {
     float roughness;
     float subsurface_scattering;
     vec3 emission;
-    vec3 normal;
+    vec3 macroNormal;
     float ambientOcclusion;
     float translucent;
     ivec2 block_id;
@@ -39,7 +39,7 @@ float adhesion(vec3 n, vec3 w, vec3 g, float a) {
         ((1 + sqrt(1 + a2 * tanA * tanA)) * (tanB + t) * t));
 }
 
-Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn, float wetStrength, float wetness, float skylight, vec3 macroNormal) {
+Material getMaterial(vec4 albedo, vec4 macroNormal, vec4 specular, mat3 tbn, float wetStrength, float wetness, float skylight, vec3 geometryNormal) {
     Material material;
 
     // === Translucency === (albedo.a)
@@ -49,15 +49,15 @@ Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn, float we
     float smoothness = specular.r;
     material.roughness = (1.0 - smoothness) * (1.0 - smoothness);
 
-    // === Normal: XY from RG channels, Z reconstructed, B = Material AO === (normal)
-    material.normal = normal.xyz * 2.0 - 1.0;
-    material.normal.z = sqrt(max(1.0 - dot(material.normal.xy, material.normal.xy), 0.0));
-    material.normal = normalize(tbn * material.normal);
+    // === Normal: XY from RG channels, Z reconstructed, B = Material AO === (macroNormal)
+    material.macroNormal = macroNormal.xyz * 2.0 - 1.0;
+    material.macroNormal.z = sqrt(max(1.0 - dot(material.macroNormal.xy, material.macroNormal.xy), 0.0));
+    material.macroNormal = normalize(tbn * material.macroNormal);
 
-    // === Ambient Occlusion === (normal.b)
+    // === Ambient Occlusion === (macroNormal.b)
     // LabPBR 1.3: B = AO directly. 但多数纹理包沿用旧约定 B = 1-AO.
-    // 为兼容性保留取反; 若纹理包严格遵循 LabPBR 1.3, 改为 normal.b.
-    material.ambientOcclusion = 1.0 - normal.b;
+    // 为兼容性保留取反; 若纹理包严格遵循 LabPBR 1.3, 改为 macroNormal.b.
+    material.ambientOcclusion = 1.0 - macroNormal.b;
 
     // === F0, metallic, albedo === (specular.g)
     int f0Channel = int(specular.g * 255.0 + 0.5);
@@ -104,11 +104,11 @@ Material getMaterial(vec4 albedo, vec4 normal, vec4 specular, mat3 tbn, float we
     }
 
     // === Wetness modulation ===
-    float adhesion_ = clamp(adhesion(macroNormal, vec3(0, -1, 0), vec3(0, -1, 0), material.roughness) + 0.25, 0.0, 1.0);
+    float adhesion_ = clamp(adhesion(geometryNormal, vec3(0, -1, 0), vec3(0, -1, 0), material.roughness) + 0.25, 0.0, 1.0);
     float mix0 = min(wetStrength * adhesion_ * min(skylight / 255.0, 1.0) * porosity + wetness * 0.15, 1.0);
     mix0 *= MAX_WETNESS;
     material.roughness = max(1.0 - mix0 * 1.5, 0.0) * material.roughness;
-    material.normal = normalize(mix(material.normal, macroNormal, mix0));
+    material.macroNormal = normalize(mix(material.macroNormal, geometryNormal, mix0));
     // Wet dielectric → F0 blends toward 1.0 (thin water film); metals unaffected
     mix0 *= 0.25;
     if (material.metallic < 0.5) {

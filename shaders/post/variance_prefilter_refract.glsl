@@ -4,7 +4,7 @@
 // Pass swap6: 折射缓冲打包 + 镜面方差预计算 (Compute, 共享内存加速)
 // ===========================================================================
 // 折射对应 swap4 (反射). 读 SSBO (refractIlluminationBuffer) + image (折射累积颜色)
-// + denoiseBuffer, LDS 5×5 方差, H = 实际几何法线 (macroNormal), 打包 colortex3/4 供 301 降噪.
+// + denoiseBuffer, LDS 5×5 方差, H = 实际几何法线 (geometryNormal), 打包 colortex3/4 供 301 降噪.
 // TileSample 紧凑打包为 3 个 vec4 (48B).
 // ===========================================================================
 

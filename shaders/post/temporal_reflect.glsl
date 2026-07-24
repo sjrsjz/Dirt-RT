@@ -77,7 +77,7 @@ vec3 reproject(vec3 pos_rel) {
 
 float info_distance; // 当前像素的主射线距离
 
-vec3 surfaceN; // 反射表面法线 (G-buffer macroNormal)
+vec3 geometryNormal; // 反射表面法线 (G-buffer geometryNormal)
 float disocclusionThreshold; // NRD 平面距离阈值 (世界单位)
 
 bool notInRange(vec2 p) {
@@ -121,7 +121,7 @@ void evalPath(vec2 prevUV, bool useGgx,
         vec3 samplePosCur = samplePos - cameraDelta;
 
         // 1. NRD 硬反遮挡: 当前表面点与历史表面点需共面
-        float planeDist = abs(dot(pos - samplePosCur, surfaceN));
+        float planeDist = abs(dot(pos - samplePosCur, geometryNormal));
         if (planeDist >= disocclusionThreshold) continue;
 
         // 双线性权重
@@ -225,7 +225,7 @@ void main() {
     // ---- 天空 / 无效几何: 重置权重后直接写出 -----------------------------
     if (info_distance < -0.5) {
         curr_sample.weight = 1.0;
-        WriteReflect(curr_sample, ivec2(pix));
+        writeReflect(curr_sample, ivec2(pix));
         return;
     }
 
@@ -242,7 +242,7 @@ void main() {
     float posLen = max(length(pos), 0.001);
     vec3 viewDir = pos / posLen; // eye → surface (相机在原点)
 
-    surfaceN = N;
+    geometryNormal = N;
     // frustumSize ≈ dist · 2·tan(fovY/2), tan(fovY/2) = 1/rtProjection[1][1] (jitter 不影响 y 缩放)
     float frustumScale = 2.0 / max(abs(rtProjection[1][1]), 1e-4);
     disocclusionThreshold = DISOCCLUSION_THRESHOLD * posLen * frustumScale;
@@ -295,5 +295,5 @@ void main() {
     // ---- 写出 (REFLECT_BUFFER_MIN: 仅 swap_color) ------------------------
     curr_sample.data_swap = result;
     curr_sample.weight = Wnew;
-    WriteReflect(curr_sample, ivec2(pix));
+    writeReflect(curr_sample, ivec2(pix));
 }

@@ -51,7 +51,7 @@ uniform vec2 resolution;
 
 struct TileSample {
     float dist;
-    vec3 normal;
+    vec3 geometryNormal;
 };
 
 shared TileSample sm_tile[SM_H][SM_W];
@@ -99,7 +99,7 @@ void main() {
             uvec2 loadXY = uvec2(clamped);
 
             float rough_unused; int illumType_unused;
-            float _pr; readGeo1(GEO_N_NORMALS, loadXY, sm_tile[row][col].normal, rough_unused, illumType_unused, _pr);
+            float _pr; readGeo1(GEO_N_NORMALS, loadXY, sm_tile[row][col].geometryNormal, rough_unused, illumType_unused, _pr);
         }
     }
     memoryBarrierShared();
@@ -121,7 +121,7 @@ void main() {
     TileSample c = sm_tile[cy][cx];
     float d_c = c.dist;
     if (d_c < -0.5) return;
-    vec3 N_c = c.normal;
+    vec3 N_c = c.geometryNormal;
     if (any(isnan(N_c))) return;
 
     // ---- 读取 4 邻域 (全从共享内存) -----------------------------------------
@@ -151,10 +151,10 @@ void main() {
 
     // ---- 方向曲率 ----------------------------------------------------------
     // 中心差分: 无效邻域用中心法线替代 (贡献为零)
-    vec3 N_r = vr ? sr.normal : N_c;
-    vec3 N_l = vl ? sl.normal : N_c;
-    vec3 N_t = vt ? st.normal : N_c;
-    vec3 N_b = vb ? sb.normal : N_c;
+    vec3 N_r = vr ? sr.geometryNormal : N_c;
+    vec3 N_l = vl ? sl.geometryNormal : N_c;
+    vec3 N_t = vt ? st.geometryNormal : N_c;
+    vec3 N_b = vb ? sb.geometryNormal : N_c;
 
     float dn_dx = dot(N_r - N_l, camRight);
     float dn_dy = dot(N_b - N_t, camUp);

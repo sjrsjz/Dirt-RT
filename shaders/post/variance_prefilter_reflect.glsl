@@ -5,7 +5,7 @@
 // ===========================================================================
 // 镜像 swap2 (漫反射). 读 SSBO (SpecularRTElement: pos/oct_dir/virtualProjDist) +
 // image (累积颜色 *_color_swap_Sampler.xyz) + denoiseBuffer (roughness/distance),
-// 用 LDS 做 5×5 几何感知双边方差滤波, H = 实际几何法线 (macroNormal),
+// 用 LDS 做 5×5 几何感知双边方差滤波, H = 实际几何法线 (geometryNormal),
 // 打包写入 colortex3/4 供 301 降噪.
 //
 //   colortex3 = (pos.xyz, oct(R))

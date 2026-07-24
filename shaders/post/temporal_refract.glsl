@@ -108,7 +108,7 @@ void main() {
     float vproj;
     vec3IlluminationData curr_sample;
 
-    unpackSpecularRT_Refr(pix, curr_sample.pos, curr_sample.normal, curr_sample.data_swap, vproj);
+    unpackSpecularRT_Refr(pix, curr_sample.pos, curr_sample.normal, curr_sample.data_swap, vproj); // curr_sample.normal stores T (transmission direction), not a surface normal
     curr_sample.data = vec3(0.0);
     curr_sample.weight = 0.0;
     curr_sample.prev_weight = 0.0;
@@ -116,7 +116,7 @@ void main() {
     // 如果几何深度无效，直接跳过时域
     if (info_distance < -0.5) {
         curr_sample.weight = 1.0;
-        WriteRefract(curr_sample, ivec2(pix));
+        writeRefract(curr_sample, ivec2(pix));
         return;
     }
 
@@ -150,5 +150,5 @@ void main() {
 
     curr_sample.data_swap = result;
     curr_sample.weight = Wnew;
-    WriteRefract(curr_sample, ivec2(pix));
+    writeRefract(curr_sample, ivec2(pix));
 }

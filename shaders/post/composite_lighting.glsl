@@ -80,10 +80,10 @@ void main() {
     // =========================================================================
     // 分支 2: 表面像素 — 跳过 Geo0，读 Geo1 + 所有光照
     // =========================================================================
-    vec3 macroN, specAlbedo, diffAlbedo, transAlbedo, emisVal, lightVal, absorptionVal, rdVal;
+    vec3 geometryNormal, specAlbedo, diffAlbedo, transAlbedo, emisVal, lightVal, absorptionVal, rdVal;
     float rough, pathR;
     int illumType;
-    readGeo1(GEO_N_NORMALS, xy, macroN, rough, illumType, pathR);
+    readGeo1(GEO_N_NORMALS, xy, geometryNormal, rough, illumType, pathR);
     vec3 microN = readMicroNormal(GEO_N_MICRONORMAL, xy);
     readAlbedosPath(GEO_N_ALBEDOS, xy, specAlbedo, diffAlbedo);
     readMisc(GEO_N_MISC, xy, transAlbedo, emisVal, rdVal);
@@ -125,8 +125,8 @@ void main() {
     fragColor.xyz = 2.0 * abs(tmp.data_swap.aliceY.xyz / max(max(tmp.data_swap.aliceY.w, length(tmp.data_swap.aliceY.xyz)), 1e-6));
 
     #elif DEBUG_VIEW == 6
-    // Normals: world-space macroNormal as RGB
-    fragColor.xyz = macroN * 0.5 + 0.5;
+    // Normals: world-space geometryNormal as RGB
+    fragColor.xyz = geometryNormal * 0.5 + 0.5;
 
     #elif DEBUG_VIEW == 7
     // Absorption / atmospheric transmission

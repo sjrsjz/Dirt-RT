@@ -65,8 +65,8 @@ void main() {
             ivec2 cc = clamp(gc, ivec2(0), texSize - 1);
             uvec2 xy = uvec2(cc);
 
-            vec3 macroN_unused; float rough; int illumType_unused;
-            float _pr; readGeo1(GEO_N_NORMALS, xy, macroN_unused, rough, illumType_unused, _pr);
+            vec3 geometryNormal_unused; float rough; int illumType_unused;
+            float _pr; readGeo1(GEO_N_NORMALS, xy, geometryNormal_unused, rough, illumType_unused, _pr);
             sm[i].materialID = rough;
         }
     }

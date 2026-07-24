@@ -46,5 +46,5 @@ void main() {
     writeRefrLight(xy, denoised, vproj, weight);
 
     vec3 R = decodeNormal(geom.w);
-    WriteRefractHistory(preDenoise, weight, geom.xyz, R, virtualProjDist, pix);
+    writeRefractHistory(preDenoise, weight, geom.xyz, R, virtualProjDist, pix);
 }
