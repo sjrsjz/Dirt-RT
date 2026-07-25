@@ -24,11 +24,11 @@ layout(rgba32f) uniform writeonly image2D colorimg4;
 
 
 #ifndef VAR_FILTER_NORMAL_POWER
-#define VAR_FILTER_NORMAL_POWER SVGF_NORMAL_POWER
+#define VAR_FILTER_NORMAL_POWER ATROUS_NORMAL_POWER
 #endif
 
 #ifndef VAR_FILTER_POSITION_PARAM
-#define VAR_FILTER_POSITION_PARAM SVGF_POSITION_PARAM
+#define VAR_FILTER_POSITION_PARAM ATROUS_POSITION_PARAM
 #endif
 
 // --- Shared memory tile: 20x20 (16+4 halo for 5x5 kernel) ---
@@ -39,8 +39,7 @@ const uint HALO = 2u;
 struct TileSample {
     bool valid;
     vec3 p;
-    float weight;
-    vec4 aliceY;
+    float estimatorVariance;
 };
 shared TileSample sm_tile[SM_H][SM_W];
 
@@ -63,10 +62,11 @@ float sanitizeVariance(float v) {
 }
 
 // Unpack swap AliceEncoding + weight from unified SSBO, return raw ALICE variance.
-void loadAliceY(uvec2 xy, out vec4 aliceY, out float weight) {
+float loadAliceY(uvec2 xy) {
     AliceEncoding alice;
+    float weight;
     readDiffuseSwap(xy, alice, weight);
-    aliceY = sanitizeAliceY(alice.aliceY);
+    return sanitizeVariance(alice_estimator_variance(alice.aliceY, weight));
 }
 
 // Depth-only geometry weight — ALICE Bures distance replaces normal-based edge-stopping
@@ -116,7 +116,7 @@ void main() {
             ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(col, row);
             ivec2 clamped = clamp(gc, ivec2(0), texSize);
             uvec2 loadXY = uvec2(clamped);
-            loadAliceY(loadXY, sm_tile[row][col].aliceY, sm_tile[row][col].weight);
+            sm_tile[row][col].estimatorVariance = loadAliceY(loadXY);
         }
     }
     barrier();
@@ -159,8 +159,7 @@ void main() {
     // =========================================================================
     // Phase 4: 5x5 geometry-aware bilateral variance filter
     // =========================================================================
-    vec4 sumAliceY = vec4(0.0);
-    float sumHistW = 0.0;
+    float sumVar = 0.0;
     float sumW = 0.0;
 
     for (int ky = -2; ky <= 2; ky++) {
@@ -173,15 +172,14 @@ void main() {
             float wGeom = varianceGeometryWeight(centerTile.p, centerNormal, s.p);
 
             float w = wKernel * wGeom;
-            sumAliceY += w * s.aliceY;
-            sumHistW += w * s.weight;
+
+            // 100% 统计独立假设
+            sumVar += w * w * s.estimatorVariance;
             sumW += w;
         }
     }
 
-    vec4 filteredAliceY = sumAliceY / max(sumW, 1e-20);
-    float filteredHistW = sumHistW / max(sumW, 1e-20);
-    float filteredVariance = alice_estimator_variance(filteredAliceY, filteredHistW);
+    float filteredVariance = sumVar / max(sumW * sumW, 1e-6);
 
     // =========================================================================
     // Phase 5: Write outputs

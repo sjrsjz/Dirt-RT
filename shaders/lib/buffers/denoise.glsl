@@ -357,7 +357,7 @@ void readDiffuseSwap(uvec2 xy, out AliceEncoding alice, out float weight) {
     vec2 ay_zw = unpackHalf2x16(floatBitsToUint(v.y));
     vec2 cocg  = unpackHalf2x16(floatBitsToUint(v.z));
     alice.aliceY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
-    alice.CoCg = cocg;
+    alice.CoCg = clamp(cocg, vec2(-65504.0), vec2(65504.0));
     weight = v.w;
 }
 

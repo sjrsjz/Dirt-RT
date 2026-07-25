@@ -40,12 +40,11 @@ option.TEMPORAL_AABB_MIN_EXTENT = AABB Min Extent
 option.TEMPORAL_AABB_BOX_SCALE = AABB Box Scale
 option.TEMPORAL_AABB_MIN_VALID_NEIGHBORS = AABB Min Valid Neighbors
 
-screen.SVGF_DENOISER = SVGF Denoiser
-option.VAR_FILTER_RADIUS = Variance Filter Radius
-option.VARIANCE_SCALE = Variance Scale
-option.SVGF_NORMAL_POWER = SVGF Normal Edge Sensitivity
-option.SVGF_PHI_L = SVGF Luma Sensitivity
-option.SVGF_POSITION_PARAM = SVGF Depth Edge Sensitivity
+screen.ATROUS_DENOISER = À-Trous Denoiser
+option.ATROUS_NORMAL_POWER = À-Trous Normal Edge Sensitivity
+option.ATROUS_PHI_L = À-Trous Luma Sensitivity
+option.ATROUS_POSITION_PARAM = À-Trous Depth Edge Sensitivity
+option.ATROUS_GAMMA = À-Trous Roughness Adaptation
 screen.DEBUG = Debug
 option.DEBUG_VIEW = Debug View
 value.DEBUG_VIEW.0 = Normal

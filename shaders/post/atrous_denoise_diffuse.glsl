@@ -56,9 +56,16 @@ void unpackLightSample(ivec2 coord, out vec3 pos, out float oct_normal,
     variance = sample_data1.w;
 }
 
-
-float relavant_power(const float R, const float gamma) {
-    return 2.0 - log2(1.0 + exp2(-gamma * R));
+// à-trous 分数阶方差传播指数
+// 注意，fs 采样使用的是泊松核，结论可能不完全适用，但仍然可以作为一个近似值
+float relevant_power(const float R) {
+    if (R <= 1.0f) {
+        return 2.0f;
+    }
+    const float R2 = R * R;
+    const float rho = exp(-1.5f * R2 / (R2 - 1.0f));
+    const float p_exact = 2.0f - ATROUS_GAMMA * (log(1.0f + 8.0f * rho) / 2.197224577f);
+    return max(1.0f, p_exact);
 }
 
 // ---------------------------------------------------------------------------
@@ -79,7 +86,7 @@ void main() {
     // 天空像素跳过 (方差被 swap2 复用作天空 mask)
     if (center_var_est < 0.0) return;
 
-    const float power = relavant_power(float(R0), SVGF_PHI_GAMMA);
+    const float power = relevant_power(R0 * 2); // 乘 2 是因为方差估计是给下一级用的
 
     center_var_est = max(center_var_est, 1e-12);
 
@@ -94,10 +101,10 @@ void main() {
     float c_kappa = alice_kappa(c_len_v, c_omega);
     vec2 c_std = alice_eigen_std(c_omega, c_kappa);
 
-    float c_inv_var = 1.0 / max(center_var_est, 1e-8);
+    float c_inv_var = 1.0 / max(center_var_est, 4e-9);
 
     float dist_to_cam = max(length(center_pos), 0.001);
-    float inv_pixel_footprint = 1.0 / (SVGF_POSITION_PARAM
+    float inv_pixel_footprint = 1.0 / (ATROUS_POSITION_PARAM
                 * max(dist_to_cam / float(resolution_global.y), 0.00001));
 
     // ---- 初始化累积器 ----------------------------------------------------
@@ -135,7 +142,7 @@ void main() {
         float s_kappa = alice_kappa(s_len_v, s_enc.w);
         vec2 s_std = alice_eigen_std(s_enc.w, s_kappa);
         float d_bures_sq = alice_bures_distance_sq_precomputed(c_enc.xyz, c_std, s_enc.xyz, s_std);
-        float w_luma = SVGF_PHI_L * R0 * d_bures_sq * c_inv_var;
+        float w_luma = ATROUS_PHI_L * R0 * d_bures_sq * c_inv_var;
 
         const float w_kernel = ps.w;
         float w0 = w_kernel * exp(-w_geometry) / (1 + w_luma);

@@ -40,12 +40,11 @@ option.TEMPORAL_AABB_MIN_EXTENT = AABB 最小范围
 option.TEMPORAL_AABB_BOX_SCALE = AABB 全局缩放
 option.TEMPORAL_AABB_MIN_VALID_NEIGHBORS = AABB 最小有效邻域
 
-screen.SVGF_DENOISER = SVGF 降噪
-option.VAR_FILTER_RADIUS = 方差滤波半径
-option.VARIANCE_SCALE = 方差缩放
-option.SVGF_NORMAL_POWER = SVGF 法线边缘灵敏度
-option.SVGF_PHI_L = SVGF 亮度灵敏度
-option.SVGF_POSITION_PARAM = SVGF 深度边缘灵敏度
+screen.ATROUS_DENOISER = À-Trous 降噪
+option.ATROUS_NORMAL_POWER = À-Trous 法线边缘灵敏度
+option.ATROUS_PHI_L = À-Trous 亮度灵敏度
+option.ATROUS_POSITION_PARAM = À-Trous 深度边缘灵敏度
+option.ATROUS_GAMMA = À-Trous 粗糙度适配
 screen.DEBUG = 调试
 option.DEBUG_VIEW = 调试视图
 value.DEBUG_VIEW.0 = 正常

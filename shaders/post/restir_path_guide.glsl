@@ -122,7 +122,7 @@ Reservoir spatialReservoir(uvec2 gid, vec3 centerNormal, float centerDist, inout
         float dist;
         readGeo0(GEO_N_GEO, xy, pos, dist);
         float depthDiff = abs(dist - centerDist) / max(abs(centerDist) + 1e-4, 1.0);
-        float geomW = exp2(-depthDiff * float(SVGF_POSITION_PARAM));
+        float geomW = exp2(-depthDiff * float(ATROUS_POSITION_PARAM));
         if (geomW <= 1e-4) continue;
 
         float w = guideTarget(y, centerNormal) * geomW;

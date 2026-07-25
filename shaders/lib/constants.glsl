@@ -23,8 +23,8 @@ const float SPEC_ROUGH_NORM_B = 0.01;
 
 // Surface geometry edge-stop for 301 (much softer than diffuse SVGF params —
 // specular is 1spp high-variance and needs MORE spatial aggregation, not less)
-const float SPEC_GEOM_NORMAL_POWER = 4.0; // cf. SVGF_NORMAL_POWER=32
-const float SPEC_GEOM_DEPTH_PARAM = 0.1; // cf. SVGF_POSITION_PARAM=0.0025
+const float SPEC_GEOM_NORMAL_POWER = 4.0; // cf. ATROUS_NORMAL_POWER=32
+const float SPEC_GEOM_DEPTH_PARAM = 0.1; // cf. ATROUS_POSITION_PARAM=0.0025
 
 // Curvature-guided geometry skip (swap2 → 300)
 

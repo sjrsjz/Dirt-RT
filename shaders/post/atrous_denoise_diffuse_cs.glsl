@@ -42,8 +42,15 @@ void unpackLightSampleSM(uint tile_idx, out vec3 pos,
     variance = light.w;
 }
 
-float relavant_power(const float R, const float gamma) {
-    return 2.0 - log2(1.0 + exp2(-gamma * R));
+// à-trous 分数阶方差传播指数
+float relevant_power(const float R) {
+    if (R <= 1.0f) {
+        return 2.0f;
+    }
+    const float R2 = R * R;
+    const float rho = exp(-1.5f * R2 / (R2 - 1.0f));
+    const float p_exact = 2.0f - ATROUS_GAMMA * (log(1.0f + 8.0f * rho) / 2.197224577f);
+    return max(1.0f, p_exact);
 }
 
 // ---------------------------------------------------------------------------
@@ -103,7 +110,7 @@ void main() {
 
     if (sm_light[center_idx].w < 0.0) return;
 
-    const float power = relavant_power(float(R0), SVGF_PHI_GAMMA);
+    const float power = relevant_power(R0 * 2); // 乘 2 是因为方差估计是给下一级用的
 
     vec3 center_pos;
     AliceEncoding center_alice;
@@ -119,10 +126,10 @@ void main() {
     vec4 c_enc = center_alice.aliceY;
     vec2 c_std = sm_std[center_idx]; // 共享内存加载阶段已预计算 eigen_std
 
-    float c_inv_var = 1.0 / max(center_var_est, 1e-4);
+    float c_inv_var = 1.0 / max(center_var_est, 4e-9);
 
     float dist_to_cam = max(length(center_pos), 0.001);
-    float inv_pixel_footprint = 1.0 / (SVGF_POSITION_PARAM
+    float inv_pixel_footprint = 1.0 / (ATROUS_POSITION_PARAM
                 * max(dist_to_cam / float(resolution_global.y), 0.00001));
 
     // ---- 初始化累积器 ----------------------------------------------------
@@ -165,7 +172,7 @@ void main() {
         vec2 s_std = sm_std[sample_idx]; // 共享内存预计算的 eigen_std
 
         float d_bures_sq = alice_bures_distance_sq_precomputed(c_enc.xyz, c_std, s_v, s_std);
-        float w_luma = SVGF_PHI_L * R0 * d_bures_sq * c_inv_var;
+        float w_luma = ATROUS_PHI_L * R0 * d_bures_sq * c_inv_var;
 
         const float w_kernel = GRID_3x3[k].z;
         float w0 = w_kernel * exp(-w_geometry) / (1 + w_luma);

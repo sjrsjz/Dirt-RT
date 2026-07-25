@@ -28,15 +28,11 @@
 #define TEMPORAL_AABB_BOX_SCALE 1.0 // AABB global scale. Tweak this first when overall clamp feels too aggressive or too conservative. [0.25 0.5 0.75 1.0 1.5 2.0]
 #define TEMPORAL_AABB_MIN_VALID_NEIGHBORS 2 // Minimum valid neighbor count below which AABB clamp is skipped. [1 2 3 4 5 6 7 8]
 
-// -- Variance pre-filter (variance_prefilter_diffuse.glsl) --
-#define VAR_FILTER_RADIUS 1 // Variance pre-filter radius. 1=3×3, 2=5×5, 3=7×7. Larger = more stable variance, slower. [1 2 3]
-#define VARIANCE_SCALE 1.0 // Global variance scale before SVGF. Higher = more aggressive denoising. [0.125 0.25 0.5 1 2 4 6 8 10 15 20 30]
-
-// -- SVGF spatial filter (atrous_denoise_diffuse.glsl) --
-#define SVGF_NORMAL_POWER 32.0 // Normal edge-stopping sensitivity in à-trous wavelet filter. Higher = sharper normal edges preserved. [1 2 4 8 16 32 64 128]
-#define SVGF_PHI_L 0.0015 // Luma sensitivity. Higher = more aggressive denoising. [0.00001 0.00005 0.0001 0.0005 0.00075 0.001 0.005 0.01]
-#define SVGF_POSITION_PARAM 0.0025 // Depth edge-stopping sensitivity. Higher = sharper depth boundaries preserved. [0.00075 0.00125 0.0025 0.005 0.01 0.02 0.04 0.08]
-#define SVGF_PHI_GAMMA 0.0875
+// -- À-trous spatial filter (atrous_denoise_diffuse.glsl) --
+#define ATROUS_NORMAL_POWER 32.0 // Normal edge-stopping sensitivity in à-trous wavelet filter. Higher = sharper normal edges preserved. [1 2 4 8 16 32 64 128]
+#define ATROUS_PHI_L 0.000005 // Luma edge-stopping sensitivity. Higher = more aggressive denoising. [0.000001 0.0000025 0.000005 0.000075 0.00001 0.000025 0.00005 0.0001 0.00025 0.0005 0.001]
+#define ATROUS_POSITION_PARAM 0.0025 // Depth edge-stopping sensitivity. Higher = sharper depth boundaries preserved. [0.00075 0.00125 0.0025 0.005 0.01 0.02 0.04 0.08]
+#define ATROUS_GAMMA 1.0 // Roughness-dependent filter order adaptation strength. 0 = constant filter width regardless of roughness (blurrier on rough surfaces), 1 = standard roughness adaptation, higher = more aggressive widening on rough surfaces. [0.0 0.25 0.5 0.75 1.0 1.5 2.0]
 
 // -- Bloom --
 #define BLOOM_MIX 0.15 // Bloom blend strength. 0 = off (scene only), 1 = full bloom. [0.0 0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5 0.6 0.8 1.0]
