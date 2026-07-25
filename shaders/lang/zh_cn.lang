@@ -70,10 +70,4 @@ value.DEBUG_VIEW.19 = 折射虚拟距离
 value.DEBUG_VIEW.20 = 路径引导
 value.DEBUG_VIEW.21 = 时域累积原始
 
-# -- ReSTIR --
-option.useReSTIR = 使用 ReSTIR
-value.useReSTIR.1 = 开启
-value.useReSTIR.0 = 关闭
-option.RESTIR_SPATIAL_SAMPLES = ReSTIR 空间采样数
-option.RESTIR_SPATIAL_RADIUS = ReSTIR 空间半径
-option.RESTIR_M_CAP = ReSTIR M 上限
+

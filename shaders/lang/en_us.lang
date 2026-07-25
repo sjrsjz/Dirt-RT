@@ -70,10 +70,4 @@ value.DEBUG_VIEW.19 = Refr. VirtDist
 value.DEBUG_VIEW.20 = Path Guide
 value.DEBUG_VIEW.21 = Temporal Raw
 
-# -- ReSTIR --
-option.useReSTIR = Use ReSTIR
-value.useReSTIR.1 = On
-value.useReSTIR.0 = Off
-option.RESTIR_SPATIAL_SAMPLES = ReSTIR Spatial Samples
-option.RESTIR_SPATIAL_RADIUS = ReSTIR Spatial Radius
-option.RESTIR_M_CAP = ReSTIR M-Cap
+
