@@ -324,21 +324,27 @@ bool evaluateSpecularBRDF(
     vec3 wo, vec3 wi, vec3 macroNormal, vec3 Cs, float Sx, float roughness,
     out vec3 fSpecTimesNoL, out float pdfNDF
 ) {
-    float NoV = abs(dot(macroNormal, wo));
+    float NoV = dot(macroNormal, wo);
     float NoL = dot(macroNormal, wi);
+
+    if (NoV <= 1e-5 || NoL <= 1e-5) {
+        fSpecTimesNoL = vec3(0.0);
+        pdfNDF = 0.0;
+        return false;
+    }
+
     HalfVector hv = computeHalfVector(wo, wi);
-    float NoH = abs(dot(macroNormal, hv.H));
+    float NoH = dot(macroNormal, hv.H);
     float VoH = abs(dot(wo, hv.H));
 
-    // Single consolidated validity check (replaces 3 scattered early returns)
-    bool valid = NoV > 1e-6 && NoL > 1e-6 && hv.valid && NoH > 1e-6 && VoH > 1e-6;
+    bool valid = hv.valid && NoH > 1e-5 && VoH > 1e-5;
 
     if (valid) {
         float rough = max(roughness, 1e-4);
-        float D_NoH = GGXpdf(NoH, 0.0, rough);
-        float D = D_NoH / NoH;
+        float D = GGXpdf(NoH, 0.0, rough);
         float G2 = GGX_G2_standard(NoV, NoL, rough);
         vec3 Fh = reflectanceColor(Cs, VoH).rgb;
+
         fSpecTimesNoL = Fh * Sx * D * G2 * NoL / max(4.0 * NoV * NoL, 1e-8);
         pdfNDF = GGX_ndf_pdf(wo, wi, macroNormal, rough);
     } else {
@@ -697,7 +703,7 @@ vec3 evalDirectSpecular(vec3 ro, vec3 macroNormal, vec3 Cs, float Sx, float roug
     float a = max(roughness, 1e-6);
     vec3 H = normalize(wi - rd_i);
     float cosThetaH = clamp(dot(H, macroNormal), 0.0, 1.0);
-    float D = GGXpdf(cosThetaH, 0.0, a) / max(cosThetaH, 1e-6);
+    float D = GGXpdf(cosThetaH, 0.0, a);
     float G2 = GGX_G2(IoN, safeOiN, a);
     vec3 F = reflectanceColor(Cs, abs(dot(rd_i, H))).xyz;
 
@@ -758,7 +764,7 @@ void recordFirstBounceGBuffer(
     float NoV = clamp(abs(dot(rd_i, macroNormal)), 0.0, 1.0);
     float Sx = surf.S.x;
     vec4 rC_stable = reflectanceColor(surf.Cs, NoV);
-    vec3 nonSpecColor_stable = surf.Cd * max(vec3(0.0), vec3(1.0) - rC_stable.rgb * Sx * 0.5);
+    vec3 nonSpecColor_stable = surf.Cd * max(vec3(0.0), vec3(1.0) - rC_stable.rgb * Sx);
     {
         vec3 F0 = surf.Cs * Sx;
         float rough = surf.R.x;
@@ -871,7 +877,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         Material surfaceMat = evaluateMaterial(tmp_Payload, rd_i, 0u);
         vec3 geomN = payload_unpackGeomNormal(tmp_Payload.data);
         vec3 geometryNormal = faceforward(geomN, geomN, rd_i);
-        vec3 macroNormal = normalize(faceforward(surfaceMat.macroNormal, surfaceMat.macroNormal, rd_i));
+        vec3 macroNormal = normalize(faceforward(surfaceMat.macroNormal, surfaceMat.macroNormal, -geometryNormal));
         int blockID;
         payload_unpackShadow(tmp_Payload.data, blockID);
         material surf = materialFromEvaluated(surfaceMat, blockID);

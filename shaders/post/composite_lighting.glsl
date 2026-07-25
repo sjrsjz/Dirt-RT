@@ -126,7 +126,7 @@ void main() {
 
     #elif DEBUG_VIEW == 6
     // Normals: world-space geometryNormal as RGB
-    fragColor.xyz = geometryNormal * 0.5 + 0.5;
+    fragColor.xyz = microN * 0.5 + 0.5;
 
     #elif DEBUG_VIEW == 7
     // Absorption / atmospheric transmission
