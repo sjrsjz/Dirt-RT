@@ -5,6 +5,7 @@
 #define REFRACTIVE_INDEX 1.331 // Water Index of Refraction (IOR). Affects caustics, underwater distortion and specular. [1.30 1.31 1.32 1.33 1.34 1.35 1.36 1.37 1.38 1.39 1.40 1.41 1.42 1.43 1.44 1.45 1.46 1.47 1.48 1.49 1.50]
 #define ACCUMULATION_LENGTH 20 // Frames to accumulate via reprojection. Higher = smoother image, more ghosting on moving lights/camera. [1 2 3 4 5 6 7 8 9 10 20 50 100]
 #define MAX_WETNESS 0.4 // Maximum surface wetness from rain or water. Controls specular reflection on wet blocks. [0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
+#define POM_ENABLED 1 // Enable Parallax Occlusion Mapping (POM) for detailed surface displacement on the first ray hit. 0 = off (better FPS), 1 = on (better visuals). [0 1]
 
 // -- Temporal history rejection (temporal_diffuse.glsl) --
 #define TEMPORAL_NORMAL_PARAM 4.0 // How strictly normal differences reject history. Higher = less ghosting on curved surfaces, more noise. [0.5 1 2 4 8 16 32 64]

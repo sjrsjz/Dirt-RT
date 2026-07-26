@@ -10,6 +10,9 @@ value.END_SKYBOX.0 = Atmospheric Scatter
 screen.MATERIAL = Material
 option.REFRACTIVE_INDEX = Water IOR
 option.MAX_WETNESS = Max Wetness
+option.POM_ENABLED = Parallax Mapping
+value.POM_ENABLED.1 = On
+value.POM_ENABLED.0 = Off
 
 screen.EXPOSURE_DISPLAY = Exposure & Display
 option.DISPLAY_MAX_LUMINANCE = Display Peak Luminance

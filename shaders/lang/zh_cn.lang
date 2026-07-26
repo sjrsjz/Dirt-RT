@@ -10,6 +10,9 @@ value.END_SKYBOX.0 = 大气散射
 screen.MATERIAL = 材质
 option.REFRACTIVE_INDEX = 水折射率
 option.MAX_WETNESS = 最大湿度
+option.POM_ENABLED = 视差映射
+value.POM_ENABLED.1 = 开启
+value.POM_ENABLED.0 = 关闭
 
 screen.EXPOSURE_DISPLAY = 曝光与显示
 option.DISPLAY_MAX_LUMINANCE = 显示器峰值亮度

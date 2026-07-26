@@ -185,25 +185,33 @@ Material evaluateMaterial(Payload pld, vec3 rd_i, uint bounce) {
 
     // --- POM — first hit only ---
     vec2 sampleUV;
-    vec2 derivatives;
     vec2 res = vec2(textureSize(blockTexNormal, 0));
 
+#if POM_ENABLED == 1
+    vec2 derivatives;
     if (bounce == 0u) {
         sampleUV = computeParallaxUV(blockTexNormal, localCoord, atlas, rd_i, tbn, derivatives);
     } else {
         sampleUV = uv;
     }
+#else
+    sampleUV = uv;
+#endif
 
     // --- Sample textures (bicubic albedo+specular first hit, bilinear otherwise) ---
     vec4 albedoTex, specularTex, normalTex;
     albedoTex = texture(blockTex, sampleUV);
     specularTex = texture(blockTexSpecular, sampleUV);
 
+#if POM_ENABLED == 1
     if (bounce == 0u) {
         normalTex = textureBicubic(blockTexNormal, sampleUV, atlas, res);
     } else {
         normalTex = texture(blockTexNormal, sampleUV);
     }
+#else
+    normalTex = texture(blockTexNormal, sampleUV);
+#endif
 
     albedoTex.rgb = pow(albedoTex.rgb * tint, vec3(2.2));
 
