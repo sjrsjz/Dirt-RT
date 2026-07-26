@@ -16,7 +16,7 @@ layout(local_size_x = 16, local_size_y = 16) in;
 
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
-#include "/lib/buffers/denoise.glsl"
+#include "/lib/buffers/buffer_io.glsl"
 
 uniform vec2 resolution;
 

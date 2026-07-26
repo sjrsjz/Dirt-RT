@@ -2,7 +2,7 @@
 #include "/lib/constants.glsl"
 #include "/lib/common.glsl"
 #include "/lib/buffers/frame_data.glsl"
-#include "/lib/buffers/denoise.glsl"
+#include "/lib/buffers/buffer_io.glsl"
 
 // ===========================================================================
 // Pass 301 CS: 镜面 NRD 风格降噪 (计算着色器变体, 前 3 级 à-trous R0=1,2,4)

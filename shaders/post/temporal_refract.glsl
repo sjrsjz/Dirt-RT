@@ -10,7 +10,7 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
-#include "/lib/buffers/denoise.glsl"
+#include "/lib/buffers/buffer_io.glsl"
 
 uniform vec2 resolution;
 

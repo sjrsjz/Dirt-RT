@@ -15,7 +15,7 @@
 #include "/lib/constants.glsl"
 #include "/lib/common.glsl"
 #include "/lib/buffers/frame_data.glsl"
-#include "/lib/buffers/denoise.glsl"
+#include "/lib/buffers/buffer_io.glsl"
 
 uniform sampler2D colortex3; // (pos.xyz, oct(R))
 uniform sampler2D colortex4; // f16(R,G)|f16(B,roughness)|f16(variance,virtualProjDist)|oct(H)

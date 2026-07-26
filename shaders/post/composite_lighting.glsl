@@ -23,7 +23,7 @@
 #define REFRACT_BUFFER_MIN2
 
 #include "/lib/buffers/frame_data.glsl"
-#include "/lib/buffers/denoise.glsl"
+#include "/lib/buffers/buffer_io.glsl"
 #include "/lib/sky.glsl"
 #include "/lib/lighting/alice.glsl"
 

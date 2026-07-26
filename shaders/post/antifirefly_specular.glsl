@@ -17,7 +17,7 @@ layout(local_size_x = 16, local_size_y = 16) in;
 #define REFLECT_BUFFER
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
-#include "/lib/buffers/denoise.glsl"
+#include "/lib/buffers/buffer_io.glsl"
 
 // 共享内存用于 3x3 邻域访问
 const uint HALO = 1u;

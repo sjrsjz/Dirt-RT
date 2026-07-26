@@ -1,7 +1,7 @@
 #version 430
 
 #include "/lib/buffers/frame_data.glsl"
-#include "/lib/buffers/denoise.glsl"
+#include "/lib/buffers/buffer_io.glsl"
 #include "/lib/constants.glsl"
 #include "/lib/post_processing/tonemap.glsl"
 
