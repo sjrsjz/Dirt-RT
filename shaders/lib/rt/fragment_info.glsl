@@ -121,4 +121,30 @@ vec3 interpolateVertexTangent(Quad quad, vec2 bary, bool sideB) {
     }
 }
 
+vec3 interpolateVertexColor(Quad quad, vec2 bary, bool sideB) {
+    vec3 c0 = vec3(quad.vertices[0].color.rgb);
+    float w0 = 1.0 - bary.x - bary.y;
+    if (!sideB) {
+        return (c0 * w0
+            + vec3(quad.vertices[1].color.rgb) * bary.x
+            + vec3(quad.vertices[2].color.rgb) * bary.y) / 255.0;
+    }
+    return (c0 * w0
+        + vec3(quad.vertices[2].color.rgb) * bary.x
+        + vec3(quad.vertices[3].color.rgb) * bary.y) / 255.0;
+}
+
+vec2 interpolateVertexLight(Quad quad, vec2 bary, bool sideB) {
+    vec2 l0 = vec2(quad.vertices[0].light_texture);
+    float w0 = 1.0 - bary.x - bary.y;
+    if (!sideB) {
+        return l0 * w0
+            + vec2(quad.vertices[1].light_texture) * bary.x
+            + vec2(quad.vertices[2].light_texture) * bary.y;
+    }
+    return l0 * w0
+        + vec2(quad.vertices[2].light_texture) * bary.x
+        + vec2(quad.vertices[3].light_texture) * bary.y;
+}
+
 #endif // FRAGMENT_INFO_GLSL

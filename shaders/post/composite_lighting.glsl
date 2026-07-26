@@ -24,6 +24,7 @@
 
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/buffer_io.glsl"
+#include "/lib/buffers/radiance_cache.glsl"
 #include "/lib/sky.glsl"
 #include "/lib/lighting/alice.glsl"
 
@@ -215,6 +216,23 @@ void main() {
         float w;
         readDiffuseHist(xy, raw, w);
         fragColor.xyz = project_alice_irradiance(raw, geometryNormal);
+    }
+
+    #elif DEBUG_VIEW == 22
+    // 世界格点辐射率缓存：可见表面处的白模辐照度
+    {
+        vec3 relativePos;
+        float distance;
+        readGeo0(GEO_N_GEO, xy, relativePos, distance);
+        vec3 cacheCoord = radianceCacheWorldToVoxel(camPos + relativePos, camPos);
+        if (isRadianceCacheSampleInBounds(cacheCoord)) {
+            RadianceCache cache = sampleRadianceCacheHist(cacheCoord);
+            fragColor.xyz = cache.weight > 0.0
+                ? project_alice_irradiance(cache.alice, microN)
+                : vec3(0.0);
+        } else {
+            fragColor.xyz = vec3(0.0);
+        }
     }
 
     #endif

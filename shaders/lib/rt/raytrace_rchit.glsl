@@ -53,27 +53,12 @@ void main() {
         vec3 barys = vec3(1.0 - baryCoord.x - baryCoord.y, baryCoord.x, baryCoord.y);
         vec2 uv = getFragmentUV(quad, barys, isSideA);
         vec4 atlas = getTextureAtlasBox(quad, isSideA);
-        vec3 geomN = decodeSNorm8Vec3(quad.vertices[0].normal);
-        vec3 tangent = decodeSNorm8Vec3(quad.vertices[0].tangent.xyz);
+        vec3 geomN = interpolateVertexNormal(quad, baryCoord, sideB);
+        vec3 tangent = interpolateVertexTangent(quad, baryCoord, sideB);
         bitangentSign = float(quad.vertices[0].tangent.w) * 0.0078125;
         blockID = quad.vertices[0].block_id.x;
-        vec3 tint = quad.vertices[0].color.rgb / 255.0;
-
-        // Skylight from light_texture interpolation
-        float AB = float(max(quad.vertices[1].position.x, quad.vertices[0].position.x)
-                    - min(quad.vertices[1].position.x, quad.vertices[0].position.x));
-        vec2 fA = quad.vertices[0].light_texture.xy;
-        vec2 fB = quad.vertices[1].light_texture.xy;
-        vec2 fC = quad.vertices[2].light_texture.xy;
-        vec2 fD = quad.vertices[3].light_texture.xy;
-        if (AB > 0.5) {
-            fA = quad.vertices[3].light_texture.xy;
-            fB = quad.vertices[0].light_texture.xy;
-            fC = quad.vertices[1].light_texture.xy;
-            fD = quad.vertices[2].light_texture.xy;
-        }
-        vec2 frag_uv = getRelativeUV(uv, atlas);
-        float skylight = mix(mix(fA, fB, frag_uv.y), mix(fD, fC, frag_uv.y), frag_uv.x).y;
+        vec3 tint = interpolateVertexColor(quad, baryCoord, sideB);
+        float skylight = interpolateVertexLight(quad, baryCoord, sideB).y;
 
         payload_packQuadUV(payload.data, uv);
         payload_packAtlasBox(payload.data, atlas);

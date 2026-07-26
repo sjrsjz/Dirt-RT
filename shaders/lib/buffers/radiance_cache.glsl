@@ -173,4 +173,49 @@ RadianceCache sampleRadianceCacheHist(vec3 voxelCoord) {
     return lerpRadianceCache(c0, c1, t.z);
 }
 
+// ===========================================================================
+// 摄像机相对、世界格点对齐的缓存坐标
+// VOXEL_SIZE == 1 时所有 RC 采样点都落在 Minecraft 方块的顶点上。
+// ===========================================================================
+
+vec3 radianceCacheAnchor(vec3 cameraPosition) {
+    return floor(cameraPosition / VOXEL_SIZE) * VOXEL_SIZE;
+}
+
+vec3 radianceCacheOrigin(vec3 cameraPosition) {
+    const vec3 centerIndex = vec3(
+        RADIANCE_CACHE_W / 2,
+        RADIANCE_CACHE_H / 2,
+        RADIANCE_CACHE_D / 2
+    );
+    return radianceCacheAnchor(cameraPosition) - centerIndex * VOXEL_SIZE;
+}
+
+vec3 radianceCacheVoxelWorldPos(uvec3 voxelCoord, vec3 cameraPosition) {
+    return radianceCacheOrigin(cameraPosition) + vec3(voxelCoord) * VOXEL_SIZE;
+}
+
+vec3 radianceCacheWorldToVoxel(vec3 worldPos, vec3 cameraPosition) {
+    return (worldPos - radianceCacheOrigin(cameraPosition)) / VOXEL_SIZE;
+}
+
+bool isRadianceCacheCoordInBounds(ivec3 voxelCoord) {
+    return all(greaterThanEqual(voxelCoord, ivec3(0)))
+        && all(lessThan(voxelCoord, ivec3(
+            RADIANCE_CACHE_W,
+            RADIANCE_CACHE_H,
+            RADIANCE_CACHE_D
+        )));
+}
+
+bool isRadianceCacheSampleInBounds(vec3 voxelCoord) {
+    ivec3 base = ivec3(floor(voxelCoord));
+    ivec3 upper = base + ivec3(
+        fract(voxelCoord.x) > 0.0 ? 1 : 0,
+        fract(voxelCoord.y) > 0.0 ? 1 : 0,
+        fract(voxelCoord.z) > 0.0 ? 1 : 0
+    );
+    return isRadianceCacheCoordInBounds(base) && isRadianceCacheCoordInBounds(upper);
+}
+
 #endif // RADIANCE_CACHE_GLSL

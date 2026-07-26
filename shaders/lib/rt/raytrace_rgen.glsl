@@ -25,6 +25,9 @@
 #include "/lib/math/quaternions.glsl"
 #include "/lib/buffers/buffer_io.glsl"
 #include "/lib/buffers/frame_data.glsl"
+#if defined(RADIANCE_CACHE_TRACE)
+#include "/lib/buffers/radiance_cache.glsl"
+#endif
 #include "/lib/pbr/material.glsl"
 #include "/lib/common.glsl"
 
@@ -58,10 +61,13 @@ layout(binding = 4) uniform sampler2D blockTexNormal;
 layout(binding = 5) uniform sampler2D blockTexSpecular;
 layout(location = 6) rayPayloadEXT Payload payload;
 
+#if !defined(RADIANCE_CACHE_TRACE)
 void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir);
+#endif
 
 bool isDarkened = false;
 
+#if !defined(RADIANCE_CACHE_TRACE)
 void main() {
     vec2 px = vec2(gl_LaunchIDEXT.xy);
     vec2 p = px / vec2(gl_LaunchSizeEXT.xy);
@@ -121,14 +127,15 @@ void main() {
     }
     #endif
 }
+#endif
 
 Payload tmp_Payload;
 
-float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse_0, bool isNEE) {
+float raycastMin(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o,
+    bool inverse_0, bool isNEE, float tMin) {
     bool inside = !inverse_0;
     payload_packFlags(payload.data, 0.0, inside, false, isNEE);
     payload_packShadow(payload.data, vec3(1.0), 0);
-    float tMin = 0;
     float tMax = 2048.0;
     traceRayEXT(acc, gl_RayFlagsNoneEXT, 0xFF, 0, 0, 0, ro, tMin, rd, tMax, 6);
     Payload hitPayload = payload;
@@ -137,6 +144,10 @@ float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse
     rd_o = rd;
     tmp_Payload = hitPayload;
     return t;
+}
+
+float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse_0, bool isNEE) {
+    return raycastMin(ro, rd, ro_o, rd_o, inverse_0, isNEE, 0.0);
 }
 
 float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse_0) {
@@ -246,6 +257,17 @@ material materialFromEvaluated(Material mat, int blockID) {
         vec4(roughness > 0.01 ? max(roughness, 0.0125) : 0.0, trans,
             isWater, mat.subsurface_scattering),
         emission);
+}
+
+vec3 evaluateNonSpecularAlbedo(material surf, vec3 rd_i, vec3 macroNormal) {
+    float NoV = clamp(abs(dot(rd_i, macroNormal)), 0.0, 1.0);
+    vec3 reflected = reflectanceColor(surf.Cs, NoV).rgb * surf.S.x;
+    return surf.Cd * max(vec3(0.0), vec3(1.0) - reflected);
+}
+
+vec3 evaluateDiffuseAlbedo(material surf, vec3 rd_i, vec3 macroNormal) {
+    return evaluateNonSpecularAlbedo(surf, rd_i, macroNormal)
+        * (1.0 - clamp(surf.S.y, 0.0, 1.0));
 }
 
 vec3 reproject(vec3 worldPos) {
@@ -684,6 +706,18 @@ vec3 evalDirectDiffuse(vec3 ro, vec3 geometryNormal, vec3 Cd, vec3 rd_i,
     return max(vec3(0.0), Cd * Li * (2.0 * OiN * oiNWeight * (1.0 - cosD_S)));
 }
 
+vec3 directDiffuseToIncident(vec3 directDiffuse, material surf) {
+    return directDiffuse / max(surf.Cd, vec3(1e-3));
+}
+
+vec3 evalDirectDiffuseIncident(vec3 ro, vec3 geometryNormal, material surf,
+    vec3 rd_i, vec3 lightDir, bool inside) {
+    return directDiffuseToIncident(
+        evalDirectDiffuse(ro, geometryNormal, surf.Cd, rd_i, lightDir, inside),
+        surf
+    );
+}
+
 vec3 evalDirectSpecular(vec3 ro, vec3 macroNormal, vec3 Cs, float Sx, float roughness,
     vec3 rd_i, vec3 lightDir, bool inside) {
     ro += (dot(lightDir, macroNormal) > 0.15 ? lightDir : macroNormal) * 0.001;
@@ -770,8 +804,6 @@ void recordFirstBounceGBuffer(
     // Specular albedo (analytic fit, matching original lines 778-797)
     float NoV = clamp(abs(dot(rd_i, macroNormal)), 0.0, 1.0);
     float Sx = surf.S.x;
-    vec4 rC_stable = reflectanceColor(surf.Cs, NoV);
-    vec3 nonSpecColor_stable = surf.Cd * max(vec3(0.0), vec3(1.0) - rC_stable.rgb * Sx);
     {
         vec3 F0 = surf.Cs * Sx;
         float rough = surf.R.x;
@@ -783,8 +815,9 @@ void recordFirstBounceGBuffer(
         fb.specularAlbedo = max(F0 * AB.x + vec3(AB.y * Sx), vec3(1e-5));
     }
     float transmissionSelector = clamp(surf.S.y, 0.0, 1.0);
-    fb.diffuseAlbedo = nonSpecColor_stable * (1.0 - transmissionSelector);
-    fb.transmissionAlbedo = nonSpecColor_stable * transmissionSelector;
+    vec3 nonSpecularAlbedo = evaluateNonSpecularAlbedo(surf, rd_i, macroNormal);
+    fb.diffuseAlbedo = nonSpecularAlbedo * (1.0 - transmissionSelector);
+    fb.transmissionAlbedo = nonSpecularAlbedo * transmissionSelector;
 }
 
 void writeDiffuseOutput(uvec2 xy, FirstBounceData fb, vec3 L_indirect, vec3 L_direct_0,
@@ -952,7 +985,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                         rd_i, lightDir, inside);
             }
             #if defined(FIRST_LOBE_DIFFUSE)
-            L_direct_0 = sunL / max(surf.Cd, vec3(1e-3));
+            L_direct_0 = directDiffuseToIncident(sunL, surf);
             #else
             L_direct_0 = sunL;
             #endif

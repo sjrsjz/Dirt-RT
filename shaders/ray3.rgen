@@ -1,0 +1,3 @@
+#version 460 core
+// 128³ block-vertex radiance-cache fixed-point GI update.
+#include "/lib/rt/radiance_cache_rgen.glsl"

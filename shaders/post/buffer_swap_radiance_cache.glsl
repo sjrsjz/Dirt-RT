@@ -8,11 +8,8 @@
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 layout(rgba32ui) uniform readonly uimage3D radianceCacheTemporal;
 
-const ivec3 workGroups = ivec3(
-    RADIANCE_CACHE_W / 4,
-    RADIANCE_CACHE_H / 4,
-    RADIANCE_CACHE_D / 4
-);
+// Iris parses workGroups arguments with Integer.parseInt; use literal values.
+const ivec3 workGroups = ivec3(32, 32, 32);
 
 void main() {
     uvec3 voxelCoord = gl_GlobalInvocationID.xyz;
