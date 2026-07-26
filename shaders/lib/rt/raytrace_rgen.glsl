@@ -56,7 +56,6 @@ layout(binding = 1) uniform accelerationStructureEXT acc;
 layout(binding = 3) uniform sampler2D blockTex;
 layout(binding = 4) uniform sampler2D blockTexNormal;
 layout(binding = 5) uniform sampler2D blockTexSpecular;
-layout(binding = 6) writeonly uniform image2D RayTraceData;
 layout(location = 6) rayPayloadEXT Payload payload;
 
 void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir);
