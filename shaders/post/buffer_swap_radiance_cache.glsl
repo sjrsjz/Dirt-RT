@@ -13,8 +13,11 @@ const ivec3 workGroups = ivec3(32, 32, 32);
 
 void main() {
     uvec3 voxelCoord = gl_GlobalInvocationID.xyz;
-    vec4 packedCache = uintBitsToFloat(imageLoad(radianceCacheTemporal, ivec3(voxelCoord)));
-    storeRadianceCacheHist(voxelCoord, unpackRadianceCache(packedCache));
+    ivec3 word0Coord = ivec3(voxelCoord);
+    ivec3 word1Coord = word0Coord + ivec3(0, 0, RADIANCE_CACHE_D);
+    vec4 word0 = uintBitsToFloat(imageLoad(radianceCacheTemporal, word0Coord));
+    vec4 word1 = uintBitsToFloat(imageLoad(radianceCacheTemporal, word1Coord));
+    storeRadianceCacheHist(voxelCoord, unpackRadianceCache(word0, word1));
 }
 
 #endif // BUFFER_SWAP_RADIANCE_CACHE_GLSL

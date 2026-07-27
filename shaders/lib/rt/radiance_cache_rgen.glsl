@@ -22,9 +22,10 @@ GuideInfo computeRadianceCacheGuide(vec3 worldPos) {
     guide.valid = false;
 
     RadianceCache previous = samplePreviousRadianceCache(worldPos);
-    vec3 directionalEnergy = previous.alice.aliceY.xyz;
+    vec4 luminanceAlice = rgb_alice_luminance(previous.alice);
+    vec3 directionalEnergy = luminanceAlice.xyz;
     float directionalLength = length(directionalEnergy);
-    float totalEnergy = max(previous.alice.aliceY.w, directionalLength);
+    float totalEnergy = max(luminanceAlice.w, directionalLength);
 
     if (previous.weight <= 0.0 || directionalLength <= 1e-8 || totalEnergy <= 1e-8) {
         return guide;
@@ -39,8 +40,8 @@ GuideInfo computeRadianceCacheGuide(vec3 worldPos) {
 }
 
 vec3 sampleProbeJitter(uvec3 voxelCoord, uint frameId) {
-    // 与方向采样 RNG 解耦的每帧 3D hash。输出均匀覆盖中心体素的 95%，
-    // 每侧保留 2.5% 安全边距，避免 jitter 后重新贴到体素边界。
+    // 与方向采样 RNG 解耦的每帧 3D hash。输出均匀覆盖中心体素，
+    // 每侧保留 RC_PROBE_JITTER_SCALE 安全边距，避免 jitter 后重新贴到体素边界。
     vec3 key = vec3(voxelCoord)
             + float(frameId) * vec3(0.754877666, 0.569840296, 0.438579021);
     vec3 xi = hash33(key);
@@ -91,7 +92,7 @@ vec3 evaluateRadianceCacheHit(vec3 rayOrigin, vec3 rayDirection, vec3 hitPos, fl
     vec3 recursiveSamplePos = hitPos + geometryNormal * RADIANCE_CACHE_SURFACE_EPSILON;
     RadianceCache recursiveCache = samplePreviousRadianceCache(recursiveSamplePos);
     vec3 recursiveIrradiance = recursiveCache.weight > 0.0
-        ? project_alice_irradiance(recursiveCache.alice, macroNormal) : vec3(0.0);
+        ? project_rgb_alice_irradiance(recursiveCache.alice, macroNormal) : vec3(0.0);
     vec3 diffuseAlbedo = evaluateDiffuseAlbedo(surf, rayDirection, macroNormal);
 
     vec3 traceLightDir = -lightDir_global;
@@ -175,7 +176,7 @@ void main() {
     radiance = clamp(radiance, vec3(0.0), vec3(32000.0));
 
     RadianceCache result;
-    result.alice = radiance_to_alice(radiance, rayDirection);
+    result.alice = radiance_to_rgb_alice(radiance, rayDirection);
     result.weight = 1.0;
     storeRadianceCacheSwap(voxelCoord, result);
 }

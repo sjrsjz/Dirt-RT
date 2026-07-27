@@ -144,7 +144,8 @@ void main() {
     #elif DEBUG_VIEW == 9
     // Reflection virtual projection distance (rainbow colormap, log scale)
     {
-        vec3 dummyColor; float d, dummyW;
+        vec3 dummyColor;
+        float d, dummyW;
         readReflLight(xy, dummyColor, d, dummyW);
         fragColor.xyz = (d >= VPROJDIST_SKY * 0.99) ? vec3(1.0) : jetColormap(logDistNorm(d));
     }
@@ -189,7 +190,8 @@ void main() {
     #elif DEBUG_VIEW == 19
     // Refraction virtual projection distance (IOR-adjusted, rainbow colormap, log scale)
     {
-        vec3 dummyColor; float d, dummyW;
+        vec3 dummyColor;
+        float d, dummyW;
         readRefrLight(xy, dummyColor, d, dummyW);
         fragColor.xyz = (d >= VPROJDIST_SKY * 0.99) ? vec3(1.0) : jetColormap(logDistNorm(d));
     }
@@ -226,13 +228,12 @@ void main() {
         readGeo0(GEO_N_GEO, xy, relativePos, distance);
         vec3 surfaceWorldPos = camPos + relativePos;
         vec3 cacheSamplePos = surfaceWorldPos
-            + geometryNormal * RADIANCE_CACHE_SURFACE_EPSILON;
+                + geometryNormal * RADIANCE_CACHE_SURFACE_EPSILON;
         vec3 cacheCoord = radianceCacheWorldToVoxel(cacheSamplePos, camPos);
         if (isRadianceCacheSampleInBounds(cacheCoord)) {
             RadianceCache cache = sampleRadianceCacheHist(cacheCoord);
             fragColor.xyz = cache.weight > 0.0
-                ? project_alice_irradiance(cache.alice, microN)
-                : vec3(0.0);
+                ? project_rgb_alice_irradiance(cache.alice, microN) : vec3(0.0);
         } else {
             fragColor.xyz = vec3(0.0);
         }

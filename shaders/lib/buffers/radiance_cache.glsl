@@ -69,42 +69,106 @@ uvec3 decodeVoxelTile4x4x4(uint index) {
     return uvec3((tx << 2u) | lx, (ty << 2u) | ly, (tz << 2u) | lz);
 }
 
+// 每个 RGB 通道独立保存一个非负标量 ALICE 方向分布。
+// 与屏幕空间 AliceEncoding/YCoCg 完全独立，避免无方向色度跨方向渗漏。
+struct RGBAliceEncoding {
+    vec4 aliceR;
+    vec4 aliceG;
+    vec4 aliceB;
+};
+
 struct RadianceCache {
-    AliceEncoding alice;
+    RGBAliceEncoding alice;
     float weight;
 };
 
+struct PackedRadianceCache {
+    vec4 word0;
+    vec4 word1;
+};
+
+RGBAliceEncoding radiance_to_rgb_alice(vec3 radiance, vec3 direction) {
+    RGBAliceEncoding encoded;
+    encoded.aliceR = vec4(direction * radiance.r, radiance.r);
+    encoded.aliceG = vec4(direction * radiance.g, radiance.g);
+    encoded.aliceB = vec4(direction * radiance.b, radiance.b);
+    return encoded;
+}
+
+vec3 project_rgb_alice_irradiance(RGBAliceEncoding encoded, vec3 normal) {
+    return vec3(
+        alice_irradiance(encoded.aliceR, normal),
+        alice_irradiance(encoded.aliceG, normal),
+        alice_irradiance(encoded.aliceB, normal)
+    );
+}
+
+vec4 rgb_alice_luminance(RGBAliceEncoding encoded) {
+    return encoded.aliceR * 0.2126
+        + encoded.aliceG * 0.7152
+        + encoded.aliceB * 0.0722;
+}
+
 RadianceCache emptyCache() {
     RadianceCache rc;
-    rc.alice.aliceY = vec4(0.0);
-    rc.alice.CoCg = vec2(0.0);
+    rc.alice.aliceR = vec4(0.0);
+    rc.alice.aliceG = vec4(0.0);
+    rc.alice.aliceB = vec4(0.0);
     rc.weight = 0.0;
     return rc;
 }
 
-vec4 packRadianceCache(RadianceCache rc) {
-    return vec4(packAlice(rc.alice), rc.weight);
+PackedRadianceCache packRadianceCache(RadianceCache rc) {
+    PackedRadianceCache packedCache;
+    packedCache.word0 = uintBitsToFloat(uvec4(
+                packHalf2x16(rc.alice.aliceR.xy),
+                packHalf2x16(rc.alice.aliceR.zw),
+                packHalf2x16(rc.alice.aliceG.xy),
+                packHalf2x16(rc.alice.aliceG.zw)
+            ));
+    packedCache.word1 = vec4(
+            uintBitsToFloat(packHalf2x16(rc.alice.aliceB.xy)),
+            uintBitsToFloat(packHalf2x16(rc.alice.aliceB.zw)),
+            rc.weight,
+            0.0
+        );
+    return packedCache;
 }
 
-RadianceCache unpackRadianceCache(vec4 encoded) {
+RadianceCache unpackRadianceCache(vec4 word0, vec4 word1) {
+    uvec4 packed0 = floatBitsToUint(word0);
     RadianceCache rc;
-    rc.alice = unpackAlice(encoded.x, encoded.y, encoded.z);
-    rc.weight = encoded.w;
+    rc.alice.aliceR = vec4(
+            unpackHalf2x16(packed0.x),
+            unpackHalf2x16(packed0.y)
+        );
+    rc.alice.aliceG = vec4(
+            unpackHalf2x16(packed0.z),
+            unpackHalf2x16(packed0.w)
+        );
+    rc.alice.aliceB = vec4(
+            unpackHalf2x16(floatBitsToUint(word1.x)),
+            unpackHalf2x16(floatBitsToUint(word1.y))
+        );
+    rc.weight = word1.z;
     return rc;
 }
 
-// 辐射率缓存存储结构
-// 第一个抽象纹理存放交换缓存，第二个存放实际的累积后的辐射率缓存数据
-#define RADIANCE_CACHE_SWAP (RADIANCE_CACHE_ABSTRACT_IMAGE_SIZE * 0)
-#define RADIANCE_CACHE_HIST (RADIANCE_CACHE_ABSTRACT_IMAGE_SIZE * 1)
+// 四个独立平面保证同一 wave 读取 word0/word1 时各自连续。
+#define RADIANCE_CACHE_SWAP_0 (RADIANCE_CACHE_ABSTRACT_IMAGE_SIZE * 0)
+#define RADIANCE_CACHE_SWAP_1 (RADIANCE_CACHE_ABSTRACT_IMAGE_SIZE * 1)
+#define RADIANCE_CACHE_HIST_0 (RADIANCE_CACHE_ABSTRACT_IMAGE_SIZE * 2)
+#define RADIANCE_CACHE_HIST_1 (RADIANCE_CACHE_ABSTRACT_IMAGE_SIZE * 3)
 
 RadianceCache loadRadianceCacheSwap(uvec3 voxelCoord) {
     if (any(greaterThanEqual(voxelCoord, uvec3(RADIANCE_CACHE_W, RADIANCE_CACHE_H, RADIANCE_CACHE_D)))) {
         return emptyCache();
     }
     uint index = encodeVoxelTile4x4x4(voxelCoord.x, voxelCoord.y, voxelCoord.z);
-    vec4 raw = radianceCacheBuffer.data[RADIANCE_CACHE_SWAP + index];
-    return unpackRadianceCache(raw);
+    return unpackRadianceCache(
+        radianceCacheBuffer.data[RADIANCE_CACHE_SWAP_0 + index],
+        radianceCacheBuffer.data[RADIANCE_CACHE_SWAP_1 + index]
+    );
 }
 
 void storeRadianceCacheSwap(uvec3 voxelCoord, RadianceCache rc) {
@@ -112,7 +176,9 @@ void storeRadianceCacheSwap(uvec3 voxelCoord, RadianceCache rc) {
         return;
     }
     uint index = encodeVoxelTile4x4x4(voxelCoord.x, voxelCoord.y, voxelCoord.z);
-    radianceCacheBuffer.data[RADIANCE_CACHE_SWAP + index] = packRadianceCache(rc);
+    PackedRadianceCache packedCache = packRadianceCache(rc);
+    radianceCacheBuffer.data[RADIANCE_CACHE_SWAP_0 + index] = packedCache.word0;
+    radianceCacheBuffer.data[RADIANCE_CACHE_SWAP_1 + index] = packedCache.word1;
 }
 
 RadianceCache loadRadianceCacheHist(uvec3 voxelCoord) {
@@ -120,8 +186,10 @@ RadianceCache loadRadianceCacheHist(uvec3 voxelCoord) {
         return emptyCache();
     }
     uint index = encodeVoxelTile4x4x4(voxelCoord.x, voxelCoord.y, voxelCoord.z);
-    vec4 raw = radianceCacheBuffer.data[RADIANCE_CACHE_HIST + index];
-    return unpackRadianceCache(raw);
+    return unpackRadianceCache(
+        radianceCacheBuffer.data[RADIANCE_CACHE_HIST_0 + index],
+        radianceCacheBuffer.data[RADIANCE_CACHE_HIST_1 + index]
+    );
 }
 
 void storeRadianceCacheHist(uvec3 voxelCoord, RadianceCache rc) {
@@ -129,23 +197,17 @@ void storeRadianceCacheHist(uvec3 voxelCoord, RadianceCache rc) {
         return;
     }
     uint index = encodeVoxelTile4x4x4(voxelCoord.x, voxelCoord.y, voxelCoord.z);
-    radianceCacheBuffer.data[RADIANCE_CACHE_HIST + index] = packRadianceCache(rc);
+    PackedRadianceCache packedCache = packRadianceCache(rc);
+    radianceCacheBuffer.data[RADIANCE_CACHE_HIST_0 + index] = packedCache.word0;
+    radianceCacheBuffer.data[RADIANCE_CACHE_HIST_1 + index] = packedCache.word1;
 }
 
 RadianceCache lerpRadianceCache(RadianceCache a, RadianceCache b, float t) {
-    vec4 packA_0 = vec4(a.alice.aliceY);
-    vec4 packA_1 = vec4(a.alice.CoCg, a.weight, 0.0);
-
-    vec4 packB_0 = vec4(b.alice.aliceY);
-    vec4 packB_1 = vec4(b.alice.CoCg, b.weight, 0.0);
-
-    vec4 res_0 = mix(packA_0, packB_0, t);
-    vec4 res_1 = mix(packA_1, packB_1, t);
-
     RadianceCache result;
-    result.alice.aliceY = res_0;
-    result.alice.CoCg = res_1.xy;
-    result.weight = res_1.z;
+    result.alice.aliceR = mix(a.alice.aliceR, b.alice.aliceR, t);
+    result.alice.aliceG = mix(a.alice.aliceG, b.alice.aliceG, t);
+    result.alice.aliceB = mix(a.alice.aliceB, b.alice.aliceB, t);
+    result.weight = mix(a.weight, b.weight, t);
     return result;
 }
 
@@ -154,11 +216,11 @@ RadianceCache lerpRadianceCache(RadianceCache a, RadianceCache b, float t) {
 RadianceCache sampleRadianceCacheHist(vec3 voxelCoord) {
     ivec3 nearestCoord = ivec3(floor(voxelCoord + 0.5));
     bool inBounds = all(greaterThanEqual(nearestCoord, ivec3(0)))
-        && all(lessThan(nearestCoord, ivec3(
-            RADIANCE_CACHE_W,
-            RADIANCE_CACHE_H,
-            RADIANCE_CACHE_D
-        )));
+            && all(lessThan(nearestCoord, ivec3(
+                        RADIANCE_CACHE_W,
+                        RADIANCE_CACHE_H,
+                        RADIANCE_CACHE_D
+                    )));
     if (!inBounds) return emptyCache();
     return loadRadianceCacheHist(uvec3(nearestCoord));
 }
@@ -178,10 +240,10 @@ vec3 radianceCacheAnchor(vec3 cameraPosition) {
 // 返回索引 (0,0,0) 对应探针的世界坐标，而不是缓存包围盒的角点。
 vec3 radianceCacheOrigin(vec3 cameraPosition) {
     const vec3 centerIndex = vec3(
-        RADIANCE_CACHE_W / 2,
-        RADIANCE_CACHE_H / 2,
-        RADIANCE_CACHE_D / 2
-    );
+            RADIANCE_CACHE_W / 2,
+            RADIANCE_CACHE_H / 2,
+            RADIANCE_CACHE_D / 2
+        );
     return radianceCacheAnchor(cameraPosition) - centerIndex * VOXEL_SIZE;
 }
 
@@ -196,10 +258,10 @@ vec3 radianceCacheWorldToVoxel(vec3 worldPos, vec3 cameraPosition) {
 bool isRadianceCacheCoordInBounds(ivec3 voxelCoord) {
     return all(greaterThanEqual(voxelCoord, ivec3(0)))
         && all(lessThan(voxelCoord, ivec3(
-            RADIANCE_CACHE_W,
-            RADIANCE_CACHE_H,
-            RADIANCE_CACHE_D
-        )));
+                    RADIANCE_CACHE_W,
+                    RADIANCE_CACHE_H,
+                    RADIANCE_CACHE_D
+                )));
 }
 
 bool isRadianceCacheSampleInBounds(vec3 voxelCoord) {

@@ -72,5 +72,6 @@ value.DEBUG_VIEW.18 = 漫反射反照率
 value.DEBUG_VIEW.19 = 折射虚拟距离
 value.DEBUG_VIEW.20 = 路径引导
 value.DEBUG_VIEW.21 = 时域累积原始
+value.DEBUG_VIEW.22 = 辐射率缓存
 
 

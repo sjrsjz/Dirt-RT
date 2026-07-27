@@ -23,10 +23,12 @@ layout(rgba32ui) uniform writeonly uimage3D radianceCacheTemporal;
 const ivec3 workGroups = ivec3(32, 32, 32);
 
 bool isFiniteRadianceCache(RadianceCache cache) {
-    return !any(isnan(cache.alice.aliceY))
-        && !any(isinf(cache.alice.aliceY))
-        && !any(isnan(cache.alice.CoCg))
-        && !any(isinf(cache.alice.CoCg))
+    return !any(isnan(cache.alice.aliceR))
+        && !any(isinf(cache.alice.aliceR))
+        && !any(isnan(cache.alice.aliceG))
+        && !any(isinf(cache.alice.aliceG))
+        && !any(isnan(cache.alice.aliceB))
+        && !any(isinf(cache.alice.aliceB))
         && !isnan(cache.weight)
         && !isinf(cache.weight);
 }
@@ -52,8 +54,9 @@ RadianceCache accumulateTemporalRadiance(RadianceCache current, RadianceCache hi
     float currentAlpha = current.weight / max(combinedWeight, 1e-6);
 
     RadianceCache result;
-    result.alice.aliceY = mix(history.alice.aliceY, current.alice.aliceY, currentAlpha);
-    result.alice.CoCg = mix(history.alice.CoCg, current.alice.CoCg, currentAlpha);
+    result.alice.aliceR = mix(history.alice.aliceR, current.alice.aliceR, currentAlpha);
+    result.alice.aliceG = mix(history.alice.aliceG, current.alice.aliceG, currentAlpha);
+    result.alice.aliceB = mix(history.alice.aliceB, current.alice.aliceB, currentAlpha);
     result.weight = min(combinedWeight, RADIANCE_CACHE_MAX_HIST);
     return result;
 }
@@ -73,10 +76,18 @@ void main() {
     }
 
     RadianceCache result = accumulateTemporalRadiance(current, history);
+    PackedRadianceCache packedCache = packRadianceCache(result);
+    ivec3 word0Coord = ivec3(voxelCoord);
+    ivec3 word1Coord = word0Coord + ivec3(0, 0, RADIANCE_CACHE_D);
     imageStore(
         radianceCacheTemporal,
-        ivec3(voxelCoord),
-        floatBitsToUint(packRadianceCache(result))
+        word0Coord,
+        floatBitsToUint(packedCache.word0)
+    );
+    imageStore(
+        radianceCacheTemporal,
+        word1Coord,
+        floatBitsToUint(packedCache.word1)
     );
 }
 

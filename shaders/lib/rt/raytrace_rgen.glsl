@@ -837,8 +837,8 @@ void writeDiffuseOutput(uvec2 xy, FirstBounceData fb, vec3 L_indirect, vec3 L_di
         L_direct_0 = clamp(L_direct_0, 0.0, 32000.0);
         AliceEncoding indAlice = radiance_to_alice(L_indirect, fb.rd_o);
         AliceEncoding dirAlice = radiance_to_alice(L_direct_0, -lightDir);
-        indAlice.CoCg += dirAlice.CoCg;
-        indAlice.aliceY += dirAlice.aliceY;
+        // indAlice.CoCg += dirAlice.CoCg;
+        // indAlice.aliceY += dirAlice.aliceY;
         combinedAlice = indAlice;
         mask = 1.0;
     }
