@@ -224,7 +224,10 @@ void main() {
         vec3 relativePos;
         float distance;
         readGeo0(GEO_N_GEO, xy, relativePos, distance);
-        vec3 cacheCoord = radianceCacheWorldToVoxel(camPos + relativePos, camPos);
+        vec3 surfaceWorldPos = camPos + relativePos;
+        vec3 cacheSamplePos = surfaceWorldPos
+            + geometryNormal * RADIANCE_CACHE_SURFACE_EPSILON;
+        vec3 cacheCoord = radianceCacheWorldToVoxel(cacheSamplePos, camPos);
         if (isRadianceCacheSampleInBounds(cacheCoord)) {
             RadianceCache cache = sampleRadianceCacheHist(cacheCoord);
             fragColor.xyz = cache.weight > 0.0
@@ -233,6 +236,7 @@ void main() {
         } else {
             fragColor.xyz = vec3(0.0);
         }
+        fragColor.xyz += lightVal;
     }
 
     #endif

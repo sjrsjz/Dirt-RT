@@ -11,6 +11,8 @@
 #define VOXEL_RANGE_HALF_W (RADIANCE_CACHE_W * VOXEL_SIZE * 0.5)
 #define VOXEL_RANGE_HALF_H (RADIANCE_CACHE_H * VOXEL_SIZE * 0.5)
 #define VOXEL_RANGE_HALF_D (RADIANCE_CACHE_D * VOXEL_SIZE * 0.5)
+// 表面查询沿几何法线移向空气侧；限制为体素尺寸的 1%，且不超过现有 RT epsilon。
+#define RADIANCE_CACHE_SURFACE_EPSILON min(0.001, VOXEL_SIZE * 0.01)
 
 #define RADIANCE_CACHE_MAX_HIST 32.0 // 最大历史权重，用于归一化历史辐射率缓存的权重
 
@@ -147,41 +149,33 @@ RadianceCache lerpRadianceCache(RadianceCache a, RadianceCache b, float t) {
     return result;
 }
 
-// 3D 三线性插值采样辐射率缓存
+// 体素中心最近邻采样。调用方通过法线偏移选择几何表面的空气侧 probe；
+// 不跨越八个相邻体素混合，避免墙体两侧辐射相互泄漏。
 RadianceCache sampleRadianceCacheHist(vec3 voxelCoord) {
-    uvec3 p00 = uvec3(floor(voxelCoord));
-    uvec3 p11 = p00 + uvec3(1);
-
-    // Perform trilinear interpolation
-    vec3 t = voxelCoord - vec3(p00);
-    RadianceCache c000 = loadRadianceCacheHist(p00);
-    RadianceCache c100 = loadRadianceCacheHist(uvec3(p11.x, p00.y, p00.z));
-    RadianceCache c010 = loadRadianceCacheHist(uvec3(p00.x, p11.y, p00.z));
-    RadianceCache c110 = loadRadianceCacheHist(uvec3(p11.x, p11.y, p00.z));
-    RadianceCache c001 = loadRadianceCacheHist(uvec3(p00.x, p00.y, p11.z));
-    RadianceCache c101 = loadRadianceCacheHist(uvec3(p11.x, p00.y, p11.z));
-    RadianceCache c011 = loadRadianceCacheHist(uvec3(p00.x, p11.y, p11.z));
-    RadianceCache c111 = loadRadianceCacheHist(p11);
-
-    RadianceCache c00 = lerpRadianceCache(c000, c100, t.x);
-    RadianceCache c01 = lerpRadianceCache(c001, c101, t.x);
-    RadianceCache c10 = lerpRadianceCache(c010, c110, t.x);
-    RadianceCache c11 = lerpRadianceCache(c011, c111, t.x);
-
-    RadianceCache c0 = lerpRadianceCache(c00, c10, t.y);
-    RadianceCache c1 = lerpRadianceCache(c01, c11, t.y);
-    return lerpRadianceCache(c0, c1, t.z);
+    ivec3 nearestCoord = ivec3(floor(voxelCoord + 0.5));
+    bool inBounds = all(greaterThanEqual(nearestCoord, ivec3(0)))
+        && all(lessThan(nearestCoord, ivec3(
+            RADIANCE_CACHE_W,
+            RADIANCE_CACHE_H,
+            RADIANCE_CACHE_D
+        )));
+    if (!inBounds) return emptyCache();
+    return loadRadianceCacheHist(uvec3(nearestCoord));
 }
 
 // ===========================================================================
 // 摄像机相对、世界格点对齐的缓存坐标
-// VOXEL_SIZE == 1 时所有 RC 采样点都落在 Minecraft 方块的顶点上。
+//
+// 探针位于缓存体素中心而不是格点角点，避免 VOXEL_SIZE == 1 时探针
+// 与 Minecraft 方块表面精确重合。偶数尺寸下索引 W/2 对齐摄像机所在
+// 体素中心，因此相对范围为 [-W/2, W/2-1]，正负方向相差一个体素。
 // ===========================================================================
 
 vec3 radianceCacheAnchor(vec3 cameraPosition) {
-    return floor(cameraPosition / VOXEL_SIZE) * VOXEL_SIZE;
+    return (floor(cameraPosition / VOXEL_SIZE) + 0.5) * VOXEL_SIZE;
 }
 
+// 返回索引 (0,0,0) 对应探针的世界坐标，而不是缓存包围盒的角点。
 vec3 radianceCacheOrigin(vec3 cameraPosition) {
     const vec3 centerIndex = vec3(
         RADIANCE_CACHE_W / 2,
@@ -209,13 +203,7 @@ bool isRadianceCacheCoordInBounds(ivec3 voxelCoord) {
 }
 
 bool isRadianceCacheSampleInBounds(vec3 voxelCoord) {
-    ivec3 base = ivec3(floor(voxelCoord));
-    ivec3 upper = base + ivec3(
-        fract(voxelCoord.x) > 0.0 ? 1 : 0,
-        fract(voxelCoord.y) > 0.0 ? 1 : 0,
-        fract(voxelCoord.z) > 0.0 ? 1 : 0
-    );
-    return isRadianceCacheCoordInBounds(base) && isRadianceCacheCoordInBounds(upper);
+    return isRadianceCacheCoordInBounds(ivec3(floor(voxelCoord + 0.5)));
 }
 
 #endif // RADIANCE_CACHE_GLSL
