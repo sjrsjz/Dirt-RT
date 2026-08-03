@@ -385,51 +385,33 @@ float alice_normalized_distance_fast(vec4 sample1, vec4 sample2, vec4 dual1, vec
 // 漫反射辐照度重建 (核心)
 // 基于三维最大熵分布的半球余弦投影解析逼近
 // ------------------------------------------------------------
-float alice_irradiance(vec4 encoded, vec3 N) {
+float alice_irradiance(vec4 encoded, vec3 n)
+{
     float omega = encoded.w;
+    vec3 v = encoded.xyz;
+    if (omega <= 1e-6) return 0.0;
 
-    // 极小能量直接返回 0
-    if (omega < 1e-6) return 0.0;
+    float lenV = length(v);
+    if (lenV <= 1e-6) return 0.25 * omega;
 
-    float len_v = length(encoded.xyz);
-    // 退化至各向同性: v 极小时直接使用各向同性解 e = 1/4
-    if (len_v < 1e-6) return omega * 0.25;
+    float rho = clamp(lenV / omega, 0.0, 1.0);
+    float kappa = (3.0 * rho) / 
+        (2.0 + sqrt(max(0.0, 4.0 - 3.0 * rho * rho)));
+    float mu = clamp(dot(v / lenV, n), -1.0, 1.0);
 
-    vec3 v_hat = encoded.xyz / len_v;
+    // kappa = 1 时一般闭式在 mu = 0 处呈 0/0，直接采用其连续极限。
+    if (1.0 - kappa <= 1e-5)
+        return omega * max(mu, 0.0);
 
-    // 计算 kappa
-    float kappa = alice_kappa(len_v, omega);
-
-    // 余弦投影
-    float mu_0 = dot(v_hat, N);
-    float abs_mu_0 = abs(mu_0);
-
-    // 中间变量
-    float kappa_sq = kappa * kappa;
-    float one_minus_kappa_sq = max(0.0, 1.0 - kappa_sq);
-    float sqrt_one_minus_kappa_sq = sqrt(one_minus_kappa_sq);
-
-    float denom_shared = 3.0 + kappa_sq;
-
-    // 对称部分边界值
-    float e_S0_num = 3.0 * sqrt_one_minus_kappa_sq;
-    float e_S1_num = 3.0 + 6.0 * kappa_sq - kappa_sq * kappa_sq;
-
-    // 高阶光滑插值: 用 κ⁴ 权重压制小 κ 时的折角
-    float kappa_fourth = kappa_sq * kappa_sq;
-    // t = (1-κ⁴)*μ₀² + κ⁴*|μ₀|
-    float t = mix(mu_0 * mu_0, abs_mu_0, kappa_fourth);
-
-    // 对称分量
-    float e_S_num = mix(e_S0_num, e_S1_num, t);
-
-    // 最终辐照度公式:
-    // E = ω / (4*(3+κ²)) * ( e_S_num + 8*κ*μ₀ )
-    float final_numerator = e_S_num + 8.0 * kappa * mu_0;
-    float irradiance = omega * final_numerator / (4.0 * denom_shared);
-
-    // 数值安全 (确保非负)
-    return max(0.0, irradiance);
+    float k2 = kappa * kappa;
+    float mu2 = mu * mu;
+    float d = max(1e-12, 1.0 - k2 + k2 * mu2);
+    float d32 = d * sqrt(d);
+    float nSym = 3.0 + 6.0 * k2 * (-1.0 + 2.0 * mu2)
+        + k2 * k2 * (3.0 - 12.0 * mu2 + 8.0 * mu2 * mu2);
+    float e = (nSym + 8.0 * kappa * mu * d32)
+        / (4.0 * (3.0 + k2) * d32);
+    return omega * max(e, 0.0);
 }
 
 // ------------------------------------------------------------

@@ -461,17 +461,25 @@ GuideInfo computeAliceGuide(vec3 ro_o, float strengthMultiplier) {
 
 vec3 sampleDiffuseWithGuide(vec3 geometryNormal, vec3 ro_o, GuideInfo guide,
     out vec3 next_rd, out float guideWeight) {
+    
     bool useGuide = getRandom() < guide.prob;
     if (useGuide) {
         next_rd = sample_alice_guiding(guide.axis, guide.kappa, rand2(ro_o));
     } else {
-        next_rd = DiffuseNormal(geometryNormal, ro_o);
+        next_rd = SampleUniformHemisphere(geometryNormal, ro_o);
     }
+
     float NoL = max(0.0, dot(geometryNormal, next_rd));
-    float pdfCos = NoL / PI;
+    // 如果采样到了几何半球下方，直接裁切
+    if (NoL <= 0.0) {
+        guideWeight = 0.0;
+        return vec3(0.0);
+    }
+
+    float pdfUniform = 1.0 / (2.0 * PI);
     float pdfAlice = guide.prob > 0.0 ? alice_guiding_pdf(next_rd, guide.axis, guide.kappa) : 0.0;
-    float pdfMix = (1.0 - guide.prob) * pdfCos + guide.prob * pdfAlice;
-    guideWeight = (NoL > 0.0 && pdfMix > 1e-20) ? (pdfCos / pdfMix) : 0.0;
+    float pdfMix = (1.0 - guide.prob) * pdfUniform + guide.prob * pdfAlice;
+    guideWeight = (pdfMix > 1e-20) ? (pdfUniform / pdfMix) : 0.0;    
     return vec3(guideWeight);
 }
 
@@ -837,8 +845,8 @@ void writeDiffuseOutput(uvec2 xy, FirstBounceData fb, vec3 L_indirect, vec3 L_di
         L_direct_0 = clamp(L_direct_0, 0.0, 32000.0);
         AliceEncoding indAlice = radiance_to_alice(L_indirect, fb.rd_o);
         AliceEncoding dirAlice = radiance_to_alice(L_direct_0, -lightDir);
-        // indAlice.CoCg += dirAlice.CoCg;
-        // indAlice.aliceY += dirAlice.aliceY;
+        indAlice.CoCg += dirAlice.CoCg;
+        indAlice.aliceY += dirAlice.aliceY;
         combinedAlice = indAlice;
         mask = 1.0;
     }

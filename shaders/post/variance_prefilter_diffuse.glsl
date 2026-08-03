@@ -39,7 +39,8 @@ const uint HALO = 2u;
 struct TileSample {
     bool valid;
     vec3 p;
-    float estimatorVariance;
+    float variance;
+    float weight;
 };
 shared TileSample sm_tile[SM_H][SM_W];
 
@@ -62,11 +63,10 @@ float sanitizeVariance(float v) {
 }
 
 // Unpack swap AliceEncoding + weight from unified SSBO, return raw ALICE variance.
-float loadAliceY(uvec2 xy) {
+float loadAliceY(uvec2 xy, out float weight) {
     AliceEncoding alice;
-    float weight;
     readDiffuseSwap(xy, alice, weight);
-    return sanitizeVariance(alice_estimator_variance(alice.aliceY, weight));
+    return sanitizeVariance(alice_variance(alice.aliceY));
 }
 
 // Depth-only geometry weight — ALICE Bures distance replaces normal-based edge-stopping
@@ -116,7 +116,7 @@ void main() {
             ivec2 gc = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO) + ivec2(col, row);
             ivec2 clamped = clamp(gc, ivec2(0), texSize);
             uvec2 loadXY = uvec2(clamped);
-            sm_tile[row][col].estimatorVariance = loadAliceY(loadXY);
+            sm_tile[row][col].variance = loadAliceY(loadXY, sm_tile[row][col].weight);
         }
     }
     barrier();
@@ -161,6 +161,7 @@ void main() {
     // =========================================================================
     float sumVar = 0.0;
     float sumW = 0.0;
+    float sumWeight = 0.0;
 
     for (int ky = -2; ky <= 2; ky++) {
         for (int kx = -2; kx <= 2; kx++) {
@@ -174,12 +175,13 @@ void main() {
             float w = wKernel * wGeom;
 
             // 100% 统计独立假设
-            sumVar += w * w * s.estimatorVariance;
+            sumVar += w * w * s.variance;
+            sumWeight += w * s.weight;
             sumW += w;
         }
     }
 
-    float filteredVariance = sumVar / max(sumW * sumW, 1e-6);
+    float filteredVariance = sumVar / max(sumWeight * sumW, 1e-10);
 
     // =========================================================================
     // Phase 5: Write outputs

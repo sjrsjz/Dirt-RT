@@ -183,6 +183,22 @@ vec3 DiffuseNormal(vec3 macroNormal, vec3 pos) {
     return sqrt(1 - xi.y) * macroNormal + sqrt(xi.y) * (cos(alpha) * randN0 + sin(alpha) * randN1);
 }
 
+vec3 SampleUniformHemisphere(vec3 geometryNormal, vec3 pos) {
+    vec2 xi = rand2(pos);
+    float phi = xi.x * 2.0 * PI;
+    float cosTheta = xi.y; // cosTheta 在 [0, 1] 均匀分布
+    float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+    
+    vec3 localDir = vec3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
+    
+    // 构建局部正交基 (ONB)
+    vec3 up = abs(geometryNormal.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    vec3 tangent = normalize(cross(up, geometryNormal));
+    vec3 bitangent = cross(geometryNormal, tangent);
+    
+    return tangent * localDir.x + bitangent * localDir.y + geometryNormal * localDir.z;
+}
+
 float GGXpdf(float costheta, float fai, float a) {
     float a2 = a * a;
     float b = 1 + (a2 - 1) * costheta * costheta;
