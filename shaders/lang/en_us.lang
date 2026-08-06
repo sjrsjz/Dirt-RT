@@ -1,55 +1,98 @@
 screen.RAY_TRACING = Ray Tracing
 option.ACCUMULATION_LENGTH = Accumulation Length
+option.ACCUMULATION_LENGTH.comment = Number of reprojected frames used by reflection and refraction denoisers. Higher values reduce noise but retain stale lighting longer during motion.
 option.RAY_BOUNCES = Ray Bounces
+option.RAY_BOUNCES.comment = Maximum surfaces visited by each camera path. More bounces preserve deep indirect light and transmission at a direct GPU cost.
 option.PATH_GUIDING_STRENGTH = Path Guiding Strength
+option.PATH_GUIDING_STRENGTH.comment = How strongly diffuse paths and radiance-cache probes follow the previous ALICE light field. Higher values can converge faster in stable scenes; excessive values can increase lag or variance after lighting changes.
 option.PATH_GUIDING_SPECULAR_STRENGTH = Specular Guiding Strength
+option.PATH_GUIDING_SPECULAR_STRENGTH.comment = Base probability of steering rough reflection rays with ALICE history. Smooth or isotropic lobes automatically receive less guiding.
+option.SUN_PATH_ROTATION = Sun Path Rotation
+option.SUN_PATH_ROTATION.comment = Rotates the apparent sun and moon path around the world X axis. This changes lighting direction, not day length.
 option.END_SKYBOX = End Skybox
+option.END_SKYBOX.comment = Selects the custom rune-ring and nebula sky in the End. Disabling it uses the cheaper atmospheric fallback.
 value.END_SKYBOX.1 = Rune Rings + Nebula
 value.END_SKYBOX.0 = Atmospheric Scatter
 
+screen.RADIANCE_CACHE = Sparse Radiance Cache
+option.RADIANCE_CACHE_MAX_ALLOCATIONS_PER_FRAME = New Bricks per Frame
+option.RADIANCE_CACHE_MAX_ALLOCATIONS_PER_FRAME.comment = Limits physical brick allocations per frame. Lower values reduce frame-time spikes; higher values make newly visible geometry converge faster.
+option.RADIANCE_CACHE_RESIDENT_HYSTERESIS_BUCKETS = Resident Hysteresis
+option.RADIANCE_CACHE_RESIDENT_HYSTERESIS_BUCKETS.comment = Gives resident bricks a priority advantage measured in 4-block distance buckets. Higher values improve stability but keep old bricks longer.
+option.RADIANCE_CACHE_MARK_TILE_SIZE = Request Sampling Tile
+option.RADIANCE_CACHE_MARK_TILE_SIZE.comment = Submits one geometry request sample per NxN screen tile. Smaller tiles improve coverage but execute more atomic request operations.
+value.RADIANCE_CACHE_MARK_TILE_SIZE.4 = 4x4 Fine
+value.RADIANCE_CACHE_MARK_TILE_SIZE.8 = 8x8 Balanced
+value.RADIANCE_CACHE_MARK_TILE_SIZE.16 = 16x16 Fast
+option.RADIANCE_CACHE_ROUGH_SPECULAR_THRESHOLD = Rough Specular Threshold
+option.RADIANCE_CACHE_ROUGH_SPECULAR_THRESHOLD.comment = Minimum PSR-style cascaded roughness for terminating a secondary specular path into the radiance cache. Lower values are faster; higher values retain sharper reflections.
+option.RADIANCE_CACHE_DIFFUSE_MIN_BOUNCE = Diffuse Cache Start Bounce
+option.RADIANCE_CACHE_DIFFUSE_MIN_BOUNCE.comment = First path bounce allowed to terminate a diffuse path into the radiance cache. Bounce 1 is the camera-visible surface. Higher values reduce cache artifacts but trace more rays.
+
 screen.MATERIAL = Material
 option.REFRACTIVE_INDEX = Water IOR
+option.REFRACTIVE_INDEX.comment = Index of refraction used by water and the current dielectric transmission model. Higher values bend transmitted rays more strongly and increase grazing reflection.
 option.MAX_WETNESS = Max Wetness
+option.MAX_WETNESS.comment = Maximum rain-induced wetness applied to materials. Higher values produce darker, smoother and more reflective wet surfaces.
 option.POM_ENABLED = Parallax Mapping
+option.POM_ENABLED.comment = Enables parallax occlusion mapping on the camera-visible surface. It improves apparent depth in supported textures at extra texture-sampling cost.
 value.POM_ENABLED.1 = On
 value.POM_ENABLED.0 = Off
 
 screen.EXPOSURE_DISPLAY = Exposure & Display
 option.DISPLAY_MAX_LUMINANCE = Display Peak Luminance
+option.DISPLAY_MAX_LUMINANCE.comment = Approximate display peak brightness in nits, used to scale HDR exposure. Set this near the sustained peak brightness of your display.
 option.DISPLAY_PAPER_WHITE_LUMINANCE = sRGB Paper White Luminance
+option.DISPLAY_PAPER_WHITE_LUMINANCE.comment = Target brightness of ordinary diffuse white relative to the display range. Lower values leave more highlight headroom and make exposure appear brighter.
 option.EXPOSURE_CURVE_K = Exposure Curve
+option.EXPOSURE_CURVE_K.comment = Compresses highlights before tone mapping. Zero disables the curve; higher values retain more bright detail but reduce highlight contrast.
 
 screen.BLOOM = Bloom
 option.BLOOM_MIX = Bloom Strength
+option.BLOOM_MIX.comment = Fraction of the final image contributed by bloom. Zero disables bloom blending; high values can wash out local contrast.
 
 screen.TEMPORAL_FILTER = Temporal Filter
-option.TEMPORAL_NORMAL_PARAM = History Normal Rejection
-option.TEMPORAL_POSITION_PARAM = History Position Rejection
 option.NRD_BLEND_STRENGTH = Low-Confidence Blend
+option.NRD_BLEND_STRENGTH.comment = Blends a wide spatial result into diffuse pixels with little valid history. Higher values hide disocclusion noise faster but can temporarily blur detail.
 option.REFLECT_GGX_CONFIDENCE = Reflect GGX Confidence
+option.REFLECT_GGX_CONFIDENCE.comment = Strictness of GGX-lobe matching during reflection reprojection. Higher values reject mismatched history more aggressively, reducing ghosting at the cost of noise.
 option.CURVATURE_CORRECTION_STRENGTH = Specular Curvature Correction
+option.CURVATURE_CORRECTION_STRENGTH.comment = Adjusts virtual reflection distance using local surface curvature. One is the standard correction; zero assumes planar surfaces.
 
 screen.TEMPORAL_ACCUMULATION = Diffuse Temporal Accumulation
 option.TEMPORAL_MAX_HISTORY = Max History Frames
-option.TEMPORAL_CONFIDENCE_POWER = Confidence Power
+option.TEMPORAL_MAX_HISTORY.comment = Maximum effective diffuse history sample count. Higher values are smoother but react more slowly to lighting changes and disocclusion.
 option.TEMPORAL_HISTORY_MIN_WEIGHT = Min History Weight
+option.TEMPORAL_HISTORY_MIN_WEIGHT.comment = History below this confidence is discarded. Raise it to reset weak history sooner; lower it to preserve sparse history longer.
 option.TEMPORAL_AABB_ENABLE = AABB Clamp
+option.TEMPORAL_AABB_ENABLE.comment = Clamps reprojected diffuse ALICE history to the current neighborhood, reducing trails and stale lighting. Disabling it uses an unclamped temporal blend.
 value.TEMPORAL_AABB_ENABLE.1 = On
 value.TEMPORAL_AABB_ENABLE.0 = Off
 option.TEMPORAL_AABB_NEIGHBOR_RADIUS = AABB Neighbor Radius
+option.TEMPORAL_AABB_NEIGHBOR_RADIUS.comment = Radius used to build the current-frame clamp box. One means 3x3, two means 5x5; larger neighborhoods cost more and preserve broader lighting variation.
 option.TEMPORAL_AABB_EXPAND = AABB Expand
+option.TEMPORAL_AABB_EXPAND.comment = Expands the sampled neighborhood range before clamping. Higher values preserve more history but allow more ghosting.
 option.TEMPORAL_AABB_SIGMA_SCALE = AABB Sigma Scale
+option.TEMPORAL_AABB_SIGMA_SCALE.comment = Variance-based expansion of the clamp box. Larger values tolerate noisy samples and retain more history.
 option.TEMPORAL_AABB_MIN_EXTENT = AABB Min Extent
+option.TEMPORAL_AABB_MIN_EXTENT.comment = Minimum absolute clamp range, preventing dark or nearly constant regions from collapsing to zero width.
 option.TEMPORAL_AABB_BOX_SCALE = AABB Box Scale
+option.TEMPORAL_AABB_BOX_SCALE.comment = Global multiplier for clamp-box width. Lower values reject history more aggressively; higher values favor stability.
 option.TEMPORAL_AABB_MIN_VALID_NEIGHBORS = AABB Min Valid Neighbors
+option.TEMPORAL_AABB_MIN_VALID_NEIGHBORS.comment = Minimum valid current-frame samples required to clamp history. If fewer samples exist, clamping is skipped to avoid unstable bounds.
 
 screen.ATROUS_DENOISER = À-Trous Denoiser
 option.ATROUS_NORMAL_POWER = À-Trous Normal Edge Sensitivity
+option.ATROUS_NORMAL_POWER.comment = Strength of normal-based edge stopping in spatial filters. Higher values preserve normal-map and silhouette edges but leave more noise.
 option.ATROUS_PHI_L = À-Trous Luma Sensitivity
+option.ATROUS_PHI_L.comment = Luminance tolerance of the diffuse spatial filter. Higher values blur across larger lighting differences; lower values preserve contrast.
 option.ATROUS_POSITION_PARAM = À-Trous Depth Edge Sensitivity
+option.ATROUS_POSITION_PARAM.comment = World-position edge sensitivity used by spatial and variance filters. Higher values reject cross-surface samples more strongly.
 option.ATROUS_GAMMA = À-Trous Roughness Adaptation
+option.ATROUS_GAMMA.comment = Controls roughness-dependent widening of the diffuse filter. Zero keeps a fixed width; higher values blur rough surfaces more aggressively.
 screen.DEBUG = Debug
 option.DEBUG_VIEW = Debug View
+option.DEBUG_VIEW.comment = Replaces the final image with an internal lighting or cache visualization. Use Normal for regular rendering.
 value.DEBUG_VIEW.0 = Normal
 value.DEBUG_VIEW.1 = Diffuse
 value.DEBUG_VIEW.2 = Refract
@@ -73,5 +116,3 @@ value.DEBUG_VIEW.19 = Refr. VirtDist
 value.DEBUG_VIEW.20 = Path Guide
 value.DEBUG_VIEW.21 = Temporal Raw
 value.DEBUG_VIEW.22 = Radiance Cache
-
-

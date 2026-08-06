@@ -7,9 +7,12 @@
 #define MAX_WETNESS 0.4 // Maximum surface wetness from rain or water. Controls specular reflection on wet blocks. [0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
 #define POM_ENABLED 1 // Enable Parallax Occlusion Mapping (POM) for detailed surface displacement on the first ray hit. 0 = off (better FPS), 1 = on (better visuals). [0 1]
 
-// -- Temporal history rejection (temporal_diffuse.glsl) --
-#define TEMPORAL_NORMAL_PARAM 4.0 // How strictly normal differences reject history. Higher = less ghosting on curved surfaces, more noise. [0.5 1 2 4 8 16 32 64]
-#define TEMPORAL_POSITION_PARAM 64.0 // How strictly position/depth differences reject history. Higher = less ghosting, more disocclusion noise. [1 2 4 8 16 32 64 128 256]
+// -- Sparse radiance cache --
+#define RADIANCE_CACHE_MAX_ALLOCATIONS_PER_FRAME 128 // Maximum new physical bricks admitted per frame. Lower values reduce allocation spikes but fill the cache more slowly. [32 64 128 256 512]
+#define RADIANCE_CACHE_RESIDENT_HYSTERESIS_BUCKETS 2 // Distance-bucket advantage for resident bricks. Higher values reduce camera-motion churn but retain old bricks longer. [0 1 2 3 4 6 8]
+#define RADIANCE_CACHE_MARK_TILE_SIZE 8 // One screen sample per NxN tile submits geometry requests. Lower values improve coverage but increase request atomics. [4 8 16]
+#define RADIANCE_CACHE_ROUGH_SPECULAR_THRESHOLD 0.35 // PSR-style cascaded roughness required before a secondary specular lobe may terminate into the cache. Lower values are faster; higher values preserve sharper reflections. [0.15 0.2 0.25 0.3 0.35 0.4 0.5 0.6 0.8]
+#define RADIANCE_CACHE_DIFFUSE_MIN_BOUNCE 3 // First path bounce at which a diffuse surface may terminate into the cache. Higher values reduce cache artifacts but trace more rays. [2 3 4 5 6]
 
 // -- NRD-inspired low-weight blend (buffer_swap_diffuse.glsl) --
 #define NRD_BLEND_STRENGTH 1.0 // Spatial filter blend strength at low temporal confidence. Blends the large-radius spatial result back into history when frame accumulation is insufficient. 0 = off. [0.0 0.1 0.25 0.5 0.75 1.0 1.25 1.5 2.0 3.0 4.0 5.0]
@@ -19,7 +22,6 @@
 
 // -- Diffuse temporal accumulation (temporal_diffuse.glsl) --
 #define TEMPORAL_MAX_HISTORY 32 // Maximum effective sample count clamped per pixel. Higher = smoother but more ghosting. [1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384]
-#define TEMPORAL_CONFIDENCE_POWER 1.0 // Reprojection confidence exponent. Higher = more aggressive rejection of mismatched history. [0.1 0.25 0.5 1.0 2.0 4.0]
 #define TEMPORAL_HISTORY_MIN_WEIGHT 0.0001 // Weight threshold below which history is discarded and reset. [0.000001 0.00001 0.0001 0.001 0.01]
 #define TEMPORAL_AABB_ENABLE 1 // AABB clamp in ALICE augmented space to prevent ghosting. 0 = fall back to raw EMA blend. [0 1]
 #define TEMPORAL_AABB_NEIGHBOR_RADIUS 2 // AABB neighborhood radius. 1 = 3×3, 2 = 5×5. [1 2 3]
@@ -45,7 +47,7 @@
 #define EXPOSURE_CURVE_K 0.0 // Highlight compression before tonemap: f(x)=ln(k+e^x)-ln(1+k). 0=off, higher=more compression. [0.0 0.1 0.25 0.5 1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0 9.0 10.0]
 
 // -- Path guiding --
-#define PATH_GUIDING_STRENGTH 0.75 // Mix probability weight for ALICE-guided importance sampling vs cosine-weighted sampling. Higher = more samples steered toward the prior, lower = more uniform. [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.925 0.95 0.975 0.99 0.999]
+#define PATH_GUIDING_STRENGTH 0.75 // ALICE-guided mixture strength for diffuse paths and radiance-cache probes. Higher values follow history more aggressively; lower values stay closer to the unbiased baseline sampler. [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.925 0.95 0.975 0.99 0.999]
 #define PATH_GUIDING_SPECULAR_STRENGTH 0.85 // Base mix probability for ALICE-guided specular reflection. Final probability = STRENGTH × roughness × rho, so smooth surfaces (low roughness) or isotropic fields (low rho) naturally suppress guiding. Guiding is only active when both roughness and rho are meaningful. [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.95 0.99]
 
 // -- NRD curvature correction --

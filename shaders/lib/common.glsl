@@ -199,10 +199,18 @@ vec3 SampleUniformHemisphere(vec3 geometryNormal, vec3 pos) {
     return tangent * localDir.x + bitangent * localDir.y + geometryNormal * localDir.z;
 }
 
+float GGX_D(float costheta, float a) {
+    float NoH = max(costheta, 0.0);
+    float alpha = max(a, 1e-4);
+    float a2 = alpha * alpha;
+    float b = 1.0 + (a2 - 1.0) * NoH * NoH;
+    return a2 / max(PI * b * b, 1e-20);
+}
+
+// GGX normal-distribution PDF in solid angle of the half vector: D(H) * NoH.
 float GGXpdf(float costheta, float fai, float a) {
-    float a2 = a * a;
-    float b = 1 + (a2 - 1) * costheta * costheta;
-    return a2 * costheta / (1e-2 + PI * b * b);
+    float NoH = max(costheta, 0.0);
+    return GGX_D(NoH, a) * NoH;
 }
 
 // NDF-sampled reflection direction PDF for GGX.

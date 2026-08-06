@@ -41,7 +41,7 @@ layout(std430, set = 3, binding = 4) buffer RefractBuffer {
 } refractBuffer;
 
 layout(std430, set = 3, binding = 5) buffer RadianceCacheBuffer {
-    vec4 data[];
+    uint data[];
 } radianceCacheBuffer;
 
 #endif // BUFFERS_ADDR_GLSL

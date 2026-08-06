@@ -227,9 +227,9 @@ void main() {
                 + geometryNormal * RADIANCE_CACHE_SURFACE_EPSILON;
         vec3 cacheCoord = radianceCacheWorldToVoxel(cacheSamplePos, camPos);
         if (isRadianceCacheSampleInBounds(cacheCoord)) {
-            RadianceCache cache = sampleRadianceCacheHist(cacheCoord);
+            RadianceCache cache = sampleRadianceCacheHist(cacheCoord, camPos);
             fragColor.xyz = cache.weight > 0.0
-                ? project_rgb_alice_irradiance(cache.alice, microN) : vec3(0.0);
+                ? radianceCacheDiffuseIncident(cache, microN) : vec3(0.0);
         } else {
             fragColor.xyz = vec3(0.0);
         }

@@ -11,7 +11,9 @@ const float RC_PROBE_JITTER_SCALE = 0.95;
 RadianceCache samplePreviousRadianceCache(vec3 worldPos) {
     vec3 voxelCoord = radianceCacheWorldToVoxel(worldPos, prevRaytracingCamPos);
     if (!isRadianceCacheSampleInBounds(voxelCoord)) return emptyCache();
-    return sampleRadianceCacheHist(voxelCoord);
+    RadianceCacheAddress address = findRadianceCacheAddress(worldPos);
+    if (!radianceCacheAddressHasHistory(address, cam.frameId)) return emptyCache();
+    return loadRadianceCachePlanes(address, RC_PLANE_HISTORY_0, RC_PLANE_HISTORY_1);
 }
 
 GuideInfo computeRadianceCacheGuide(vec3 worldPos) {
@@ -39,7 +41,7 @@ GuideInfo computeRadianceCacheGuide(vec3 worldPos) {
     return guide;
 }
 
-vec3 sampleProbeJitter(uvec3 voxelCoord, uint frameId) {
+vec3 sampleProbeJitter(ivec3 voxelCoord, uint frameId) {
     // 与方向采样 RNG 解耦的每帧 3D hash。输出均匀覆盖中心体素，
     // 每侧保留 RC_PROBE_JITTER_SCALE 安全边距，避免 jitter 后重新贴到体素边界。
     vec3 key = vec3(voxelCoord)
@@ -91,8 +93,8 @@ vec3 evaluateRadianceCacheHit(vec3 rayOrigin, vec3 rayDirection, vec3 hitPos, fl
     // 避免浮点误差把表面查询归入实体内部中心 probe。
     vec3 recursiveSamplePos = hitPos + geometryNormal * RADIANCE_CACHE_SURFACE_EPSILON;
     RadianceCache recursiveCache = samplePreviousRadianceCache(recursiveSamplePos);
-    vec3 recursiveIrradiance = recursiveCache.weight > 0.0
-        ? project_rgb_alice_irradiance(recursiveCache.alice, macroNormal) : vec3(0.0);
+    vec3 recursiveDiffuseIncident = radianceCacheValueValid(recursiveCache)
+        ? radianceCacheDiffuseIncident(recursiveCache, macroNormal) : vec3(0.0);
     vec3 diffuseAlbedo = evaluateDiffuseAlbedo(surf, rayDirection, macroNormal);
 
     vec3 traceLightDir = -lightDir_global;
@@ -101,13 +103,14 @@ vec3 evaluateRadianceCacheHit(vec3 rayOrigin, vec3 rayDirection, vec3 hitPos, fl
         directIncident = evalDirectDiffuseIncident(
                 hitPos,
                 geometryNormal,
-                surf,
+                macroNormal,
                 rayDirection,
                 traceLightDir,
                 false
             );
     }
-    vec3 diffuseRadiance = (recursiveIrradiance + directIncident) * diffuseAlbedo / PI;
+    // Both terms are E/pi; apply the diffuse albedo exactly once.
+    vec3 diffuseRadiance = (recursiveDiffuseIncident + directIncident) * diffuseAlbedo;
 
     MediumResult medium = evalMedium(
             hitDistance,
@@ -124,15 +127,17 @@ vec3 evaluateRadianceCacheHit(vec3 rayOrigin, vec3 rayDirection, vec3 hitPos, fl
 }
 
 void main() {
-    uvec3 voxelCoord = gl_LaunchIDEXT.xyz;
-    if (any(greaterThanEqual(voxelCoord, uvec3(
-                    RADIANCE_CACHE_W,
-                    RADIANCE_CACHE_H,
-                    RADIANCE_CACHE_D
-                )))) return;
+    vec3 currentCameraPosition = cam.viewInverse[3].xyz;
+    uint linearIndex = gl_LaunchIDEXT.x
+        + gl_LaunchIDEXT.y * gl_LaunchSizeEXT.x
+        + gl_LaunchIDEXT.z * gl_LaunchSizeEXT.x * gl_LaunchSizeEXT.y;
+    ivec3 worldVoxel;
+    RadianceCacheAddress poolAddress = radianceCacheAddressForPoolVoxel(
+        linearIndex, currentCameraPosition, worldVoxel);
+    if (!validateRadianceCacheAddress(poolAddress)) return;
 
     setFrame(cam.frameId);
-    vec3 seedCoord = vec3(voxelCoord)
+    vec3 seedCoord = vec3(worldVoxel)
             + float(cam.frameId) * vec3(0.61803398875, 0.41421356237, 0.73205080757);
     wseed = floatBitsToUint(hash13(seedCoord));
     wseed3 = uvec3(
@@ -150,8 +155,8 @@ void main() {
             && world_type_global != WORLD_THE_NETHER;
     #endif
 
-    vec3 probeCenter = radianceCacheVoxelWorldPos(voxelCoord, cam.viewInverse[3].xyz);
-    vec3 probePosition = probeCenter + sampleProbeJitter(voxelCoord, cam.frameId);
+    vec3 probeCenter = (vec3(worldVoxel) + 0.5) * VOXEL_SIZE;
+    vec3 probePosition = probeCenter + sampleProbeJitter(worldVoxel, cam.frameId);
     // 引导场属于中心 voxel；jitter 只改变实际射线原点，不改变缓存寻址。
     GuideInfo guide = computeRadianceCacheGuide(probeCenter);
     float estimatorWeight;
@@ -178,5 +183,6 @@ void main() {
     RadianceCache result;
     result.alice = radiance_to_rgb_alice(radiance, rayDirection);
     result.weight = 1.0;
-    storeRadianceCacheSwap(voxelCoord, result);
+    storeRadianceCachePlanes(
+        poolAddress, RC_PLANE_CURRENT_0, RC_PLANE_CURRENT_1, result);
 }
