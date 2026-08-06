@@ -52,12 +52,8 @@ void main() {
     uvec2 xy = uvec2(gl_FragCoord.xy);
     ivec2 pix = ivec2(gl_FragCoord.xy);
 
-    // 先用 N=0 surfaceMask 判定天空/表面（省去表面像素的 Geo0 读取）
-    float surfaceMask;
-    {
-        AliceEncoding dummy_alice;
-        readDiffuseLightRT(xy, dummy_alice, surfaceMask);
-    }
+    // 用 N=1 surfaceMask 判定天空/表面（surfaceMask 不再在 N=0 重复存储）
+    float surfaceMask = readDiffuseSurfaceMask(xy);
 
     // =========================================================================
     // 分支 1: 天空像素 — 读 Geo0 + N=3 + N=4
@@ -215,8 +211,8 @@ void main() {
     // 原始时域累积白模 (N=2 hist ALICE × geometryNormal, 降噪前)
     {
         AliceEncoding raw;
-        float w;
-        readDiffuseHist(xy, raw, w);
+        float w, meanY2_unused;
+        readDiffuseHist(xy, raw, w, meanY2_unused);
         fragColor.xyz = project_alice_irradiance(raw, geometryNormal);
     }
 

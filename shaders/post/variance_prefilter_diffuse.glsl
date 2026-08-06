@@ -65,7 +65,8 @@ float sanitizeVariance(float v) {
 // Unpack swap AliceEncoding + weight from unified SSBO, return raw ALICE variance.
 float loadAliceY(uvec2 xy, out float weight) {
     AliceEncoding alice;
-    readDiffuseSwap(xy, alice, weight);
+    float meanY2_unused;
+    readDiffuseSwap(xy, alice, weight, meanY2_unused);
     return sanitizeVariance(alice_variance(alice.aliceY));
 }
 
@@ -151,9 +152,9 @@ void main() {
     // Phase 3: Unpack center AliceEncoding
     // =========================================================================
     uvec2 xy = uvec2(clamp(ivec2(gid), ivec2(0), texSize));
-    float cWeight;
+    float cWeight, cMeanY2;
     AliceEncoding outAlice;
-    readDiffuseSwap(xy, outAlice, cWeight);
+    readDiffuseSwap(xy, outAlice, cWeight, cMeanY2);
     outAlice = sanitizeAlice(outAlice);
 
     // =========================================================================

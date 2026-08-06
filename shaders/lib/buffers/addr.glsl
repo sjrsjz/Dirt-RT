@@ -29,7 +29,7 @@ layout(std430, set = 3, binding = 0) buffer GeometryMaterialBuffer {
 } geomBuffer;
 
 layout(std430, set = 3, binding = 2) buffer DiffuseBuffer {
-    vec4 data[];
+    uvec4 data[];  // raw uint storage — no implicit float interpretation
 } diffuseBuffer;
 
 layout(std430, set = 3, binding = 3) buffer ReflectBuffer {

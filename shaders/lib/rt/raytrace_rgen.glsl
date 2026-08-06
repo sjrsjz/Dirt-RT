@@ -850,7 +850,8 @@ void writeDiffuseOutput(uvec2 xy, FirstBounceData fb, vec3 L_indirect, vec3 L_di
         combinedAlice = indAlice;
         mask = 1.0;
     }
-    writeDiffuseLightRT(xy, combinedAlice, mask);
+    float currentMeanY2 = combinedAlice.aliceY.w * combinedAlice.aliceY.w; // Y² for 1-spp
+    writeDiffuseLightRT(xy, combinedAlice, currentMeanY2);
     writeDiffuseGeo(xy, pos_rel, mask);
 }
 

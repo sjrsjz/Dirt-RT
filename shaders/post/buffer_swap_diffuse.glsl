@@ -36,6 +36,7 @@ void main() {
     if (any(isnan(tmp.data_swap.aliceY))) tmp.data_swap.aliceY = vec4(0.0);
     if (any(isnan(tmp.data_swap.CoCg))) tmp.data_swap.CoCg = vec2(0.0);
     tmp.prev_weight = tmp.weight;
+    tmp.prev_meanY2 = tmp.meanY2;
     tmp.data = tmp.data_swap;
 
     AliceEncoding blurred_alice, encoded;
@@ -50,6 +51,14 @@ void main() {
             clamp(NRD_BLEND_STRENGTH * exp(-NRD_BLEND_STRENGTH * clamp(tmp.weight, 0.0, 100.0)), 0.0, 1.0));
     writeDiffuse(tmp, pix);
 
-    // Phase 2: colortex6 → N=5 原样拷贝
-    diffuseBuffer.data[addr(DIF_N_PATHGUIDE, gxy)] = texelFetch(colortex6, pix, 0);
+    // Phase 2: colortex6 → N=5 (uvec4 raw-integer copy)
+    {
+        vec4 texVal = texelFetch(colortex6, pix, 0);
+        diffuseBuffer.data[addr(DIF_N_PATHGUIDE, gxy)] = uvec4(
+            floatBitsToUint(texVal.x),  // packHalf2x16(aliceY.xy)
+            floatBitsToUint(texVal.y),  // packHalf2x16(aliceY.zw)
+            floatBitsToUint(texVal.z),  // W
+            floatBitsToUint(texVal.w)   // M
+        );
+    }
 }

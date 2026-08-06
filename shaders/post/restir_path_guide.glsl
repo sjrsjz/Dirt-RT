@@ -112,10 +112,10 @@ Reservoir spatialReservoir(uvec2 gid, vec3 centerNormal, float centerDist, inout
 
         uvec2 xy = uvec2(sc);
         AliceEncoding alice;
-        float mask;
-        readDiffuseLightRT(xy, alice, mask);
+        float meanY2_unused;
+        readDiffuseLightRT(xy, alice, meanY2_unused);
         vec4 y = alice.aliceY;
-        if (isSky(y)) continue;
+        if (isSky(y) || readDiffuseSurfaceMask(xy) < 0.5) continue;
 
         // 深度不连续拒绝
         vec3 pos;
@@ -153,11 +153,11 @@ struct StoredReservoir {
 };
 
 StoredReservoir loadStored(ivec2 pix) {
-    vec4 raw = diffuseBuffer.data[addr(DIF_N_PATHGUIDE, uvec2(pix))];
+    uvec4 raw = diffuseBuffer.data[addr(DIF_N_PATHGUIDE, uvec2(pix))];
     StoredReservoir s;
-    s.y = unpackAliceHalf(raw.xy);
-    s.W = raw.z;
-    s.M = raw.w;
+    s.y = vec4(unpackHalf2x16(raw.x), unpackHalf2x16(raw.y));
+    s.W = uintBitsToFloat(raw.z);
+    s.M = uintBitsToFloat(raw.w);
     return s;
 }
 

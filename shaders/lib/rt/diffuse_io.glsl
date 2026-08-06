@@ -16,6 +16,8 @@ struct diffuseIlluminationData {
     float histSurfaceMask;
     float weight;
     float prev_weight;
+    float meanY2;       // second moment E[Y²] for swap (current accumulated)
+    float prev_meanY2;  // second moment E[Y²] for history
 };
 
 struct DiffuseIlluminationWriteData {
@@ -23,6 +25,7 @@ struct DiffuseIlluminationWriteData {
     vec3 pos;
     float surfaceMask;
     float weight;
+    float meanY2;       // second moment E[Y²]
 };
 
 // ===========================================================================
@@ -34,9 +37,11 @@ DiffuseIlluminationWriteData loadDiffuseInput(ivec2 p) {
     uvec2 xy = uvec2(p);
     DiffuseIlluminationWriteData t;
     AliceEncoding alice;
-    float mask;
-    readDiffuseLightRT(xy, alice, mask);
+    float meanY2;
+    readDiffuseLightRT(xy, alice, meanY2);
     t.data_swap = alice;
+    t.meanY2 = meanY2;
+    float mask;
     readDiffuseGeo(xy, t.pos, mask);
     t.surfaceMask = mask;
     t.weight = 1.0;
@@ -50,18 +55,20 @@ diffuseIlluminationData fetchDiffuse(ivec2 p) {
 
     // swap = current frame accumulated (N=4)
     AliceEncoding alice;
-    float weight;
-    readDiffuseSwap(xy, alice, weight);
+    float weight, meanY2;
+    readDiffuseSwap(xy, alice, weight, meanY2);
     tmp.data_swap = alice;
     tmp.weight = weight;
+    tmp.meanY2 = meanY2;
 
 #ifndef DIFFUSE_BUFFER_MIN2
     // hist = previous frame history (N=2)
-    readDiffuseHist(xy, alice, weight);
+    readDiffuseHist(xy, alice, weight, meanY2);
     tmp.data = alice;
     tmp.prev_weight = weight;
+    tmp.prev_meanY2 = meanY2;
 
-    // history geometry (N=3) — surfaceMask replaces oct(macroNormal)
+    // history geometry (N=3) — surfaceMask
     float mask;
     readDiffuseHistGeo(xy, tmp.pos, mask);
     tmp.histSurfaceMask = mask;
@@ -73,10 +80,12 @@ diffuseIlluminationData blendDiffuse(diffuseIlluminationData A, diffuseIlluminat
     diffuseIlluminationData t;
     t.data_swap = mix_alice(A.data_swap, B.data_swap, x);
     t.weight = (B.weight - A.weight) * x + A.weight;
+    t.meanY2 = (B.meanY2 - A.meanY2) * x + A.meanY2;
 #ifndef DIFFUSE_BUFFER_MIN2
     t.data = mix_alice(A.data, B.data, x);
     t.pos = mix(A.pos, B.pos, x);
     t.prev_weight = (B.prev_weight - A.prev_weight) * x + A.prev_weight;
+    t.prev_meanY2 = (B.prev_meanY2 - A.prev_meanY2) * x + A.prev_meanY2;
 #endif
     return t;
 }
@@ -102,11 +111,11 @@ void writeDiffuse(diffuseIlluminationData data, ivec2 p) {
     uvec2 xy = uvec2(p);
 
     // Always write swap (N=4)
-    writeDiffuseSwap(xy, data.data_swap, data.weight);
+    writeDiffuseSwap(xy, data.data_swap, data.weight, data.meanY2);
 
 #if !defined(DIFFUSE_BUFFER_MIN) && !defined(DIFFUSE_BUFFER_MIN2)
     // Full write: also update hist (N=2) + hist geometry (N=3)
-    writeDiffuseHist(xy, data.data, data.prev_weight);
+    writeDiffuseHist(xy, data.data, data.prev_weight, data.prev_meanY2);
     writeDiffuseHistGeo(xy, data.pos, data.histSurfaceMask);
 #endif
 }
@@ -123,10 +132,11 @@ DiffuseIlluminationWriteData fetchPrevDiffuse(ivec2 p) {
 
     // swap = previous frame final denoised result (used by ray0.rgen for guiding)
     AliceEncoding alice;
-    float weight;
-    readDiffuseSwap(xy, alice, weight);
+    float weight, meanY2;
+    readDiffuseSwap(xy, alice, weight, meanY2);
     t.data_swap = alice;
     t.weight = weight;
+    t.meanY2 = meanY2;
 
     // Read position+mask from current geometry (unchanged by ray0 since it only writes N=0,1)
     float mask;
@@ -141,6 +151,7 @@ DiffuseIlluminationWriteData blendPrevDiffuse(DiffuseIlluminationWriteData A, Di
     t.data_swap = mix_alice(A.data_swap, B.data_swap, x);
     t.pos = mix(A.pos, B.pos, x);
     t.weight = mix(A.weight, B.weight, x);
+    t.meanY2 = mix(A.meanY2, B.meanY2, x);
     return t;
 }
 
@@ -156,7 +167,7 @@ DiffuseIlluminationWriteData samplePrevDiffuse(vec2 p) {
 
 void writePrevDiffuse(DiffuseIlluminationWriteData data, ivec2 p) {
     uvec2 xy = uvec2(p);
-    writeDiffuseSwap(xy, data.data_swap, data.weight);
+    writeDiffuseSwap(xy, data.data_swap, data.weight, data.meanY2);
 }
 
 #endif

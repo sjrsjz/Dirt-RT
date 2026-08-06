@@ -241,6 +241,7 @@ void clampHistoryToAABB(inout AliceEncoding hist, vec4 minAY, vec4 maxAY, vec2 m
 void resetToCurrentSample() {
     output_weight = 1.0;
     out_data.data_swap = current_data.data_swap;
+    out_data.meanY2 = current_data.meanY2;
 }
 
 void MixDiffuse() {
@@ -260,6 +261,7 @@ void MixDiffuse() {
     vec2 prevFrac = fract(prevCoord);
 
     AliceEncoding accumAlice = init_alice();
+    float accumMeanY2 = 0.0;
     float validKernelWeight = 0.0;
     float accumHistWeight = 0.0;
 
@@ -291,6 +293,7 @@ void MixDiffuse() {
         float correctedTapW = min(tap.prev_weight * scale, float(TEMPORAL_MAX_HISTORY));
 
         accumulate_alice(accumAlice, tap.data, w[i]);
+        accumMeanY2 += w[i] * tap.prev_meanY2;
         validKernelWeight += w[i];
         accumHistWeight += w[i] * correctedTapW;
     }
@@ -303,6 +306,8 @@ void MixDiffuse() {
 
     AliceEncoding histAlice = scale_alice(accumAlice, 1.0 / validKernelWeight);
     float histWeight = accumHistWeight / validKernelWeight;
+
+    float histMeanY2 = accumMeanY2 / validKernelWeight;
 
     histWeight = clamp(histWeight, 0.0, float(TEMPORAL_MAX_HISTORY));
     if (histWeight <= TEMPORAL_HISTORY_MIN_WEIGHT) {
@@ -326,7 +331,11 @@ void MixDiffuse() {
     float curAlpha = 1.0 / max(W, 1e-6);
     output_weight = min(W, float(TEMPORAL_MAX_HISTORY));
 
+    // Blend second moment: M₂,n = (1-α)·M₂,h + α·Y²_c
+    float newMeanY2 = mix(histMeanY2, current_data.meanY2, curAlpha);
+
     out_data.data_swap = curAlpha >= 0.9999 ? current_data.data_swap : mix_alice(histAlice, current_data.data_swap, curAlpha);
+    out_data.meanY2 = newMeanY2;
     imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), vec4(validKernelWeight, 0.0, 0.0, 0.0));
 }
 
@@ -352,9 +361,9 @@ void main() {
 
             AABBTileSample s;
             AliceEncoding alice;
-            float mask;
-            readDiffuseLightRT(loadXY, alice, mask);
-            s.valid = mask > 0.5;
+            float meanY2_unused;
+            readDiffuseLightRT(loadXY, alice, meanY2_unused);
+            s.valid = readDiffuseSurfaceMask(loadXY) > 0.5;
             if (s.valid) {
                 s.aliceY = alice.aliceY;
                 s.CoCg = alice.CoCg;
@@ -375,13 +384,14 @@ void main() {
         readGeo0(GEO_N_GEO, pix, current_data.pos, info_distance);
     }
     {
-        // 从 DiffuseBuffer N=0 读 ALICE + surfaceMask，pos 复用 Geo0
+        // 从 DiffuseBuffer N=0 读 ALICE + meanY2，surfaceMask 从 N=1 读
         uvec2 _xy = uvec2(pix);
         AliceEncoding alice;
-        float mask;
-        readDiffuseLightRT(_xy, alice, mask);
+        float meanY2;
+        readDiffuseLightRT(_xy, alice, meanY2);
         current_data.data_swap = alice;
-        current_data.surfaceMask = mask;
+        current_data.meanY2 = meanY2;
+        current_data.surfaceMask = readDiffuseSurfaceMask(_xy);
         current_data.weight = 1.0;
         // 从 Geo1 取 geometryNormal（仅用于 buildTemporalFootprint 切空间）
         float _r;
@@ -391,6 +401,7 @@ void main() {
     }
 
     out_data.data_swap = current_data.data_swap;
+    out_data.meanY2 = current_data.meanY2;
     out_data.data = init_alice();
     out_data.surfaceMask = current_data.surfaceMask;
     out_data.pos = current_data.pos;
