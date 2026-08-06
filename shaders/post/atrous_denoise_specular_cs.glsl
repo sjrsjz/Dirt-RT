@@ -19,16 +19,16 @@
 layout(local_size_x = 16, local_size_y = 16) in;
 
 uniform sampler2D colortex3; // (pos.xyz, oct(R))
-uniform sampler2D colortex4; // f16(R,G)|f16(B,roughness)|f16(variance,virtualProjDist)|oct(H)
+uniform usampler2D colortex4; // f16(R,G)|f16(B,roughness)|f16(variance,virtualProjDist)|oct(H)
 
-layout(rgba32f) uniform image2D colorimg4;
+layout(rgba32ui) uniform uimage2D colorimg4;
 
 #define HALO R0
 #define TILE_SIZE (16 + 2 * HALO)
 #define TILE_AREA (TILE_SIZE * TILE_SIZE)
 
 shared vec4 sm_geometry[TILE_AREA];
-shared vec4 sm_light[TILE_AREA];
+shared uvec4 sm_light[TILE_AREA];
 
 // NRD-style 粗糙度权重参数 (返回 (a, -b) 用于 ComputeWeight)
 vec2 GetRoughnessWeightParams(float roughness, float fraction) {
@@ -136,7 +136,7 @@ void main() {
         } else {
             // 越界: 天空 mask (variance<0)
             sm_geometry[i] = vec4(0.0);
-            sm_light[i] = vec4(0.0, 0.0, pack2HalfClamped(-1.0, 0.0), 0.0);
+            sm_light[i] = uvec4(0u, 0u, packHalf2x16(vec2(-1.0, 0.0)), 0u);
         }
     }
 

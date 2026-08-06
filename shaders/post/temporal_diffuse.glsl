@@ -5,7 +5,7 @@
 // ===========================================================================
 
 layout(local_size_x = 16, local_size_y = 16) in;
-layout(rgba32f) uniform writeonly image2D colorimg6;
+layout(rgba32ui) uniform writeonly uimage2D colorimg6;
 
 #define DIFFUSE_BUFFER_MIN
 #define PREV_DIFFUSE_BUFFER
@@ -300,7 +300,7 @@ void MixDiffuse() {
 
     if (validKernelWeight < 1e-5) {
         resetToCurrentSample();
-        imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), vec4(0.0, 0.0, 0.0, 0.0));
+        imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), uvec4(0u));
         return;
     }
 
@@ -312,7 +312,7 @@ void MixDiffuse() {
     histWeight = clamp(histWeight, 0.0, float(TEMPORAL_MAX_HISTORY));
     if (histWeight <= TEMPORAL_HISTORY_MIN_WEIGHT) {
         resetToCurrentSample();
-        imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), vec4(0.0, 0.0, 0.0, 0.0));
+        imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), uvec4(0u));
         return;
     }
 
@@ -336,7 +336,7 @@ void MixDiffuse() {
 
     out_data.data_swap = curAlpha >= 0.9999 ? current_data.data_swap : mix_alice(histAlice, current_data.data_swap, curAlpha);
     out_data.meanY2 = newMeanY2;
-    imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), vec4(validKernelWeight, 0.0, 0.0, 0.0));
+    imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), uvec4(floatBitsToUint(validKernelWeight), 0u, 0u, 0u));
 }
 
 // ===========================================================================
@@ -410,7 +410,7 @@ void main() {
     if (info_distance < -0.5) {
         out_data.weight = 0.0;
         writeDiffuse(out_data, ivec2(pix));
-        imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), vec4(0.0, 0.0, 0.0, 0.0));
+        imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), uvec4(0u));
         return;
     }
 

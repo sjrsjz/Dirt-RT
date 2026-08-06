@@ -18,7 +18,7 @@
 #define REFLECT_GGX_CONFIDENCE 25.0 // GGX lobe similarity strictness for specular temporal accumulation. Lower = more tolerant of normal/roughness mismatch → smoother but more ghosting. Higher = stricter lobe match → less ghosting but noisier on curved surfaces. [1.0 2.0 5.0 10.0 20.0 25.0 50.0 75.0 100.0]
 
 // -- Diffuse temporal accumulation (temporal_diffuse.glsl) --
-#define TEMPORAL_MAX_HISTORY 32 // Maximum effective sample count clamped per pixel. Higher = smoother but more ghosting. [1 2 4 8 16 32 64 128 255]
+#define TEMPORAL_MAX_HISTORY 32 // Maximum effective sample count clamped per pixel. Higher = smoother but more ghosting. [1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384]
 #define TEMPORAL_CONFIDENCE_POWER 1.0 // Reprojection confidence exponent. Higher = more aggressive rejection of mismatched history. [0.1 0.25 0.5 1.0 2.0 4.0]
 #define TEMPORAL_HISTORY_MIN_WEIGHT 0.0001 // Weight threshold below which history is discarded and reset. [0.000001 0.00001 0.0001 0.001 0.01]
 #define TEMPORAL_AABB_ENABLE 1 // AABB clamp in ALICE augmented space to prevent ghosting. 0 = fall back to raw EMA blend. [0 1]
@@ -31,7 +31,7 @@
 
 // -- À-trous spatial filter (atrous_denoise_diffuse.glsl) --
 #define ATROUS_NORMAL_POWER 32.0 // Normal edge-stopping sensitivity in à-trous wavelet filter. Higher = sharper normal edges preserved. [1 2 4 8 16 32 64 128]
-#define ATROUS_PHI_L 0.000005 // Luma edge-stopping sensitivity. Higher = more aggressive denoising. [0.000001 0.0000025 0.000005 0.000075 0.00001 0.000025 0.00005 0.0001 0.00025 0.0005 0.001]
+#define ATROUS_PHI_L 0.25 // Luma edge-stopping sensitivity. Higher = more aggressive denoising. [0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5]
 #define ATROUS_POSITION_PARAM 0.0025 // Depth edge-stopping sensitivity. Higher = sharper depth boundaries preserved. [0.00075 0.00125 0.0025 0.005 0.01 0.02 0.04 0.08]
 #define ATROUS_GAMMA 1.0 // Roughness-dependent filter order adaptation strength. 0 = constant filter width regardless of roughness (blurrier on rough surfaces), 1 = standard roughness adaptation, higher = more aggressive widening on rough surfaces. [0.0 0.25 0.5 0.75 1.0 1.5 2.0]
 
@@ -64,9 +64,9 @@ const int colortex0Format = RGBA32F;
 const int colortex1Format = RGBA32F;
 const int colortex2Format = RGBA32F;
 const int colortex3Format = RGBA32F;
-const int colortex4Format = RGBA32F;
-const int colortex5Format = RGBA32F;
-const int colortex6Format = RGBA32F;
+const int colortex4Format = RGBA32UI;
+const int colortex5Format = RGBA32UI;
+const int colortex6Format = RGBA32UI;
 const int colortex7Format = RGBA32F;
 const int colortex8Format = RGBA32F;
 const int colortex9Format = RGBA32F;

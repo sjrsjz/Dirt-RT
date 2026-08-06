@@ -16,7 +16,7 @@ layout(local_size_x = 16, local_size_y = 16) in;
 #include "/lib/buffers/buffer_io.glsl"
 
 uniform sampler2D colortex3; // (pos.xyz, oct(R))
-uniform sampler2D colortex4; // 降噪后: f16(R,G)|f16(B,roughness)|f16(variance,virtualProjDist)|oct(H)
+uniform usampler2D colortex4; // 降噪后: f16(R,G)|f16(B,roughness)|f16(variance,virtualProjDist)|oct(H)
 
 void main() {
     ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
@@ -24,11 +24,11 @@ void main() {
     if (pix.x >= texSize.x || pix.y >= texSize.y) return;
 
     vec4 geom = texelFetch(colortex3, pix, 0);
-    vec4 light = texelFetch(colortex4, pix, 0);
+    uvec4 light = texelFetch(colortex4, pix, 0);
 
-    vec2 rg = unpackHalf2x16(floatBitsToUint(light.x));
-    vec2 br = unpackHalf2x16(floatBitsToUint(light.y));
-    vec2 vv = unpackHalf2x16(floatBitsToUint(light.z));
+    vec2 rg = unpackHalf2x16(light.x);
+    vec2 br = unpackHalf2x16(light.y);
+    vec2 vv = unpackHalf2x16(light.z);
     float virtualProjDist = vv.y;
     if (vv.x < 0.0) return; // 天空 → 跳过, 保留 SSBO 原有值
 
@@ -39,8 +39,8 @@ void main() {
     if (any(isnan(preDenoise))) preDenoise = vec3(0.0);
 
     // 写回降噪颜色到 SSBO 当前帧区段 (fog.fsh 通过 fetchReflect 读取)
-    vec2 drg = unpackHalf2x16(floatBitsToUint(light.x));
-    vec2 dbr = unpackHalf2x16(floatBitsToUint(light.y));
+    vec2 drg = unpackHalf2x16(light.x);
+    vec2 dbr = unpackHalf2x16(light.y);
     vec3 denoised = vec3(drg.x, drg.y, dbr.x);
     if (any(isnan(denoised))) denoised = vec3(0.0);
     writeReflLight(xy, denoised, vproj, weight);

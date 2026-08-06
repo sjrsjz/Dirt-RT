@@ -115,7 +115,7 @@ void main() {
 
     #elif DEBUG_VIEW == 4
     // White model: diffuse irradiance only, no albedo
-    fragColor.xyz = project_alice_irradiance(tmp.data_swap, geometryNormal) + lightVal;
+    fragColor.xyz = project_alice_irradiance(tmp.data_swap, microN) + lightVal;
 
     #elif DEBUG_VIEW == 5
     // Light field: ALICE normalized dominant direction × energy

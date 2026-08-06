@@ -14,10 +14,10 @@ layout(local_size_x = 16, local_size_y = 16) in;
 #include "/lib/common.glsl"
 #include "/lib/lighting/alice.glsl"
 
-uniform sampler2D colortex4; // atrous 降噪 ALICE (packAlice 格式)
-uniform sampler2D colortex6; // temporal_diffuse validKernelWeight
+uniform usampler2D colortex4; // atrous 降噪 ALICE (packAlice 格式, RGBA32UI)
+uniform usampler2D colortex6; // temporal_diffuse validKernelWeight
 
-layout(rgba32f) uniform writeonly image2D colorimg6;
+layout(rgba32ui) uniform writeonly uimage2D colorimg6;
 
 const uint POISSON_N = 8u;
 const float POISSON_R0 = 16.0;
@@ -82,11 +82,11 @@ bool isSky(vec4 y) {
     return y.w <= 1e-8;
 }
 
-vec2 packAliceHalf(vec4 y) {
-    return vec2(uintBitsToFloat(packHalf2x16(y.xy)), uintBitsToFloat(packHalf2x16(y.zw)));
+uvec2 packAliceHalf(vec4 y) {
+    return uvec2(packHalf2x16(y.xy), packHalf2x16(y.zw));
 }
-vec4 unpackAliceHalf(vec2 p) {
-    return vec4(unpackHalf2x16(floatBitsToUint(p.x)), unpackHalf2x16(floatBitsToUint(p.y)));
+vec4 unpackAliceHalf(uvec2 p) {
+    return vec4(unpackHalf2x16(p.x), unpackHalf2x16(p.y));
 }
 
 float guideTarget(vec4 y, vec3 N) {
@@ -135,8 +135,10 @@ Reservoir spatialReservoir(uvec2 gid, vec3 centerNormal, float centerDist, inout
 // Phase 3: 降噪先验
 // ---------------------------------------------------------------------------
 void addDenoisedPrior(inout Reservoir r, ivec2 pix, vec3 centerNormal, inout uint seed) {
-    vec4 raw = texelFetch(colortex4, pix, 0);
-    AliceEncoding a = unpackAlice(raw.x, raw.y, raw.z);
+    uvec4 raw = texelFetch(colortex4, pix, 0);
+    AliceEncoding a;
+    a.aliceY = vec4(unpackHalf2x16(raw.x), unpackHalf2x16(raw.y));
+    a.CoCg   = unpackHalf2x16(raw.z);
     vec4 y = a.aliceY;
     if (isSky(y)) return;
     float w = guideTarget(y, centerNormal);
@@ -231,13 +233,13 @@ void main() {
     // Phase 4+5: 历史重投影 + RIS 合并
     StoredReservoir hist;
     if (sampleHistory(gxy, seed, hist)) {
-        float temporalConf = clamp(texelFetch(colortex6, pix, 0).r, 0.0, 1.0);
+        float temporalConf = clamp(uintBitsToFloat(texelFetch(colortex6, pix, 0).r), 0.0, 1.0);
         combineWithHistory(r, hist, temporalConf, centerNormal, seed);
     }
 
     r.M = min(r.M, GUIDE_MAX_M);
     float W = reservoirW(r);
 
-    vec2 halfY = packAliceHalf(r.y);
-    imageStore(colorimg6, pix, vec4(halfY, W, r.M));
+    uvec2 halfY = packAliceHalf(r.y);
+    imageStore(colorimg6, pix, uvec4(halfY.x, halfY.y, floatBitsToUint(W), floatBitsToUint(r.M)));
 }

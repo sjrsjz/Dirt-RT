@@ -25,7 +25,7 @@ layout(local_size_x = 16, local_size_y = 16) in;
 uniform vec2 resolution;
 
 layout(rgba32f) uniform writeonly image2D colorimg3;
-layout(rgba32f) uniform writeonly image2D colorimg4;
+layout(rgba32ui) uniform writeonly uimage2D colorimg4;
 
 // 5×5 方差核 → halo=2 → 20×20 tile
 const uint HALO = 2u;
@@ -144,7 +144,7 @@ void main() {
     // ---- 主天空: 写 variance<0 mask ----
     if (c.H_dist.w < -0.5) {
         imageStore(colorimg3, ivec2(gid), vec4(0.0));
-        imageStore(colorimg4, ivec2(gid), vec4(0.0, 0.0, pack2HalfClamped(-1.0, 0.0), 0.0));
+        imageStore(colorimg4, ivec2(gid), uvec4(0u, 0u, packHalf2x16(vec2(-1.0, 0.0)), 0u));
         return;
     }
 

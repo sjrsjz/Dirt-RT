@@ -14,9 +14,9 @@
 layout(local_size_x = 16, local_size_y = 16) in;
 
 uniform sampler2D colortex3;
-uniform sampler2D colortex4;
+uniform usampler2D colortex4;
 
-layout(rgba32f) uniform image2D colorimg4;
+layout(rgba32ui) uniform uimage2D colorimg4;
 
 // ---------------------------------------------------------------------------
 // 共享内存
@@ -25,7 +25,7 @@ layout(rgba32f) uniform image2D colorimg4;
 #define TILE_AREA (TILE_SIZE * TILE_SIZE)
 
 shared vec4 sm_geometry[TILE_AREA];
-shared vec4 sm_light[TILE_AREA];
+shared uvec4 sm_light[TILE_AREA];
 shared vec2 sm_std[TILE_AREA]; // precomputed eigen_std (σ_⊥, σ_∥) per tile pixel
 
 // ---------------------------------------------------------------------------
@@ -35,11 +35,11 @@ shared vec2 sm_std[TILE_AREA]; // precomputed eigen_std (σ_⊥, σ_∥) per til
 void unpackLightSampleSM(uint tile_idx, out vec3 pos,
     out AliceEncoding encoded, out float variance) {
     vec4 geom = sm_geometry[tile_idx];
-    vec4 light = sm_light[tile_idx];
+    uvec4 light = sm_light[tile_idx];
     pos = geom.xyz;
-    // geom.w is now surfaceMask — normal not needed for ALICE edge-stopping
-    encoded = unpackAlice(light.x, light.y, light.z);
-    variance = light.w;
+    encoded.aliceY = vec4(unpackHalf2x16(light.x), unpackHalf2x16(light.y));
+    encoded.CoCg   = unpackHalf2x16(light.z);
+    variance = uintBitsToFloat(light.w);
 }
 
 // à-trous 分数阶方差传播指数
@@ -79,19 +79,16 @@ void main() {
         sm_geometry[i] = texelFetch(colortex3, cc, 0);
 
         if (gc == cc) {
-            vec4 light = texelFetch(colortex4, cc, 0);
+            uvec4 light = texelFetch(colortex4, cc, 0);
             sm_light[i] = light;
 
-            // 在共享内存加载阶段立即预计算 eigen_std，
-            // 消除 atrous 采样循环中 alice_eigen_std 的冗余 sqrt
-            AliceEncoding pre_enc = unpackAlice(light.x, light.y, light.z);
-            vec4 pre_y = pre_enc.aliceY;
+            // 在共享内存加载阶段立即预计算 eigen_std
+            vec4 pre_y = vec4(unpackHalf2x16(light.x), unpackHalf2x16(light.y));
             float pre_omega = abs(pre_y.w);
-            float pre_len = length(pre_y.xyz);
-            float pre_kappa = alice_kappa(pre_len, pre_omega);
+            float pre_kappa = alice_kappa(length(pre_y.xyz), pre_omega);
             sm_std[i] = alice_eigen_std(pre_omega, pre_kappa);
         } else {
-            sm_light[i] = vec4(0.0, 0.0, 0.0, -1.0); // 天空标记
+            sm_light[i] = uvec4(0xFFFFFFFFu); // 无效/天空标记
             sm_std[i] = vec2(0.0);
         }
     }
@@ -108,7 +105,7 @@ void main() {
     uint cy = local_id.y + uint(R0);
     uint center_idx = cy * uint(TILE_SIZE) + cx;
 
-    if (sm_light[center_idx].w < 0.0) return;
+    if (sm_light[center_idx].x == 0xFFFFFFFFu) return;
 
     const float power = relevant_power(R0 * 2); // 乘 2 是因为方差估计是给下一级用的
 
@@ -125,8 +122,6 @@ void main() {
     // ---- 预计算中心像素的统计特征 -----------------------------------------
     vec4 c_enc = center_alice.aliceY;
     vec2 c_std = sm_std[center_idx]; // 共享内存加载阶段已预计算 eigen_std
-
-    float c_inv_var = 1.0 / max(center_var_est, 4e-9);
 
     float dist_to_cam = max(length(center_pos), 0.001);
     float inv_pixel_footprint = 1.0 / (ATROUS_POSITION_PARAM
@@ -155,7 +150,7 @@ void main() {
         uint sy = cy + uint(dy * R0);
         uint sample_idx = sy * uint(TILE_SIZE) + sx;
 
-        if (sm_light[sample_idx].w < 0.0) continue;
+        if (sm_light[sample_idx].x == 0xFFFFFFFFu) continue;
 
         vec3 sample_world_pos;
         AliceEncoding sample_alice;
@@ -172,10 +167,10 @@ void main() {
         vec2 s_std = sm_std[sample_idx]; // 共享内存预计算的 eigen_std
 
         float d_bures_sq = alice_bures_distance_sq_precomputed(c_enc.xyz, c_std, s_v, s_std);
-        float w_luma = ATROUS_PHI_L * R0 * d_bures_sq * c_inv_var;
+        float w_luma = ATROUS_PHI_L * d_bures_sq / max(center_var_est + sample_var_est, 1e-12);
 
         const float w_kernel = GRID_3x3[k].z;
-        float w0 = w_kernel * exp(-w_geometry) / (1 + w_luma);
+        float w0 = w_kernel * exp(-w_geometry - w_luma);
 
         accumulate_alice(accumAlice, sample_alice, w0);
         sumWeight += w0;
@@ -187,5 +182,9 @@ void main() {
     accumAlice = scale_alice(accumAlice, inv_sumWeight);
 
     float varEnergyOut = sumVarEnergy * pow(inv_sumWeight, power);
-    imageStore(colorimg4, pix, vec4(packAlice(accumAlice), varEnergyOut));
+    imageStore(colorimg4, pix, uvec4(
+        packHalf2x16(clamp(accumAlice.aliceY.xy, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(accumAlice.aliceY.zw, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(accumAlice.CoCg,        vec2(-65504.0), vec2(65504.0))),
+        floatBitsToUint(varEnergyOut)));
 }

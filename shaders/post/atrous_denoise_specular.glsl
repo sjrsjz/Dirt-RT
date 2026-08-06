@@ -18,7 +18,7 @@
 #include "/lib/buffers/buffer_io.glsl"
 
 uniform sampler2D colortex3; // (pos.xyz, oct(R))
-uniform sampler2D colortex4; // f16(R,G)|f16(B,roughness)|f16(variance,virtualProjDist)|oct(H)
+uniform usampler2D colortex4; // f16(R,G)|f16(B,roughness)|f16(variance,virtualProjDist)|oct(H)
 
 // Poisson 圆盘采样表 (NRD) — 预计算采样偏移 + 高斯核权重
 // .xy = 归一化采样偏移, .z = length(.xy), .w = 高斯核权重 exp(-z^2/2)
@@ -113,14 +113,14 @@ float GetPlaneDistanceWeight_Atrous(vec3 centerWorldPos, vec3 centerNormal, vec3
 
 
 /* RENDERTARGETS: 4 */
-layout(location = 0) out vec4 color;
+layout(location = 0) out uvec4 color;
 
 void main() {
     ivec2 pix = ivec2(gl_FragCoord.xy);
     ivec2 texSize = textureSize(colortex3, 0);
 
     vec4 centerGeom = texelFetch(colortex3, pix, 0);
-    vec4 centerLight = texelFetch(colortex4, pix, 0);
+    uvec4 centerLight = texelFetch(colortex4, pix, 0);
 
     vec3 cPos, cR, cRad, cH;
     float cRough, cVar, cVproj;
@@ -186,7 +186,7 @@ void main() {
         }
 
         vec4 sG = texelFetch(colortex3, samplePos, 0);
-        vec4 sL = texelFetch(colortex4, samplePos, 0);
+        uvec4 sL = texelFetch(colortex4, samplePos, 0);
         vec3 sPos, sR, sRad, sH;
         float sRough, sVar, sVproj;
         unpackSpecularSample(PackedLightSample(sG, sL),

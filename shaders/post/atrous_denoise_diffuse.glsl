@@ -16,11 +16,11 @@
 // ==========================================================================
 
 uniform sampler2D colortex3; // 几何 (pos + normal)
-uniform sampler2D colortex4; // 光照 (ALICE + variance)
+uniform usampler2D colortex4; // 光照 (ALICE + variance)
 
 /* RENDERTARGETS: 4,5 */
-layout(location = 0) out mediump vec4 out_light_sample;
-layout(location = 1) out mediump vec4 out_light_sample_blurred;
+layout(location = 0) out uvec4 out_light_sample;
+layout(location = 1) out uvec4 out_light_sample_blurred;
 
 // ---------------------------------------------------------------------------
 // Poisson 圆盘采样表 (NRD)
@@ -49,11 +49,12 @@ const vec4 POISSON_8[8] = {
 void unpackLightSample(ivec2 coord, out vec3 pos, out float oct_normal,
     out AliceEncoding encoded, out float variance) {
     vec4 sample_data0 = texelFetch(colortex3, coord, 0);
-    vec4 sample_data1 = texelFetch(colortex4, coord, 0);
+    uvec4 light = texelFetch(colortex4, coord, 0);
     pos = sample_data0.xyz;
     oct_normal = sample_data0.w;
-    encoded = unpackAlice(sample_data1.x, sample_data1.y, sample_data1.z);
-    variance = sample_data1.w;
+    encoded.aliceY = vec4(unpackHalf2x16(light.x), unpackHalf2x16(light.y));
+    encoded.CoCg   = unpackHalf2x16(light.z);
+    variance = uintBitsToFloat(light.w);
 }
 
 // à-trous 分数阶方差传播指数
@@ -83,8 +84,8 @@ void main() {
     float center_var_est;
     unpackLightSample(pix, center_pos, center_oct_n, center_alice, center_var_est);
 
-    // 天空像素跳过 (方差被 swap2 复用作天空 mask)
-    if (center_var_est < 0.0) return;
+    // 天空像素跳过 (colortex3.xyz = 0 for sky)
+    if (dot(center_pos, center_pos) < 1e-6) return;
 
     const float power = relevant_power(R0 * 2); // 乘 2 是因为方差估计是给下一级用的
 
@@ -100,8 +101,6 @@ void main() {
     float c_omega = c_enc.w;
     float c_kappa = alice_kappa(c_len_v, c_omega);
     vec2 c_std = alice_eigen_std(c_omega, c_kappa);
-
-    float c_inv_var = 1.0 / max(center_var_est, 4e-9);
 
     float dist_to_cam = max(length(center_pos), 0.001);
     float inv_pixel_footprint = 1.0 / (ATROUS_POSITION_PARAM
@@ -131,7 +130,7 @@ void main() {
         unpackLightSample(sample_coord, sample_world_pos, sample_oct_n,
             sample_alice, sample_var_est);
 
-        if (sample_var_est < 0.0) continue; // 天空
+        if (dot(sample_world_pos, sample_world_pos) < 1e-6) continue; // 天空
         sample_alice.aliceY.w = abs(sample_alice.aliceY.w);
 
         vec3 delta = (sample_world_pos - center_pos) * inv_pixel_footprint;
@@ -142,10 +141,10 @@ void main() {
         float s_kappa = alice_kappa(s_len_v, s_enc.w);
         vec2 s_std = alice_eigen_std(s_enc.w, s_kappa);
         float d_bures_sq = alice_bures_distance_sq_precomputed(c_enc.xyz, c_std, s_enc.xyz, s_std);
-        float w_luma = ATROUS_PHI_L * R0 * d_bures_sq * c_inv_var;
+        float w_luma = ATROUS_PHI_L * d_bures_sq / max(center_var_est + sample_var_est, 1e-12);
 
         const float w_kernel = ps.w;
-        float w0 = w_kernel * exp(-w_geometry) / (1 + w_luma);
+        float w0 = w_kernel * exp(-w_geometry - w_luma);
 
         // ---- 累积 ----------------------------------------------------
         accumulate_alice(accumAlice, sample_alice, w0);
@@ -160,9 +159,17 @@ void main() {
     accumAlice = scale_alice(accumAlice, inv_sumWeight);
 
     float varEnergyOut = sumVarEnergy * pow(inv_sumWeight, power);
-    out_light_sample = vec4(packAlice(accumAlice), varEnergyOut);
+    out_light_sample = uvec4(
+        packHalf2x16(clamp(accumAlice.aliceY.xy, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(accumAlice.aliceY.zw, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(accumAlice.CoCg,        vec2(-65504.0), vec2(65504.0))),
+        floatBitsToUint(varEnergyOut));
 
     #if FINAL_DENOISE_PASS
-    out_light_sample_blurred = vec4(packAlice(accumAlice), 0.0);
+    out_light_sample_blurred = uvec4(
+        packHalf2x16(clamp(accumAlice.aliceY.xy, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(accumAlice.aliceY.zw, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(accumAlice.CoCg,        vec2(-65504.0), vec2(65504.0))),
+        0u);
     #endif
 }

@@ -24,18 +24,18 @@ struct vec3IlluminationData {
 
 struct PackedLightSample {
     vec4 data0;
-    vec4 data1;
+    uvec4 data1;
 };
 
 PackedLightSample packSpecularSample(vec3 pos, vec3 R, vec3 radiance,
     float roughness, float variance, float virtualProjDist, vec3 H) {
     PackedLightSample s;
     s.data0 = vec4(pos, encodeNormal(R));
-    s.data1 = vec4(
-        pack2HalfClamped(radiance.r, radiance.g),
-        pack2HalfClamped(radiance.b, roughness),
-        pack2HalfClamped(variance, virtualProjDist),
-        encodeNormal(H)
+    s.data1 = uvec4(
+        packHalf2x16(vec2(clamp(radiance.r, -65504.0, 65504.0), clamp(radiance.g, -65504.0, 65504.0))),
+        packHalf2x16(vec2(clamp(radiance.b, -65504.0, 65504.0), clamp(roughness, -65504.0, 65504.0))),
+        packHalf2x16(vec2(clamp(variance, -65504.0, 65504.0), clamp(virtualProjDist, -65504.0, 65504.0))),
+        floatBitsToUint(encodeNormal(H))
     );
     return s;
 }
@@ -45,14 +45,14 @@ void unpackSpecularSample(PackedLightSample s,
     out float roughness, out float variance, out float virtualProjDist, out vec3 H) {
     pos = s.data0.xyz;
     R = decodeNormal(s.data0.w);
-    vec2 rg = unpackHalf2x16(floatBitsToUint(s.data1.x));
-    vec2 br = unpackHalf2x16(floatBitsToUint(s.data1.y));
-    vec2 vv = unpackHalf2x16(floatBitsToUint(s.data1.z));
+    vec2 rg = unpackHalf2x16(s.data1.x);
+    vec2 br = unpackHalf2x16(s.data1.y);
+    vec2 vv = unpackHalf2x16(s.data1.z);
     radiance  = vec3(rg.x, rg.y, br.x);
     roughness = br.y;
     variance  = vv.x;
     virtualProjDist = vv.y;
-    H = decodeNormal(s.data1.w);
+    H = decodeNormal(uintBitsToFloat(s.data1.w));
 }
 
 // ===========================================================================

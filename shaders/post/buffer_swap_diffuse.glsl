@@ -11,18 +11,20 @@ layout(local_size_x = 16, local_size_y = 16) in;
 #include "/lib/buffers/buffer_io.glsl"
 
 uniform sampler2D colortex3;
-uniform sampler2D colortex4;
-uniform sampler2D colortex5;
-uniform sampler2D colortex6;
+uniform usampler2D colortex4;
+uniform usampler2D colortex5;
+uniform usampler2D colortex6;
 
 void unpackLightSample(ivec2 coord, out vec3 pos, out float surfaceMask, out AliceEncoding encoded, out AliceEncoding blurred_alice) {
     vec4 d0 = texelFetch(colortex3, coord, 0);
-    vec4 d1 = texelFetch(colortex4, coord, 0);
-    vec4 d2 = texelFetch(colortex5, coord, 0);
+    uvec4 d1 = texelFetch(colortex4, coord, 0);
+    uvec4 d2 = texelFetch(colortex5, coord, 0);
     pos = d0.xyz;
-    surfaceMask = d0.w; // was oct(macroNormal), now surfaceMask
-    encoded = unpackAlice(d1.x, d1.y, d1.z);
-    blurred_alice = unpackAlice(d2.x, d2.y, d2.z);
+    surfaceMask = d0.w;
+    encoded.aliceY       = vec4(unpackHalf2x16(d1.x), unpackHalf2x16(d1.y));
+    encoded.CoCg         =       unpackHalf2x16(d1.z);
+    blurred_alice.aliceY = vec4(unpackHalf2x16(d2.x), unpackHalf2x16(d2.y));
+    blurred_alice.CoCg   =       unpackHalf2x16(d2.z);
 }
 
 void main() {
@@ -51,14 +53,6 @@ void main() {
             clamp(NRD_BLEND_STRENGTH * exp(-NRD_BLEND_STRENGTH * clamp(tmp.weight, 0.0, 100.0)), 0.0, 1.0));
     writeDiffuse(tmp, pix);
 
-    // Phase 2: colortex6 → N=5 (uvec4 raw-integer copy)
-    {
-        vec4 texVal = texelFetch(colortex6, pix, 0);
-        diffuseBuffer.data[addr(DIF_N_PATHGUIDE, gxy)] = uvec4(
-            floatBitsToUint(texVal.x),  // packHalf2x16(aliceY.xy)
-            floatBitsToUint(texVal.y),  // packHalf2x16(aliceY.zw)
-            floatBitsToUint(texVal.z),  // W
-            floatBitsToUint(texVal.w)   // M
-        );
-    }
+    // Phase 2: colortex6 → N=5 (both RGBA32UI, raw copy)
+    diffuseBuffer.data[addr(DIF_N_PATHGUIDE, gxy)] = texelFetch(colortex6, pix, 0);
 }

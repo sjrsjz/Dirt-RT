@@ -8,15 +8,16 @@
 // ===========================================================================
 // Binding 2 — DiffuseBuffer pack/unpack (uvec4 raw-integer storage)
 // ===========================================================================
-// N=0: Current Light  — uvec4(packHalf2(aliceY.xy), packHalf2(aliceY.zw), packHalf2(CoCg), fbits(meanY2))
-// N=1: Current Geo    — uvec4(fbits(worldPos.xyz), fbits(surfaceMask))
-// N=2: History Light  — uvec4(packHalf2(hist_aliceY.xy), packHalf2(hist_aliceY.zw), packHalf2(hist_CoCg), packHistoryMeta(weight, meanY2))
-// N=3: History Geo    — uvec4(fbits(hist_worldPos.xyz), fbits(surfaceMask))
-// N=4: Swap Light     — uvec4(packHalf2(swap_aliceY.xy), packHalf2(swap_aliceY.zw), packHalf2(swap_CoCg), packHistoryMeta(weight, meanY2))
-// N=5: Path Guide     — uvec4(packHalf2(aliceY.xy), packHalf2(aliceY.zw), fbits(M), 0u)
+// N=0: Current Light  — uvec4(pHalf2(aliceY.xy), pHalf2(aliceY.zw), pHalf2(CoCg), pHalf2(0, sqrt(meanY2)))
+// N=1: Current Geo    — uvec4(fbits(pos.xyz), fbits(surfaceMask))
+// N=2: History Light  — uvec4(pHalf2(hist_aliceY.xy), pHalf2(hist_aliceY.zw), pHalf2(hist_CoCg), pHalf2(weight, sqrt(meanY2)))
+// N=3: History Geo    — uvec4(fbits(hist_pos.xyz), fbits(surfaceMask))
+// N=4: Swap Light     — uvec4(pHalf2(swap_aliceY.xy), pHalf2(swap_aliceY.zw), pHalf2(swap_CoCg), pHalf2(weight, sqrt(meanY2)))
+// N=5: Path Guide     — uvec4(pHalf2(aliceY.xy), pHalf2(aliceY.zw), fbits(M), 0u)
 //
-// All 6 slots use identical uvec4 semantics. The .w lane of N=2/N=4 packs
-// an 8-bit history weight (u8) + 24-bit unsigned float (ufloat24) second moment.
+// .w lane uses packHalf2x16: weight:f16 + sqrt(meanY2):f16.
+// sqrt compression keeps HDR second moments within f16 range (e.g. Y=1000 →
+// sqrt(Y²)=1000 < 65504), at the cost of relative precision halved after squaring.
 // surfaceMask lives only in N=1/N=3 (geo layers), not duplicated in light layers.
 
 #define DIF_N_LIGHT    0u
@@ -29,14 +30,15 @@
 // ===========================================================================
 // N=0 — Current RT Light
 // ===========================================================================
-// .w = floatBitsToUint(currentMeanY2) where meanY2 = E[Y²] (Y² for single-sample)
+// .w = packHalf2x16(0.0, sqrt(meanY2))  —  single-sample second moment Y²
 
 void writeDiffuseLightRT(uvec2 xy, AliceEncoding alice, float meanY2) {
+    float sqrtM2 = sqrt(max(meanY2, 0.0));
     diffuseBuffer.data[addr(DIF_N_LIGHT, xy)] = uvec4(
         packHalf2x16(clamp(alice.aliceY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(alice.aliceY.zw, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(alice.CoCg,        vec2(-65504.0), vec2(65504.0))),
-        floatBitsToUint(meanY2)
+        packHalf2x16(vec2(0.0, sqrtM2))
     );
 }
 void readDiffuseLightRT(uvec2 xy, out AliceEncoding alice, out float meanY2) {
@@ -46,10 +48,11 @@ void readDiffuseLightRT(uvec2 xy, out AliceEncoding alice, out float meanY2) {
     vec2 cocg  = unpackHalf2x16(v.z);
     alice.aliceY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
     alice.CoCg = cocg;
-    meanY2 = uintBitsToFloat(v.w);
+    vec2 wm = unpackHalf2x16(v.w);
+    meanY2 = wm.y * wm.y;  // undo sqrt compression
 }
 
-// Helper: write zero light (sky reset — meanY2=0.0 implicit)
+// Helper: write zero light (sky reset)
 void writeDiffuseLightRTSky(uvec2 xy) {
     diffuseBuffer.data[addr(DIF_N_LIGHT, xy)] = uvec4(0u);
 }
@@ -72,7 +75,7 @@ void readDiffuseGeo(uvec2 xy, out vec3 pos, out float surfaceMask) {
     surfaceMask = uintBitsToFloat(v.w);
 }
 
-// Convenience: read only surfaceMask from N=1 (replaces old N=0.w surfaceMask reads)
+// Convenience: read only surfaceMask from N=1
 float readDiffuseSurfaceMask(uvec2 xy) {
     return uintBitsToFloat(diffuseBuffer.data[addr(DIF_N_GEO, xy)].w);
 }
@@ -80,14 +83,15 @@ float readDiffuseSurfaceMask(uvec2 xy) {
 // ===========================================================================
 // N=2 — History Light
 // ===========================================================================
-// .w = packHistoryMeta(historyWeight, histMeanY2)  →  weight:u8 | meanY2:ufloat24
+// .w = packHalf2x16(weight, sqrt(meanY2))  →  weight:f16 + sqrt(meanY2):f16
 
 void writeDiffuseHist(uvec2 xy, AliceEncoding alice, float weight, float meanY2) {
+    float sqrtM2 = sqrt(max(meanY2, 0.0));
     diffuseBuffer.data[addr(DIF_N_HIST, xy)] = uvec4(
         packHalf2x16(clamp(alice.aliceY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(alice.aliceY.zw, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(alice.CoCg,        vec2(-65504.0), vec2(65504.0))),
-        packHistoryMeta(uint(clamp(weight, 0.0, 255.0)), meanY2)
+        packHalf2x16(vec2(weight, sqrtM2))
     );
 }
 void readDiffuseHist(uvec2 xy, out AliceEncoding alice, out float weight, out float meanY2) {
@@ -97,9 +101,9 @@ void readDiffuseHist(uvec2 xy, out AliceEncoding alice, out float weight, out fl
     vec2 cocg  = unpackHalf2x16(v.z);
     alice.aliceY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
     alice.CoCg = cocg;
-    uint w;
-    unpackHistoryMeta(v.w, w, meanY2);
-    weight = float(w);
+    vec2 wm = unpackHalf2x16(v.w);
+    weight = wm.x;
+    meanY2 = wm.y * wm.y;
 }
 
 // ===========================================================================
@@ -123,14 +127,15 @@ void readDiffuseHistGeo(uvec2 xy, out vec3 pos, out float surfaceMask) {
 // ===========================================================================
 // N=4 — Swap Light
 // ===========================================================================
-// .w = packHistoryMeta(swapWeight, swapMeanY2)  →  weight:u8 | meanY2:ufloat24
+// .w = packHalf2x16(weight, sqrt(meanY2))  →  weight:f16 + sqrt(meanY2):f16
 
 void writeDiffuseSwap(uvec2 xy, AliceEncoding alice, float weight, float meanY2) {
+    float sqrtM2 = sqrt(max(meanY2, 0.0));
     diffuseBuffer.data[addr(DIF_N_SWAP, xy)] = uvec4(
         packHalf2x16(clamp(alice.aliceY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(alice.aliceY.zw, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(alice.CoCg,        vec2(-65504.0), vec2(65504.0))),
-        packHistoryMeta(uint(clamp(weight, 0.0, 255.0)), meanY2)
+        packHalf2x16(vec2(weight, sqrtM2))
     );
 }
 void readDiffuseSwap(uvec2 xy, out AliceEncoding alice, out float weight, out float meanY2) {
@@ -140,18 +145,18 @@ void readDiffuseSwap(uvec2 xy, out AliceEncoding alice, out float weight, out fl
     vec2 cocg  = unpackHalf2x16(v.z);
     alice.aliceY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
     alice.CoCg = clamp(cocg, vec2(-65504.0), vec2(65504.0));
-    uint w;
-    unpackHistoryMeta(v.w, w, meanY2);
-    weight = float(w);
+    vec2 wm = unpackHalf2x16(v.w);
+    weight = wm.x;
+    meanY2 = wm.y * wm.y;
 }
 
 // ===========================================================================
 // N=5 — ReSTIR temporal reservoir (Path Guide Reservoir)
 // ===========================================================================
 // Layout: uvec4(
-//   packHalf2x16(aliceY.xy),   // sample direction × luminance (2×f16 → uint)
-//   packHalf2x16(aliceY.zw),   // total energy            (2×f16 → uint)
-//   floatBitsToUint(M),        // effective sample count / reservoir weight sum
+//   packHalf2x16(aliceY.xy),   // sample direction × luminance
+//   packHalf2x16(aliceY.zw),   // total energy
+//   floatBitsToUint(M),        // effective sample count
 //   0u)                        // pad
 
 void writePathGuide(uvec2 xy, vec4 aliceY, float M) {
@@ -181,7 +186,6 @@ vec4 samplePathGuide(vec2 prevCoord) {
     readPathGuide(uvec2(clamp(p0 + ivec2(0, 1), ivec2(0), ivec2(resolution_global) - 1)), y01, M01);
     readPathGuide(uvec2(clamp(p0 + ivec2(1, 1), ivec2(0), ivec2(resolution_global) - 1)), y11, M11);
 
-    // Validity mask: M > 0 means valid reservoir
     float w00 = (M00 > 0.0) ? (1.0 - pf.x) * (1.0 - pf.y) : 0.0;
     float w10 = (M10 > 0.0) ? pf.x * (1.0 - pf.y) : 0.0;
     float w01 = (M01 > 0.0) ? (1.0 - pf.x) * pf.y : 0.0;
