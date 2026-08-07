@@ -43,6 +43,9 @@ value.END_SKYBOX.0 = Atmospheric Scatter
 option.FIREFLY_SUPPRESSION_MULTIPLIER = Firefly Suppression
 option.FIREFLY_SUPPRESSION_MULTIPLIER.comment = Per-sample brightness cap multiplier (× average exposure). Lower values clamp bright outlier samples more aggressively, reducing fireflies but potentially darkening specular highlights.
 
+option.GI_CLAMP_MAX = GI Hard Clamp
+option.GI_CLAMP_MAX.comment = Hard ceiling on indirect lighting (per-channel) before ALICE encoding. Prevents individual path outliers from destabilising the light-field history. Higher values give more headroom for bright indirect light; lower values suppress extreme fireflies more aggressively.
+
 option.PATHGUIDE_SPATIAL_RADIUS = Path Guide Spatial Radius
 option.PATHGUIDE_SPATIAL_RADIUS.comment = Poisson disk sampling radius (pixels) for the path-guide ReSTIR reservoir. Higher values probe farther neighbours for more diverse candidates but increase incoherent memory access.
 

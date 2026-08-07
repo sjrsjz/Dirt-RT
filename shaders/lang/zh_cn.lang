@@ -43,6 +43,9 @@ value.END_SKYBOX.0 = 大气散射
 option.FIREFLY_SUPPRESSION_MULTIPLIER = 萤火虫抑制
 option.FIREFLY_SUPPRESSION_MULTIPLIER.comment = 每样本亮度上限倍率（× 平均曝光）。减小此值可更激进地钳制异常亮像素，减少萤火虫现象，但可能使高光变暗。
 
+option.GI_CLAMP_MAX = GI 硬截断
+option.GI_CLAMP_MAX.comment = 间接光照在 ALICE 编码前的硬上限（逐通道）。防止单条路径的离群值破坏光场历史的稳定性。提高可给高亮间接光更多余量，降低可更激进地抑制极端萤火虫。
+
 option.PATHGUIDE_SPATIAL_RADIUS = 路径引导空间半径
 option.PATHGUIDE_SPATIAL_RADIUS.comment = 路径引导 ReSTIR 蓄水池的 Poisson 盘空间采样半径（像素）。提高可探测更远的邻居以获取更多样化的候选，但会增加非连续内存访问。
 

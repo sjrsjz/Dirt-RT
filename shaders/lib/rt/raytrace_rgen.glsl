@@ -1035,7 +1035,7 @@ void writeDiffuseOutput(uvec2 xy, FirstBounceData fb, vec3 L_indirect,
     AliceEncoding combinedAlice = init_alice();
     float mask = 0.0;
     if (fb.t > -0.5) {
-        L_indirect = clamp(L_indirect, 0.0, 32000.0);
+        L_indirect = clamp(L_indirect, 0.0, GI_CLAMP_MAX);
         L_direct_0 = clamp(L_direct_0, 0.0, 32000.0);
         AliceEncoding indAlice = radiance_to_alice(L_indirect, fb.rd_o);
         AliceEncoding dirAlice = radiance_to_alice(

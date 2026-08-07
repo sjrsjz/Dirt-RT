@@ -104,6 +104,7 @@
 
 // -- Misc --
 #define FIREFLY_SUPPRESSION_MULTIPLIER 50.0 // Per-sample brightness cap multiplier (× average exposure). Lower values clamp fireflies more aggressively. [1.0 5.0 10.0 25.0 50.0 100.0 250.0 500.0]
+#define GI_CLAMP_MAX 100.0 // Hard ceiling on indirect lighting before ALICE encoding. Prevents individual path outliers from destabilising the light field. Higher = more headroom, lower = stronger clamping. [50.0 75.0 100.0 150.0 250.0 500.0 1000.0 2500.0 5000.0 10000.0 20000.0 32000.0]
 #define VPROJDIST_SKY 60000.0 // Virtual projected distance assigned to sky hits (m). Used by specular/refraction denoiser to tag infinity. [5000.0 10000.0 25000.0 50000.0 60000.0 100000.0 250000.0]
 
 // -- Debug view --
