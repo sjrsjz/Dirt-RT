@@ -2,8 +2,9 @@
 #ifndef TEMPORAL_RADIANCE_CACHE_GLSL
 #define TEMPORAL_RADIANCE_CACHE_GLSL
 
-// In-place sparse temporal RIS. Each pool voxel has exactly one invocation, so
-// reservoir merging needs no atomics and does not increase SSBO allocation.
+// In-place sparse temporal processing. Each pool voxel has exactly one
+// invocation, so neither the RIS reservoir nor the radiance-field accumulator
+// needs atomics or additional SSBO storage.
 #include "/lib/buffers/radiance_cache.glsl"
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 const ivec3 workGroups = ivec3(16, 16, 16);
@@ -86,7 +87,16 @@ RadianceCache radianceCacheRisFinalize(inout RadianceCacheRisReservoir r) {
     }
 
     float denominator = r.M * r.selectedTarget;
-    if (!(r.weightSum > 0.0) || !(denominator > 0.0)) return emptyCache();
+    if (!(r.weightSum > 0.0) || !(denominator > 0.0)) {
+        // Zero-valued candidates are still samples. Preserve their M so a
+        // later bright candidate is normalized by every preceding miss.
+        RadianceCache black = emptyCache();
+        if (r.M > 0.0) {
+            black.W = 1.0;
+            black.M = r.M;
+        }
+        return black;
+    }
     float W = r.weightSum / denominator;
     if (!(W > 0.0) || isnan(W) || isinf(W)) return emptyCache();
 
@@ -125,6 +135,21 @@ RadianceCache radianceCacheRisEstimate(RadianceCache reservoir,
     estimate.W = 1.0;
     estimate.M = 1.0;
     return estimate;
+}
+
+RadianceCache radianceCacheCurrentEstimate(RadianceCache current) {
+    if (!isValidRadianceCacheReservoir(current)) return emptyCache();
+
+    // CURRENT is a one-sample unbiased estimate of all four ALICE moments. Its
+    // importance correction is normally already baked into alice by ray4, but
+    // canonicalizing W here keeps the filtered planes well-defined if the
+    // producer representation changes later.
+    current.alice.aliceR *= current.W;
+    current.alice.aliceG *= current.W;
+    current.alice.aliceB *= current.W;
+    current.W = 1.0;
+    current.M = 1.0;
+    return current;
 }
 
 RadianceCache smoothTemporalRadiance(RadianceCache currentEstimate,
@@ -174,10 +199,14 @@ void main() {
 
     RadianceCache reservoir = resampleTemporalRadiance(
         current, history, worldVoxel, frameStamp);
+    // Do not feed the selected RIS sample into the ALICE field accumulator.
+    // A temporal reservoir retains one direction for O(M) frames; averaging
+    // that correlated selection makes |E[L*w]| / E[L] approach one and turns
+    // a multi-directional field into an artificial sharp lobe. Accumulating
+    // the raw per-frame moment estimate preserves every sampled direction and
+    // is the unbiased estimator required by ALICE's nonlinear reconstruction.
     RadianceCache filtered = smoothTemporalRadiance(
-        radianceCacheRisEstimate(reservoir,
-            isValidRadianceCacheReservoir(current)),
-        previousFiltered);
+        radianceCacheCurrentEstimate(current), previousFiltered);
 
     storeRadianceCachePlanes(address, RC_PLANE_HISTORY_0, RC_PLANE_HISTORY_1,
         reservoir);

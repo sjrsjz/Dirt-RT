@@ -241,5 +241,40 @@ void main() {
     // Reflection spatial-pipeline stage selected by the corresponding pass.
     fragColor.xyz = tmp2.data_swap;
 
+    #elif DEBUG_VIEW >= 31 && DEBUG_VIEW <= 34
+    {
+        vec3 relativePos;
+        float distance;
+        readGeo0(GEO_N_GEO, xy, relativePos, distance);
+        vec3 worldPos = camPos + relativePos
+            + geometryNormal * RADIANCE_CACHE_SURFACE_EPSILON;
+        RadianceCacheAddress address = findRadianceCacheAddress(worldPos);
+        if (!validateRadianceCacheAddress(address)) {
+            fragColor.xyz = vec3(1.0, 0.0, 1.0);
+        } else {
+            #if DEBUG_VIEW == 31
+                RadianceCache cache = loadRadianceCachePlanes(address,
+                    RC_PLANE_CURRENT_0, RC_PLANE_CURRENT_1);
+                fragColor.xyz = radianceCacheValueValid(cache)
+                    ? radianceCacheDiffuseIncident(cache, microN) : vec3(0.0);
+            #elif DEBUG_VIEW == 32
+                RadianceCache cache = loadRadianceCachePlanes(address,
+                    RC_PLANE_HISTORY_0, RC_PLANE_HISTORY_1);
+                fragColor.xyz = radianceCacheValueValid(cache)
+                    ? radianceCacheDiffuseIncident(cache, microN) : vec3(0.0);
+            #elif DEBUG_VIEW == 33
+                RadianceCache cache = loadRadianceCachePlanes(address,
+                    RC_PLANE_HISTORY_0, RC_PLANE_HISTORY_1);
+                fragColor.xyz = jetColormap(clamp(cache.M
+                    / max(float(RADIANCE_CACHE_MAX_HIST), 1.0), 0.0, 1.0));
+            #else
+                RadianceCache cache = loadRadianceCachePlanes(address,
+                    RC_PLANE_FILTERED_0, RC_PLANE_FILTERED_1);
+                fragColor.xyz = radianceCacheValueValid(cache)
+                    ? radianceCacheDiffuseIncident(cache, microN) : vec3(0.0);
+            #endif
+        }
+    }
+
     #endif
 }

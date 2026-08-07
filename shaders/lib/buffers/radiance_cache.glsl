@@ -74,7 +74,10 @@
 #define RC_POOL_DATA_OFFSET (RC_MISSING_BUCKET_OFFSET + uint(RADIANCE_CACHE_DISTANCE_BUCKET_COUNT))
 #define RC_TOTAL_WORDS (RC_POOL_DATA_OFFSET + uint(RADIANCE_CACHE_POOL_CAPACITY) * RC_POOL_SLOT_WORDS)
 
-#define RC_MAGIC 0x52435036u
+// Bump whenever the meaning of a persistent payload plane changes. P7 makes
+// shader reloads discard P6 filtered planes produced from correlated RIS
+// selections instead of slowly blending that invalid directional history out.
+#define RC_MAGIC 0x52435037u
 #define RC_INVALID_TOKEN 0xffffffffu
 #define RC_TOMBSTONE_TOKEN 0xfffffffeu
 #define RC_LOCKED_TOKEN 0xfffffffdu

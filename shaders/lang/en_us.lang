@@ -27,7 +27,7 @@ option.RAY_BOUNCES = Ray Bounces
 option.RAY_BOUNCES.comment = Maximum surfaces visited by each camera path. More bounces preserve deep indirect light and transmission at a direct GPU cost.
 
 option.PATH_GUIDING_STRENGTH = Path Guiding Strength
-option.PATH_GUIDING_STRENGTH.comment = How strongly diffuse paths and radiance-cache probes follow the previous ALICE light field. Higher values can converge faster in stable scenes; excessive values can increase lag or variance after lighting changes.
+option.PATH_GUIDING_STRENGTH.comment = ALICE guiding strength for diffuse paths and the total ALICE+RIS guided probability for radiance-cache probes. Cache probes always retain at least 10% uniform-sphere sampling. Higher values can converge faster in stable scenes; excessive values can increase lag or variance after lighting changes.
 
 option.PATH_GUIDING_SPECULAR_STRENGTH = Specular Guiding Strength
 option.PATH_GUIDING_SPECULAR_STRENGTH.comment = Base probability of steering rough reflection rays with ALICE history. Smooth or isotropic lobes automatically receive less guiding.
@@ -106,7 +106,13 @@ option.RADIANCE_CACHE_MAX_HIST = Cache RIS Max M
 option.RADIANCE_CACHE_MAX_HIST.comment = Maximum effective candidate count retained by each voxel's temporal RIS reservoir. Higher values reuse important bright samples longer; lower values react faster when lighting or geometry changes.
 
 option.RADIANCE_CACHE_FILTER_MAX_HIST = Cache Smoothing Frames
-option.RADIANCE_CACHE_FILTER_MAX_HIST.comment = Short temporal smoothing applied after RIS. Higher values reduce stochastic reservoir replacement flicker; lower values react faster and reduce lighting trails. This filtered result is used for lighting, recursive feedback and cache path guiding.
+option.RADIANCE_CACHE_FILTER_MAX_HIST.comment = Temporal sample count used to accumulate the cache's directional ALICE moments directly. Higher values reduce directional and energy variance; lower values react faster and reduce lighting trails. Lighting, recursive feedback and cache path guiding all use this result.
+
+option.RADIANCE_CACHE_RIS_GUIDING_STRENGTH = Cache RIS Guide Share
+option.RADIANCE_CACHE_RIS_GUIDING_STRENGTH.comment = Maximum fraction of a cache probe's total guided probability assigned to the temporal RIS direction proposal. It reaches this share only when the reservoir agrees with the stable ALICE field in direction and energy and has sufficient history. 0 disables RIS guiding.
+
+option.RADIANCE_CACHE_RIS_GUIDING_KAPPA = Cache RIS Guide Sharpness
+option.RADIANCE_CACHE_RIS_GUIDING_KAPPA.comment = Concentration of the continuous sampling lobe around the RIS-selected direction. Higher values can find compact lights faster but are more sensitive to stale or imprecise directions; lower values are more robust.
 
 # ===========================================================================
 # Temporal Filter
@@ -322,3 +328,7 @@ value.DEBUG_VIEW.27 = Refl. A-trous 2
 value.DEBUG_VIEW.28 = Refl. A-trous 4
 value.DEBUG_VIEW.29 = Refl. A-trous 8
 value.DEBUG_VIEW.30 = Refl. A-trous 16
+value.DEBUG_VIEW.31 = Cache Current Raw
+value.DEBUG_VIEW.32 = Cache RIS Reservoir
+value.DEBUG_VIEW.33 = Cache RIS Sample Count
+value.DEBUG_VIEW.34 = Cache Final Temporal

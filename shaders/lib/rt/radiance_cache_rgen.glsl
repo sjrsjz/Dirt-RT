@@ -7,6 +7,15 @@
 const float RC_UNIFORM_SPHERE_PDF = 1.0 / (4.0 * PI);
 const float RC_TRACE_T_MIN = RADIANCE_CACHE_SURFACE_EPSILON;
 const float RC_PROBE_JITTER_SCALE = 0.95;
+const float RC_MAX_GUIDED_PROBABILITY = 0.9;
+
+struct RadianceCacheGuideInfo {
+    GuideInfo alice;
+    vec3 risAxis;
+    float risKappa;
+    float risProb;
+    bool risValid;
+};
 
 RadianceCache samplePreviousRadianceCache(vec3 worldPos) {
     vec3 voxelCoord = radianceCacheWorldToVoxel(worldPos, prevRaytracingCamPos);
@@ -16,14 +25,24 @@ RadianceCache samplePreviousRadianceCache(vec3 worldPos) {
     return loadRadianceCachePlanes(address, RC_PLANE_FILTERED_0, RC_PLANE_FILTERED_1);
 }
 
-GuideInfo computeRadianceCacheGuide(vec3 worldPos) {
-    GuideInfo guide;
-    guide.axis = vec3(0.0, 1.0, 0.0);
-    guide.kappa = 0.0;
-    guide.prob = 0.0;
-    guide.valid = false;
+RadianceCacheGuideInfo computeRadianceCacheGuide(vec3 worldPos) {
+    RadianceCacheGuideInfo guide;
+    guide.alice.axis = vec3(0.0, 1.0, 0.0);
+    guide.alice.kappa = 0.0;
+    guide.alice.prob = 0.0;
+    guide.alice.valid = false;
+    guide.risAxis = vec3(0.0, 1.0, 0.0);
+    guide.risKappa = 0.0;
+    guide.risProb = 0.0;
+    guide.risValid = false;
 
-    RadianceCache previous = samplePreviousRadianceCache(worldPos);
+    vec3 voxelCoord = radianceCacheWorldToVoxel(worldPos, prevRaytracingCamPos);
+    if (!isRadianceCacheSampleInBounds(voxelCoord)) return guide;
+    RadianceCacheAddress address = findRadianceCacheAddress(worldPos);
+    if (!radianceCacheAddressHasHistory(address, cam.frameId)) return guide;
+
+    RadianceCache previous = loadRadianceCachePlanes(
+        address, RC_PLANE_FILTERED_0, RC_PLANE_FILTERED_1);
     if (!radianceCacheValueValid(previous)) return guide;
     vec4 luminanceAlice = rgb_alice_luminance(previous.alice) * previous.W;
     vec3 directionalEnergy = luminanceAlice.xyz;
@@ -34,11 +53,43 @@ GuideInfo computeRadianceCacheGuide(vec3 worldPos) {
         return guide;
     }
 
-    guide.axis = directionalEnergy / directionalLength;
+    guide.alice.axis = directionalEnergy / directionalLength;
     float rho = clamp(directionalLength / totalEnergy, 0.0, 1.0);
-    guide.kappa = alice_kappa(directionalLength, totalEnergy);
-    guide.prob = min(PATH_GUIDING_STRENGTH * rho, 0.999);
-    guide.valid = true;
+    guide.alice.kappa = alice_kappa(directionalLength, totalEnergy);
+    guide.alice.prob = min(PATH_GUIDING_STRENGTH * rho,
+        RC_MAX_GUIDED_PROBABILITY);
+    guide.alice.valid = guide.alice.prob > 1e-6;
+    if (RADIANCE_CACHE_RIS_GUIDING_STRENGTH <= 0.0) return guide;
+
+    // A temporal RIS reservoir is a proposal, never the light-field estimate.
+    // Reinforce it only when its selected incoming direction and normalized
+    // energy agree with the stable multi-frame ALICE moments.
+    RadianceCache reservoir = loadRadianceCachePlanes(
+        address, RC_PLANE_HISTORY_0, RC_PLANE_HISTORY_1);
+    if (!radianceCacheValueValid(reservoir)) return guide;
+    vec4 risAlice = rgb_alice_luminance(reservoir.alice);
+    float risDirectionalLength = length(risAlice.xyz);
+    float risMeanEnergy = max(risAlice.w, risDirectionalLength) * reservoir.W;
+    if (!(risDirectionalLength > 1e-8) || !(risMeanEnergy > 1e-8)) return guide;
+
+    vec3 risAxis = risAlice.xyz / risDirectionalLength;
+    float directionalAgreement = smoothstep(0.25, 0.9,
+        max(dot(guide.alice.axis, risAxis), 0.0));
+    float energyAgreement = min(totalEnergy, risMeanEnergy)
+        / max(max(totalEnergy, risMeanEnergy), 1e-8);
+    energyAgreement = smoothstep(0.05, 0.5, energyAgreement);
+    float confidenceDenominator = max(
+        min(float(RADIANCE_CACHE_MAX_HIST), 16.0) - 1.0, 1.0);
+    float historyConfidence = clamp((reservoir.M - 1.0)
+        / confidenceDenominator, 0.0, 1.0);
+    float risShare = clamp(RADIANCE_CACHE_RIS_GUIDING_STRENGTH, 0.0, 1.0)
+        * directionalAgreement * energyAgreement * historyConfidence;
+
+    guide.risProb = guide.alice.prob * risShare;
+    guide.alice.prob -= guide.risProb;
+    guide.risAxis = risAxis;
+    guide.risKappa = clamp(RADIANCE_CACHE_RIS_GUIDING_KAPPA, 0.0, 0.98);
+    guide.risValid = guide.risProb > 1e-6 && guide.risKappa > 1e-4;
     return guide;
 }
 
@@ -51,21 +102,28 @@ vec3 sampleProbeJitter(ivec3 voxelCoord, uint frameId) {
     return (xi - 0.5) * (RC_PROBE_JITTER_SCALE * VOXEL_SIZE);
 }
 
-vec3 sampleRadianceCacheDirection(GuideInfo guide, out float estimatorWeight) {
+vec3 sampleRadianceCacheDirection(RadianceCacheGuideInfo guide,
+        out float estimatorWeight) {
     float mixtureSelector = getRandom();
     vec2 xi = vec2(getRandom(), getRandom());
-    bool useGuide = guide.valid && mixtureSelector < guide.prob;
+    float aliceProb = guide.alice.valid ? max(guide.alice.prob, 0.0) : 0.0;
+    float risProb = guide.risValid ? max(guide.risProb, 0.0) : 0.0;
+    float uniformProb = max(1.0 - aliceProb - risProb, 0.0);
 
-    // 统一使用 ALICE 的球面映射。无引导分支等价于 axis=Y、kappa=0
-    // 的均匀球面，避免在 prob=0 时切换到另一套与 RC 随机场相关的参数化。
-    vec3 sampleAxis = useGuide ? guide.axis : vec3(0.0, 1.0, 0.0);
-    float sampleKappa = useGuide ? guide.kappa : 0.0;
+    bool useRis = mixtureSelector < risProb;
+    bool useAlice = !useRis && mixtureSelector < risProb + aliceProb;
+    vec3 sampleAxis = useRis ? guide.risAxis
+        : (useAlice ? guide.alice.axis : vec3(0.0, 1.0, 0.0));
+    float sampleKappa = useRis ? guide.risKappa
+        : (useAlice ? guide.alice.kappa : 0.0);
     vec3 direction = sample_alice_guiding(sampleAxis, sampleKappa, xi);
 
-    float guidePdf = guide.valid
-        ? alice_guiding_pdf(direction, guide.axis, guide.kappa) : 0.0;
-    float mixturePdf = (1.0 - guide.prob) * RC_UNIFORM_SPHERE_PDF
-            + guide.prob * guidePdf;
+    float alicePdf = guide.alice.valid
+        ? alice_guiding_pdf(direction, guide.alice.axis, guide.alice.kappa) : 0.0;
+    float risPdf = guide.risValid
+        ? alice_guiding_pdf(direction, guide.risAxis, guide.risKappa) : 0.0;
+    float mixturePdf = uniformProb * RC_UNIFORM_SPHERE_PDF
+        + aliceProb * alicePdf + risProb * risPdf;
     estimatorWeight = RC_UNIFORM_SPHERE_PDF / max(mixturePdf, 1e-20);
     return normalize(direction);
 }
@@ -159,7 +217,7 @@ void main() {
     vec3 probeCenter = (vec3(worldVoxel) + 0.5) * VOXEL_SIZE;
     vec3 probePosition = probeCenter + sampleProbeJitter(worldVoxel, cam.frameId);
     // 引导场属于中心 voxel；jitter 只改变实际射线原点，不改变缓存寻址。
-    GuideInfo guide = computeRadianceCacheGuide(probeCenter);
+    RadianceCacheGuideInfo guide = computeRadianceCacheGuide(probeCenter);
     float estimatorWeight;
     vec3 rayDirection = sampleRadianceCacheDirection(guide, estimatorWeight);
 

@@ -27,7 +27,7 @@ option.RAY_BOUNCES = 光线弹射次数
 option.RAY_BOUNCES.comment = 每条相机路径最多访问的表面数。增加跳数可保留更深层的间接光与透射，但会直接增加 GPU 开销。
 
 option.PATH_GUIDING_STRENGTH = 路径引导强度
-option.PATH_GUIDING_STRENGTH.comment = 漫反射路径与辐射率缓存探针跟随上一帧 ALICE 光场的强度。稳定场景中提高它可加快收敛，过高则可能在光照变化后增加延迟或方差。
+option.PATH_GUIDING_STRENGTH.comment = 漫反射路径的 ALICE 引导强度，同时控制辐射率缓存探针的 ALICE+RIS 总引导概率；缓存探针始终保留至少 10% 均匀球面采样。提高可加快稳定场景收敛，过高则可能在光照变化后增加延迟或方差。
 
 option.PATH_GUIDING_SPECULAR_STRENGTH = 镜面引导强度
 option.PATH_GUIDING_SPECULAR_STRENGTH.comment = 使用 ALICE 历史引导粗糙反射射线的基础概率。光滑镜面或各向同性光场会自动减少引导。
@@ -106,7 +106,13 @@ option.RADIANCE_CACHE_MAX_HIST = 缓存 RIS 最大 M
 option.RADIANCE_CACHE_MAX_HIST.comment = 每个缓存体素的时域 RIS Reservoir 最多保留的有效候选数。数值越高越容易长期复用重要亮样本；数值越低，对光照或几何变化的响应越快。
 
 option.RADIANCE_CACHE_FILTER_MAX_HIST = 缓存平滑帧数
-option.RADIANCE_CACHE_FILTER_MAX_HIST.comment = RIS 之后使用的短历史时域平滑长度。数值越高越能压制 Reservoir 随机替换造成的闪烁；数值越低响应越快、光照拖影越少。实际光照、递归反馈和缓存路径引导均读取该平滑结果。
+option.RADIANCE_CACHE_FILTER_MAX_HIST.comment = 用于直接累计缓存方向性 ALICE 矩的时域样本数。数值越高，方向与能量的方差越低；数值越低，对光照或几何变化的响应越快、拖影越少。实际光照、递归反馈和缓存路径引导均读取该结果。
+
+option.RADIANCE_CACHE_RIS_GUIDING_STRENGTH = 缓存 RIS 引导占比
+option.RADIANCE_CACHE_RIS_GUIDING_STRENGTH.comment = 从缓存探针的总引导概率中分配给时域 RIS 方向提议的最大比例。只有 Reservoir 与稳定 ALICE 光场的方向和能量一致且历史充足时才会达到该比例；0 表示关闭 RIS 引导。
+
+option.RADIANCE_CACHE_RIS_GUIDING_KAPPA = 缓存 RIS 引导锐度
+option.RADIANCE_CACHE_RIS_GUIDING_KAPPA.comment = RIS 选中方向周围连续采样波瓣的集中度。数值越高越聚焦，可能更快命中紧凑光源，但对过期或不精确方向更敏感；数值越低越稳健。
 
 # ===========================================================================
 # 时域滤波
@@ -322,3 +328,7 @@ value.DEBUG_VIEW.27 = 反射 A-trous 2
 value.DEBUG_VIEW.28 = 反射 A-trous 4
 value.DEBUG_VIEW.29 = 反射 A-trous 8
 value.DEBUG_VIEW.30 = 反射 A-trous 16
+value.DEBUG_VIEW.31 = 缓存当前帧原始值
+value.DEBUG_VIEW.32 = 缓存 RIS Reservoir
+value.DEBUG_VIEW.33 = 缓存 RIS 样本数 M
+value.DEBUG_VIEW.34 = 缓存最终时域值
