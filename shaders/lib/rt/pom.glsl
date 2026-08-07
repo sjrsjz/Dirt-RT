@@ -8,9 +8,15 @@
 // Only use for the first hit (bounce == 0); skip for secondary bounces.
 // ===========================================================================
 
+#ifndef POM_STEPS
 #define POM_STEPS 32
+#endif
+#ifndef POM_DEPTH
 #define POM_DEPTH 0.25
+#endif
+#ifndef BINARY_SEARCH_STEPS
 #define BINARY_SEARCH_STEPS 6
+#endif
 
 #define LINEAR_SAMPLING 1
 

@@ -1,148 +1,288 @@
+# ===========================================================================
+# Dirt RT — English (US) Localization
+# ===========================================================================
+
+# -- Screen groups --
 screen.RAY_TRACING = Ray Tracing
+screen.MATERIAL = Material
+screen.POM = Parallax Occlusion Mapping
+screen.RADIANCE_CACHE = Sparse Radiance Cache
+screen.TEMPORAL_FILTER = Temporal Filter
+screen.TEMPORAL_ACCUMULATION = Diffuse Temporal Accumulation
+screen.RELAX_DENOISER = RELAX Specular Denoiser
+screen.VARIANCE_PREFILTER = Variance Prefilter
+screen.ATROUS_DENOISER = À-Trous Denoiser
+screen.BLOOM = Bloom
+screen.EXPOSURE_DISPLAY = Exposure & Display
+screen.ADVANCED = Advanced
+screen.DEBUG = Debug
+
+# ===========================================================================
+# Ray Tracing
+# ===========================================================================
 option.ACCUMULATION_LENGTH = Refraction History Frames
 option.ACCUMULATION_LENGTH.comment = Maximum reprojected history used by the refraction denoiser. ReLAX reflection history is controlled separately below.
+
 option.RAY_BOUNCES = Ray Bounces
 option.RAY_BOUNCES.comment = Maximum surfaces visited by each camera path. More bounces preserve deep indirect light and transmission at a direct GPU cost.
+
 option.PATH_GUIDING_STRENGTH = Path Guiding Strength
 option.PATH_GUIDING_STRENGTH.comment = How strongly diffuse paths and radiance-cache probes follow the previous ALICE light field. Higher values can converge faster in stable scenes; excessive values can increase lag or variance after lighting changes.
+
 option.PATH_GUIDING_SPECULAR_STRENGTH = Specular Guiding Strength
 option.PATH_GUIDING_SPECULAR_STRENGTH.comment = Base probability of steering rough reflection rays with ALICE history. Smooth or isotropic lobes automatically receive less guiding.
+
 option.SUN_PATH_ROTATION = Sun Path Rotation
 option.SUN_PATH_ROTATION.comment = Rotates the apparent sun and moon path around the world X axis. This changes lighting direction, not day length.
+
 option.END_SKYBOX = End Skybox
 option.END_SKYBOX.comment = Selects the custom rune-ring and nebula sky in the End. Disabling it uses the cheaper atmospheric fallback.
 value.END_SKYBOX.1 = Rune Rings + Nebula
 value.END_SKYBOX.0 = Atmospheric Scatter
 
-screen.RADIANCE_CACHE = Sparse Radiance Cache
-option.RADIANCE_CACHE_MAX_ALLOCATIONS_PER_FRAME = New Bricks per Frame
-option.RADIANCE_CACHE_MAX_ALLOCATIONS_PER_FRAME.comment = Limits physical brick allocations per frame. Lower values reduce frame-time spikes; higher values make newly visible geometry converge faster.
-option.RADIANCE_CACHE_RESIDENT_HYSTERESIS_BUCKETS = Resident Hysteresis
-option.RADIANCE_CACHE_RESIDENT_HYSTERESIS_BUCKETS.comment = Gives resident bricks a priority advantage measured in 4-block distance buckets. Higher values improve stability but keep old bricks longer.
-option.RADIANCE_CACHE_MARK_TILE_SIZE = Request Sampling Tile
-option.RADIANCE_CACHE_MARK_TILE_SIZE.comment = Submits one geometry request sample per NxN screen tile. Smaller tiles improve coverage but execute more atomic request operations.
-value.RADIANCE_CACHE_MARK_TILE_SIZE.4 = 4x4 Fine
-value.RADIANCE_CACHE_MARK_TILE_SIZE.8 = 8x8 Balanced
-value.RADIANCE_CACHE_MARK_TILE_SIZE.16 = 16x16 Fast
-option.RADIANCE_CACHE_ROUGH_SPECULAR_THRESHOLD = Rough Specular Threshold
-option.RADIANCE_CACHE_ROUGH_SPECULAR_THRESHOLD.comment = Minimum PSR-style cascaded roughness for terminating a secondary specular path into the radiance cache. Lower values are faster; higher values retain sharper reflections.
-option.RADIANCE_CACHE_DIFFUSE_MIN_BOUNCE = Diffuse Cache Start Bounce
-option.RADIANCE_CACHE_DIFFUSE_MIN_BOUNCE.comment = First path bounce allowed to terminate a diffuse path into the radiance cache. Bounce 1 is the camera-visible surface. Higher values reduce cache artifacts but trace more rays.
+option.FIREFLY_SUPPRESSION_MULTIPLIER = Firefly Suppression
+option.FIREFLY_SUPPRESSION_MULTIPLIER.comment = Per-sample brightness cap multiplier (× average exposure). Lower values clamp bright outlier samples more aggressively, reducing fireflies but potentially darkening specular highlights.
 
-screen.MATERIAL = Material
+option.PATHGUIDE_SPATIAL_RADIUS = Path Guide Spatial Radius
+option.PATHGUIDE_SPATIAL_RADIUS.comment = Poisson disk sampling radius (pixels) for the path-guide ReSTIR reservoir. Higher values probe farther neighbours for more diverse candidates but increase incoherent memory access.
+
+option.PATHGUIDE_MAX_TEMPORAL_M = Path Guide Max Temporal M
+option.PATHGUIDE_MAX_TEMPORAL_M.comment = Maximum effective sample count carried forward by the path-guide ReSTIR temporal reservoir. Limits how many past samples influence the current guide. Higher values retain more history but respond more slowly to lighting changes.
+
+# ===========================================================================
+# Material
+# ===========================================================================
 option.REFRACTIVE_INDEX = Water IOR
 option.REFRACTIVE_INDEX.comment = Index of refraction used by water and the current dielectric transmission model. Higher values bend transmitted rays more strongly and increase grazing reflection.
+
 option.MAX_WETNESS = Max Wetness
 option.MAX_WETNESS.comment = Maximum rain-induced wetness applied to materials. Higher values produce darker, smoother and more reflective wet surfaces.
+
+# ===========================================================================
+# Parallax Occlusion Mapping
+# ===========================================================================
 option.POM_ENABLED = Parallax Mapping
 option.POM_ENABLED.comment = Enables parallax occlusion mapping on the camera-visible surface. It improves apparent depth in supported textures at extra texture-sampling cost.
 value.POM_ENABLED.1 = On
 value.POM_ENABLED.0 = Off
 
-screen.EXPOSURE_DISPLAY = Exposure & Display
-option.DISPLAY_MAX_LUMINANCE = Display Peak Luminance
-option.DISPLAY_MAX_LUMINANCE.comment = Approximate display peak brightness in nits, used to scale HDR exposure. Set this near the sustained peak brightness of your display.
-option.DISPLAY_PAPER_WHITE_LUMINANCE = sRGB Paper White Luminance
-option.DISPLAY_PAPER_WHITE_LUMINANCE.comment = Target brightness of ordinary diffuse white relative to the display range. Lower values leave more highlight headroom and make exposure appear brighter.
-option.EXPOSURE_CURVE_K = Exposure Curve
-option.EXPOSURE_CURVE_K.comment = Compresses highlights before tone mapping. Zero disables the curve; higher values retain more bright detail but reduce highlight contrast.
+option.POM_STEPS = POM Ray Steps
+option.POM_STEPS.comment = Number of linear ray-marching steps for parallax occlusion mapping. Higher values produce sharper displacement at higher GPU cost. Lower values are faster but can miss fine surface detail.
 
-screen.BLOOM = Bloom
-option.BLOOM_MIX = Bloom Strength
-option.BLOOM_MIX.comment = Fraction of the final image contributed by bloom. Zero disables bloom blending; high values can wash out local contrast.
+option.POM_DEPTH = POM Depth Scale
+option.POM_DEPTH.comment = Maximum apparent depth of surface displacement in world units. Higher values make bumps and crevices appear deeper. The visual effect depends on the underlying height-map texture.
 
-screen.RELAX_DENOISER = RELAX Specular Denoiser
-option.RELAX_SPEC_MAX_HISTORY = Slow History Frames
-option.RELAX_SPEC_MAX_HISTORY.comment = Maximum length of stable reflection history. Higher values reduce stationary noise but react more slowly to changing reflections.
-option.RELAX_SPEC_MAX_FAST_HISTORY = Responsive History Frames
-option.RELAX_SPEC_MAX_FAST_HISTORY.comment = Length of the fast history used by anti-lag and history clamping. Lower values respond faster; higher values make the clamp less noisy.
-option.RELAX_PREPASS_RADIUS = Pre-pass Radius
-option.RELAX_PREPASS_RADIUS.comment = Radius of the geometry-aware filter applied to the raw 1 spp reflection before reprojection. Zero disables it; large values can soften sharp reflections.
-option.RELAX_DISOCCLUSION_THRESHOLD = Disocclusion Threshold
-option.RELAX_DISOCCLUSION_THRESHOLD.comment = Relative plane-distance tolerance for reprojected surfaces. Lower values reject more history; higher values can leak history across thin geometry.
-option.RELAX_ROUGHNESS_FRACTION = Roughness Tolerance
-option.RELAX_ROUGHNESS_FRACTION.comment = Roughness difference accepted by spatial filtering. Lower values preserve material boundaries; higher values remove more noise across gradual roughness changes.
-option.RELAX_LOBE_ANGLE_FRACTION = Specular Lobe Fraction
-option.RELAX_LOBE_ANGLE_FRACTION.comment = Portion of the GGX lobe accepted by normal edge stopping. Lower values preserve sharp reflection boundaries but leave more noise.
-option.RELAX_LOBE_ANGLE_SLACK = Lobe Angle Slack
-option.RELAX_LOBE_ANGLE_SLACK.comment = Small angular tolerance added to the GGX lobe test. Raise only if quantized normals cause speckling or broken history.
-option.RELAX_DEPTH_THRESHOLD = Spatial Plane Threshold
-option.RELAX_DEPTH_THRESHOLD.comment = World-space plane tolerance used by history repair and A-Trous filtering. Higher values blur more aggressively across depth changes.
-option.RELAX_MIN_HIT_DISTANCE_WEIGHT = Minimum Hit-distance Weight
-option.RELAX_MIN_HIT_DISTANCE_WEIGHT.comment = Lower bound for reflection hit-distance similarity in the pre-pass. Raise it for more smoothing; lower it to preserve separated reflection depths.
-option.RELAX_CURVATURE_STRENGTH = Curvature Correction
-option.RELAX_CURVATURE_STRENGTH.comment = Scales NRD thin-lens correction for virtual reflection motion. Zero assumes planar reflectors; one uses the estimated surface curvature.
-option.RELAX_MAX_VIRTUAL_MOTION_ACCELERATION = Virtual-motion Guard
-option.RELAX_MAX_VIRTUAL_MOTION_ACCELERATION.comment = Rejects curvature estimates that move virtual history much faster than the visible surface. Lower values are safer but can reduce tracking on curved mirrors.
-option.RELAX_ANTIFIREFLY_ENABLE = RELAX Anti-firefly
-option.RELAX_ANTIFIREFLY_ENABLE.comment = Enables the official rank-conditioned 3x3 anti-firefly stage after temporal accumulation. It preserves the temporal second moment.
-value.RELAX_ANTIFIREFLY_ENABLE.1 = On
-value.RELAX_ANTIFIREFLY_ENABLE.0 = Off
-option.RELAX_HISTORY_FIX_FRAMES = History-fix Frames
-option.RELAX_HISTORY_FIX_FRAMES.comment = Pixels with no more than this many history frames receive sparse cross-bilateral disocclusion repair.
-option.RELAX_HISTORY_FIX_BASE_STRIDE = History-fix Radius
-option.RELAX_HISTORY_FIX_BASE_STRIDE.comment = Maximum sampling stride of disocclusion repair. Larger values fill wider holes but can import less local lighting.
-option.RELAX_COLOR_BOX_SIGMA = History Clamp Sigma
-option.RELAX_COLOR_BOX_SIGMA.comment = Width of the responsive-history YCoCg color box. Lower values remove trails more aggressively; higher values retain stable highlights.
-option.RELAX_HISTORY_ACCELERATION = Anti-lag Acceleration
-option.RELAX_HISTORY_ACCELERATION.comment = Moves slow history toward responsive history when the clamp detects a lighting change. Excessive values can amplify residual noise.
-option.RELAX_HISTORY_RESET_TEMPORAL_SIGMA = Reset Temporal Sigma
-option.RELAX_HISTORY_RESET_TEMPORAL_SIGMA.comment = Temporal noisy-signal deviation tolerated before history reset. Higher values retain history longer during lighting changes.
-option.RELAX_HISTORY_RESET_SPATIAL_SIGMA = Reset Spatial Sigma
-option.RELAX_HISTORY_RESET_SPATIAL_SIGMA.comment = Responsive-neighborhood deviation tolerated before history reset. Higher values reduce resets in noisy areas.
-option.RELAX_HISTORY_RESET_AMOUNT = History Reset Amount
-option.RELAX_HISTORY_RESET_AMOUNT.comment = Maximum fraction of history replaced by the current sample in one frame when reset detection triggers.
-option.RELAX_HISTORY_THRESHOLD = Variance Trust Frames
-option.RELAX_HISTORY_THRESHOLD.comment = Required history length before temporal second moments are trusted without spatial stabilization.
-option.RELAX_SPEC_VARIANCE_BOOST = Empty-sample Variance
-option.RELAX_SPEC_VARIANCE_BOOST.comment = Variance injected when a zero reflection sample has weak reprojection confidence. It prevents the spatial filter from locking onto false certainty.
-option.RELAX_ROUGHNESS_EDGE_RELAXATION = Roughness-edge View Relaxation
-option.RELAX_ROUGHNESS_EDGE_RELAXATION.comment = Relaxes view-vector rejection around roughness edges. Higher values denoise more but may soften view-dependent boundaries.
-option.RELAX_NORMAL_RELAXATION = Low-confidence Normal Relaxation
-option.RELAX_NORMAL_RELAXATION.comment = Relaxes normal edge stopping when reprojection confidence is low, helping newly revealed pixels converge.
-option.RELAX_LUMINANCE_RELAXATION = Low-confidence Luma Relaxation
-option.RELAX_LUMINANCE_RELAXATION.comment = Relaxes luminance edge stopping when reprojection confidence is low. Higher values hide noise faster but can blur highlights.
-option.RELAX_SPEC_PHI_LUMINANCE = Specular Luma Sensitivity
-option.RELAX_SPEC_PHI_LUMINANCE.comment = Scales variance-normalized luminance rejection in A-Trous passes. Higher values permit more smoothing across brightness differences.
-option.RELAX_MAX_LUMINANCE_DIFFERENCE = Maximum Luma Rejection
-option.RELAX_MAX_LUMINANCE_DIFFERENCE.comment = Caps the luminance penalty so extreme 1 spp differences cannot completely isolate a pixel from spatial filtering.
+option.BINARY_SEARCH_STEPS = POM Refinement Steps
+option.BINARY_SEARCH_STEPS.comment = Binary search refinement iterations after the linear ray march. Higher values yield more precise surface intersection and sharper occlusion edges. Set to 0 to disable refinement (faster, softer results).
 
-screen.TEMPORAL_FILTER = Temporal Filter
+# ===========================================================================
+# Sparse Radiance Cache
+# ===========================================================================
+option.RADIANCE_CACHE_MAX_ALLOCATIONS_PER_FRAME = New Bricks per Frame
+option.RADIANCE_CACHE_MAX_ALLOCATIONS_PER_FRAME.comment = Limits physical brick allocations per frame. Lower values reduce frame-time spikes; higher values make newly visible geometry converge faster.
+
+option.RADIANCE_CACHE_RESIDENT_HYSTERESIS_BUCKETS = Resident Hysteresis
+option.RADIANCE_CACHE_RESIDENT_HYSTERESIS_BUCKETS.comment = Gives resident bricks a priority advantage measured in 4-block distance buckets. Higher values improve stability but keep old bricks longer.
+
+option.RADIANCE_CACHE_MARK_TILE_SIZE = Request Sampling Tile
+option.RADIANCE_CACHE_MARK_TILE_SIZE.comment = Submits one geometry request sample per NxN screen tile. Smaller tiles improve coverage but execute more atomic request operations.
+value.RADIANCE_CACHE_MARK_TILE_SIZE.4 = 4x4 Fine
+value.RADIANCE_CACHE_MARK_TILE_SIZE.8 = 8x8 Balanced
+value.RADIANCE_CACHE_MARK_TILE_SIZE.16 = 16x16 Fast
+
+option.RADIANCE_CACHE_ROUGH_SPECULAR_THRESHOLD = Rough Specular Threshold
+option.RADIANCE_CACHE_ROUGH_SPECULAR_THRESHOLD.comment = Minimum PSR-style cascaded roughness for terminating a secondary specular path into the radiance cache. Lower values are faster; higher values retain sharper reflections.
+
+option.RADIANCE_CACHE_DIFFUSE_MIN_BOUNCE = Diffuse Cache Start Bounce
+option.RADIANCE_CACHE_DIFFUSE_MIN_BOUNCE.comment = First path bounce allowed to terminate a diffuse path into the radiance cache. Bounce 1 is the camera-visible surface. Higher values reduce cache artifacts but trace more rays.
+
+option.VOXEL_SIZE = Cache Voxel Size
+option.VOXEL_SIZE.comment = Edge length of a single radiance-cache voxel in world units. Smaller voxels increase spatial precision and capture finer lighting detail, but require more bricks and memory to cover the same volume.
+
+option.RADIANCE_CACHE_MAX_HIST = Cache Max History
+option.RADIANCE_CACHE_MAX_HIST.comment = Maximum temporal history frames blended per cache voxel. Higher values produce smoother irradiance estimates but respond more slowly to lighting changes such as moving light sources or broken/placed blocks.
+
+# ===========================================================================
+# Temporal Filter
+# ===========================================================================
 option.NRD_BLEND_STRENGTH = Low-Confidence Blend
 option.NRD_BLEND_STRENGTH.comment = Blends a wide spatial result into diffuse pixels with little valid history. Higher values hide disocclusion noise faster but can temporarily blur detail.
 
-screen.TEMPORAL_ACCUMULATION = Diffuse Temporal Accumulation
+# ===========================================================================
+# Diffuse Temporal Accumulation
+# ===========================================================================
 option.TEMPORAL_MAX_HISTORY = Max History Frames
 option.TEMPORAL_MAX_HISTORY.comment = Maximum effective diffuse history sample count. Higher values are smoother but react more slowly to lighting changes and disocclusion.
+
 option.TEMPORAL_HISTORY_MIN_WEIGHT = Min History Weight
 option.TEMPORAL_HISTORY_MIN_WEIGHT.comment = History below this confidence is discarded. Raise it to reset weak history sooner; lower it to preserve sparse history longer.
+
 option.TEMPORAL_AABB_ENABLE = AABB Clamp
 option.TEMPORAL_AABB_ENABLE.comment = Clamps reprojected diffuse ALICE history to the current neighborhood, reducing trails and stale lighting. Disabling it uses an unclamped temporal blend.
 value.TEMPORAL_AABB_ENABLE.1 = On
 value.TEMPORAL_AABB_ENABLE.0 = Off
+
 option.TEMPORAL_AABB_NEIGHBOR_RADIUS = AABB Neighbor Radius
 option.TEMPORAL_AABB_NEIGHBOR_RADIUS.comment = Radius used to build the current-frame clamp box. One means 3x3, two means 5x5; larger neighborhoods cost more and preserve broader lighting variation.
+
 option.TEMPORAL_AABB_EXPAND = AABB Expand
 option.TEMPORAL_AABB_EXPAND.comment = Expands the sampled neighborhood range before clamping. Higher values preserve more history but allow more ghosting.
+
 option.TEMPORAL_AABB_SIGMA_SCALE = AABB Sigma Scale
 option.TEMPORAL_AABB_SIGMA_SCALE.comment = Variance-based expansion of the clamp box. Larger values tolerate noisy samples and retain more history.
+
 option.TEMPORAL_AABB_MIN_EXTENT = AABB Min Extent
 option.TEMPORAL_AABB_MIN_EXTENT.comment = Minimum absolute clamp range, preventing dark or nearly constant regions from collapsing to zero width.
+
 option.TEMPORAL_AABB_BOX_SCALE = AABB Box Scale
 option.TEMPORAL_AABB_BOX_SCALE.comment = Global multiplier for clamp-box width. Lower values reject history more aggressively; higher values favor stability.
+
 option.TEMPORAL_AABB_MIN_VALID_NEIGHBORS = AABB Min Valid Neighbors
 option.TEMPORAL_AABB_MIN_VALID_NEIGHBORS.comment = Minimum valid current-frame samples required to clamp history. If fewer samples exist, clamping is skipped to avoid unstable bounds.
 
-screen.ATROUS_DENOISER = À-Trous Denoiser
-option.ATROUS_NORMAL_POWER = À-Trous Normal Edge Sensitivity
+option.TEMPORAL_DEPTH_FOOTPRINT_SCALE = Temporal Footprint Scale
+option.TEMPORAL_DEPTH_FOOTPRINT_SCALE.comment = Scales the depth half-extent of the temporal reprojection footprint trapezoid. Higher values accept history samples that are farther off the reconstructed surface plane, reducing resets but potentially leaking across thin geometry.
+
+option.TEMPORAL_CLIP_PIXEL_RADIUS = Temporal Clip Radius
+option.TEMPORAL_CLIP_PIXEL_RADIUS.comment = Pixel footprint radius used for temporal reprojection corner calculation. Larger values widen the acceptance region, trading precision for fewer disocclusion resets.
+
+# ===========================================================================
+# RELAX Specular Denoiser
+# ===========================================================================
+option.RELAX_SPEC_MAX_HISTORY = Slow History Frames
+option.RELAX_SPEC_MAX_HISTORY.comment = Maximum length of stable reflection history. Higher values reduce stationary noise but react more slowly to changing reflections.
+
+option.RELAX_SPEC_MAX_FAST_HISTORY = Responsive History Frames
+option.RELAX_SPEC_MAX_FAST_HISTORY.comment = Length of the fast history used by anti-lag and history clamping. Lower values respond faster; higher values make the clamp less noisy.
+
+option.RELAX_PREPASS_RADIUS = Pre-pass Radius
+option.RELAX_PREPASS_RADIUS.comment = Radius of the geometry-aware filter applied to the raw 1 spp reflection before reprojection. Zero disables it; large values can soften sharp reflections.
+
+option.RELAX_DISOCCLUSION_THRESHOLD = Disocclusion Threshold
+option.RELAX_DISOCCLUSION_THRESHOLD.comment = Relative plane-distance tolerance for reprojected surfaces. Lower values reject more history; higher values can leak history across thin geometry.
+
+option.RELAX_ROUGHNESS_FRACTION = Roughness Tolerance
+option.RELAX_ROUGHNESS_FRACTION.comment = Roughness difference accepted by spatial filtering. Lower values preserve material boundaries; higher values remove more noise across gradual roughness changes.
+
+option.RELAX_LOBE_ANGLE_FRACTION = Specular Lobe Fraction
+option.RELAX_LOBE_ANGLE_FRACTION.comment = Portion of the GGX lobe accepted by normal edge stopping. Lower values preserve sharp reflection boundaries but leave more noise.
+
+option.RELAX_LOBE_ANGLE_SLACK = Lobe Angle Slack
+option.RELAX_LOBE_ANGLE_SLACK.comment = Small angular tolerance added to the GGX lobe test. Raise only if quantized normals cause speckling or broken history.
+
+option.RELAX_DEPTH_THRESHOLD = Spatial Plane Threshold
+option.RELAX_DEPTH_THRESHOLD.comment = World-space plane tolerance used by history repair and A-Trous filtering. Higher values blur more aggressively across depth changes.
+
+option.RELAX_MIN_HIT_DISTANCE_WEIGHT = Minimum Hit-distance Weight
+option.RELAX_MIN_HIT_DISTANCE_WEIGHT.comment = Lower bound for reflection hit-distance similarity in the pre-pass. Raise it for more smoothing; lower it to preserve separated reflection depths.
+
+option.RELAX_CURVATURE_STRENGTH = Curvature Correction
+option.RELAX_CURVATURE_STRENGTH.comment = Scales NRD thin-lens correction for virtual reflection motion. Zero assumes planar reflectors; one uses the estimated surface curvature.
+
+option.RELAX_MAX_VIRTUAL_MOTION_ACCELERATION = Virtual-motion Guard
+option.RELAX_MAX_VIRTUAL_MOTION_ACCELERATION.comment = Rejects curvature estimates that move virtual history much faster than the visible surface. Lower values are safer but can reduce tracking on curved mirrors.
+
+option.RELAX_ANTIFIREFLY_ENABLE = RELAX Anti-firefly
+option.RELAX_ANTIFIREFLY_ENABLE.comment = Enables the official rank-conditioned 3x3 anti-firefly stage after temporal accumulation. It preserves the temporal second moment.
+value.RELAX_ANTIFIREFLY_ENABLE.1 = On
+value.RELAX_ANTIFIREFLY_ENABLE.0 = Off
+
+option.RELAX_HISTORY_FIX_FRAMES = History-fix Frames
+option.RELAX_HISTORY_FIX_FRAMES.comment = Pixels with no more than this many history frames receive sparse cross-bilateral disocclusion repair.
+
+option.RELAX_HISTORY_FIX_BASE_STRIDE = History-fix Radius
+option.RELAX_HISTORY_FIX_BASE_STRIDE.comment = Maximum sampling stride of disocclusion repair. Larger values fill wider holes but can import less local lighting.
+
+option.RELAX_COLOR_BOX_SIGMA = History Clamp Sigma
+option.RELAX_COLOR_BOX_SIGMA.comment = Width of the responsive-history YCoCg color box. Lower values remove trails more aggressively; higher values retain stable highlights.
+
+option.RELAX_HISTORY_ACCELERATION = Anti-lag Acceleration
+option.RELAX_HISTORY_ACCELERATION.comment = Moves slow history toward responsive history when the clamp detects a lighting change. Excessive values can amplify residual noise.
+
+option.RELAX_HISTORY_RESET_TEMPORAL_SIGMA = Reset Temporal Sigma
+option.RELAX_HISTORY_RESET_TEMPORAL_SIGMA.comment = Temporal noisy-signal deviation tolerated before history reset. Higher values retain history longer during lighting changes.
+
+option.RELAX_HISTORY_RESET_SPATIAL_SIGMA = Reset Spatial Sigma
+option.RELAX_HISTORY_RESET_SPATIAL_SIGMA.comment = Responsive-neighborhood deviation tolerated before history reset. Higher values reduce resets in noisy areas.
+
+option.RELAX_HISTORY_RESET_AMOUNT = History Reset Amount
+option.RELAX_HISTORY_RESET_AMOUNT.comment = Maximum fraction of history replaced by the current sample in one frame when reset detection triggers.
+
+option.RELAX_HISTORY_THRESHOLD = Variance Trust Frames
+option.RELAX_HISTORY_THRESHOLD.comment = Required history length before temporal second moments are trusted without spatial stabilization.
+
+option.RELAX_SPEC_VARIANCE_BOOST = Empty-sample Variance
+option.RELAX_SPEC_VARIANCE_BOOST.comment = Variance injected when a zero reflection sample has weak reprojection confidence. It prevents the spatial filter from locking onto false certainty.
+
+option.RELAX_ROUGHNESS_EDGE_RELAXATION = Roughness-edge View Relaxation
+option.RELAX_ROUGHNESS_EDGE_RELAXATION.comment = Relaxes view-vector rejection around roughness edges. Higher values denoise more but may soften view-dependent boundaries.
+
+option.RELAX_NORMAL_RELAXATION = Low-confidence Normal Relaxation
+option.RELAX_NORMAL_RELAXATION.comment = Relaxes normal edge stopping when reprojection confidence is low, helping newly revealed pixels converge.
+
+option.RELAX_LUMINANCE_RELAXATION = Low-confidence Luma Relaxation
+option.RELAX_LUMINANCE_RELAXATION.comment = Relaxes luminance edge stopping when reprojection confidence is low. Higher values hide noise faster but can blur highlights.
+
+option.RELAX_SPEC_PHI_LUMINANCE = Specular Luma Sensitivity
+option.RELAX_SPEC_PHI_LUMINANCE.comment = Scales variance-normalized luminance rejection in A-Trous passes. Higher values permit more smoothing across brightness differences.
+
+option.RELAX_MAX_LUMINANCE_DIFFERENCE = Maximum Luma Rejection
+option.RELAX_MAX_LUMINANCE_DIFFERENCE.comment = Caps the luminance penalty so extreme 1 spp differences cannot completely isolate a pixel from spatial filtering.
+
+# ===========================================================================
+# Variance Prefilter
+# ===========================================================================
+option.VAR_FILTER_KERNEL_SIGMA = Variance Kernel Sigma
+option.VAR_FILTER_KERNEL_SIGMA.comment = Gaussian kernel standard deviation (pixels) for the spatial variance pooling pass. Higher values smooth variance estimates over wider neighborhoods, trading precision for stability.
+
+option.VAR_FILTER_HISTORY_BEGIN = Variance Begin Frames
+option.VAR_FILTER_HISTORY_BEGIN.comment = History frame count at which the spatial→temporal variance transition begins. Below this, variance is dominated by the spatial neighborhood estimate to handle cold starts.
+
+option.VAR_FILTER_HISTORY_END = Variance End Frames
+option.VAR_FILTER_HISTORY_END.comment = History frame count at which the spatial→temporal variance transition completes. At or above this, the purely temporal variance estimate is fully trusted.
+
+# ===========================================================================
+# À-Trous Denoiser
+# ===========================================================================
+option.ATROUS_NORMAL_POWER = À-Trous Normal Sensitivity
 option.ATROUS_NORMAL_POWER.comment = Strength of normal-based edge stopping in spatial filters. Higher values preserve normal-map and silhouette edges but leave more noise.
+
 option.ATROUS_PHI_L = À-Trous Luma Sensitivity
 option.ATROUS_PHI_L.comment = Luminance tolerance of the diffuse spatial filter. Higher values blur across larger lighting differences; lower values preserve contrast.
-option.ATROUS_POSITION_PARAM = À-Trous Depth Edge Sensitivity
+
+option.ATROUS_POSITION_PARAM = À-Trous Depth Sensitivity
 option.ATROUS_POSITION_PARAM.comment = World-position edge sensitivity used by spatial and variance filters. Higher values reject cross-surface samples more strongly.
+
 option.ATROUS_GAMMA = À-Trous Roughness Adaptation
 option.ATROUS_GAMMA.comment = Controls roughness-dependent widening of the diffuse filter. Zero keeps a fixed width; higher values blur rough surfaces more aggressively.
-screen.DEBUG = Debug
+
+# ===========================================================================
+# Bloom
+# ===========================================================================
+option.BLOOM_MIX = Bloom Strength
+option.BLOOM_MIX.comment = Fraction of the final image contributed by bloom. Zero disables bloom blending; high values can wash out local contrast.
+
+# ===========================================================================
+# Exposure & Display
+# ===========================================================================
+option.DISPLAY_MAX_LUMINANCE = Display Peak Luminance
+option.DISPLAY_MAX_LUMINANCE.comment = Approximate display peak brightness in nits, used to scale HDR exposure. Set this near the sustained peak brightness of your display.
+
+option.DISPLAY_PAPER_WHITE_LUMINANCE = sRGB Paper White Luminance
+option.DISPLAY_PAPER_WHITE_LUMINANCE.comment = Target brightness of ordinary diffuse white relative to the display range. Lower values leave more highlight headroom and make exposure appear brighter.
+
+option.EXPOSURE_CURVE_K = Exposure Curve
+option.EXPOSURE_CURVE_K.comment = Compresses highlights before tone mapping. Zero disables the curve; higher values retain more bright detail but reduce highlight contrast.
+
+# ===========================================================================
+# Advanced
+# ===========================================================================
+option.VPROJDIST_SKY = Sky Virtual Distance
+option.VPROJDIST_SKY.comment = Virtual projected distance (meters) assigned to sky pixels in the specular and refraction denoisers. Used to tag infinity hits so the denoiser can identify sky regions. Rarely needs adjustment.
+
+# ===========================================================================
+# Debug
+# ===========================================================================
 option.DEBUG_VIEW = Debug View
 option.DEBUG_VIEW.comment = Replaces the final image with an internal lighting or cache visualization. Use Normal for regular rendering.
 value.DEBUG_VIEW.0 = Normal

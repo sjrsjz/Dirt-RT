@@ -17,10 +17,11 @@
 #include "/lib/rt/payload.glsl"
 #define FRAGMENT_INFO_NO_PRIMITIVE
 #include "/lib/rt/fragment_info.glsl"
-#include "/lib/rt/pom.glsl"
 #include "/lib/common/bicubic.glsl"
+// constants.glsl includes settings.glsl — must precede pom.glsl for option overrides
 #include "/lib/constants.glsl"
 #include "/lib/settings.glsl"
+#include "/lib/rt/pom.glsl"
 #include "/lib/sky.glsl"
 #include "/lib/math/quaternions.glsl"
 #include "/lib/buffers/buffer_io.glsl"
@@ -1212,6 +1213,12 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
     // ===== SECONDARY LOOP =====
     if (max(throughput.r, max(throughput.g, throughput.b)) > 0.0 && !any(isnan(throughput))) {
+        // Track whether we arrived via specular (not just current lobe).
+        // Primary specular → secondary surface should be cache-eligible at bounce 2.
+        bool arrivedViaSpecular = false;
+        #if defined(FIRST_LOBE_REFLECTION)
+        arrivedViaSpecular = true;
+        #endif
         for (int depth = 1; depth < MaxRay; depth++) {
             // --- Ray cast ---
             float t2 = raycast(ro_i, rd_i, ro_o, rd_o, !inside, false);
@@ -1311,19 +1318,23 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             }
 
             // --- Radiance-cache path termination ---
-            // Query only after NEE so direct sunlight at this surface is never
-            // replaced by the cache. The cache currently represents air-side
-            // incident radiance, so paths inside a medium continue normally.
+            // Query only after NEE so direct sunlight is never replaced.
+            int bounceNumber = depth + 1;
             float roughThreshold2 =
                 RADIANCE_CACHE_ROUGH_SPECULAR_THRESHOLD
                 * RADIANCE_CACHE_ROUGH_SPECULAR_THRESHOLD;
-            bool roughSpecular = sampledSpecularLobe
-                && nextCascadedRoughness2 >= roughThreshold2;
-            int bounceNumber = depth + 1;
-            bool diffuseCacheEligible = sampledDiffuseLobe
+            // Cache-eligible when:
+            //   Diffuse + setting (≥3 avoids corner block artifacts), OR
+            //   Specular lobe (roughness-based OR sharp after 1 reflection), OR
+            //   Arrived via specular — secondary surface after mirror reflection.
+            bool diffuseEligible = sampledDiffuseLobe
                 && bounceNumber >= RADIANCE_CACHE_DIFFUSE_MIN_BOUNCE;
+            bool specularLobeEligible = sampledSpecularLobe
+                && (nextCascadedRoughness2 >= roughThreshold2 || bounceNumber >= 2);
+            bool viaSpecularEligible = arrivedViaSpecular
+                && bounceNumber >= 2;
             bool cacheEligible = !inside
-                && (diffuseCacheEligible || roughSpecular);
+                && (diffuseEligible || specularLobeEligible || viaSpecularEligible);
             if (cacheEligible) {
                 RadianceCache cache;
                 if (loadSecondaryRadianceCache(
@@ -1365,6 +1376,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             // --- Advance ---
             ro_i = ro_o + geometryNormal * ((current_type == REFRACTION) ? -0.001 : 0.001);
             rd_i = next_rd;
+            arrivedViaSpecular = (current_type == REFLECTION);
         }
     }
 

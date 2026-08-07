@@ -1,150 +1,290 @@
+# ===========================================================================
+# Dirt RT — 简体中文 (Simplified Chinese) Localization
+# ===========================================================================
+
+# -- Screen groups --
 screen.RAY_TRACING = 光线追踪
+screen.MATERIAL = 材质
+screen.POM = 视差遮蔽映射
+screen.RADIANCE_CACHE = 稀疏辐射率缓存
+screen.TEMPORAL_FILTER = 时域滤波
+screen.TEMPORAL_ACCUMULATION = 漫反射时域累积
+screen.RELAX_DENOISER = RELAX 镜面降噪
+screen.VARIANCE_PREFILTER = 方差预滤波
+screen.ATROUS_DENOISER = À-Trous 降噪
+screen.BLOOM = 泛光
+screen.EXPOSURE_DISPLAY = 曝光与显示
+screen.ADVANCED = 高级
+screen.DEBUG = 调试
+
+# ===========================================================================
+# 光线追踪
+# ===========================================================================
 option.ACCUMULATION_LENGTH = 折射历史帧数
 option.ACCUMULATION_LENGTH.comment = 折射降噪器使用的最大重投影历史。ReLAX 反射历史由下方的独立选项控制。
+
 option.RAY_BOUNCES = 光线弹射次数
 option.RAY_BOUNCES.comment = 每条相机路径最多访问的表面数。增加跳数可保留更深层的间接光与透射，但会直接增加 GPU 开销。
+
 option.PATH_GUIDING_STRENGTH = 路径引导强度
 option.PATH_GUIDING_STRENGTH.comment = 漫反射路径与辐射率缓存探针跟随上一帧 ALICE 光场的强度。稳定场景中提高它可加快收敛，过高则可能在光照变化后增加延迟或方差。
+
 option.PATH_GUIDING_SPECULAR_STRENGTH = 镜面引导强度
 option.PATH_GUIDING_SPECULAR_STRENGTH.comment = 使用 ALICE 历史引导粗糙反射射线的基础概率。光滑镜面或各向同性光场会自动减少引导。
+
 option.SUN_PATH_ROTATION = 日照路径旋转
 option.SUN_PATH_ROTATION.comment = 绕世界 X 轴旋转太阳和月亮的视运动路径，只改变光照方向，不改变昼夜长度。
+
 option.END_SKYBOX = 末地天空盒
 option.END_SKYBOX.comment = 控制末地是否使用符文环与星云天空。关闭后使用开销较低的大气散射备用天空。
 value.END_SKYBOX.1 = 符文环 + 星云
 value.END_SKYBOX.0 = 大气散射
 
-screen.RADIANCE_CACHE = 稀疏辐射率缓存
-option.RADIANCE_CACHE_MAX_ALLOCATIONS_PER_FRAME = 每帧新分配体素块
-option.RADIANCE_CACHE_MAX_ALLOCATIONS_PER_FRAME.comment = 限制每帧物理体素块分配数量。数值越低越能抑制帧时间尖峰，数值越高则新出现的几何体收敛越快。
-option.RADIANCE_CACHE_RESIDENT_HYSTERESIS_BUCKETS = 驻留页滞回距离
-option.RADIANCE_CACHE_RESIDENT_HYSTERESIS_BUCKETS.comment = 以 4 方块距离桶为单位提高已驻留体素块的优先级。数值越高越稳定，但旧体素块保留时间也越长。
-option.RADIANCE_CACHE_MARK_TILE_SIZE = 请求采样区块
-option.RADIANCE_CACHE_MARK_TILE_SIZE.comment = 每个 NxN 屏幕像素区块提交一次几何请求。区块越小覆盖越完整，但原子请求次数越多。
-value.RADIANCE_CACHE_MARK_TILE_SIZE.4 = 4x4 精细
-value.RADIANCE_CACHE_MARK_TILE_SIZE.8 = 8x8 均衡
-value.RADIANCE_CACHE_MARK_TILE_SIZE.16 = 16x16 性能
-option.RADIANCE_CACHE_ROUGH_SPECULAR_THRESHOLD = 粗糙镜面终止阈值
-option.RADIANCE_CACHE_ROUGH_SPECULAR_THRESHOLD.comment = 次级镜面路径进入辐射率缓存前所需的最小 PSR 级联粗糙度。数值越低性能越高，数值越高则能保留更清晰的反射。
-option.RADIANCE_CACHE_DIFFUSE_MIN_BOUNCE = 漫反射缓存起始跳数
-option.RADIANCE_CACHE_DIFFUSE_MIN_BOUNCE.comment = 漫反射路径允许进入辐射率缓存的最早跳数。相机可见的第一个表面记为第 1 跳。数值越高缓存伪影越少，但会追踪更多光线。
+option.FIREFLY_SUPPRESSION_MULTIPLIER = 萤火虫抑制
+option.FIREFLY_SUPPRESSION_MULTIPLIER.comment = 每样本亮度上限倍率（× 平均曝光）。减小此值可更激进地钳制异常亮像素，减少萤火虫现象，但可能使高光变暗。
 
-screen.MATERIAL = 材质
+option.PATHGUIDE_SPATIAL_RADIUS = 路径引导空间半径
+option.PATHGUIDE_SPATIAL_RADIUS.comment = 路径引导 ReSTIR 蓄水池的 Poisson 盘空间采样半径（像素）。提高可探测更远的邻居以获取更多样化的候选，但会增加非连续内存访问。
+
+option.PATHGUIDE_MAX_TEMPORAL_M = 路径引导最大时域 M
+option.PATHGUIDE_MAX_TEMPORAL_M.comment = 路径引导 ReSTIR 时域蓄水池的最大有效样本数上限。限制历史样本对当前引导的影响程度。提高可保留更多历史，但对光照变化响应更慢。
+
+# ===========================================================================
+# 材质
+# ===========================================================================
 option.REFRACTIVE_INDEX = 水折射率
 option.REFRACTIVE_INDEX.comment = 水和当前介质透射模型使用的折射率。数值越高，折射弯曲越强，掠射角反射也越明显。
+
 option.MAX_WETNESS = 最大湿度
 option.MAX_WETNESS.comment = 雨水可施加到材质上的最大湿润程度。提高后湿表面会更暗、更光滑并具有更强反射。
+
+# ===========================================================================
+# 视差遮蔽映射
+# ===========================================================================
 option.POM_ENABLED = 视差映射
 option.POM_ENABLED.comment = 为相机可见的首个表面启用视差遮蔽映射。可增强受支持纹理的凹凸深度感，但会增加纹理采样开销。
 value.POM_ENABLED.1 = 开启
 value.POM_ENABLED.0 = 关闭
 
-screen.EXPOSURE_DISPLAY = 曝光与显示
-option.DISPLAY_MAX_LUMINANCE = 显示器峰值亮度
-option.DISPLAY_MAX_LUMINANCE.comment = 显示器大致的持续峰值亮度，单位为尼特，用于缩放 HDR 曝光。建议按显示设备的实际能力设置。
-option.DISPLAY_PAPER_WHITE_LUMINANCE = sRGB 纸白亮度
-option.DISPLAY_PAPER_WHITE_LUMINANCE.comment = 普通漫反射白色相对于显示范围的目标亮度。降低它会给高光留下更多余量，并使场景曝光看起来更亮。
-option.EXPOSURE_CURVE_K = 曝光曲线
-option.EXPOSURE_CURVE_K.comment = 在色调映射前压缩高光。设为 0 表示关闭；数值越高越能保留亮部细节，但高光对比度会降低。
+option.POM_STEPS = POM 步进步数
+option.POM_STEPS.comment = 视差遮蔽映射的线性光线步进步数。提高可产生更锐利的位移效果，但 GPU 开销更高。降低可提升性能，但可能丢失精细表面细节。
 
-screen.BLOOM = 泛光
-option.BLOOM_MIX = 泛光强度
-option.BLOOM_MIX.comment = 最终画面中泛光所占的混合比例。设为 0 可关闭泛光；过高会冲淡局部对比度。
+option.POM_DEPTH = POM 深度缩放
+option.POM_DEPTH.comment = 表面位移的最大视觉深度（世界单位）。提高可使凹凸和缝隙看起来更深。实际视觉效果取决于底层的高度纹理。
 
-screen.RELAX_DENOISER = RELAX 镜面降噪
-option.RELAX_SPEC_MAX_HISTORY = 慢速历史帧数
-option.RELAX_SPEC_MAX_HISTORY.comment = 稳定反射历史的最大长度。提高可减少静止噪点，但反射变化后的响应会更慢。
-option.RELAX_SPEC_MAX_FAST_HISTORY = 响应历史帧数
-option.RELAX_SPEC_MAX_FAST_HISTORY.comment = 抗延迟与历史钳制使用的快速历史长度。降低可更快响应，提高则可使钳制参考更稳定。
-option.RELAX_PREPASS_RADIUS = 预滤波半径
-option.RELAX_PREPASS_RADIUS.comment = 重投影前对原始 1 spp 反射执行的几何感知滤波半径。0 表示关闭；过大会软化清晰反射。
-option.RELAX_DISOCCLUSION_THRESHOLD = 解遮挡阈值
-option.RELAX_DISOCCLUSION_THRESHOLD.comment = 重投影表面的相对平面距离容差。降低会拒绝更多历史，提高则可能使历史越过薄小几何体。
-option.RELAX_ROUGHNESS_FRACTION = 粗糙度容差
-option.RELAX_ROUGHNESS_FRACTION.comment = 空间滤波允许的粗糙度差异。降低可保留材质边界，提高可更充分平滑渐变粗糙度区域。
-option.RELAX_LOBE_ANGLE_FRACTION = 镜面波瓣比例
-option.RELAX_LOBE_ANGLE_FRACTION.comment = 法线边缘停止允许的 GGX 波瓣比例。降低可保留锐利反射边界，但会留下更多噪点。
-option.RELAX_LOBE_ANGLE_SLACK = 波瓣角余量
-option.RELAX_LOBE_ANGLE_SLACK.comment = 给 GGX 波瓣测试增加少量角度容差。仅在法线量化导致闪点或历史断裂时提高。
-option.RELAX_DEPTH_THRESHOLD = 空间平面阈值
-option.RELAX_DEPTH_THRESHOLD.comment = 历史修复与 À-Trous 使用的世界空间平面容差。提高会更积极地跨深度变化平滑。
-option.RELAX_MIN_HIT_DISTANCE_WEIGHT = 最小命中距离权重
-option.RELAX_MIN_HIT_DISTANCE_WEIGHT.comment = 预滤波中反射命中距离相似度的权重下限。提高可增强平滑，降低可保留分离的反射深度。
-option.RELAX_CURVATURE_STRENGTH = 曲率校正强度
-option.RELAX_CURVATURE_STRENGTH.comment = 缩放 NRD 用于虚拟反射运动的薄透镜校正。0 按平面处理，1 使用估计的表面曲率。
-option.RELAX_MAX_VIRTUAL_MOTION_ACCELERATION = 虚拟运动保护
-option.RELAX_MAX_VIRTUAL_MOTION_ACCELERATION.comment = 拒绝让虚拟历史运动远快于可见表面的曲率估计。降低更安全，但可能削弱曲面镜上的追踪。
-option.RELAX_ANTIFIREFLY_ENABLE = RELAX 萤火虫抑制
-option.RELAX_ANTIFIREFLY_ENABLE.comment = 在时域累积后启用官方的 3x3 排名条件萤火虫滤波，并保留时域二阶矩。
-value.RELAX_ANTIFIREFLY_ENABLE.1 = 开启
-value.RELAX_ANTIFIREFLY_ENABLE.0 = 关闭
-option.RELAX_HISTORY_FIX_FRAMES = 历史修复帧数
-option.RELAX_HISTORY_FIX_FRAMES.comment = 历史不超过该帧数的像素会接受稀疏交叉双边解遮挡修复。
-option.RELAX_HISTORY_FIX_BASE_STRIDE = 历史修复半径
-option.RELAX_HISTORY_FIX_BASE_STRIDE.comment = 解遮挡修复的最大采样步长。提高可填补更宽区域，但可能引入距离更远的光照。
-option.RELAX_COLOR_BOX_SIGMA = 历史钳制 Sigma
-option.RELAX_COLOR_BOX_SIGMA.comment = 响应历史 YCoCg 颜色盒的宽度。降低可更积极清除拖影，提高可保留稳定高光。
-option.RELAX_HISTORY_ACCELERATION = 抗延迟加速
-option.RELAX_HISTORY_ACCELERATION.comment = 检测到光照变化时让慢速历史向响应历史靠近。过高可能放大残余噪声。
-option.RELAX_HISTORY_RESET_TEMPORAL_SIGMA = 重置时域 Sigma
-option.RELAX_HISTORY_RESET_TEMPORAL_SIGMA.comment = 触发历史重置前允许的时域噪声偏差。提高会在光照变化时更久保留历史。
-option.RELAX_HISTORY_RESET_SPATIAL_SIGMA = 重置空间 Sigma
-option.RELAX_HISTORY_RESET_SPATIAL_SIGMA.comment = 触发历史重置前允许的响应邻域偏差。提高可减少高噪声区域的重置。
-option.RELAX_HISTORY_RESET_AMOUNT = 历史重置幅度
-option.RELAX_HISTORY_RESET_AMOUNT.comment = 检测到重置时，单帧内最多由当前样本替换的历史比例。
-option.RELAX_HISTORY_THRESHOLD = 方差可信帧数
-option.RELAX_HISTORY_THRESHOLD.comment = 时域二阶矩不再需要空间稳定处理之前所需的历史长度。
-option.RELAX_SPEC_VARIANCE_BOOST = 空样本方差
-option.RELAX_SPEC_VARIANCE_BOOST.comment = 零反射样本重投影置信度较低时注入的方差，防止空间滤波器错误锁定为零方差。
-option.RELAX_ROUGHNESS_EDGE_RELAXATION = 粗糙边缘视线放宽
-option.RELAX_ROUGHNESS_EDGE_RELAXATION.comment = 在粗糙度边缘放宽视线方向拒绝。提高可增强降噪，但可能软化视角相关边界。
-option.RELAX_NORMAL_RELAXATION = 低置信度法线放宽
-option.RELAX_NORMAL_RELAXATION.comment = 重投影置信度较低时放宽法线边缘停止，帮助新显露像素更快收敛。
-option.RELAX_LUMINANCE_RELAXATION = 低置信度亮度放宽
-option.RELAX_LUMINANCE_RELAXATION.comment = 重投影置信度较低时放宽亮度边缘停止。提高可更快隐藏噪点，但可能模糊高光。
-option.RELAX_SPEC_PHI_LUMINANCE = 镜面亮度灵敏度
-option.RELAX_SPEC_PHI_LUMINANCE.comment = 缩放 À-Trous 中按方差归一化的亮度拒绝。提高会允许跨越更大亮度差进行平滑。
-option.RELAX_MAX_LUMINANCE_DIFFERENCE = 最大亮度拒绝
-option.RELAX_MAX_LUMINANCE_DIFFERENCE.comment = 限制亮度惩罚，避免极端 1 spp 差异让像素完全无法参与空间滤波。
+option.BINARY_SEARCH_STEPS = POM 细化次数
+option.BINARY_SEARCH_STEPS.comment = 线性步进后的二分搜索细化迭代次数。提高能获得更精确的表面交点和更锐利的遮蔽边缘。设为 0 可禁用细化（更快，效果更柔和）。
 
-screen.TEMPORAL_FILTER = 时域滤波
+# ===========================================================================
+# 稀疏辐射率缓存
+# ===========================================================================
+option.RADIANCE_CACHE_MAX_ALLOCATIONS_PER_FRAME = 每帧新分配体素块
+option.RADIANCE_CACHE_MAX_ALLOCATIONS_PER_FRAME.comment = 限制每帧物理体素块分配数量。数值越低越能抑制帧时间尖峰，数值越高则新出现的几何体收敛越快。
+
+option.RADIANCE_CACHE_RESIDENT_HYSTERESIS_BUCKETS = 驻留页滞回距离
+option.RADIANCE_CACHE_RESIDENT_HYSTERESIS_BUCKETS.comment = 以 4 方块距离桶为单位提高已驻留体素块的优先级。数值越高越稳定，但旧体素块保留时间也越长。
+
+option.RADIANCE_CACHE_MARK_TILE_SIZE = 请求采样区块
+option.RADIANCE_CACHE_MARK_TILE_SIZE.comment = 每个 NxN 屏幕像素区块提交一次几何请求。区块越小覆盖越完整，但原子请求次数越多。
+value.RADIANCE_CACHE_MARK_TILE_SIZE.4 = 4x4 精细
+value.RADIANCE_CACHE_MARK_TILE_SIZE.8 = 8x8 均衡
+value.RADIANCE_CACHE_MARK_TILE_SIZE.16 = 16x16 性能
+
+option.RADIANCE_CACHE_ROUGH_SPECULAR_THRESHOLD = 粗糙镜面终止阈值
+option.RADIANCE_CACHE_ROUGH_SPECULAR_THRESHOLD.comment = 次级镜面路径进入辐射率缓存前所需的最小 PSR 级联粗糙度。数值越低性能越高，数值越高则能保留更清晰的反射。
+
+option.RADIANCE_CACHE_DIFFUSE_MIN_BOUNCE = 漫反射缓存起始跳数
+option.RADIANCE_CACHE_DIFFUSE_MIN_BOUNCE.comment = 漫反射路径允许进入辐射率缓存的最早跳数。相机可见的第一个表面记为第 1 跳。数值越高缓存伪影越少，但会追踪更多光线。
+
+option.VOXEL_SIZE = 缓存体素尺寸
+option.VOXEL_SIZE.comment = 单个辐射率缓存体素的边长（世界单位）。数值越小空间精度越高，可捕获更精细的光照细节，但覆盖相同体积需要更多体素块和内存。
+
+option.RADIANCE_CACHE_MAX_HIST = 缓存最大历史
+option.RADIANCE_CACHE_MAX_HIST.comment = 每个缓存体素混合的最大时域历史帧数。数值越高辐照度越平滑，但对光照变化（如移动光源、放置/破坏方块）的响应越慢。
+
+# ===========================================================================
+# 时域滤波
+# ===========================================================================
 option.NRD_BLEND_STRENGTH = 低置信度混合
 option.NRD_BLEND_STRENGTH.comment = 在漫反射历史不足时混入大范围空间滤波结果。提高后可更快隐藏解遮挡噪点，但细节可能暂时变软。
 
-screen.TEMPORAL_ACCUMULATION = 漫反射时域累积
+# ===========================================================================
+# 漫反射时域累积
+# ===========================================================================
 option.TEMPORAL_MAX_HISTORY = 最大历史帧数
 option.TEMPORAL_MAX_HISTORY.comment = 漫反射历史的最大有效样本数。提高后更平滑，但对光照变化和解遮挡的响应更慢。
+
 option.TEMPORAL_HISTORY_MIN_WEIGHT = 最小历史权重
 option.TEMPORAL_HISTORY_MIN_WEIGHT.comment = 低于此置信度的历史会被丢弃。提高可更早重置弱历史，降低则会更久保留稀疏历史。
+
 option.TEMPORAL_AABB_ENABLE = AABB 钳制
 option.TEMPORAL_AABB_ENABLE.comment = 将重投影的漫反射 ALICE 历史限制在当前邻域范围内，以减少拖影和陈旧光照。关闭后使用不钳制的时域混合。
 value.TEMPORAL_AABB_ENABLE.1 = 开启
 value.TEMPORAL_AABB_ENABLE.0 = 关闭
+
 option.TEMPORAL_AABB_NEIGHBOR_RADIUS = AABB 邻域半径
 option.TEMPORAL_AABB_NEIGHBOR_RADIUS.comment = 构建当前帧钳制范围时使用的邻域半径。1 表示 3x3，2 表示 5x5；更大邻域开销更高，但可容纳更宽的光照变化。
+
 option.TEMPORAL_AABB_EXPAND = AABB 扩展系数
 option.TEMPORAL_AABB_EXPAND.comment = 钳制前扩展邻域取值范围。提高后可保留更多历史，但也更容易留下拖影。
+
 option.TEMPORAL_AABB_SIGMA_SCALE = AABB Sigma 缩放
 option.TEMPORAL_AABB_SIGMA_SCALE.comment = 根据方差扩展钳制范围。数值越大，对噪声样本越宽容，并会保留更多历史。
+
 option.TEMPORAL_AABB_MIN_EXTENT = AABB 最小范围
 option.TEMPORAL_AABB_MIN_EXTENT.comment = 钳制范围的最小绝对宽度，防止暗部或近似恒定区域的范围收缩为零。
+
 option.TEMPORAL_AABB_BOX_SCALE = AABB 全局缩放
 option.TEMPORAL_AABB_BOX_SCALE.comment = 钳制范围宽度的全局倍率。降低会更积极地拒绝历史，提高则更偏向稳定性。
+
 option.TEMPORAL_AABB_MIN_VALID_NEIGHBORS = AABB 最小有效邻域
 option.TEMPORAL_AABB_MIN_VALID_NEIGHBORS.comment = 执行历史钳制所需的最少当前帧有效样本数。样本不足时会跳过钳制，避免使用不稳定边界。
 
-screen.ATROUS_DENOISER = À-Trous 降噪
-option.ATROUS_NORMAL_POWER = À-Trous 法线边缘灵敏度
+option.TEMPORAL_DEPTH_FOOTPRINT_SCALE = 时域足迹深度缩放
+option.TEMPORAL_DEPTH_FOOTPRINT_SCALE.comment = 缩放时域重投影足迹梯形的深度半范围。提高可接受离重建表面平面更远的历史样本，减少重置但可能跨薄几何体泄漏。
+
+option.TEMPORAL_CLIP_PIXEL_RADIUS = 时域裁剪像素半径
+option.TEMPORAL_CLIP_PIXEL_RADIUS.comment = 用于时域重投影角点计算的像素足迹半径。提高会扩宽接受范围，以精度换取更少的解遮挡重置。
+
+# ===========================================================================
+# RELAX 镜面降噪
+# ===========================================================================
+option.RELAX_SPEC_MAX_HISTORY = 慢速历史帧数
+option.RELAX_SPEC_MAX_HISTORY.comment = 稳定反射历史的最大长度。提高可减少静止噪点，但反射变化后的响应会更慢。
+
+option.RELAX_SPEC_MAX_FAST_HISTORY = 响应历史帧数
+option.RELAX_SPEC_MAX_FAST_HISTORY.comment = 抗延迟与历史钳制使用的快速历史长度。降低可更快响应，提高则可使钳制参考更稳定。
+
+option.RELAX_PREPASS_RADIUS = 预滤波半径
+option.RELAX_PREPASS_RADIUS.comment = 重投影前对原始 1 spp 反射执行的几何感知滤波半径。0 表示关闭；过大会软化清晰反射。
+
+option.RELAX_DISOCCLUSION_THRESHOLD = 解遮挡阈值
+option.RELAX_DISOCCLUSION_THRESHOLD.comment = 重投影表面的相对平面距离容差。降低会拒绝更多历史，提高则可能使历史越过薄小几何体。
+
+option.RELAX_ROUGHNESS_FRACTION = 粗糙度容差
+option.RELAX_ROUGHNESS_FRACTION.comment = 空间滤波允许的粗糙度差异。降低可保留材质边界，提高可更充分平滑渐变粗糙度区域。
+
+option.RELAX_LOBE_ANGLE_FRACTION = 镜面波瓣比例
+option.RELAX_LOBE_ANGLE_FRACTION.comment = 法线边缘停止允许的 GGX 波瓣比例。降低可保留锐利反射边界，但会留下更多噪点。
+
+option.RELAX_LOBE_ANGLE_SLACK = 波瓣角余量
+option.RELAX_LOBE_ANGLE_SLACK.comment = 给 GGX 波瓣测试增加少量角度容差。仅在法线量化导致闪点或历史断裂时提高。
+
+option.RELAX_DEPTH_THRESHOLD = 空间平面阈值
+option.RELAX_DEPTH_THRESHOLD.comment = 历史修复与 À-Trous 使用的世界空间平面容差。提高会更积极地跨深度变化平滑。
+
+option.RELAX_MIN_HIT_DISTANCE_WEIGHT = 最小命中距离权重
+option.RELAX_MIN_HIT_DISTANCE_WEIGHT.comment = 预滤波中反射命中距离相似度的权重下限。提高可增强平滑，降低可保留分离的反射深度。
+
+option.RELAX_CURVATURE_STRENGTH = 曲率校正强度
+option.RELAX_CURVATURE_STRENGTH.comment = 缩放 NRD 用于虚拟反射运动的薄透镜校正。0 按平面处理，1 使用估计的表面曲率。
+
+option.RELAX_MAX_VIRTUAL_MOTION_ACCELERATION = 虚拟运动保护
+option.RELAX_MAX_VIRTUAL_MOTION_ACCELERATION.comment = 拒绝让虚拟历史运动远快于可见表面的曲率估计。降低更安全，但可能削弱曲面镜上的追踪。
+
+option.RELAX_ANTIFIREFLY_ENABLE = RELAX 萤火虫抑制
+option.RELAX_ANTIFIREFLY_ENABLE.comment = 在时域累积后启用官方的 3x3 排名条件萤火虫滤波，并保留时域二阶矩。
+value.RELAX_ANTIFIREFLY_ENABLE.1 = 开启
+value.RELAX_ANTIFIREFLY_ENABLE.0 = 关闭
+
+option.RELAX_HISTORY_FIX_FRAMES = 历史修复帧数
+option.RELAX_HISTORY_FIX_FRAMES.comment = 历史不超过该帧数的像素会接受稀疏交叉双边解遮挡修复。
+
+option.RELAX_HISTORY_FIX_BASE_STRIDE = 历史修复半径
+option.RELAX_HISTORY_FIX_BASE_STRIDE.comment = 解遮挡修复的最大采样步长。提高可填补更宽区域，但可能引入距离更远的光照。
+
+option.RELAX_COLOR_BOX_SIGMA = 历史钳制 Sigma
+option.RELAX_COLOR_BOX_SIGMA.comment = 响应历史 YCoCg 颜色盒的宽度。降低可更积极清除拖影，提高可保留稳定高光。
+
+option.RELAX_HISTORY_ACCELERATION = 抗延迟加速
+option.RELAX_HISTORY_ACCELERATION.comment = 检测到光照变化时让慢速历史向响应历史靠近。过高可能放大残余噪声。
+
+option.RELAX_HISTORY_RESET_TEMPORAL_SIGMA = 重置时域 Sigma
+option.RELAX_HISTORY_RESET_TEMPORAL_SIGMA.comment = 触发历史重置前允许的时域噪声偏差。提高会在光照变化时更久保留历史。
+
+option.RELAX_HISTORY_RESET_SPATIAL_SIGMA = 重置空间 Sigma
+option.RELAX_HISTORY_RESET_SPATIAL_SIGMA.comment = 触发历史重置前允许的响应邻域偏差。提高可减少高噪声区域的重置。
+
+option.RELAX_HISTORY_RESET_AMOUNT = 历史重置幅度
+option.RELAX_HISTORY_RESET_AMOUNT.comment = 检测到重置时，单帧内最多由当前样本替换的历史比例。
+
+option.RELAX_HISTORY_THRESHOLD = 方差可信帧数
+option.RELAX_HISTORY_THRESHOLD.comment = 时域二阶矩不再需要空间稳定处理之前所需的历史长度。
+
+option.RELAX_SPEC_VARIANCE_BOOST = 空样本方差
+option.RELAX_SPEC_VARIANCE_BOOST.comment = 零反射样本重投影置信度较低时注入的方差，防止空间滤波器错误锁定为零方差。
+
+option.RELAX_ROUGHNESS_EDGE_RELAXATION = 粗糙边缘视线放宽
+option.RELAX_ROUGHNESS_EDGE_RELAXATION.comment = 在粗糙度边缘放宽视线方向拒绝。提高可增强降噪，但可能软化视角相关边界。
+
+option.RELAX_NORMAL_RELAXATION = 低置信度法线放宽
+option.RELAX_NORMAL_RELAXATION.comment = 重投影置信度较低时放宽法线边缘停止，帮助新显露像素更快收敛。
+
+option.RELAX_LUMINANCE_RELAXATION = 低置信度亮度放宽
+option.RELAX_LUMINANCE_RELAXATION.comment = 重投影置信度较低时放宽亮度边缘停止。提高可更快隐藏噪点，但可能模糊高光。
+
+option.RELAX_SPEC_PHI_LUMINANCE = 镜面亮度灵敏度
+option.RELAX_SPEC_PHI_LUMINANCE.comment = 缩放 À-Trous 中按方差归一化的亮度拒绝。提高会允许跨越更大亮度差进行平滑。
+
+option.RELAX_MAX_LUMINANCE_DIFFERENCE = 最大亮度拒绝
+option.RELAX_MAX_LUMINANCE_DIFFERENCE.comment = 限制亮度惩罚，避免极端 1 spp 差异让像素完全无法参与空间滤波。
+
+# ===========================================================================
+# 方差预滤波
+# ===========================================================================
+option.VAR_FILTER_KERNEL_SIGMA = 方差滤波 Sigma
+option.VAR_FILTER_KERNEL_SIGMA.comment = 空间方差池化滤波的高斯核标准差（像素）。提高可在更大邻域平滑方差估计，以精度换取稳定性。
+
+option.VAR_FILTER_HISTORY_BEGIN = 方差起始帧数
+option.VAR_FILTER_HISTORY_BEGIN.comment = 空间→时域方差过渡开始时的历史帧数。低于此值时，方差以空间邻域估计为主，用于处理冷启动。
+
+option.VAR_FILTER_HISTORY_END = 方差结束帧数
+option.VAR_FILTER_HISTORY_END.comment = 空间→时域方差过渡完成时的历史帧数。达到或超过此值时，完全信任纯时域方差估计。
+
+# ===========================================================================
+# À-Trous 降噪
+# ===========================================================================
+option.ATROUS_NORMAL_POWER = À-Trous 法线灵敏度
 option.ATROUS_NORMAL_POWER.comment = 空间滤波中的法线边缘停止强度。提高可更好保留法线贴图和轮廓边缘，但会留下更多噪点。
+
 option.ATROUS_PHI_L = À-Trous 亮度灵敏度
 option.ATROUS_PHI_L.comment = 漫反射空间滤波对亮度差异的容忍度。提高会跨越更大的光照差异进行模糊，降低则更能保留对比度。
-option.ATROUS_POSITION_PARAM = À-Trous 深度边缘灵敏度
+
+option.ATROUS_POSITION_PARAM = À-Trous 深度灵敏度
 option.ATROUS_POSITION_PARAM.comment = 空间与方差滤波使用的世界位置边缘灵敏度。提高后会更强地拒绝来自其他表面的样本。
+
 option.ATROUS_GAMMA = À-Trous 粗糙度适配
 option.ATROUS_GAMMA.comment = 控制滤波范围随粗糙度扩大的程度。0 使用固定宽度；提高后会更积极地平滑粗糙表面。
-screen.DEBUG = 调试
+
+# ===========================================================================
+# 泛光
+# ===========================================================================
+option.BLOOM_MIX = 泛光强度
+option.BLOOM_MIX.comment = 最终画面中泛光所占的混合比例。设为 0 可关闭泛光；过高会冲淡局部对比度。
+
+# ===========================================================================
+# 曝光与显示
+# ===========================================================================
+option.DISPLAY_MAX_LUMINANCE = 显示器峰值亮度
+option.DISPLAY_MAX_LUMINANCE.comment = 显示器大致的持续峰值亮度，单位为尼特，用于缩放 HDR 曝光。建议按显示设备的实际能力设置。
+
+option.DISPLAY_PAPER_WHITE_LUMINANCE = sRGB 纸白亮度
+option.DISPLAY_PAPER_WHITE_LUMINANCE.comment = 普通漫反射白色相对于显示范围的目标亮度。降低它会给高光留下更多余量，并使场景曝光看起来更亮。
+
+option.EXPOSURE_CURVE_K = 曝光曲线
+option.EXPOSURE_CURVE_K.comment = 在色调映射前压缩高光。设为 0 表示关闭；数值越高越能保留亮部细节，但高光对比度会降低。
+
+# ===========================================================================
+# 高级
+# ===========================================================================
+option.VPROJDIST_SKY = 天空虚拟距离
+option.VPROJDIST_SKY.comment = 在镜面和折射降噪器中分配给天空像素的虚拟投影距离（米）。用于标记无穷远命中，使降噪器能识别天空区域。通常无需调整。
+
+# ===========================================================================
+# 调试
+# ===========================================================================
 option.DEBUG_VIEW = 调试视图
-option.DEBUG_VIEW.comment = 使用内部光照、路径或缓存可视化替换最终画面。正常游玩时请选择“正常”。
+option.DEBUG_VIEW.comment = 使用内部光照、路径或缓存可视化替换最终画面。正常游玩时请选择"正常"。
 value.DEBUG_VIEW.0 = 正常
 value.DEBUG_VIEW.1 = 漫反射
 value.DEBUG_VIEW.2 = 折射

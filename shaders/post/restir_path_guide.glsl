@@ -20,8 +20,12 @@ uniform usampler2D colortex6; // temporal_diffuse validKernelWeight
 layout(rgba32ui) uniform writeonly uimage2D colorimg6;
 
 const uint POISSON_N = 8u;
-const float POISSON_R0 = 16.0;
-const float GUIDE_MAX_M = 64.0;
+#ifndef PATHGUIDE_SPATIAL_RADIUS
+#define PATHGUIDE_SPATIAL_RADIUS 16.0
+#endif
+#ifndef PATHGUIDE_MAX_TEMPORAL_M
+#define PATHGUIDE_MAX_TEMPORAL_M 64.0
+#endif
 
 // NRD Poisson 盘: .xy=偏移 .z=length .w=高斯权重
 const vec4 POISSON[8] = {
@@ -137,7 +141,7 @@ Reservoir spatialReservoir(uvec2 gid, vec3 centerNormal, vec3 centerPos, inout u
     ivec2 texSize = ivec2(resolution_global);
 
     float theta = 2.0 * PI * nextFloat(seed);
-    mat2 rot = mat2(cos(theta), -sin(theta), sin(theta), cos(theta)) * POISSON_R0;
+    mat2 rot = mat2(cos(theta), -sin(theta), sin(theta), cos(theta)) * PATHGUIDE_SPATIAL_RADIUS;
 
     for (uint k = 0u; k < POISSON_N; k++) {
         vec4 ps = POISSON[k];
@@ -238,7 +242,7 @@ bool sampleHistory(uvec2 gxy, inout uint seed, out StoredReservoir result) {
 void combineWithHistory(inout Reservoir r, StoredReservoir hist, float temporalConf, vec3 centerNormal, inout uint seed) {
     float targetNow = max(guideTarget(hist.y, centerNormal), 0.0);
 
-    float reusedM = min(hist.M, GUIDE_MAX_M) * clamp(temporalConf, 0.0, 1.0);
+    float reusedM = min(hist.M, PATHGUIDE_MAX_TEMPORAL_M) * clamp(temporalConf, 0.0, 1.0);
     if (reusedM <= 0.0) return;
 
     float candidateWeight = targetNow * hist.W * reusedM;
@@ -280,7 +284,7 @@ void main() {
         combineWithHistory(r, hist, temporalConf, centerNormal, seed);
     }
 
-    reservoirClampM(r, GUIDE_MAX_M);
+    reservoirClampM(r, PATHGUIDE_MAX_TEMPORAL_M);
     float W = reservoirW(r);
 
     uvec2 halfY = packAliceHalf(r.y);
