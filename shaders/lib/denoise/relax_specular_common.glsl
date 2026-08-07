@@ -82,7 +82,8 @@ struct RelaxFastSignal {
 uvec4 relaxPackSlow(RelaxSlowSignal s) {
     return uvec4(
         relaxPackHalf2(s.radiance.r, s.radiance.g),
-        relaxPackHalf2(s.radiance.b, s.secondMoment),
+        relaxPackHalf2(s.radiance.b,
+            encodeSqrtMomentFP16(s.secondMoment)),
         relaxPackHalf2(s.hitDistance, s.historyLength),
         relaxPackHalf2(s.confidence, 0.0));
 }
@@ -94,7 +95,7 @@ RelaxSlowSignal relaxUnpackSlow(uvec4 p) {
     vec2 hh = unpackHalf2x16(p.z);
     vec2 c0 = unpackHalf2x16(p.w);
     s.radiance = vec3(rg, bm.x);
-    s.secondMoment = max(bm.y, 0.0);
+    s.secondMoment = decodeSqrtMomentFP16(bm.y);
     s.hitDistance = max(hh.x, 0.0);
     s.historyLength = max(hh.y, 0.0);
     s.confidence = clamp(c0.x, 0.0, 1.0);

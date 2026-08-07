@@ -139,7 +139,8 @@ void writeRelaxSpecularHistory(uvec2 xy, RelaxSpecularHistory h) {
         h.surfacePosition, encodeNormal(h.geometryNormal));
     reflectBuffer.data[addr(SPEC_N_HISTLIGHT, xy)] = vec4(
         pack2HalfClamped(h.slowRadiance.r, h.slowRadiance.g),
-        pack2HalfClamped(h.slowRadiance.b, h.secondMoment),
+        pack2HalfClamped(h.slowRadiance.b,
+            encodeSqrtMomentFP16(h.secondMoment)),
         pack2HalfClamped(h.responsiveRadiance.r, h.responsiveRadiance.g),
         pack2HalfClamped(h.responsiveRadiance.b, h.hitDistance));
     reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)] = vec4(
@@ -169,7 +170,7 @@ RelaxSpecularHistory readRelaxSpecularHistory(uvec2 xy) {
     h.surfacePosition = g.xyz;
     h.geometryNormal = decodeNormal(g.w);
     h.slowRadiance = vec3(slowRG, slowBM2.x);
-    h.secondMoment = slowBM2.y;
+    h.secondMoment = decodeSqrtMomentFP16(slowBM2.y);
     h.responsiveRadiance = vec3(fastRG, fastBHit.x);
     h.hitDistance = fastBHit.y;
     h.roughness = roughHistory.x;

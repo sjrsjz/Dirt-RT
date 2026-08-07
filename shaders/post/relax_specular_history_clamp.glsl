@@ -45,6 +45,10 @@ void main() {
         relaxStoreClampedHistory(pixel, slow, fast);
         imageStore(colorimg9, ivec2(pixel), slow);
         imageStore(colorimg4, ivec2(pixel), relaxPackFast(fast));
+#if DEBUG_VIEW == 23
+        writeReflLight(pixel, relaxFiniteColor(slow.rgb), fast.hitDistance,
+            fast.historyLength);
+#endif
         return;
     }
 
@@ -127,4 +131,8 @@ void main() {
     relaxStoreClampedHistory(pixel, slow, fast);
     imageStore(colorimg9, ivec2(pixel), slow);
     imageStore(colorimg4, ivec2(pixel), relaxPackFast(fast));
+#if DEBUG_VIEW == 23
+    writeReflLight(pixel, relaxFiniteColor(slow.rgb), fast.hitDistance,
+        fast.historyLength);
+#endif
 }

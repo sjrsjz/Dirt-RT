@@ -156,8 +156,8 @@ void main() {
     fragColor.xyz = vec3(rough);
 
     #elif DEBUG_VIEW == 12
-    // Raw reflection incident (before specularAlbedo modulation)
-    // The denoised signal before composite multiplications — pure light field
+    // Temporally accumulated reflection incident, before every spatial stage
+    // and before specularAlbedo modulation.
     fragColor.xyz = tmp2.data_swap;
 
     #elif DEBUG_VIEW == 13
@@ -229,13 +229,17 @@ void main() {
         vec3 cacheCoord = radianceCacheWorldToVoxel(cacheSamplePos, camPos);
         if (isRadianceCacheSampleInBounds(cacheCoord)) {
             RadianceCache cache = sampleRadianceCacheHist(cacheCoord, camPos);
-            fragColor.xyz = cache.weight > 0.0
+            fragColor.xyz = radianceCacheValueValid(cache)
                 ? radianceCacheDiffuseIncident(cache, microN) : vec3(0.0);
         } else {
             fragColor.xyz = vec3(0.0);
         }
         fragColor.xyz += lightVal;
     }
+
+    #elif DEBUG_VIEW >= 23 && DEBUG_VIEW <= 30
+    // Reflection spatial-pipeline stage selected by the corresponding pass.
+    fragColor.xyz = tmp2.data_swap;
 
     #endif
 }

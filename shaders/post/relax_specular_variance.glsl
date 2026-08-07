@@ -38,6 +38,10 @@ void main() {
         sky.historyLength = 0.0;
         sky.confidence = 0.0;
         imageStore(colorimg6, ivec2(pixel), relaxPackSpatial(sky));
+#if DEBUG_VIEW == 25
+        writeReflLight(pixel, sky.radiance, sky.hitDistance,
+            sky.historyLength);
+#endif
         return;
     }
 
@@ -84,4 +88,9 @@ void main() {
     spatial.historyLength = fast.historyLength;
     spatial.confidence = fast.confidence;
     imageStore(colorimg6, ivec2(pixel), relaxPackSpatial(spatial));
+#if DEBUG_VIEW == 25
+    // Spatial preparation output before the first A-trous pass.
+    writeReflLight(pixel, relaxFiniteColor(spatial.radiance),
+        spatial.hitDistance, spatial.historyLength);
+#endif
 }

@@ -261,18 +261,49 @@ material materialFromEvaluated(Material mat, int blockID) {
     bool isPortal = blockID == BLOCK_PORTAL;
 
     float metallic = mat.metallic;
-    float trans = float(!isWater && mat.translucent > 0.9 && !isGlass);
-    trans = isPortal ? 0.25 : trans;
+
+    // albedo.a is coverage for alpha-tested geometry. The any-hit shader has
+    // already rejected uncovered texels, so using the remaining filtered alpha
+    // as physical transmission turns leaf/vine/lily-pad edges into glass.
+    // Only explicitly classified blocks may enter the transmission branch.
+    float opaqueFraction = (isWater || isGlass) ? 0.0 : 1.0;
+    opaqueFraction = isPortal ? 0.25 : opaqueFraction;
     float roughness = (isWater || isPortal) ? 0.0 : mat.roughness;
     vec3 albedo = isWater ? vec3(1.0) : mat.albedo;
-    vec3 emission = isPortal ? albedo * (1.0 - trans) : mat.emission;
-    float specSelector = (isWater || isGlass) ? 1.0 : mix(trans, 1.0, metallic);
+    vec3 emission = isPortal ? albedo * (1.0 - opaqueFraction) : mat.emission;
+    float specSelector = (isWater || isGlass)
+        ? 1.0 : mix(opaqueFraction, 1.0, metallic);
 
     return newMaterial(clamp(mat.F0, 0.0, 1.0), albedo,
-        vec2(specSelector, 1.0 - trans),
-        vec4(roughness > 0.01 ? max(roughness, 0.0125) : 0.0, trans,
+        vec2(specSelector, 1.0 - opaqueFraction),
+        vec4(roughness > 0.01 ? max(roughness, 0.0125) : 0.0, opaqueFraction,
             isWater, mat.subsurface_scattering),
         emission);
+}
+
+// The compact shadow payload reserves its block-ID byte for three special
+// transport classes, so ordinary blocks arrive as ID 0. ReLAX still needs a
+// stable discriminator. The atlas rectangle identifies the sampled sprite
+// without another payload slot, SSBO, or image.
+uint hashRelaxMaterialWord(uint x) {
+    x ^= x >> 16u;
+    x *= 0x7feb352du;
+    x ^= x >> 15u;
+    x *= 0x846ca68bu;
+    return x ^ (x >> 16u);
+}
+
+int getRelaxMaterialID(Payload pld, int transportBlockID) {
+    vec4 atlas = payload_unpackAtlasBox(pld.data);
+    uvec4 a = floatBitsToUint(atlas);
+    uint h = hashRelaxMaterialWord(a.x ^ (a.y * 0x9e3779b9u));
+    h = hashRelaxMaterialWord(h ^ a.z ^ (a.w * 0x85ebca6bu));
+
+    uint transportClass = transportBlockID == BLOCK_WATER ? 1u
+        : (transportBlockID == BLOCK_GLASS ? 2u
+        : (transportBlockID == BLOCK_PORTAL ? 3u : 0u));
+    h = hashRelaxMaterialWord(h ^ (transportClass * 0x27d4eb2du));
+    return int(h & 0xffffu);
 }
 
 vec3 evaluateNonSpecularAlbedo(material surf, vec3 rd_i, vec3 macroNormal) {
@@ -286,9 +317,21 @@ vec3 evaluateDiffuseAlbedo(material surf, vec3 rd_i, vec3 macroNormal) {
         * (1.0 - clamp(surf.S.y, 0.0, 1.0));
 }
 
-vec3 evaluateSpecularAlbedo(material surf, vec3 rd_i, vec3 macroNormal) {
+vec3 evaluateSpecularAlbedo(
+    material surf, vec3 rd_i, vec3 macroNormal, float etaRatio
+) {
     float NoV = clamp(abs(dot(rd_i, macroNormal)), 0.0, 1.0);
-    vec3 F0 = surf.Cs * surf.S.x;
+    float transmissionSelector = clamp(surf.S.y, 0.0, 1.0);
+    float etaDenominator = max(abs(1.0 + etaRatio), 1e-4);
+    float dielectricF0 = (1.0 - etaRatio) / etaDenominator;
+    dielectricF0 *= dielectricF0;
+
+    // Match evaluateSurfaceFresnel(): opaque/metallic lobes use LabPBR F0,
+    // while transmissive interfaces use IOR Fresnel and reach one at grazing.
+    // The old mismatch could divide a ~4% glass reflection by 1e-5.
+    vec3 F0 = mix(surf.Cs * surf.S.x, vec3(dielectricF0),
+        transmissionSelector);
+    float grazingScale = mix(surf.S.x, 1.0, transmissionSelector);
     vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
     vec4 c1 = vec4(1.0, 0.0425, 1.040, -0.040);
     // The split-sum fit is parameterized by perceptual roughness, while R.x
@@ -297,7 +340,9 @@ vec3 evaluateSpecularAlbedo(material surf, vec3 rd_i, vec3 macroNormal) {
     vec4 r = fma(vec4(perceptualRoughness), c0, c1);
     float a004 = min(r.x * r.x, exp2(-9.28 * NoV)) * r.x + r.y;
     vec2 AB = fma(vec2(-1.04, 1.04), vec2(a004), r.zw);
-    return max(F0 * AB.x + vec3(AB.y * surf.S.x), vec3(1e-5));
+    vec3 response = F0 * AB.x + vec3(AB.y * grazingScale);
+    if (any(isnan(response)) || any(isinf(response))) return vec3(1e-5);
+    return clamp(response, vec3(1e-5), vec3(1.0));
 }
 
 vec3 reproject(vec3 worldPos) {
@@ -929,7 +974,7 @@ bool loadSecondaryRadianceCache(
     RadianceCacheAddress address = findRadianceCacheAddress(samplePosition);
     if (!radianceCacheAddressHasHistory(address, cam.frameId)) return false;
     cache = loadRadianceCachePlanes(
-        address, RC_PLANE_HISTORY_0, RC_PLANE_HISTORY_1);
+        address, RC_PLANE_FILTERED_0, RC_PLANE_FILTERED_1);
     return radianceCacheValueValid(cache);
 }
 
@@ -956,7 +1001,7 @@ vec3 evaluateCachedRoughSpecularLighting(
     vec3 incidentResponse = radianceCacheDiffuseIncident(
         cache, dominantDirection);
     vec3 specularAlbedo = evaluateSpecularAlbedo(
-        surf, rd_i, macroNormal);
+        surf, rd_i, macroNormal, 1.0 / REFRACTIVE_INDEX);
     return incidentResponse * specularAlbedo / max(lobes.P_spec, 1e-5);
 }
 
@@ -1013,7 +1058,8 @@ void recordFirstBounceGBuffer(
     fb.roughness = surf.R.x;
     fb.absorption = currentAbsorption;
 
-    fb.specularAlbedo = evaluateSpecularAlbedo(surf, rd_i, macroNormal);
+    fb.specularAlbedo = evaluateSpecularAlbedo(
+        surf, rd_i, macroNormal, n_i / max(n_o, 1e-5));
     float transmissionSelector = clamp(surf.S.y, 0.0, 1.0);
     vec3 nonSpecularAlbedo = evaluateNonSpecularAlbedo(surf, rd_i, macroNormal);
     fb.diffuseAlbedo = nonSpecularAlbedo * (1.0 - transmissionSelector);
@@ -1056,7 +1102,12 @@ void writeReflectionOutput(uvec2 xy, FirstBounceData fb, vec3 totalIllumination,
     float refl_vprojdist = fb.reflectionHitDistance;
     vec3 refl_color = vec3(0.0);
     if (fb.t > -0.5) {
-        refl_color = clamp(totalIllumination / max(fb.specularAlbedo, vec3(1e-6)), 0.0, 200.0 * div_avgExposure);
+        vec3 demodulated = totalIllumination /
+            max(fb.specularAlbedo, vec3(1e-5));
+        if (!any(isnan(demodulated)) && !any(isinf(demodulated))) {
+            refl_color = clamp(demodulated, 0.0,
+                200.0 * div_avgExposure);
+        }
     }
     writeReflGeo(xy, pos_rel, refl_R);
     writeReflLight(xy, refl_color, refl_vprojdist, 0.0);
@@ -1125,6 +1176,11 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         int blockID;
         payload_unpackShadow(tmp_Payload.data, blockID);
         material surf = materialFromEvaluated(surfaceMat, blockID);
+        // tmp_Payload is shared by every trace issued by this invocation.
+        // Freeze the primary-surface signature before PSR or sun NEE can
+        // replace it with a secondary/shadow-hit payload. Otherwise material
+        // continuity follows sun visibility and RELAX rejects valid history.
+        int relaxMaterialID = getRelaxMaterialID(tmp_Payload, blockID);
         vec3 microNormal = GGXNormal(macroNormal, surf.R.x, ro_o);
         float n_i = inside ? REFRACTIVE_INDEX : 1.0;
         float n_o = inside ? 1.0 : REFRACTIVE_INDEX;
@@ -1194,7 +1250,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
         // --- Record G-Buffer ---
         recordFirstBounceGBuffer(ro_o, ro, macroNormal, geometryNormal, microNormal,
-            surf, blockID, rd_i, next_rd, t, n_i,
+            surf, relaxMaterialID, rd_i, next_rd, t, n_i,
             (current_type == REFRACTION) ? n_o : n_i,
             current_type, medium.emission,
             medium.absorption, fb);

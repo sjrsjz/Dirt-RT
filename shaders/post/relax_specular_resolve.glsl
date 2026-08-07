@@ -10,8 +10,15 @@ uniform usampler2D colortex5;
 void main() {
     uvec2 pixel = gl_GlobalInvocationID.xy;
     if (any(greaterThanEqual(pixel, resolution_global))) return;
+
+#if DEBUG_VIEW == 12 || (DEBUG_VIEW >= 23 && DEBUG_VIEW <= 30)
+    // A selected diagnostic stage stored its output in N=1.  Do not overwrite
+    // it with the final spatially filtered result from colortex5.
+    return;
+#else
     RelaxSpatialSignal signal = relaxUnpackSpatial(
         texelFetch(colortex5, ivec2(pixel), 0));
     writeReflLight(pixel, relaxFiniteColor(signal.radiance),
         signal.hitDistance, signal.historyLength);
+#endif
 }

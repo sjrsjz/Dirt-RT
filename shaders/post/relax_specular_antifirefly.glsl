@@ -18,6 +18,10 @@ void main() {
 
     if (centerFast.confidence <= 0.0 || RELAX_ANTIFIREFLY_ENABLE == 0) {
         imageStore(colorimg3, ivec2(pixel), center);
+#if DEBUG_VIEW == 24
+        writeReflLight(pixel, relaxFiniteColor(center.rgb),
+            centerFast.hitDistance, centerFast.historyLength);
+#endif
         return;
     }
 
@@ -52,4 +56,8 @@ void main() {
         if (centerLuminance < minLuminance) outputColor = minColor;
     }
     imageStore(colorimg3, ivec2(pixel), vec4(outputColor, center.a));
+#if DEBUG_VIEW == 24
+    writeReflLight(pixel, relaxFiniteColor(outputColor),
+        centerFast.hitDistance, centerFast.historyLength);
+#endif
 }

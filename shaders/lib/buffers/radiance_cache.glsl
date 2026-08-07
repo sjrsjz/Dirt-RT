@@ -20,6 +20,9 @@
 #ifndef RADIANCE_CACHE_MAX_HIST
 #define RADIANCE_CACHE_MAX_HIST 32.0
 #endif
+#ifndef RADIANCE_CACHE_FILTER_MAX_HIST
+#define RADIANCE_CACHE_FILTER_MAX_HIST 8.0
+#endif
 #define RADIANCE_CACHE_BRICK_WORLD_SIZE (float(RADIANCE_CACHE_BRICK_SIZE) * VOXEL_SIZE)
 #define RADIANCE_CACHE_BRICKS_X (RADIANCE_CACHE_W / RADIANCE_CACHE_BRICK_SIZE)
 #define RADIANCE_CACHE_BRICKS_Y (RADIANCE_CACHE_H / RADIANCE_CACHE_BRICK_SIZE)
@@ -65,13 +68,13 @@
 #define RC_MISSING_BUCKET_OFFSET (RC_DISTANCE_BUCKET_OFFSET + uint(RADIANCE_CACHE_DISTANCE_BUCKET_COUNT))
 #define RC_VOXELS_PER_BRICK 64u
 #define RC_VEC4_WORDS 4u
-#define RC_PLANES_PER_VOXEL 4u
+#define RC_PLANES_PER_VOXEL 6u
 #define RC_PLANE_WORDS (RC_VOXELS_PER_BRICK * RC_VEC4_WORDS)
 #define RC_POOL_SLOT_WORDS (RC_PLANES_PER_VOXEL * RC_PLANE_WORDS)
 #define RC_POOL_DATA_OFFSET (RC_MISSING_BUCKET_OFFSET + uint(RADIANCE_CACHE_DISTANCE_BUCKET_COUNT))
 #define RC_TOTAL_WORDS (RC_POOL_DATA_OFFSET + uint(RADIANCE_CACHE_POOL_CAPACITY) * RC_POOL_SLOT_WORDS)
 
-#define RC_MAGIC 0x52435035u
+#define RC_MAGIC 0x52435036u
 #define RC_INVALID_TOKEN 0xffffffffu
 #define RC_TOMBSTONE_TOKEN 0xfffffffeu
 #define RC_LOCKED_TOKEN 0xfffffffdu
@@ -91,9 +94,14 @@
 #define RC_PLANE_CURRENT_1 1u
 #define RC_PLANE_HISTORY_0 2u
 #define RC_PLANE_HISTORY_1 3u
+#define RC_PLANE_FILTERED_0 4u
+#define RC_PLANE_FILTERED_1 5u
 
 struct RGBAliceEncoding { vec4 aliceR; vec4 aliceG; vec4 aliceB; };
-struct RadianceCache { RGBAliceEncoding alice; float weight; };
+// History stores a temporal RIS reservoir: alice is the raw selected sample,
+// W is the reciprocal-proposal normalization, and M is the represented sample
+// count. Current-frame probes are unit reservoirs (W=1, M=1).
+struct RadianceCache { RGBAliceEncoding alice; float W; float M; };
 struct PackedRadianceCache { vec4 word0; vec4 word1; };
 struct RadianceCacheAddress { uint token; uint slot; uint localIndex; };
 
@@ -129,12 +137,14 @@ vec3 project_rgb_alice_irradiance(RGBAliceEncoding e, vec3 n) {
 }
 vec3 radianceCacheDiffuseIncident(RadianceCache cache, vec3 n) {
     // Cache rays estimate a uniform-sphere average. Multiplying the cosine
-    // projection by four converts it to E/pi, ready for a diffuse albedo.
-    return 4.0 * project_rgb_alice_irradiance(cache.alice, n);
+    // projection by four converts it to E/pi, ready for a diffuse albedo. The
+    // reservoir stores its selected sample unscaled, so apply W exactly once.
+    return (4.0 * cache.W) * project_rgb_alice_irradiance(cache.alice, n);
 }
 bool radianceCacheValueValid(RadianceCache cache) {
-    return cache.weight > 0.0
-        && !isnan(cache.weight) && !isinf(cache.weight)
+    return cache.W > 0.0 && cache.M > 0.0
+        && !isnan(cache.W) && !isinf(cache.W)
+        && !isnan(cache.M) && !isinf(cache.M)
         && !any(isnan(cache.alice.aliceR)) && !any(isinf(cache.alice.aliceR))
         && !any(isnan(cache.alice.aliceG)) && !any(isinf(cache.alice.aliceG))
         && !any(isnan(cache.alice.aliceB)) && !any(isinf(cache.alice.aliceB));
@@ -145,7 +155,8 @@ vec4 rgb_alice_luminance(RGBAliceEncoding e) {
 RadianceCache emptyCache() {
     RadianceCache rc;
     rc.alice.aliceR = vec4(0.0); rc.alice.aliceG = vec4(0.0); rc.alice.aliceB = vec4(0.0);
-    rc.weight = 0.0;
+    rc.W = 0.0;
+    rc.M = 0.0;
     return rc;
 }
 PackedRadianceCache packRadianceCache(RadianceCache rc) {
@@ -154,7 +165,7 @@ PackedRadianceCache packRadianceCache(RadianceCache rc) {
         packHalf2x16(rc.alice.aliceR.xy), packHalf2x16(rc.alice.aliceR.zw),
         packHalf2x16(rc.alice.aliceG.xy), packHalf2x16(rc.alice.aliceG.zw)));
     p.word1 = vec4(uintBitsToFloat(packHalf2x16(rc.alice.aliceB.xy)),
-        uintBitsToFloat(packHalf2x16(rc.alice.aliceB.zw)), rc.weight, 0.0);
+        uintBitsToFloat(packHalf2x16(rc.alice.aliceB.zw)), rc.W, rc.M);
     return p;
 }
 RadianceCache unpackRadianceCache(vec4 word0, vec4 word1) {
@@ -163,7 +174,8 @@ RadianceCache unpackRadianceCache(vec4 word0, vec4 word1) {
     rc.alice.aliceR = vec4(unpackHalf2x16(p.x), unpackHalf2x16(p.y));
     rc.alice.aliceG = vec4(unpackHalf2x16(p.z), unpackHalf2x16(p.w));
     rc.alice.aliceB = vec4(unpackHalf2x16(floatBitsToUint(word1.x)), unpackHalf2x16(floatBitsToUint(word1.y)));
-    rc.weight = word1.z;
+    rc.W = word1.z;
+    rc.M = word1.w;
     return rc;
 }
 
@@ -353,8 +365,9 @@ bool allocateRadianceCacheBrick(ivec3 worldBrick, uint frameStamp) {
     rcStore(rcMetaAddress(slot, RC_META_KEY_Z), uint(worldBrick.z));
     rcStore(rcMetaAddress(slot, RC_META_MAP_INDEX), insertionIndex);
     rcStore(rcMetaAddress(slot, RC_META_TOKEN), newToken);
-    // ray4 overwrites every current voxel. Temporal treats history as empty on
-    // this birth frame, so recycling never needs a 1024-word payload clear.
+    // ray4 overwrites every current voxel. Temporal treats both RIS and
+    // filtered history as empty on this birth frame, so recycling never needs
+    // a full payload clear.
     rcStore(rcMetaAddress(slot, RC_META_BIRTH_FRAME), frameStamp);
     rcStore(rcMetaAddress(slot, RC_META_PIN_FRAME), frameStamp);
     rcStore(rcMapAddress(insertionIndex, 0u), uint(worldBrick.x));
@@ -554,11 +567,11 @@ RadianceCacheAddress radianceCacheAddressForPoolVoxel(
 }
 RadianceCache loadRadianceCacheHistWorld(vec3 worldPos) {
     return loadRadianceCachePlanes(findRadianceCacheAddress(worldPos),
-        RC_PLANE_HISTORY_0, RC_PLANE_HISTORY_1);
+        RC_PLANE_FILTERED_0, RC_PLANE_FILTERED_1);
 }
 RadianceCache loadRadianceCacheHist(uvec3 voxelCoord, vec3 cameraPosition) {
     return loadRadianceCachePlanes(radianceCacheAddressForVoxel(voxelCoord, cameraPosition),
-        RC_PLANE_HISTORY_0, RC_PLANE_HISTORY_1);
+        RC_PLANE_FILTERED_0, RC_PLANE_FILTERED_1);
 }
 RadianceCache sampleRadianceCacheHist(vec3 voxelCoord, vec3 cameraPosition) {
     ivec3 nearest = ivec3(floor(voxelCoord + 0.5));

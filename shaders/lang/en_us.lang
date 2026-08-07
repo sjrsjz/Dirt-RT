@@ -102,8 +102,11 @@ option.RADIANCE_CACHE_DIFFUSE_MIN_BOUNCE.comment = First path bounce allowed to 
 option.VOXEL_SIZE = Cache Voxel Size
 option.VOXEL_SIZE.comment = Edge length of a single radiance-cache voxel in world units. Smaller voxels increase spatial precision and capture finer lighting detail, but require more bricks and memory to cover the same volume.
 
-option.RADIANCE_CACHE_MAX_HIST = Cache Max History
-option.RADIANCE_CACHE_MAX_HIST.comment = Maximum temporal history frames blended per cache voxel. Higher values produce smoother irradiance estimates but respond more slowly to lighting changes such as moving light sources or broken/placed blocks.
+option.RADIANCE_CACHE_MAX_HIST = Cache RIS Max M
+option.RADIANCE_CACHE_MAX_HIST.comment = Maximum effective candidate count retained by each voxel's temporal RIS reservoir. Higher values reuse important bright samples longer; lower values react faster when lighting or geometry changes.
+
+option.RADIANCE_CACHE_FILTER_MAX_HIST = Cache Smoothing Frames
+option.RADIANCE_CACHE_FILTER_MAX_HIST.comment = Short temporal smoothing applied after RIS. Higher values reduce stochastic reservoir replacement flicker; lower values react faster and reduce lighting trails. This filtered result is used for lighting, recursive feedback and cache path guiding.
 
 # ===========================================================================
 # Temporal Filter
@@ -300,7 +303,7 @@ value.DEBUG_VIEW.8 = Refl. Direction
 value.DEBUG_VIEW.9 = Refl. HitDist
 value.DEBUG_VIEW.10 = Specular Albedo
 value.DEBUG_VIEW.11 = Roughness
-value.DEBUG_VIEW.12 = Refl. Incident
+value.DEBUG_VIEW.12 = Refl. Temporal Only
 value.DEBUG_VIEW.13 = Diffuse Weight
 value.DEBUG_VIEW.14 = Reflect Weight
 value.DEBUG_VIEW.15 = Refract Weight
@@ -311,3 +314,11 @@ value.DEBUG_VIEW.19 = Refr. VirtDist
 value.DEBUG_VIEW.20 = Path Guide
 value.DEBUG_VIEW.21 = Temporal Raw
 value.DEBUG_VIEW.22 = Radiance Cache
+value.DEBUG_VIEW.23 = Refl. History Clamp
+value.DEBUG_VIEW.24 = Refl. Anti-firefly
+value.DEBUG_VIEW.25 = Refl. Spatial Prep
+value.DEBUG_VIEW.26 = Refl. A-trous 1
+value.DEBUG_VIEW.27 = Refl. A-trous 2
+value.DEBUG_VIEW.28 = Refl. A-trous 4
+value.DEBUG_VIEW.29 = Refl. A-trous 8
+value.DEBUG_VIEW.30 = Refl. A-trous 16

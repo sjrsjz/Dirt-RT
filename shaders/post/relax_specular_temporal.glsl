@@ -211,6 +211,10 @@ void main() {
         noisy.confidence = 0.0;
         imageStore(colorimg4, ivec2(pixel), relaxPackSlow(slow));
         imageStore(colorimg5, ivec2(pixel), relaxPackFast(noisy));
+#if DEBUG_VIEW == 12
+        writeReflLight(pixel, slow.radiance, slow.hitDistance,
+            slow.historyLength);
+#endif
         return;
     }
 
@@ -319,4 +323,11 @@ void main() {
             (1.0 - outputSlow.confidence);
     imageStore(colorimg4, ivec2(pixel), relaxPackSlow(outputSlow));
     imageStore(colorimg5, ivec2(pixel), relaxPackFast(outputFast));
+#if DEBUG_VIEW == 12
+    // Preserve the temporal-only result in ReflectBuffer N=1.  The later
+    // RELAX passes may still execute, but resolve leaves this value untouched
+    // in debug view 12, so no spatial stage contributes to the visualization.
+    writeReflLight(pixel, relaxFiniteColor(outputSlow.radiance),
+        outputSlow.hitDistance, outputSlow.historyLength);
+#endif
 }

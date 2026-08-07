@@ -102,8 +102,11 @@ option.RADIANCE_CACHE_DIFFUSE_MIN_BOUNCE.comment = 漫反射路径允许进入�
 option.VOXEL_SIZE = 缓存体素尺寸
 option.VOXEL_SIZE.comment = 单个辐射率缓存体素的边长（世界单位）。数值越小空间精度越高，可捕获更精细的光照细节，但覆盖相同体积需要更多体素块和内存。
 
-option.RADIANCE_CACHE_MAX_HIST = 缓存最大历史
-option.RADIANCE_CACHE_MAX_HIST.comment = 每个缓存体素混合的最大时域历史帧数。数值越高辐照度越平滑，但对光照变化（如移动光源、放置/破坏方块）的响应越慢。
+option.RADIANCE_CACHE_MAX_HIST = 缓存 RIS 最大 M
+option.RADIANCE_CACHE_MAX_HIST.comment = 每个缓存体素的时域 RIS Reservoir 最多保留的有效候选数。数值越高越容易长期复用重要亮样本；数值越低，对光照或几何变化的响应越快。
+
+option.RADIANCE_CACHE_FILTER_MAX_HIST = 缓存平滑帧数
+option.RADIANCE_CACHE_FILTER_MAX_HIST.comment = RIS 之后使用的短历史时域平滑长度。数值越高越能压制 Reservoir 随机替换造成的闪烁；数值越低响应越快、光照拖影越少。实际光照、递归反馈和缓存路径引导均读取该平滑结果。
 
 # ===========================================================================
 # 时域滤波
@@ -300,7 +303,7 @@ value.DEBUG_VIEW.8 = 反射方向
 value.DEBUG_VIEW.9 = 反射命中距离
 value.DEBUG_VIEW.10 = 镜面反照率
 value.DEBUG_VIEW.11 = 粗糙度
-value.DEBUG_VIEW.12 = 反射入射光
+value.DEBUG_VIEW.12 = 反射仅时域
 value.DEBUG_VIEW.13 = 漫反射历史权重
 value.DEBUG_VIEW.14 = 反射历史权重
 value.DEBUG_VIEW.15 = 折射历史权重
@@ -311,3 +314,11 @@ value.DEBUG_VIEW.19 = 折射虚拟距离
 value.DEBUG_VIEW.20 = 路径引导
 value.DEBUG_VIEW.21 = 时域累积原始
 value.DEBUG_VIEW.22 = 辐射率缓存
+value.DEBUG_VIEW.23 = 反射历史钳制
+value.DEBUG_VIEW.24 = 反射抗萤火虫
+value.DEBUG_VIEW.25 = 反射空间准备
+value.DEBUG_VIEW.26 = 反射 A-trous 1
+value.DEBUG_VIEW.27 = 反射 A-trous 2
+value.DEBUG_VIEW.28 = 反射 A-trous 4
+value.DEBUG_VIEW.29 = 反射 A-trous 8
+value.DEBUG_VIEW.30 = 反射 A-trous 16

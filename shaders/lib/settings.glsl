@@ -35,7 +35,8 @@
 #define RADIANCE_CACHE_ROUGH_SPECULAR_THRESHOLD 0.35 // PSR-style cascaded roughness required before a secondary specular lobe may terminate into the cache. Lower values are faster; higher values preserve sharper reflections. [0.15 0.2 0.25 0.3 0.35 0.4 0.5 0.6 0.8]
 #define RADIANCE_CACHE_DIFFUSE_MIN_BOUNCE 3 // First path bounce at which a diffuse surface may terminate into the cache. Higher values reduce cache artifacts but trace more rays. [2 3 4 5 6]
 #define VOXEL_SIZE 1.0 // Radiance-cache voxel size in world units. Lower values increase spatial precision at the cost of memory and fill rate. [0.5 0.75 1.0 1.5 2.0]
-#define RADIANCE_CACHE_MAX_HIST 32.0 // Maximum temporal history frames blended per cache voxel. Higher = smoother irradiance, more ghosting under lighting change. [4.0 8.0 16.0 24.0 32.0 48.0 64.0 96.0 128.0]
+#define RADIANCE_CACHE_MAX_HIST 32.0 // Maximum effective sample count M retained by each cache voxel's temporal RIS reservoir. Higher values reuse bright samples longer; lower values respond faster to lighting changes. [4.0 8.0 16.0 24.0 32.0 48.0 64.0 96.0 128.0]
+#define RADIANCE_CACHE_FILTER_MAX_HIST 16.0 // Short temporal smoothing length applied after RIS. Higher values reduce reservoir replacement flicker; lower values react faster and ghost less. [1.0 2.0 3.0 4.0 6.0 8.0 12.0 16.0 24.0 32.0]
 
 // -- NRD-inspired low-weight blend (buffer_swap_diffuse.glsl) --
 #define NRD_BLEND_STRENGTH 1.0 // Spatial filter blend strength at low temporal confidence. Blends the large-radius spatial result back into history when frame accumulation is insufficient. 0 = off. [0.0 0.1 0.25 0.5 0.75 1.0 1.25 1.5 2.0 3.0 4.0 5.0]
@@ -80,7 +81,7 @@
 #define RELAX_ROUGHNESS_EDGE_RELAXATION 0.3 // View-vector edge relaxation. [0.0 0.1 0.2 0.3 0.5 0.75 1.0]
 #define RELAX_NORMAL_RELAXATION 0.5 // Low-confidence normal relaxation. [0.0 0.25 0.5 0.75 1.0]
 #define RELAX_LUMINANCE_RELAXATION 0.5 // Low-confidence luminance relaxation. [0.0 0.25 0.5 0.75 1.0]
-#define RELAX_SPEC_PHI_LUMINANCE 1.0 // Variance-normalized luminance sensitivity. [0.25 0.5 0.75 1.0 1.5 2.0 3.0]
+#define RELAX_SPEC_PHI_LUMINANCE 3.0 // Variance-normalized luminance sensitivity. [0.25 0.5 0.75 1.0 1.5 2.0 3.0 4.0 5.0 6.0 8.0 10.0]
 #define RELAX_MAX_LUMINANCE_DIFFERENCE 2.0 // Relative luminance rejection clamp. [0.5 1.0 1.5 2.0 3.0 4.0 8.0]
 
 // -- Variance prefilter (before A-Trous denoiser) --
@@ -108,7 +109,7 @@
 #define VPROJDIST_SKY 60000.0 // Virtual projected distance assigned to sky hits (m). Used by specular/refraction denoiser to tag infinity. [5000.0 10000.0 25000.0 50000.0 60000.0 100000.0 250000.0]
 
 // -- Debug view --
-#define DEBUG_VIEW 0 // Debug output mode. 0=Normal 1=Diffuse 2=Refract 3=Reflect 4=WhiteModel 5=LightField 6=Normals 7=Absorption 8=ReflDir 9=ReflDist 10=SpecAlbedo 11=Roughness 12=ReflRaw 13=DiffuseWeight 14=ReflectWeight 15=RefractWeight 16=SurfaceEmission 17=MediumEmission 18=DiffuseAlbedo 19=RefrVProjDist 20=PathGuide 21=TemporalRaw 22=RadianceCache [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22]
+#define DEBUG_VIEW 0 // Debug output mode. 0=Normal 1=Diffuse 2=Refract 3=Reflect 4=WhiteModel 5=LightField 6=Normals 7=Absorption 8=ReflDir 9=ReflDist 10=SpecAlbedo 11=Roughness 12=ReflTemporalOnly 13=DiffuseWeight 14=ReflectWeight 15=RefractWeight 16=SurfaceEmission 17=MediumEmission 18=DiffuseAlbedo 19=RefrVProjDist 20=PathGuide 21=TemporalRaw 22=RadianceCache 23=ReflHistoryClamp 24=ReflAntiFirefly 25=ReflSpatialPrep 26=ReflAtrous1 27=ReflAtrous2 28=ReflAtrous4 29=ReflAtrous8 30=ReflAtrous16 [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30]
 
 /*
 const int depthtex0Format = RGBA32F;

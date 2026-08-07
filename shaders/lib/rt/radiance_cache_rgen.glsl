@@ -13,7 +13,7 @@ RadianceCache samplePreviousRadianceCache(vec3 worldPos) {
     if (!isRadianceCacheSampleInBounds(voxelCoord)) return emptyCache();
     RadianceCacheAddress address = findRadianceCacheAddress(worldPos);
     if (!radianceCacheAddressHasHistory(address, cam.frameId)) return emptyCache();
-    return loadRadianceCachePlanes(address, RC_PLANE_HISTORY_0, RC_PLANE_HISTORY_1);
+    return loadRadianceCachePlanes(address, RC_PLANE_FILTERED_0, RC_PLANE_FILTERED_1);
 }
 
 GuideInfo computeRadianceCacheGuide(vec3 worldPos) {
@@ -24,12 +24,13 @@ GuideInfo computeRadianceCacheGuide(vec3 worldPos) {
     guide.valid = false;
 
     RadianceCache previous = samplePreviousRadianceCache(worldPos);
-    vec4 luminanceAlice = rgb_alice_luminance(previous.alice);
+    if (!radianceCacheValueValid(previous)) return guide;
+    vec4 luminanceAlice = rgb_alice_luminance(previous.alice) * previous.W;
     vec3 directionalEnergy = luminanceAlice.xyz;
     float directionalLength = length(directionalEnergy);
     float totalEnergy = max(luminanceAlice.w, directionalLength);
 
-    if (previous.weight <= 0.0 || directionalLength <= 1e-8 || totalEnergy <= 1e-8) {
+    if (directionalLength <= 1e-8 || totalEnergy <= 1e-8) {
         return guide;
     }
 
@@ -182,7 +183,8 @@ void main() {
 
     RadianceCache result;
     result.alice = radiance_to_rgb_alice(radiance, rayDirection);
-    result.weight = 1.0;
+    result.W = 1.0;
+    result.M = 1.0;
     storeRadianceCachePlanes(
         poolAddress, RC_PLANE_CURRENT_0, RC_PLANE_CURRENT_1, result);
 }
