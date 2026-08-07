@@ -354,7 +354,8 @@ struct FirstBounceData {
     vec3 specularAlbedo, diffuseAlbedo, transmissionAlbedo;
     vec3 emission_val, light_surf, absorption;
     float t, roughness, n_i, n_o, t2_ior_adjusted, pathRoughness;
-    int type;
+    float reflectionHitDistance;
+    int type, materialID;
 };
 
 // ===========================================================================
@@ -983,13 +984,15 @@ FirstBounceData initFirstBounceData(vec3 ro, vec3 rd) {
     fb.n_o = 1.0;
     fb.t2_ior_adjusted = 0.0;
     fb.pathRoughness = 0.0;
+    fb.reflectionHitDistance = 0.0;
     fb.type = -1;
+    fb.materialID = 0;
     return fb;
 }
 
 void recordFirstBounceGBuffer(
     vec3 ro_o, vec3 ro, vec3 macroNormal, vec3 geometryNormal, vec3 microNormal,
-    material surf, vec3 rd_i, vec3 next_rd, float t,
+    material surf, int materialID, vec3 rd_i, vec3 next_rd, float t,
     float n_i, float n_o, int lobeType, vec3 segmentEmission,
     vec3 currentAbsorption, inout FirstBounceData fb
 ) {
@@ -999,6 +1002,7 @@ void recordFirstBounceGBuffer(
     fb.micro_n = microNormal;
     fb.t = t;
     fb.type = lobeType;
+    fb.materialID = materialID;
     fb.n_i = n_i;
     fb.n_o = n_o;
     fb.rd_i = rd_i;
@@ -1019,7 +1023,9 @@ void writeDiffuseOutput(uvec2 xy, FirstBounceData fb, vec3 L_indirect,
     vec3 L_direct_0, vec3 L_direct_0_dir, vec3 ro) {
     vec3 pos_rel = fb.p - ro;
     writeGeo0(GEO_N_GEO, xy, pos_rel, fb.t);
-    writeGeo1(GEO_N_NORMALS, xy, fb.geometry_n, fb.roughness, fb.type, fb.roughness);
+    // Stable material continuity is required by RELAX. The previous first-lobe
+    // value in this slot was never consumed by composition.
+    writeGeo1(GEO_N_NORMALS, xy, fb.geometry_n, fb.roughness, fb.materialID, fb.roughness);
     writeMicroNormal(GEO_N_MICRONORMAL, xy, fb.macro_n);
     writeAlbedosPath(GEO_N_ALBEDOS, xy, fb.specularAlbedo, fb.diffuseAlbedo);
     writeMisc(GEO_N_MISC, xy, fb.transmissionAlbedo, fb.emission_val, fb.rd_i);
@@ -1045,17 +1051,10 @@ void writeDiffuseOutput(uvec2 xy, FirstBounceData fb, vec3 L_indirect,
 
 void writeReflectionOutput(uvec2 xy, FirstBounceData fb, vec3 totalIllumination, vec3 ro) {
     vec3 pos_rel = fb.p - ro;
-    vec3 refl_R = fb.rd_i;
-    float refl_vprojdist = 0.0;
+    vec3 refl_R = fb.rd_o;
+    float refl_vprojdist = fb.reflectionHitDistance;
     vec3 refl_color = vec3(0.0);
     if (fb.t > -0.5) {
-        vec3 r_rd_i = GetSpecularDominantDirection(
-            fb.macro_n, fb.rd_i,
-            sqrt(clamp(fb.roughness, 0.0, 1.0)));
-        vec3 r_ro, r_rd;
-        float t_refl = raycast(fb.p + fb.geometry_n * 0.00025, r_rd_i, r_ro, r_rd, false, false);
-        refl_R = r_rd_i;
-        refl_vprojdist = (t_refl > -0.5) ? t_refl : VPROJDIST_SKY;
         refl_color = clamp(totalIllumination / max(fb.specularAlbedo, vec3(1e-6)), 0.0, 200.0 * div_avgExposure);
     }
     writeReflGeo(xy, pos_rel, refl_R);
@@ -1194,7 +1193,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
         // --- Record G-Buffer ---
         recordFirstBounceGBuffer(ro_o, ro, macroNormal, geometryNormal, microNormal,
-            surf, rd_i, next_rd, t, n_i,
+            surf, blockID, rd_i, next_rd, t, n_i,
             (current_type == REFRACTION) ? n_o : n_i,
             current_type, medium.emission,
             medium.absorption, fb);
@@ -1216,6 +1215,11 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         for (int depth = 1; depth < MaxRay; depth++) {
             // --- Ray cast ---
             float t2 = raycast(ro_i, rd_i, ro_o, rd_o, !inside, false);
+
+            // Distance of the actual noisy specular sample. This replaces the
+            // unrelated extra ray previously traced along a fitted direction.
+            if (depth == 1)
+                fb.reflectionHitDistance = (t2 > -0.5) ? t2 : VPROJDIST_SKY;
 
             // --- Miss -> sky ---
             if (t2 < -0.5) {

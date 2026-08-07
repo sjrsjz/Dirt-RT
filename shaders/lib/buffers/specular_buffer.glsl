@@ -17,6 +17,20 @@
 #define SPEC_N_LIGHT     1u
 #define SPEC_N_HISTGEO   2u
 #define SPEC_N_HISTLIGHT 3u
+#define SPEC_N_HISTMETA  4u
+
+struct RelaxSpecularHistory {
+    vec3 surfacePosition;
+    vec3 geometryNormal;
+    vec3 slowRadiance;
+    float secondMoment;
+    vec3 responsiveRadiance;
+    float hitDistance;
+    float roughness;
+    float historyLength;
+    uint materialID;
+    float reprojectionConfidence;
+};
 
 // --- N=0: Current Geometry + Direction ---
 void writeReflGeo(uvec2 xy, vec3 pos, vec3 R) {
@@ -116,6 +130,66 @@ void readRefrHistLight(uvec2 xy, out vec3 color, out float vprojDist, out float 
     color     = vec3(rg.x, rg.y, bv.x);
     vprojDist = bv.y;
     weight    = v.z;
+}
+
+// Reflection-only RELAX history. Five tiled virtual images share binding 3;
+// refraction continues to use the four legacy images above.
+void writeRelaxSpecularHistory(uvec2 xy, RelaxSpecularHistory h) {
+    reflectBuffer.data[addr(SPEC_N_HISTGEO, xy)] = vec4(
+        h.surfacePosition, encodeNormal(h.geometryNormal));
+    reflectBuffer.data[addr(SPEC_N_HISTLIGHT, xy)] = vec4(
+        pack2HalfClamped(h.slowRadiance.r, h.slowRadiance.g),
+        pack2HalfClamped(h.slowRadiance.b, h.secondMoment),
+        pack2HalfClamped(h.responsiveRadiance.r, h.responsiveRadiance.g),
+        pack2HalfClamped(h.responsiveRadiance.b, h.hitDistance));
+    reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)] = vec4(
+        pack2HalfClamped(h.roughness, h.historyLength),
+        float(h.materialID), h.reprojectionConfidence, 0.0);
+}
+
+RelaxSpecularHistory readRelaxSpecularHistory(uvec2 xy) {
+    RelaxSpecularHistory h;
+    vec4 g = reflectBuffer.data[addr(SPEC_N_HISTGEO, xy)];
+    vec4 s = reflectBuffer.data[addr(SPEC_N_HISTLIGHT, xy)];
+    vec4 m = reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)];
+    vec2 slowRG = unpackHalf2x16(floatBitsToUint(s.x));
+    vec2 slowBM2 = unpackHalf2x16(floatBitsToUint(s.y));
+    vec2 fastRG = unpackHalf2x16(floatBitsToUint(s.z));
+    vec2 fastBHit = unpackHalf2x16(floatBitsToUint(s.w));
+    vec2 roughHistory = unpackHalf2x16(floatBitsToUint(m.x));
+    bool valid = !any(isnan(g.xyz)) && !any(isinf(g.xyz)) &&
+        !any(isnan(slowRG)) && !any(isinf(slowRG)) &&
+        !any(isnan(slowBM2)) && !any(isinf(slowBM2)) &&
+        !any(isnan(fastRG)) && !any(isinf(fastRG)) &&
+        !any(isnan(fastBHit)) && !any(isinf(fastBHit)) &&
+        !any(isnan(roughHistory)) && !any(isinf(roughHistory)) &&
+        !isnan(m.y) && !isinf(m.y) && !isnan(m.z) && !isinf(m.z) &&
+        m.y >= 0.0 && m.y <= 16777215.0 &&
+        roughHistory.y >= 0.0 && roughHistory.y <= 255.0;
+    h.surfacePosition = g.xyz;
+    h.geometryNormal = decodeNormal(g.w);
+    h.slowRadiance = vec3(slowRG, slowBM2.x);
+    h.secondMoment = slowBM2.y;
+    h.responsiveRadiance = vec3(fastRG, fastBHit.x);
+    h.hitDistance = fastBHit.y;
+    h.roughness = roughHistory.x;
+    h.historyLength = roughHistory.y;
+    h.materialID = 0u;
+    if (valid)
+        h.materialID = uint(m.y + 0.5);
+    h.reprojectionConfidence = clamp(m.z, 0.0, 1.0);
+    if (!valid) {
+        h.surfacePosition = vec3(0.0);
+        h.geometryNormal = vec3(0.0, 1.0, 0.0);
+        h.slowRadiance = vec3(0.0);
+        h.secondMoment = 0.0;
+        h.responsiveRadiance = vec3(0.0);
+        h.hitDistance = 0.0;
+        h.roughness = 1.0;
+        h.historyLength = 0.0;
+        h.reprojectionConfidence = 0.0;
+    }
+    return h;
 }
 
 #endif // BUFFERS_SPECULAR_BUFFER_GLSL

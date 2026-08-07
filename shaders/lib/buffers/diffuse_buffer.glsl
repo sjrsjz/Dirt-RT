@@ -13,7 +13,7 @@
 // N=2: History Light  — uvec4(pHalf2(hist_aliceY.xy), pHalf2(hist_aliceY.zw), pHalf2(hist_CoCg), pHalf2(weight, sqrt(meanY2)))
 // N=3: History Geo    — uvec4(fbits(hist_pos.xyz), fbits(surfaceMask))
 // N=4: Swap Light     — uvec4(pHalf2(swap_aliceY.xy), pHalf2(swap_aliceY.zw), pHalf2(swap_CoCg), pHalf2(weight, sqrt(meanY2)))
-// N=5: Path Guide     — uvec4(pHalf2(aliceY.xy), pHalf2(aliceY.zw), fbits(M), 0u)
+// N=5: Path Guide     — uvec4(pHalf2(aliceY.xy), pHalf2(aliceY.zw), fbits(W), fbits(M))
 //
 // .w lane uses packHalf2x16: weight:f16 + sqrt(meanY2):f16.
 // sqrt compression keeps HDR second moments within f16 range (e.g. Y=1000 →
@@ -156,22 +156,29 @@ void readDiffuseSwap(uvec2 xy, out AliceEncoding alice, out float weight, out fl
 // Layout: uvec4(
 //   packHalf2x16(aliceY.xy),   // sample direction × luminance
 //   packHalf2x16(aliceY.zw),   // total energy
-//   floatBitsToUint(M),        // effective sample count
-//   0u)                        // pad
+//   floatBitsToUint(W),        // reservoir reciprocal-proposal normalization
+//   floatBitsToUint(M))        // effective sample count
 
-void writePathGuide(uvec2 xy, vec4 aliceY, float M) {
+void writePathGuide(uvec2 xy, vec4 aliceY, float W, float M) {
     diffuseBuffer.data[addr(DIF_N_PATHGUIDE, xy)] = uvec4(
         packHalf2x16(clamp(aliceY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(aliceY.zw, vec2(-65504.0), vec2(65504.0))),
-        floatBitsToUint(M),
-        0u);
+        floatBitsToUint(W),
+        floatBitsToUint(M));
 }
-void readPathGuide(uvec2 xy, out vec4 aliceY, out float M) {
+void readPathGuide(uvec2 xy, out vec4 aliceY, out float W, out float M) {
     uvec4 v = diffuseBuffer.data[addr(DIF_N_PATHGUIDE, xy)];
     vec2 ay_xy = unpackHalf2x16(v.x);
     vec2 ay_zw = unpackHalf2x16(v.y);
     aliceY = vec4(ay_xy, ay_zw);
-    M = uintBitsToFloat(v.z);
+    W = uintBitsToFloat(v.z);
+    M = uintBitsToFloat(v.w);
+}
+
+bool pathGuideReservoirValid(vec4 aliceY, float W, float M) {
+    return W > 0.0 && M > 0.0
+        && !isnan(W) && !isinf(W) && !isnan(M) && !isinf(M)
+        && !any(isnan(aliceY)) && !any(isinf(aliceY));
 }
 
 // 2×2 bilinear path guide sampling with validity mask
@@ -180,16 +187,22 @@ vec4 samplePathGuide(vec2 prevCoord) {
     vec2  pf = prevCoord - vec2(p0);
 
     vec4 y00, y10, y01, y11;
+    float W00, W10, W01, W11;
     float M00, M10, M01, M11;
-    readPathGuide(uvec2(clamp(p0 + ivec2(0, 0), ivec2(0), ivec2(resolution_global) - 1)), y00, M00);
-    readPathGuide(uvec2(clamp(p0 + ivec2(1, 0), ivec2(0), ivec2(resolution_global) - 1)), y10, M10);
-    readPathGuide(uvec2(clamp(p0 + ivec2(0, 1), ivec2(0), ivec2(resolution_global) - 1)), y01, M01);
-    readPathGuide(uvec2(clamp(p0 + ivec2(1, 1), ivec2(0), ivec2(resolution_global) - 1)), y11, M11);
+    readPathGuide(uvec2(clamp(p0 + ivec2(0, 0), ivec2(0), ivec2(resolution_global) - 1)), y00, W00, M00);
+    readPathGuide(uvec2(clamp(p0 + ivec2(1, 0), ivec2(0), ivec2(resolution_global) - 1)), y10, W10, M10);
+    readPathGuide(uvec2(clamp(p0 + ivec2(0, 1), ivec2(0), ivec2(resolution_global) - 1)), y01, W01, M01);
+    readPathGuide(uvec2(clamp(p0 + ivec2(1, 1), ivec2(0), ivec2(resolution_global) - 1)), y11, W11, M11);
 
-    float w00 = (M00 > 0.0) ? (1.0 - pf.x) * (1.0 - pf.y) : 0.0;
-    float w10 = (M10 > 0.0) ? pf.x * (1.0 - pf.y) : 0.0;
-    float w01 = (M01 > 0.0) ? (1.0 - pf.x) * pf.y : 0.0;
-    float w11 = (M11 > 0.0) ? pf.x * pf.y : 0.0;
+    bool v00 = pathGuideReservoirValid(y00, W00, M00);
+    bool v10 = pathGuideReservoirValid(y10, W10, M10);
+    bool v01 = pathGuideReservoirValid(y01, W01, M01);
+    bool v11 = pathGuideReservoirValid(y11, W11, M11);
+
+    float w00 = v00 ? (1.0 - pf.x) * (1.0 - pf.y) : 0.0;
+    float w10 = v10 ? pf.x * (1.0 - pf.y) : 0.0;
+    float w01 = v01 ? (1.0 - pf.x) * pf.y : 0.0;
+    float w11 = v11 ? pf.x * pf.y : 0.0;
 
     float sumW = w00 + w10 + w01 + w11;
     if (sumW < 1e-8) return vec4(0.0);

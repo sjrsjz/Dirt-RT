@@ -1,4 +1,2 @@
-#define R0 4
-#define STEP 2
-
-#include "/post/atrous_denoise_specular_cs.glsl"
+#define REFLECT_BUFFER
+#include "/post/relax_specular_history_clamp.glsl"

@@ -63,23 +63,58 @@ void reservoirInit(out Reservoir r) {
     r.M = 0.0;
     r.target = 0.0;
 }
-void reservoirUpdate(inout Reservoir r, vec4 candidate, float w, float m, inout uint seed) {
-    r.weightSum += w;
+// Weighted reservoir update. selectionWeight controls candidate selection,
+// while candidateTarget is p_hat(candidate) evaluated at the current pixel.
+// A reused reservoir uses selectionWeight = p_hat * W * M, but its selected
+// target remains p_hat.
+void reservoirUpdate(inout Reservoir r, vec4 candidate, float selectionWeight,
+        float candidateTarget, float m, inout uint seed) {
+    if (!(m > 0.0) || isnan(m) || isinf(m)
+            || isnan(selectionWeight) || isinf(selectionWeight)
+            || isnan(candidateTarget) || isinf(candidateTarget)
+            || any(isnan(candidate)) || any(isinf(candidate))) {
+        return;
+    }
+
     r.M += m;
-    if (nextFloat(seed) * r.weightSum < w) {
+    // Zero-target candidates are still part of M, but can never be selected.
+    if (!(selectionWeight > 0.0) || !(candidateTarget > 0.0)) {
+        return;
+    }
+
+    float newWeightSum = r.weightSum + selectionWeight;
+    if (nextFloat(seed) * newWeightSum < selectionWeight) {
         r.y = candidate;
-        r.target = w;
+        r.target = candidateTarget;
+    }
+    r.weightSum = newWeightSum;
+}
+
+// Limiting temporal memory must scale both M and sum(w_i). Scaling only M
+// changes W = sum(w_i) / (M * p_hat(y)) and artificially amplifies history.
+void reservoirClampM(inout Reservoir r, float maxM) {
+    if (r.M > maxM) {
+        float scale = maxM / r.M;
+        r.weightSum *= scale;
+        r.M = maxM;
     }
 }
 float reservoirW(Reservoir r) {
-    return r.weightSum / max(r.M * r.target, 1e-20);
+    float denominator = r.M * r.target;
+    if (!(r.weightSum > 0.0) || !(denominator > 0.0)
+            || isnan(r.weightSum) || isinf(r.weightSum)
+            || isnan(denominator) || isinf(denominator)) {
+        return 0.0;
+    }
+    float W = r.weightSum / denominator;
+    return (!isnan(W) && !isinf(W)) ? W : 0.0;
 }
 
 // ---------------------------------------------------------------------------
 // 工具
 // ---------------------------------------------------------------------------
 bool isSky(vec4 y) {
-    return y.w <= 1e-8;
+    return y.w <= 1e-8 || any(isnan(y)) || any(isinf(y));
 }
 
 uvec2 packAliceHalf(vec4 y) {
@@ -96,7 +131,7 @@ float guideTarget(vec4 y, vec3 N) {
 // ---------------------------------------------------------------------------
 // Phase 2: 8 点 Poisson 盘空间蓄水池 (直接 SSBO 读)
 // ---------------------------------------------------------------------------
-Reservoir spatialReservoir(uvec2 gid, vec3 centerNormal, float centerDist, inout uint seed) {
+Reservoir spatialReservoir(uvec2 gid, vec3 centerNormal, vec3 centerPos, inout uint seed) {
     Reservoir r;
     reservoirInit(r);
     ivec2 texSize = ivec2(resolution_global);
@@ -121,12 +156,18 @@ Reservoir spatialReservoir(uvec2 gid, vec3 centerNormal, float centerDist, inout
         vec3 pos;
         float dist;
         readGeo0(GEO_N_GEO, xy, pos, dist);
-        float depthDiff = abs(dist - centerDist) / max(abs(centerDist) + 1e-4, 1.0);
-        float geomW = exp2(-depthDiff * float(ATROUS_POSITION_PARAM));
+        // Plane distance in units of the center pixel's world-space footprint.
+        // ATROUS_POSITION_PARAM is a scale, so it belongs in the denominator;
+        // multiplying by its small value would make almost every edge weight 1.
+        float centerDistance = max(length(centerPos), 0.01);
+        float pixelFootprint = max(centerDistance / float(resolution_global.y), 1e-4);
+        float planeDistance = abs(dot(pos - centerPos, centerNormal));
+        float geomW = exp2(-planeDistance
+                / max(float(ATROUS_POSITION_PARAM) * pixelFootprint, 1e-6));
         if (geomW <= 1e-4) continue;
 
-        float w = guideTarget(y, centerNormal) * geomW;
-        if (w > 1e-8) reservoirUpdate(r, y, w, 1.0, seed);
+        float target = max(guideTarget(y, centerNormal), 0.0);
+        reservoirUpdate(r, y, target * geomW, target, 1.0, seed);
     }
     return r;
 }
@@ -141,8 +182,8 @@ void addDenoisedPrior(inout Reservoir r, ivec2 pix, vec3 centerNormal, inout uin
     a.CoCg   = unpackHalf2x16(raw.z);
     vec4 y = a.aliceY;
     if (isSky(y)) return;
-    float w = guideTarget(y, centerNormal);
-    if (w > 1e-8) reservoirUpdate(r, y, w, 1.0, seed);
+    float target = max(guideTarget(y, centerNormal), 0.0);
+    reservoirUpdate(r, y, target, target, 1.0, seed);
 }
 
 // ---------------------------------------------------------------------------
@@ -185,21 +226,23 @@ bool sampleHistory(uvec2 gxy, inout uint seed, out StoredReservoir result) {
 
     ivec2 offset = ivec2(nextFloat(seed) < f.x ? 1 : 0, nextFloat(seed) < f.y ? 1 : 0);
     result = loadStored(clamp(p0 + offset, ivec2(0), ivec2(resolution_global) - 1));
-    return result.W > 0.0 && result.M > 0.0;
+    return result.W > 0.0 && result.M > 0.0
+        && !isnan(result.W) && !isinf(result.W)
+        && !isnan(result.M) && !isinf(result.M)
+        && !any(isnan(result.y)) && !any(isinf(result.y));
 }
 
 // ---------------------------------------------------------------------------
 // Phase 5: 历史 RIS 合并
 // ---------------------------------------------------------------------------
 void combineWithHistory(inout Reservoir r, StoredReservoir hist, float temporalConf, vec3 centerNormal, inout uint seed) {
-    float targetNow = guideTarget(hist.y, centerNormal);
-    if (targetNow <= 1e-8) return;
+    float targetNow = max(guideTarget(hist.y, centerNormal), 0.0);
 
     float reusedM = min(hist.M, GUIDE_MAX_M) * clamp(temporalConf, 0.0, 1.0);
     if (reusedM <= 0.0) return;
 
     float candidateWeight = targetNow * hist.W * reusedM;
-    reservoirUpdate(r, hist.y, candidateWeight, reusedM, seed);
+    reservoirUpdate(r, hist.y, candidateWeight, targetNow, reusedM, seed);
 }
 
 // ===========================================================================
@@ -225,7 +268,7 @@ void main() {
     }
 
     // Phase 2: Poisson 盘空间蓄水池
-    Reservoir r = spatialReservoir(gid, centerNormal, centerDist, seed);
+    Reservoir r = spatialReservoir(gid, centerNormal, centerPos, seed);
 
     // Phase 3: 降噪先验
     addDenoisedPrior(r, pix, centerNormal, seed);
@@ -237,7 +280,7 @@ void main() {
         combineWithHistory(r, hist, temporalConf, centerNormal, seed);
     }
 
-    r.M = min(r.M, GUIDE_MAX_M);
+    reservoirClampM(r, GUIDE_MAX_M);
     float W = reservoirW(r);
 
     uvec2 halfY = packAliceHalf(r.y);

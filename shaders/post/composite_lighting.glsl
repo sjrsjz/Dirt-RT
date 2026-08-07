@@ -43,7 +43,7 @@ vec3 jetColormap(float t) {
         clamp(min(4.0 * t + 0.5, -4.0 * t + 2.5), 0.0, 1.0));
 }
 
-// Log-scale normalize for virtual projection distance (0.01m..~160m → [0,1])
+// Log-scale normalize for ray-segment distance (0.01m..~160m → [0,1])
 float logDistNorm(float d) {
     return clamp(log2(max(d, 0.01) * 100.0 + 1.0) / 14.0, 0.0, 1.0);
 }
@@ -51,6 +51,7 @@ float logDistNorm(float d) {
 void main() {
     uvec2 xy = uvec2(gl_FragCoord.xy);
     ivec2 pix = ivec2(gl_FragCoord.xy);
+    fragColor = vec4(0.0, 0.0, 0.0, 1.0);
 
     // 用 N=1 surfaceMask 判定天空/表面（surfaceMask 不再在 N=0 重复存储）
     float surfaceMask = readDiffuseSurfaceMask(xy);
@@ -102,8 +103,8 @@ void main() {
             + emisVal;
 
     #elif DEBUG_VIEW == 1
-    // Diffuse only: irradiance × diffuseAlbedo
-    fragColor.xyz = project_alice_irradiance(tmp.data_swap, microN) * diffAlbedo + lightVal;
+    // Diffuse transport only. First-hit NEE is already part of this signal.
+    fragColor.xyz = project_alice_irradiance(tmp.data_swap, microN) * diffAlbedo;
 
     #elif DEBUG_VIEW == 2
     // Refract only
@@ -115,7 +116,7 @@ void main() {
 
     #elif DEBUG_VIEW == 4
     // White model: diffuse irradiance only, no albedo
-    fragColor.xyz = project_alice_irradiance(tmp.data_swap, microN) + lightVal;
+    fragColor.xyz = project_alice_irradiance(tmp.data_swap, microN);
 
     #elif DEBUG_VIEW == 5
     // Light field: ALICE normalized dominant direction × energy
@@ -130,7 +131,7 @@ void main() {
     fragColor.xyz = absorptionVal;
 
     #elif DEBUG_VIEW == 8
-    // Reflection dominant direction R as RGB (oct-decoded)
+    // Actually sampled GGX reflection direction as RGB (oct-decoded)
     {
         vec3 Rpos, R;
         readReflGeo(xy, Rpos, R);
@@ -138,7 +139,7 @@ void main() {
     }
 
     #elif DEBUG_VIEW == 9
-    // Reflection virtual projection distance (rainbow colormap, log scale)
+    // Sampled reflection ray hit distance (rainbow colormap, log scale)
     {
         vec3 dummyColor;
         float d, dummyW;
@@ -165,18 +166,18 @@ void main() {
 
     #elif DEBUG_VIEW == 14
     // Reflect temporal accumulation weight (heatmap)
-    fragColor.xyz = jetColormap(clamp(tmp2.weight / ACCUMULATION_LENGTH, 0.0, 1.0));
+    fragColor.xyz = jetColormap(clamp(tmp2.weight / RELAX_SPEC_MAX_HISTORY, 0.0, 1.0));
 
     #elif DEBUG_VIEW == 15
     // Refract temporal accumulation weight (heatmap)
     fragColor.xyz = jetColormap(clamp(tmp3.weight / ACCUMULATION_LENGTH, 0.0, 1.0));
 
     #elif DEBUG_VIEW == 16
-    // Direct light only — raw direct illumination component
+    // First-surface material emission
     fragColor.xyz = lightVal;
 
     #elif DEBUG_VIEW == 17
-    // Emission only — self-illuminating surfaces (glowstone, lava, etc.)
+    // Emission accumulated along the primary medium segment
     fragColor.xyz = emisVal;
 
     #elif DEBUG_VIEW == 18
@@ -196,9 +197,9 @@ void main() {
     // Path guide ALICE direction as RGB (蓄水池+降噪投票结果, N=5)
     {
         vec4 guideY;
-        float guideEnergy;
+        float guideW;
         float guideM;
-        readPathGuide(xy, guideY, guideM);
+        readPathGuide(xy, guideY, guideW, guideM);
         if (guideM < 1e-6) {
             fragColor.xyz = vec3(0.0); // 无效/天空 → 黑
         } else {

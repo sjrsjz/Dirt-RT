@@ -183,28 +183,6 @@ vec3IlluminationData fetchRefract(ivec2 p) {
     return tmp;
 }
 
-vec3IlluminationData blendRefract(vec3IlluminationData A, vec3IlluminationData B, float x) {
-    vec3IlluminationData t;
-    t.data_swap = mix(A.data_swap, B.data_swap, x);
-    t.weight = (B.weight - A.weight) * x + A.weight;
-#ifndef REFRACT_BUFFER_MIN2
-    t.data = mix(A.data, B.data, x);
-    t.pos = mix(A.pos, B.pos, x);
-    t.normal = mix(A.normal, B.normal, x);
-#endif
-    return t;
-}
-
-vec3IlluminationData sampleRefract(vec2 p) {
-    ivec2 p1 = ivec2(p);
-    vec2 p2 = fract(p);
-    vec3IlluminationData A = fetchRefract(p1);
-    vec3IlluminationData B = fetchRefract(p1 + ivec2(1, 0));
-    vec3IlluminationData C = fetchRefract(p1 + ivec2(0, 1));
-    vec3IlluminationData D = fetchRefract(p1 + ivec2(1, 1));
-    return blendRefract(blendRefract(A, B, p2.x), blendRefract(C, D, p2.x), p2.y);
-}
-
 void writeRefract(vec3IlluminationData data, ivec2 p) {
     uvec2 xy = uvec2(p);
     vec3 color; float vproj, accumW;

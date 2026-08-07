@@ -146,25 +146,6 @@ DiffuseIlluminationWriteData fetchPrevDiffuse(ivec2 p) {
     return t;
 }
 
-DiffuseIlluminationWriteData blendPrevDiffuse(DiffuseIlluminationWriteData A, DiffuseIlluminationWriteData B, float x) {
-    DiffuseIlluminationWriteData t;
-    t.data_swap = mix_alice(A.data_swap, B.data_swap, x);
-    t.pos = mix(A.pos, B.pos, x);
-    t.weight = mix(A.weight, B.weight, x);
-    t.meanY2 = mix(A.meanY2, B.meanY2, x);
-    return t;
-}
-
-DiffuseIlluminationWriteData samplePrevDiffuse(vec2 p) {
-    ivec2 p1 = ivec2(p);
-    vec2 p2 = fract(p);
-    DiffuseIlluminationWriteData A = fetchPrevDiffuse(p1);
-    DiffuseIlluminationWriteData B = fetchPrevDiffuse(p1 + ivec2(1, 0));
-    DiffuseIlluminationWriteData C = fetchPrevDiffuse(p1 + ivec2(0, 1));
-    DiffuseIlluminationWriteData D = fetchPrevDiffuse(p1 + ivec2(1, 1));
-    return blendPrevDiffuse(blendPrevDiffuse(A, B, p2.x), blendPrevDiffuse(C, D, p2.x), p2.y);
-}
-
 void writePrevDiffuse(DiffuseIlluminationWriteData data, ivec2 p) {
     uvec2 xy = uvec2(p);
     writeDiffuseSwap(xy, data.data_swap, data.weight, data.meanY2);

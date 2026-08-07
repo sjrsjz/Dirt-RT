@@ -12,8 +12,8 @@
 //   lib/buffers/diffuse_buffer.glsl  — DiffuseBuffer read/write + samplePathGuide
 //   lib/buffers/specular_buffer.glsl — Reflect/Refract buffer read/write
 //   lib/lighting/alice_encode.glsl   — AliceEncoding + encode/decode/project
-//   lib/rt/diffuse_io.glsl           — Diffuse data structs + load/fetch/write
-//   lib/rt/specular_io.glsl          — Specular data structs + fetch/write
+//   lib/buffers/diffuse_io.glsl      — Diffuse data structs + load/fetch/write
+//   lib/buffers/specular_io.glsl     — Specular data structs + fetch/write
 // ===========================================================================
 
 #include "/lib/common/pack_half.glsl"
@@ -22,5 +22,5 @@
 #include "/lib/buffers/diffuse_buffer.glsl"
 #include "/lib/buffers/specular_buffer.glsl"
 #include "/lib/lighting/alice_encode.glsl"
-#include "/lib/rt/diffuse_io.glsl"
-#include "/lib/rt/specular_io.glsl"
+#include "/lib/buffers/diffuse_io.glsl"
+#include "/lib/buffers/specular_io.glsl"
