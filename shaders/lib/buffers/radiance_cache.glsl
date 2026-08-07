@@ -11,7 +11,7 @@
 #define RADIANCE_CACHE_BRICK_SIZE 4
 #define RADIANCE_CACHE_POOL_CAPACITY 4096
 #define RADIANCE_CACHE_MAPPING_TABLE_SIZE 16384
-#define RADIANCE_CACHE_MAX_HASH_PROBES 128
+#define RADIANCE_CACHE_MAX_HASH_PROBES 32
 #define RADIANCE_CACHE_DISTANCE_BUCKET_COUNT 64
 #define RADIANCE_CACHE_SAFE_WORLD_LIMIT 100000000.0
 #ifndef VOXEL_SIZE
@@ -39,6 +39,9 @@
 #if (RADIANCE_CACHE_POOL_CAPACITY > 4096)
 #error Mapping tokens reserve 12 bits for the pool slot.
 #endif
+#if ((RADIANCE_CACHE_POOL_CAPACITY & (RADIANCE_CACHE_POOL_CAPACITY - 1)) != 0)
+#error RADIANCE_CACHE_POOL_CAPACITY must be a power of two for CLOCK eviction.
+#endif
 #if ((RADIANCE_CACHE_MARK_TILE_SIZE & (RADIANCE_CACHE_MARK_TILE_SIZE - 1)) != 0)
 #error RADIANCE_CACHE_MARK_TILE_SIZE must be a power of two.
 #endif
@@ -48,6 +51,9 @@
 #if (RADIANCE_CACHE_MAX_ALLOCATIONS_PER_FRAME < 1)
 #error RADIANCE_CACHE_MAX_ALLOCATIONS_PER_FRAME must be positive.
 #endif
+#if (RADIANCE_CACHE_UPDATE_PERIOD < 1) || ((RADIANCE_CACHE_UPDATE_PERIOD & (RADIANCE_CACHE_UPDATE_PERIOD - 1)) != 0)
+#error RADIANCE_CACHE_UPDATE_PERIOD must be a positive power of two.
+#endif
 
 // One SSBO, separated into request, allocator metadata, and payload regions.
 // Only request submission is atomic. Different Vulkanite execution groups put
@@ -55,8 +61,8 @@
 #define RC_HEADER_WORDS 16u
 #define RC_HEADER_MAGIC_ADDR 0u
 #define RC_HEADER_NEXT_UNUSED_ADDR 1u
-#define RC_HEADER_LRU_HEAD_ADDR 2u
-#define RC_HEADER_LRU_TAIL_ADDR 3u
+#define RC_HEADER_EVICTION_CURSOR_ADDR 2u
+#define RC_HEADER_RESERVED_ADDR 3u
 #define RC_HEADER_FAILED_ALLOCATIONS_ADDR 4u
 #define RC_MAP_STRIDE 4u
 #define RC_MAP_OFFSET RC_HEADER_WORDS
@@ -74,10 +80,9 @@
 #define RC_POOL_DATA_OFFSET (RC_MISSING_BUCKET_OFFSET + uint(RADIANCE_CACHE_DISTANCE_BUCKET_COUNT))
 #define RC_TOTAL_WORDS (RC_POOL_DATA_OFFSET + uint(RADIANCE_CACHE_POOL_CAPACITY) * RC_POOL_SLOT_WORDS)
 
-// Bump whenever the meaning of a persistent payload plane changes. P7 makes
-// shader reloads discard P6 filtered planes produced from correlated RIS
-// selections instead of slowly blending that invalid directional history out.
-#define RC_MAGIC 0x52435037u
+// P8 resets legacy tombstones and linked-LRU metadata before enabling
+// backward-shift deletion and CLOCK eviction.
+#define RC_MAGIC 0x52435038u
 #define RC_INVALID_TOKEN 0xffffffffu
 #define RC_TOMBSTONE_TOKEN 0xfffffffeu
 #define RC_LOCKED_TOKEN 0xfffffffdu
@@ -250,15 +255,25 @@ uint radianceCacheHash(ivec3 key) {
     h ^= h >> 16u; h *= 0x7feb352du; h ^= h >> 15u;
     return h;
 }
+bool radianceCacheShouldUpdate(ivec3 worldVoxel, uint frameStamp) {
+#if RADIANCE_CACHE_UPDATE_PERIOD == 1
+    return true;
+#else
+    uint phaseMask = uint(RADIANCE_CACHE_UPDATE_PERIOD - 1);
+    ivec3 worldBrick = radianceCacheWorldBrick(worldVoxel);
+    uint localIndex = radianceCacheLocalIndex(worldVoxel, worldBrick);
+    // A reversible bit mix distributes every axis across phases while keeping
+    // exactly 64 / period updates in each brick. The brick hash rotates the
+    // phase spatially, avoiding coherent world-space update planes.
+    uint localPhase = localIndex ^ (localIndex >> 2u) ^ (localIndex >> 4u);
+    uint phase = (localPhase + radianceCacheHash(worldBrick)) & phaseMask;
+    return phase == (frameStamp & phaseMask);
+#endif
+}
 bool rcMapKeyEquals(uint i, ivec3 k) {
     return rcLoad(rcMapAddress(i, 0u)) == uint(k.x)
         && rcLoad(rcMapAddress(i, 1u)) == uint(k.y)
         && rcLoad(rcMapAddress(i, 2u)) == uint(k.z);
-}
-bool rcSlotKeyEquals(uint s, ivec3 k) {
-    return rcLoad(rcMetaAddress(s, RC_META_KEY_X)) == uint(k.x)
-        && rcLoad(rcMetaAddress(s, RC_META_KEY_Y)) == uint(k.y)
-        && rcLoad(rcMetaAddress(s, RC_META_KEY_Z)) == uint(k.z);
 }
 bool radianceCacheReady() {
     return radianceCacheStorageAvailable() && rcLoad(RC_HEADER_MAGIC_ADDR) == RC_MAGIC;
@@ -274,7 +289,10 @@ uint findRadianceCacheMapping(ivec3 key) {
         if (token >= RC_LOCKED_TOKEN || !rcMapKeyEquals(mapIndex, key)) continue;
         uint slot = token & RC_SLOT_MASK;
         if (slot >= uint(RADIANCE_CACHE_POOL_CAPACITY)) continue;
-        if (rcLoad(rcMetaAddress(slot, RC_META_TOKEN)) == token && rcSlotKeyEquals(slot, key)) return token;
+        // Mapping key + generation token are sufficient after the allocator
+        // barrier. Re-reading the same XYZ key from pool metadata costs three
+        // random SSBO loads per successful lookup without adding safety.
+        if (rcLoad(rcMetaAddress(slot, RC_META_TOKEN)) == token) return token;
     }
     return RC_INVALID_TOKEN;
 }
@@ -283,35 +301,56 @@ uint rcNextGeneration(uint oldToken) {
     generation = (generation + 1u) & RC_GENERATION_MASK;
     return max(generation, 1u);
 }
-void rcLruRemove(uint slot) {
-    uint prev = rcLoad(rcMetaAddress(slot, RC_META_LRU_PREV));
-    uint next = rcLoad(rcMetaAddress(slot, RC_META_LRU_NEXT));
-    bool prevValid = prev < uint(RADIANCE_CACHE_POOL_CAPACITY);
-    bool nextValid = next < uint(RADIANCE_CACHE_POOL_CAPACITY);
-    if (prevValid) rcStore(rcMetaAddress(prev, RC_META_LRU_NEXT), nextValid ? next : RC_INVALID_SLOT);
-    else rcStore(RC_HEADER_LRU_HEAD_ADDR, nextValid ? next : RC_INVALID_SLOT);
-    if (nextValid) rcStore(rcMetaAddress(next, RC_META_LRU_PREV), prevValid ? prev : RC_INVALID_SLOT);
-    else rcStore(RC_HEADER_LRU_TAIL_ADDR, prevValid ? prev : RC_INVALID_SLOT);
+void rcEraseRadianceCacheMapping(uint erasedIndex, uint erasedToken) {
+    if (erasedIndex >= uint(RADIANCE_CACHE_MAPPING_TABLE_SIZE)
+            || rcLoad(rcMapAddress(erasedIndex, 3u)) != erasedToken) return;
+
+    // Backward-shift deletion preserves the early-empty lookup invariant and
+    // prevents camera motion from filling the table with tombstones. The loop
+    // is bounded; an exceptionally long cluster falls back to one tombstone
+    // rather than risking an unbounded allocator pass.
+    uint mask = uint(RADIANCE_CACHE_MAPPING_TABLE_SIZE - 1);
+    uint hole = erasedIndex;
+    for (uint step = 1u; step <= uint(RADIANCE_CACHE_MAX_HASH_PROBES); ++step) {
+        uint scan = (erasedIndex + step) & mask;
+        uint token = rcLoad(rcMapAddress(scan, 3u));
+        if (token == RC_INVALID_TOKEN) {
+            rcStore(rcMapAddress(hole, 3u), RC_INVALID_TOKEN);
+            return;
+        }
+        if (token >= RC_LOCKED_TOKEN) {
+            rcStore(rcMapAddress(hole, 3u), RC_TOMBSTONE_TOKEN);
+            return;
+        }
+
+        ivec3 key = ivec3(
+            rcLoad(rcMapAddress(scan, 0u)),
+            rcLoad(rcMapAddress(scan, 1u)),
+            rcLoad(rcMapAddress(scan, 2u)));
+        uint home = radianceCacheHash(key) & mask;
+        uint scanDistance = (scan - home) & mask;
+        uint holeDistance = (hole - home) & mask;
+        if (holeDistance < scanDistance) {
+            rcStore(rcMapAddress(hole, 0u), uint(key.x));
+            rcStore(rcMapAddress(hole, 1u), uint(key.y));
+            rcStore(rcMapAddress(hole, 2u), uint(key.z));
+            rcStore(rcMapAddress(hole, 3u), token);
+            uint movedSlot = token & RC_SLOT_MASK;
+            if (movedSlot < uint(RADIANCE_CACHE_POOL_CAPACITY)
+                    && rcLoad(rcMetaAddress(movedSlot, RC_META_TOKEN)) == token)
+                rcStore(rcMetaAddress(movedSlot, RC_META_MAP_INDEX), hole);
+            hole = scan;
+        }
+    }
+    rcStore(rcMapAddress(hole, 3u), RC_TOMBSTONE_TOKEN);
 }
-void rcLruAppend(uint slot) {
-    uint tail = rcLoad(RC_HEADER_LRU_TAIL_ADDR);
-    bool tailValid = tail < uint(RADIANCE_CACHE_POOL_CAPACITY);
-    rcStore(rcMetaAddress(slot, RC_META_LRU_PREV), tailValid ? tail : RC_INVALID_SLOT);
-    rcStore(rcMetaAddress(slot, RC_META_LRU_NEXT), RC_INVALID_SLOT);
-    if (tailValid) rcStore(rcMetaAddress(tail, RC_META_LRU_NEXT), slot);
-    else rcStore(RC_HEADER_LRU_HEAD_ADDR, slot);
-    rcStore(RC_HEADER_LRU_TAIL_ADDR, slot);
-}
-void rcLruPin(uint slot, uint frameStamp) {
+void rcPinPoolSlot(uint slot, uint frameStamp) {
     rcStore(rcMetaAddress(slot, RC_META_PIN_FRAME), frameStamp);
-    if (rcLoad(RC_HEADER_LRU_TAIL_ADDR) == slot) return;
-    rcLruRemove(slot);
-    rcLruAppend(slot);
 }
 void initializeRadianceCacheAllocator() {
     rcStore(RC_HEADER_NEXT_UNUSED_ADDR, 0u);
-    rcStore(RC_HEADER_LRU_HEAD_ADDR, RC_INVALID_SLOT);
-    rcStore(RC_HEADER_LRU_TAIL_ADDR, RC_INVALID_SLOT);
+    rcStore(RC_HEADER_EVICTION_CURSOR_ADDR, 0u);
+    rcStore(RC_HEADER_RESERVED_ADDR, 0u);
     rcStore(RC_HEADER_FAILED_ALLOCATIONS_ADDR, 0u);
     for (uint i = 0u; i < uint(RADIANCE_CACHE_MAPPING_TABLE_SIZE); ++i)
         rcStore(rcMapAddress(i, 3u), RC_INVALID_TOKEN);
@@ -347,19 +386,31 @@ bool allocateRadianceCacheBrick(ivec3 worldBrick, uint frameStamp) {
         slot = nextUnused;
         rcStore(RC_HEADER_NEXT_UNUSED_ADDR, nextUnused + 1u);
     } else {
-        slot = rcLoad(RC_HEADER_LRU_HEAD_ADDR);
-        if (slot >= uint(RADIANCE_CACHE_POOL_CAPACITY)
-                || rcLoad(rcMetaAddress(slot, RC_META_PIN_FRAME)) == frameStamp) {
+        // Nearest-first admission has already pinned every page selected for
+        // this frame. A CLOCK scan therefore only needs to find an unpinned
+        // page; maintaining an exact linked LRU would add several serialized,
+        // random SSBO writes for every resident request.
+        slot = RC_INVALID_SLOT;
+        uint capacityMask = uint(RADIANCE_CACHE_POOL_CAPACITY - 1);
+        uint cursor = rcLoad(RC_HEADER_EVICTION_CURSOR_ADDR) & capacityMask;
+        for (uint scan = 0u; scan < uint(RADIANCE_CACHE_POOL_CAPACITY); ++scan) {
+            uint candidate = (cursor + scan) & capacityMask;
+            if (rcLoad(rcMetaAddress(candidate, RC_META_PIN_FRAME)) != frameStamp) {
+                slot = candidate;
+                rcStore(RC_HEADER_EVICTION_CURSOR_ADDR,
+                    (candidate + 1u) & capacityMask);
+                break;
+            }
+        }
+        if (slot >= uint(RADIANCE_CACHE_POOL_CAPACITY)) {
             rcStore(RC_HEADER_FAILED_ALLOCATIONS_ADDR,
                 rcLoad(RC_HEADER_FAILED_ALLOCATIONS_ADDR) + 1u);
             return false;
         }
-        rcLruRemove(slot);
         uint oldToken = rcLoad(rcMetaAddress(slot, RC_META_TOKEN));
         uint oldMapIndex = rcLoad(rcMetaAddress(slot, RC_META_MAP_INDEX));
-        if (oldToken < RC_LOCKED_TOKEN && oldMapIndex < uint(RADIANCE_CACHE_MAPPING_TABLE_SIZE)
-                && rcLoad(rcMapAddress(oldMapIndex, 3u)) == oldToken)
-            rcStore(rcMapAddress(oldMapIndex, 3u), RC_TOMBSTONE_TOKEN);
+        if (oldToken < RC_LOCKED_TOKEN)
+            rcEraseRadianceCacheMapping(oldMapIndex, oldToken);
     }
     uint oldToken = rcLoad(rcMetaAddress(slot, RC_META_TOKEN));
     uint newToken = (rcNextGeneration(oldToken) << 12u) | slot;
@@ -377,7 +428,6 @@ bool allocateRadianceCacheBrick(ivec3 worldBrick, uint frameStamp) {
     rcStore(rcMapAddress(insertionIndex, 1u), uint(worldBrick.y));
     rcStore(rcMapAddress(insertionIndex, 2u), uint(worldBrick.z));
     rcStore(rcMapAddress(insertionIndex, 3u), newToken);
-    rcLruAppend(slot);
     return true;
 }
 ivec3 rcRequestWorldBrick(uint requestIndex, ivec3 minBrick) {
@@ -463,7 +513,7 @@ void processRadianceCacheAllocationRequests(vec3 cameraPosition, uint frameStamp
             if (allowed != 0u) {
                 rcStore(bucketAddress, allowed - 1u);
                 if (token != RC_INVALID_TOKEN) {
-                    rcLruPin(token & RC_SLOT_MASK, currentFrame);
+                    rcPinPoolSlot(token & RC_SLOT_MASK, currentFrame);
                 } else {
                     selectedMissingBits |= 1u << bit;
                     uint missingAddress = RC_MISSING_BUCKET_OFFSET + bucket;
@@ -522,6 +572,18 @@ bool validateRadianceCacheAddress(RadianceCacheAddress a) {
 }
 bool radianceCacheAddressHasHistory(RadianceCacheAddress a, uint frameStamp) {
     return validateRadianceCacheAddress(a)
+        && rcLoad(rcMetaAddress(a.slot, RC_META_BIRTH_FRAME)) != rcFrameTag(frameStamp);
+}
+bool radianceCacheResolvedPoolAddressHasHistory(
+        RadianceCacheAddress a, uint frameStamp) {
+    // For addresses returned immediately by radianceCacheAddressForPoolVoxel.
+    // That function has just read the slot token and execution-group barriers
+    // prevent allocator mutation here, so repeating the token load is wasteful.
+    // Structural bounds remain explicit, preserving defined SSBO access even
+    // if an invalid address is passed accidentally.
+    return a.token < RC_LOCKED_TOKEN
+        && a.slot < uint(RADIANCE_CACHE_POOL_CAPACITY)
+        && a.localIndex < RC_VOXELS_PER_BRICK
         && rcLoad(rcMetaAddress(a.slot, RC_META_BIRTH_FRAME)) != rcFrameTag(frameStamp);
 }
 RadianceCache loadRadianceCachePlanes(RadianceCacheAddress a, uint plane0, uint plane1) {

@@ -108,6 +108,9 @@ option.RADIANCE_CACHE_MAX_HIST.comment = 每个缓存体素的时域 RIS Reservo
 option.RADIANCE_CACHE_FILTER_MAX_HIST = 缓存平滑帧数
 option.RADIANCE_CACHE_FILTER_MAX_HIST.comment = 用于直接累计缓存方向性 ALICE 矩的时域样本数。数值越高，方向与能量的方差越低；数值越低，对光照或几何变化的响应越快、拖影越少。实际光照、递归反馈和缓存路径引导均读取该结果。
 
+option.RADIANCE_CACHE_UPDATE_PERIOD = 缓存更新周期
+option.RADIANCE_CACHE_UPDATE_PERIOD.comment = 已驻留缓存体素每隔多少帧追踪一次更新光线。新分配体素块仍会在首帧完整初始化。数值 4 可将稳态缓存光线和 Resolve 工作量降低约 75%；更高数值性能更好，但动态光照响应和样本收敛更慢。
+
 option.RADIANCE_CACHE_RIS_GUIDING_STRENGTH = 缓存 RIS 引导占比
 option.RADIANCE_CACHE_RIS_GUIDING_STRENGTH.comment = 从缓存探针的总引导概率中分配给时域 RIS 方向提议的最大比例。只有 Reservoir 与稳定 ALICE 光场的方向和能量一致且历史充足时才会达到该比例；0 表示关闭 RIS 引导。
 
@@ -328,7 +331,7 @@ value.DEBUG_VIEW.27 = 反射 A-trous 2
 value.DEBUG_VIEW.28 = 反射 A-trous 4
 value.DEBUG_VIEW.29 = 反射 A-trous 8
 value.DEBUG_VIEW.30 = 反射 A-trous 16
-value.DEBUG_VIEW.31 = 缓存当前帧原始值
+value.DEBUG_VIEW.31 = 缓存最近一次原始值
 value.DEBUG_VIEW.32 = 缓存 RIS Reservoir
 value.DEBUG_VIEW.33 = 缓存 RIS 样本数 M
 value.DEBUG_VIEW.34 = 缓存最终时域值

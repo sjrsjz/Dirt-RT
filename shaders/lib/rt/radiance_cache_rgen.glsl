@@ -193,7 +193,11 @@ void main() {
     ivec3 worldVoxel;
     RadianceCacheAddress poolAddress = radianceCacheAddressForPoolVoxel(
         linearIndex, currentCameraPosition, worldVoxel);
-    if (!validateRadianceCacheAddress(poolAddress)) return;
+    if (poolAddress.token >= RC_LOCKED_TOKEN) return;
+    uint frameStamp = cam.frameId;
+    bool hasHistory = radianceCacheResolvedPoolAddressHasHistory(
+        poolAddress, frameStamp);
+    if (hasHistory && !radianceCacheShouldUpdate(worldVoxel, frameStamp)) return;
 
     setFrame(cam.frameId);
     vec3 seedCoord = vec3(worldVoxel)

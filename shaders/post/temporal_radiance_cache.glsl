@@ -185,11 +185,13 @@ void main() {
     ivec3 worldVoxel;
     RadianceCacheAddress address = radianceCacheAddressForPoolVoxel(
         linearIndex, camPos, worldVoxel);
-    if (!validateRadianceCacheAddress(address)) return;
+    if (address.token >= RC_LOCKED_TOKEN) return;
+    uint frameStamp = uint(max(frame_id, 0));
+    bool hasHistory = radianceCacheResolvedPoolAddressHasHistory(
+        address, frameStamp);
+    if (hasHistory && !radianceCacheShouldUpdate(worldVoxel, frameStamp)) return;
     RadianceCache current = loadRadianceCachePlanes(
         address, RC_PLANE_CURRENT_0, RC_PLANE_CURRENT_1);
-    uint frameStamp = uint(max(frame_id, 0));
-    bool hasHistory = radianceCacheAddressHasHistory(address, frameStamp);
     RadianceCache history = hasHistory
         ? loadRadianceCachePlanes(address, RC_PLANE_HISTORY_0, RC_PLANE_HISTORY_1)
         : emptyCache();

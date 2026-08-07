@@ -108,6 +108,9 @@ option.RADIANCE_CACHE_MAX_HIST.comment = Maximum effective candidate count retai
 option.RADIANCE_CACHE_FILTER_MAX_HIST = Cache Smoothing Frames
 option.RADIANCE_CACHE_FILTER_MAX_HIST.comment = Temporal sample count used to accumulate the cache's directional ALICE moments directly. Higher values reduce directional and energy variance; lower values react faster and reduce lighting trails. Lighting, recursive feedback and cache path guiding all use this result.
 
+option.RADIANCE_CACHE_UPDATE_PERIOD = Cache Update Period
+option.RADIANCE_CACHE_UPDATE_PERIOD.comment = Number of frames between update rays for resident cache voxels. Newly allocated bricks are still fully initialized on their birth frame. A value of 4 reduces steady-state cache rays and Resolve work by about 75%; higher values are faster but respond and converge more slowly.
+
 option.RADIANCE_CACHE_RIS_GUIDING_STRENGTH = Cache RIS Guide Share
 option.RADIANCE_CACHE_RIS_GUIDING_STRENGTH.comment = Maximum fraction of a cache probe's total guided probability assigned to the temporal RIS direction proposal. It reaches this share only when the reservoir agrees with the stable ALICE field in direction and energy and has sufficient history. 0 disables RIS guiding.
 
@@ -328,7 +331,7 @@ value.DEBUG_VIEW.27 = Refl. A-trous 2
 value.DEBUG_VIEW.28 = Refl. A-trous 4
 value.DEBUG_VIEW.29 = Refl. A-trous 8
 value.DEBUG_VIEW.30 = Refl. A-trous 16
-value.DEBUG_VIEW.31 = Cache Current Raw
+value.DEBUG_VIEW.31 = Cache Latest Raw
 value.DEBUG_VIEW.32 = Cache RIS Reservoir
 value.DEBUG_VIEW.33 = Cache RIS Sample Count
 value.DEBUG_VIEW.34 = Cache Final Temporal
