@@ -25,6 +25,7 @@ layout(std430, binding = 0) uniform CameraInfo {
 } cam;
 
 layout(binding = 3) uniform sampler2D blockTex;
+layout(binding = 6) uniform sampler2D entityTextures[256];
 
 layout(set = 1, binding = 0) buffer Quads {
     Quad quads[];
@@ -42,8 +43,11 @@ void main() {
 
     // === Geometric identification ===
     payload_packHitPos(payload.data, worldPos, gl_HitTEXT);
+    int entityTextureIndex = quad.vertices[0].block_id.x == -2
+        ? int(quad.vertices[0].block_id.y) - 1 : -1;
     payload_packQuadIDs(payload.data,
-        uint(gl_InstanceCustomIndexEXT + gl_GeometryIndexEXT), 0u, uint(gl_PrimitiveID));
+        uint(gl_InstanceCustomIndexEXT + gl_GeometryIndexEXT),
+        uint(max(entityTextureIndex + 1, 0)), uint(gl_PrimitiveID));
     payload_packBarycentrics(payload.data, baryCoord);
 
     // === Quad-derived data for material evaluation in rgen ===
@@ -52,7 +56,9 @@ void main() {
     {
         vec3 barys = vec3(1.0 - baryCoord.x - baryCoord.y, baryCoord.x, baryCoord.y);
         vec2 uv = getFragmentUV(quad, barys, isSideA);
-        vec4 atlas = getTextureAtlasBox(quad, isSideA);
+        vec4 atlas = entityTextureIndex >= 0
+            ? vec4(0.0, 0.0, 1.0, 1.0)
+            : getTextureAtlasBox(quad, isSideA);
         vec3 geomN = interpolateVertexNormal(quad, baryCoord, sideB);
         vec3 tangent = interpolateVertexTangent(quad, baryCoord, sideB);
         bitangentSign = float(quad.vertices[0].tangent.w) * 0.0078125;
@@ -74,7 +80,9 @@ void main() {
 
     if (inside) {
         vec2 uv = getFragmentUV(quad, baryCoord);
-        vec4 albedo = texture(blockTex, uv);
+        vec4 albedo = entityTextureIndex >= 0
+            ? texture(entityTextures[nonuniformEXT(entityTextureIndex)], uv)
+            : texture(blockTex, uv);
         float segDist = clamp(gl_HitTEXT - prevDist, 0.0, 100.0);
         shadowTrans = applyVolumeExtinction(shadowTrans, segDist, albedo, blockID);
     }

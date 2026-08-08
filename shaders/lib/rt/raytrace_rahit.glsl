@@ -23,6 +23,7 @@ layout(std430, binding = 0) uniform CameraInfo {
 } cam;
 
 layout(binding = 3) uniform sampler2D blockTex;
+layout(binding = 6) uniform sampler2D entityTextures[256];
 
 layout(set = 1, binding = 0) buffer Quads {
     Quad quads[];
@@ -35,7 +36,11 @@ Quad getRayQuad() {
 void main() {
     Quad quad = getRayQuad();
     vec2 uv = getFragmentUV(quad, baryCoord);
-    vec4 texColor = texture(blockTex, uv);
+    int entityTextureIndex = quad.vertices[0].block_id.x == -2
+        ? int(quad.vertices[0].block_id.y) - 1 : -1;
+    vec4 texColor = entityTextureIndex >= 0
+        ? texture(entityTextures[nonuniformEXT(entityTextureIndex)], uv)
+        : texture(blockTex, uv);
 
     bool inside, handedness, isNEE;
     float prevDist = payload_unpackFlags(payload.data, inside, handedness, isNEE);
@@ -49,8 +54,14 @@ void main() {
         shadowTrans = applyVolumeExtinction(shadowTrans, segDist, texColor, blockID);
     }
 
-    // Pass through: alpha-test transparency, or NEE shadow ray passing through transmissive blocks
-    if (texColor.a < 0.1 || (isNEE && isTransmissive)) {
+    // Alpha-tested coverage is not a volume boundary. In particular, player
+    // hat/jacket layers contain transparent black texels over the base skin.
+    if (texColor.a < 0.1) {
+        ignoreIntersectionEXT;
+    }
+
+    // Transmissive blocks do cross a volume boundary on NEE shadow rays.
+    if (isNEE && isTransmissive) {
         prevDist = gl_HitTEXT;
         inside = !inside;
         payload_packShadow(payload.data, shadowTrans, blockID);

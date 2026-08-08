@@ -58,6 +58,7 @@ layout(binding = 1) uniform accelerationStructureEXT acc;
 layout(binding = 3) uniform sampler2D blockTex;
 layout(binding = 4) uniform sampler2D blockTexNormal;
 layout(binding = 5) uniform sampler2D blockTexSpecular;
+layout(binding = 6) uniform sampler2D entityTextures[256];
 layout(location = 6) rayPayloadEXT Payload payload;
 
 #if !defined(RADIANCE_CACHE_TRACE)
@@ -202,15 +203,26 @@ Material evaluateMaterial(Payload pld, vec3 rd_i, uint bounce) {
     bool _inside, handedness, _isNEE;
     payload_unpackFlags(pld.data, _inside, handedness, _isNEE);
     float bitangentSign = handedness ? 1.0 : -1.0;
+    uint instanceIdx, entityTextureId, primitiveId;
+    payload_unpackQuadIDs(pld.data, instanceIdx, entityTextureId, primitiveId);
 
     // --- TBN ---
     vec3 bitangent = cross(tangent, geomN) * bitangentSign;
     mat3 tbn = mat3(tangent, bitangent, geomN);
 
+    vec2 sampleUV = uv;
+    vec4 albedoTex;
+    vec4 specularTex;
+    vec4 normalTex;
+
+    if (entityTextureId != 0u) {
+        albedoTex = texture(entityTextures[nonuniformEXT(entityTextureId - 1u)], uv);
+        specularTex = vec4(0.0, 0.04, 0.0, 1.0);
+        normalTex = vec4(0.5, 0.5, 1.0, 1.0);
+    } else {
     vec2 localCoord = getRelativeUV(uv, atlas);
 
     // --- POM — first hit only ---
-    vec2 sampleUV;
     vec2 res = vec2(textureSize(blockTexNormal, 0));
 
 #if POM_ENABLED == 1
@@ -225,7 +237,6 @@ Material evaluateMaterial(Payload pld, vec3 rd_i, uint bounce) {
 #endif
 
     // --- Sample textures (bicubic albedo+specular first hit, bilinear otherwise) ---
-    vec4 albedoTex, specularTex, normalTex;
     albedoTex = texture(blockTex, sampleUV);
     specularTex = texture(blockTexSpecular, sampleUV);
 
@@ -238,6 +249,7 @@ Material evaluateMaterial(Payload pld, vec3 rd_i, uint bounce) {
 #else
     normalTex = texture(blockTexNormal, sampleUV);
 #endif
+    }
 
     albedoTex.rgb = pow(albedoTex.rgb * tint, vec3(2.2));
 
