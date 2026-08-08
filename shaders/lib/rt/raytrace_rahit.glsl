@@ -29,8 +29,12 @@ layout(set = 1, binding = 0) buffer Quads {
     Quad quads[];
 } geometryBuffers[];
 
+#define ENTITY_INSTANCE_FLAG 0x800000u
+
 Quad getRayQuad() {
-    return geometryBuffers[nonuniformEXT(gl_InstanceCustomIndexEXT + gl_GeometryIndexEXT)].quads[gl_PrimitiveID >> 1];
+    uint geometryIndex = (uint(gl_InstanceCustomIndexEXT) & ~ENTITY_INSTANCE_FLAG)
+        + uint(gl_GeometryIndexEXT);
+    return geometryBuffers[nonuniformEXT(geometryIndex)].quads[gl_PrimitiveID >> 1];
 }
 
 void main() {

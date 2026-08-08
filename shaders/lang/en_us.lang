@@ -345,3 +345,6 @@ value.DEBUG_VIEW.31 = Cache Latest Raw
 value.DEBUG_VIEW.32 = Cache RIS Reservoir
 value.DEBUG_VIEW.33 = Cache RIS Sample Count
 value.DEBUG_VIEW.34 = Cache Final Temporal
+value.DEBUG_VIEW.35 = Motion Match Status
+value.DEBUG_VIEW.36 = Entity World Motion
+value.DEBUG_VIEW.37 = Screen Motion

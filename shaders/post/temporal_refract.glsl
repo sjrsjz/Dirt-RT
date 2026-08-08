@@ -122,6 +122,11 @@ void main() {
 
     cameraDelta = camPos - prevRaytracingCamPos;
 
+    vec3 surfaceMotion;
+    float motionValid;
+    readSurfaceMotion(pix, surfaceMotion, motionValid);
+    cameraDelta -= surfaceMotion;
+
     vec3 pos = curr_sample.pos;
     vec3 curNormal_dir = curr_sample.normal;
 
@@ -135,7 +140,7 @@ void main() {
     float Wnew = 1.0;
 
     // 屏蔽掉指向天空的无效历史
-    bool hitSky = (vproj > 0.5 * VPROJDIST_SKY);
+    bool hitSky = (vproj > 0.5 * VPROJDIST_SKY) || motionValid < 0.5;
 
     if (!hitSky) {
         // 统一对虚像位置进行重投影

@@ -345,3 +345,6 @@ value.DEBUG_VIEW.31 = 缓存最近一次原始值
 value.DEBUG_VIEW.32 = 缓存 RIS Reservoir
 value.DEBUG_VIEW.33 = 缓存 RIS 样本数 M
 value.DEBUG_VIEW.34 = 缓存最终时域值
+value.DEBUG_VIEW.35 = 运动匹配状态
+value.DEBUG_VIEW.36 = 实体世界运动
+value.DEBUG_VIEW.37 = 屏幕运动

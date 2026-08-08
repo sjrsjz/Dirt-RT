@@ -31,8 +31,12 @@ layout(set = 1, binding = 0) buffer Quads {
     Quad quads[];
 } geometryBuffers[];
 
+#define ENTITY_INSTANCE_FLAG 0x800000u
+
 Quad getRayQuad() {
-    return geometryBuffers[nonuniformEXT(gl_InstanceCustomIndexEXT + gl_GeometryIndexEXT)].quads[gl_PrimitiveID >> 1];
+    uint geometryIndex = (uint(gl_InstanceCustomIndexEXT) & ~ENTITY_INSTANCE_FLAG)
+        + uint(gl_GeometryIndexEXT);
+    return geometryBuffers[nonuniformEXT(geometryIndex)].quads[gl_PrimitiveID >> 1];
 }
 
 void main() {
@@ -46,7 +50,7 @@ void main() {
     int entityTextureIndex = quad.vertices[0].block_id.x == -2
         ? int(quad.vertices[0].block_id.y) - 1 : -1;
     payload_packQuadIDs(payload.data,
-        uint(gl_InstanceCustomIndexEXT + gl_GeometryIndexEXT),
+        uint(gl_InstanceCustomIndexEXT) + uint(gl_GeometryIndexEXT),
         uint(max(entityTextureIndex + 1, 0)), uint(gl_PrimitiveID));
     payload_packBarycentrics(payload.data, baryCoord);
 

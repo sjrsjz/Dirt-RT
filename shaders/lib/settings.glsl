@@ -95,7 +95,7 @@
 // -- À-trous spatial filter (atrous_denoise_diffuse.glsl) --
 #define ATROUS_NORMAL_POWER 32.0 // Normal edge-stopping sensitivity in à-trous wavelet filter. Higher = sharper normal edges preserved. [1 2 4 8 16 32 64 128]
 #define ATROUS_PHI_L 0.25 // Luma edge-stopping sensitivity. Higher = more aggressive denoising. [0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5]
-#define ATROUS_POSITION_PARAM 0.0025 // Depth edge-stopping sensitivity. Higher = sharper depth boundaries preserved. [0.00075 0.00125 0.0025 0.005 0.01 0.02 0.04 0.08]
+#define ATROUS_POSITION_PARAM 0.01 // Depth edge-stopping sensitivity. Higher = sharper depth boundaries preserved. [0.00075 0.00125 0.0025 0.005 0.01 0.02 0.04 0.08]
 #define ATROUS_GAMMA 1.0 // Roughness-dependent filter order adaptation strength. 0 = constant filter width regardless of roughness (blurrier on rough surfaces), 1 = standard roughness adaptation, higher = more aggressive widening on rough surfaces. [0.0 0.25 0.5 0.75 1.0 1.5 2.0]
 
 // -- Bloom --
@@ -116,7 +116,7 @@
 #define VPROJDIST_SKY 60000.0 // Virtual projected distance assigned to sky hits (m). Used by specular/refraction denoiser to tag infinity. [5000.0 10000.0 25000.0 50000.0 60000.0 100000.0 250000.0]
 
 // -- Debug view --
-#define DEBUG_VIEW 0 // Debug output mode. [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34]
+#define DEBUG_VIEW 0 // Debug output mode. [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37]
 
 /*
 const int depthtex0Format = RGBA32F;

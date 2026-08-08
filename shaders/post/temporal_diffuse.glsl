@@ -420,6 +420,18 @@ void main() {
 
     cameraDelta = camPos - prevRaytracingCamPos;
 
+    vec3 surfaceMotion;
+    float motionValid;
+    readSurfaceMotion(pix, surfaceMotion, motionValid);
+    if (motionValid < 0.5) {
+        resetToCurrentSample();
+        out_data.weight = output_weight;
+        writeDiffuse(out_data, ivec2(pix));
+        imageStore(colorimg6, ivec2(pix), uvec4(0u));
+        return;
+    }
+    cameraDelta -= surfaceMotion;
+
     vec4 clipPos = rtPrevProjection * rtPrevModelView * vec4(current_data.pos + cameraDelta, 1.0);
     prevScreenPos = abs(clipPos.w) > 1e-6 ? (clipPos.xyz / clipPos.w) * 0.5 + 0.5 : vec3(-1.0);
 

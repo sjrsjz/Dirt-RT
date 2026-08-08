@@ -61,6 +61,16 @@ layout(binding = 5) uniform sampler2D blockTexSpecular;
 layout(binding = 6) uniform sampler2D entityTextures[256];
 layout(location = 6) rayPayloadEXT Payload payload;
 
+#define ENTITY_INSTANCE_FLAG 0x800000u
+
+struct EntityMotionVertex {
+    f16vec4 deltaAndValid;
+};
+
+layout(std430, set = 0, binding = 2, scalar) readonly buffer EntityMotionBuffer {
+    EntityMotionVertex vertices[];
+} entityMotionBuffer;
+
 #if !defined(RADIANCE_CACHE_TRACE)
 void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir);
 #endif
@@ -169,6 +179,28 @@ float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse
 
 float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse_0) {
     return raycast(ro, rd, ro_o, rd_o, inverse_0, false);
+}
+
+vec4 getPrimarySurfaceMotion(Payload hitPayload) {
+    uint instanceIdx, geometryId, primitiveId;
+    payload_unpackQuadIDs(hitPayload.data, instanceIdx, geometryId, primitiveId);
+    if ((instanceIdx & ENTITY_INSTANCE_FLAG) == 0u) {
+        // w=2 distinguishes static scene geometry from a tracked entity in
+        // motion debug views. Temporal passes only test w >= 0.5.
+        return vec4(0.0, 0.0, 0.0, 2.0);
+    }
+
+    vec2 bary = payload_unpackBarycentrics(hitPayload.data);
+    float w0 = 1.0 - bary.x - bary.y;
+    uint baseVertex = (primitiveId >> 1u) * 4u;
+    uint secondVertex = (primitiveId & 1u) == 0u ? 1u : 2u;
+    uint thirdVertex = (primitiveId & 1u) == 0u ? 2u : 3u;
+    vec4 m0 = vec4(entityMotionBuffer.vertices[baseVertex].deltaAndValid);
+    vec4 m1 = vec4(entityMotionBuffer.vertices[baseVertex + secondVertex].deltaAndValid);
+    vec4 m2 = vec4(entityMotionBuffer.vertices[baseVertex + thirdVertex].deltaAndValid);
+    vec3 motion = m0.xyz * w0 + m1.xyz * bary.x + m2.xyz * bary.y;
+    float valid = min(m0.w, min(m1.w, m2.w));
+    return vec4(motion, valid);
 }
 
 struct material {
@@ -479,6 +511,8 @@ struct FirstBounceData {
     vec3 emission_val, light_surf, absorption;
     float t, roughness, n_i, n_o, t2_ior_adjusted, pathRoughness;
     float reflectionHitDistance;
+    vec3 surfaceMotion;
+    float motionValid;
     int type, materialID;
 };
 
@@ -1193,6 +1227,8 @@ FirstBounceData initFirstBounceData(vec3 ro, vec3 rd) {
     fb.t2_ior_adjusted = 0.0;
     fb.pathRoughness = 0.0;
     fb.reflectionHitDistance = 0.0;
+    fb.surfaceMotion = vec3(0.0);
+    fb.motionValid = 0.0;
     fb.type = -1;
     fb.materialID = 0;
     return fb;
@@ -1239,6 +1275,7 @@ void writeDiffuseOutput(uvec2 xy, FirstBounceData fb, vec3 L_indirect,
     writeAlbedosPath(GEO_N_ALBEDOS, xy, fb.specularAlbedo, fb.diffuseAlbedo);
     writeMisc(GEO_N_MISC, xy, fb.transmissionAlbedo, fb.emission_val, fb.rd_i);
     writeLightAbs(GEO_N_LIGHTABS, xy, fb.light_surf, fb.absorption);
+    writeSurfaceMotion(xy, fb.surfaceMotion, fb.motionValid);
 
     AliceEncoding combinedAlice = init_alice();
     float mask = 0.0;
@@ -1268,7 +1305,7 @@ void writeReflectionOutput(uvec2 xy, FirstBounceData fb, vec3 totalIllumination,
             vec3(RELAX_NRD_MATERIAL_FACTOR_MIN_SCALE));
         if (!any(isnan(demodulated)) && !any(isinf(demodulated))) {
             refl_color = clamp(demodulated, 0.0,
-                1000.0 * div_avgExposure);
+                200.0 * div_avgExposure);
         }
     }
     writeReflGeo(xy, pos_rel, refl_R);
@@ -1333,6 +1370,9 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         fb.t = -1.0;
         fb.absorption = originalInside ? vec3(0.0) : vec3(1.0);
     } else {
+        vec4 primaryMotion = getPrimarySurfaceMotion(tmp_Payload);
+        fb.surfaceMotion = primaryMotion.xyz;
+        fb.motionValid = primaryMotion.w;
         // --- Material evaluation ---
         Material surfaceMat = evaluateMaterial(tmp_Payload, rd_i, 0u);
         vec3 geomN = payload_unpackGeomNormal(tmp_Payload.data);

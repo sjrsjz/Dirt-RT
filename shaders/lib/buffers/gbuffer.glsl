@@ -21,6 +21,7 @@
 #define GEO_N_MISC         3u
 #define GEO_N_LIGHTABS     4u
 #define GEO_N_MICRONORMAL  5u  // oct(macroNormal) — surface normal with detail map
+#define GEO_N_MOTION       6u  // xyz=currentWorld-previousWorld, w=history validity
 
 // --- N=0 ---
 void writeGeo0(uint N, uvec2 xy, vec3 pos, float dist) {
@@ -29,6 +30,16 @@ void writeGeo0(uint N, uvec2 xy, vec3 pos, float dist) {
 void readGeo0(uint N, uvec2 xy, out vec3 pos, out float dist) {
     vec4 v = geomBuffer.data[addr(N, xy)];
     pos = v.xyz; dist = v.w;
+}
+
+void writeSurfaceMotion(uvec2 xy, vec3 motion, float valid) {
+    geomBuffer.data[addr(GEO_N_MOTION, xy)] = vec4(motion, valid);
+}
+
+void readSurfaceMotion(uvec2 xy, out vec3 motion, out float valid) {
+    vec4 v = geomBuffer.data[addr(GEO_N_MOTION, xy)];
+    motion = v.xyz;
+    valid = v.w;
 }
 
 // --- N=1 ---

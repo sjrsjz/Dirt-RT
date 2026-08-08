@@ -56,6 +56,14 @@ void main() {
     // 用 N=1 surfaceMask 判定天空/表面（surfaceMask 不再在 N=0 重复存储）
     float surfaceMask = readDiffuseSurfaceMask(xy);
 
+    #if DEBUG_VIEW >= 35 && DEBUG_VIEW <= 37
+    // Sky pixels do not contain a surface motion record.
+    if (surfaceMask < 0.5) {
+        fragColor.xyz = vec3(0.0);
+        return;
+    }
+    #endif
+
     // =========================================================================
     // 分支 1: 天空像素 — 读 Geo0 + N=3 + N=4
     // =========================================================================
@@ -285,6 +293,78 @@ void main() {
                 fragColor.xyz = radianceCacheValueValid(cache)
                     ? radianceCacheDiffuseIncident(cache, microN) : vec3(0.0);
             #endif
+        }
+    }
+
+    #elif DEBUG_VIEW == 35
+    {
+        vec3 surfaceMotion;
+        float motionClass;
+        readSurfaceMotion(xy, surfaceMotion, motionClass);
+
+        // Gray: static scene. Green: entity matched to the previous frame.
+        // Failure colors: red=no key, orange=vertex count, cyan=topology,
+        // blue=non-finite or excessive world motion.
+        if (motionClass > 1.5) {
+            fragColor.xyz = vec3(0.18);
+        } else if (motionClass > 0.5) {
+            fragColor.xyz = vec3(0.0, 1.0, 0.0);
+        } else if (motionClass > -0.5) {
+            fragColor.xyz = vec3(1.0, 0.0, 0.0);
+        } else if (motionClass > -1.5) {
+            fragColor.xyz = vec3(1.0, 0.35, 0.0);
+        } else if (motionClass > -2.5) {
+            fragColor.xyz = vec3(0.0, 1.0, 1.0);
+        } else {
+            fragColor.xyz = vec3(0.0, 0.2, 1.0);
+        }
+    }
+
+    #elif DEBUG_VIEW == 36
+    {
+        vec3 surfaceMotion;
+        float motionClass;
+        readSurfaceMotion(xy, surfaceMotion, motionClass);
+
+        if (motionClass > 1.5) {
+            fragColor.xyz = vec3(0.0);
+        } else if (motionClass < 0.5) {
+            fragColor.xyz = vec3(1.0, 0.0, 1.0);
+        } else {
+            // Neutral gray is zero. +/-0.0625 block/frame reaches the range ends.
+            fragColor.xyz = clamp(vec3(0.5) + surfaceMotion * 8.0, 0.0, 1.0);
+        }
+    }
+
+    #elif DEBUG_VIEW == 37
+    {
+        vec3 surfaceMotion;
+        float motionClass;
+        readSurfaceMotion(xy, surfaceMotion, motionClass);
+
+        if (motionClass < 0.5) {
+            fragColor.xyz = vec3(1.0, 0.0, 1.0);
+        } else {
+            vec3 relativePos;
+            float distance;
+            readGeo0(GEO_N_GEO, xy, relativePos, distance);
+            vec3 previousRelativePos = relativePos
+                + camPos - prevRaytracingCamPos - surfaceMotion;
+            vec4 previousClip = rtPrevProjection * rtPrevModelView
+                * vec4(previousRelativePos, 1.0);
+            if (abs(previousClip.w) < 1e-6) {
+                fragColor.xyz = vec3(1.0, 0.0, 1.0);
+            } else {
+                vec2 currentUv = vec2(xy) / vec2(resolution_global);
+                vec2 previousUv = previousClip.xy / previousClip.w * 0.5 + 0.5;
+                vec2 velocityPixels = (currentUv - previousUv)
+                    * vec2(resolution_global);
+                // R/G: signed X/Y at 16 px/frame. B: magnitude.
+                fragColor.xyz = vec3(
+                    0.5 + 0.5 * clamp(velocityPixels.x / 16.0, -1.0, 1.0),
+                    0.5 + 0.5 * clamp(velocityPixels.y / 16.0, -1.0, 1.0),
+                    clamp(length(velocityPixels) / 16.0, 0.0, 1.0));
+            }
         }
     }
 

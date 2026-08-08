@@ -226,6 +226,10 @@ void main() {
     uint currentMaterial = uint(max(currentMaterialInt, 0));
     float currentRoughness = relaxPerceptualRoughness(currentAlpha);
     vec3 cameraDelta = camPos - prevRaytracingCamPos;
+    vec3 surfaceMotion;
+    float motionValid;
+    readSurfaceMotion(pixel, surfaceMotion, motionValid);
+    cameraDelta -= surfaceMotion;
     vec3 viewDirection = relaxSafeNormalize(currentPos, vec3(0.0, 0.0, 1.0));
     vec3 V = -viewDirection;
     float NoV = abs(dot(currentNormal, V));
@@ -234,6 +238,7 @@ void main() {
     RelaxReprojectedHistory surface = relaxLoadHistory(
         surfaceUv, currentPos, currentNormal, currentMaterial,
         cameraDelta, false);
+    surface.found = surface.found && motionValid >= 0.5;
     float lobeAngle = max(atan(relaxSpecLobeTanHalfAngle(currentRoughness, 0.75)),
         1.5 / 255.0);
     float surfaceViewWeight = 0.0;
@@ -262,6 +267,7 @@ void main() {
     RelaxReprojectedHistory virtualHistory = relaxLoadHistory(
         virtualUv, currentPos, currentNormal, currentMaterial,
         cameraDelta, true);
+    virtualHistory.found = virtualHistory.found && motionValid >= 0.5;
 
     float dominantFactor = relaxDominantFactor(NoV, currentRoughness);
     float virtualAmount = virtualHistory.found ? dominantFactor : 0.0;

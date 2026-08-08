@@ -218,7 +218,12 @@ bool sampleHistory(uvec2 gxy, inout uint seed, out StoredReservoir result) {
     readGeo0(GEO_N_GEO, gxy, curPos, curDist);
     if (curDist <= -0.5) return false;
 
-    vec3 prevPos = curPos + camPos - prevRaytracingCamPos;
+    vec3 surfaceMotion;
+    float motionValid;
+    readSurfaceMotion(gxy, surfaceMotion, motionValid);
+    if (motionValid < 0.5) return false;
+
+    vec3 prevPos = curPos + camPos - prevRaytracingCamPos - surfaceMotion;
     vec4 clip = rtPrevProjection * rtPrevModelView * vec4(prevPos, 1.0);
     if (clip.w <= 1e-6) return false;
     vec2 uv = (clip.xy / clip.w) * 0.5 + 0.5;
