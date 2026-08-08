@@ -33,7 +33,7 @@ option.PATH_GUIDING_SPECULAR_STRENGTH = 镜面引导强度
 option.PATH_GUIDING_SPECULAR_STRENGTH.comment = 使用 ALICE 历史引导粗糙反射射线的基础概率。光滑镜面或各向同性光场会自动减少引导。
 
 option.SUN_PATH_ROTATION = 日照路径旋转
-option.SUN_PATH_ROTATION.comment = 绕世界 X 轴旋转太阳和月亮的视运动路径，只改变光照方向，不改变昼夜长度。
+option.SUN_PATH_ROTATION.comment = 类似纬度地绕世界 X 轴倾斜太阳和月亮的视运动路径，只改变光照方向，不改变昼夜长度。30° 对应当前大气模型的北纬 30° 春季晴空标定基准。
 
 option.END_SKYBOX = 末地天空盒
 option.END_SKYBOX.comment = 控制末地是否使用符文环与星云天空。关闭后使用开销较低的大气散射备用天空。
@@ -276,6 +276,10 @@ option.ATROUS_GAMMA.comment = 控制滤波范围随粗糙度扩大的程度。0 
 # ===========================================================================
 option.BLOOM_MIX = 泛光强度
 option.BLOOM_MIX.comment = 最终画面中泛光所占的混合比例。设为 0 可关闭泛光；过高会冲淡局部对比度。
+option.BLOOM_DIFFUSION_SCALE = 泛光扩散尺度
+option.BLOOM_DIFFUSION_SCALE.comment = 同时缩放 RGB 三通道的高斯散射半径，并保留由波长决定的比例。数值越高，晶状体散射光晕越宽。
+option.BLOOM_CHROMATIC_SCATTER = 晶状体波长散射
+option.BLOOM_CHROMATIC_SCATTER.comment = 控制晶状体散射功率中的小粒子瑞利分量。0 近似波长无关的大粒子前向散射，1 是纯瑞利散射上限。系统在方差域按 RGB 约 611/549/464 nm 的代表波长混合；纯瑞利对应约 0.807/1.000/1.400 的红绿蓝 sigma 比例。
 
 # ===========================================================================
 # 曝光与显示
@@ -288,6 +292,12 @@ option.DISPLAY_PAPER_WHITE_LUMINANCE.comment = 普通漫反射白色相对于显
 
 option.EXPOSURE_CURVE_K = 曝光曲线
 option.EXPOSURE_CURVE_K.comment = 在色调映射前压缩高光。设为 0 表示关闭；数值越高越能保留亮部细节，但高光对比度会降低。
+
+option.PUPIL_MIN_DIAMETER_MM = 最小瞳孔直径
+option.PUPIL_MIN_DIAMETER_MM.comment = 明亮环境中瞳孔能够收缩到的最小直径，单位为毫米。它限制快速的光学适应；较慢的视网膜/神经适应仍会完成剩余曝光调节，因此不会把该值错误地当作总曝光下限。典型成人约为 2–4 mm。
+
+option.PUPIL_MAX_DIAMETER_MM = 最大瞳孔直径
+option.PUPIL_MAX_DIAMETER_MM.comment = 黑暗环境中瞳孔能够扩张到的最大直径，单位为毫米。它限制快速的光学适应，较慢的视网膜/神经适应会继续调节暗部。典型成人约为 6–8 mm；系统以 4 mm 瞳孔作为 1 倍光学曝光参考。
 
 # ===========================================================================
 # 高级

@@ -47,7 +47,9 @@ void main() {
     unpackLightSample(pix, pos, mask, encoded, blurred_alice);
     tmp.pos = pos;
     tmp.surfaceMask = mask;
-    tmp.histSurfaceMask = mask;
+    float roughness_unused, pathRoughness_unused;
+    int illumType_unused;
+    readGeo1(GEO_N_NORMALS, gxy, tmp.histNormal, roughness_unused, illumType_unused, pathRoughness_unused);
     tmp.data_swap = encoded;
     tmp.data = mix_alice(tmp.data, blurred_alice,
             clamp(NRD_BLEND_STRENGTH * exp(-NRD_BLEND_STRENGTH * clamp(tmp.weight, 0.0, 100.0)), 0.0, 1.0));

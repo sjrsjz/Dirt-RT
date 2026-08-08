@@ -307,14 +307,54 @@ int getRelaxMaterialID(Payload pld, int transportBlockID) {
 }
 
 vec3 evaluateNonSpecularAlbedo(material surf, vec3 rd_i, vec3 macroNormal) {
-    float NoV = clamp(abs(dot(rd_i, macroNormal)), 0.0, 1.0);
-    vec3 reflected = reflectanceColor(surf.Cs, NoV).rgb * surf.S.x;
-    return surf.Cd * max(vec3(0.0), vec3(1.0) - reflected);
+    // Disney's diffuse/base-color lobe is not pre-multiplied by a view-angle
+    // Fresnel term. Its grazing response is part of the Burley diffuse factor.
+    return surf.Cd;
 }
 
 vec3 evaluateDiffuseAlbedo(material surf, vec3 rd_i, vec3 macroNormal) {
     return evaluateNonSpecularAlbedo(surf, rd_i, macroNormal)
         * (1.0 - clamp(surf.S.y, 0.0, 1.0));
+}
+
+// Exact GLSL port of NRD.hlsli's material-factor front end. ReLAX consumes
+// demodulated specular radiance, so both the fit and its deliberately biased
+// stability floors are part of the denoiser contract, not optional tuning.
+const float RELAX_NRD_EPS = 1e-6;
+const float RELAX_NRD_MATERIAL_FACTOR_MIN_SCALE = 0.02;
+const float RELAX_NRD_ROUGHNESS_FACTOR_MIN_SCALE = 0.1;
+
+vec3 relaxNrdEnvironmentTermRtg(vec3 Rf0, float NoV,
+    float perceptualRoughness) {
+    // Ray Tracing Gems, Chapter 32, Equation 4. The official fit consumes
+    // perceptual roughness and squares it internally to obtain GGX alpha.
+    float m = clamp(perceptualRoughness * perceptualRoughness, 0.0, 1.0);
+
+    vec4 X = vec4(1.0, NoV, NoV * NoV, NoV * NoV * NoV);
+    vec4 Y = vec4(1.0, m, m * m, m * m * m);
+
+    // Written explicitly to preserve HLSL mul(matrix, columnVector) semantics
+    // and avoid a row/column-major transpose while porting the NRD constants.
+    vec2 m1x = vec2(
+         0.99044 * X.x - 1.28514  * X.y,
+         1.29678 * X.x - 0.755907 * X.y);
+    vec3 m2x = vec3(
+          1.0     * X.x +   2.92338 * X.y +  59.4188 * X.w,
+         20.3225  * X.x -  27.0302  * X.y + 222.592  * X.w,
+        121.563   * X.x + 626.13    * X.y + 316.627  * X.w);
+    vec2 m3x = vec2(
+        0.0365463 * X.x + 3.32707 * X.y,
+        9.0632    * X.x - 9.04756 * X.y);
+    vec3 m4x = vec3(
+        1.0     * X.x +   3.59685 * X.z -  1.36772 * X.w,
+        9.04401 * X.x -  16.3174  * X.z +  9.22949 * X.w,
+        5.56589 * X.x +  19.7886  * X.z - 20.2123  * X.w);
+
+    float bias = dot(m1x, Y.xy)
+        / max(dot(m2x, Y.xyw), RELAX_NRD_EPS);
+    float scale = dot(m3x, Y.xy)
+        / max(dot(m4x, Y.xyw), RELAX_NRD_EPS);
+    return clamp(Rf0 * scale + vec3(bias), vec3(0.0), vec3(1.0));
 }
 
 vec3 evaluateSpecularAlbedo(
@@ -327,22 +367,26 @@ vec3 evaluateSpecularAlbedo(
     dielectricF0 *= dielectricF0;
 
     // Match evaluateSurfaceFresnel(): opaque/metallic lobes use LabPBR F0,
-    // while transmissive interfaces use IOR Fresnel and reach one at grazing.
-    // The old mismatch could divide a ~4% glass reflection by 1e-5.
-    vec3 F0 = mix(surf.Cs * surf.S.x, vec3(dielectricF0),
+    // while transmissive interfaces use IOR Fresnel.
+    vec3 Rf0 = mix(surf.Cs * surf.S.x, vec3(dielectricF0),
         transmissionSelector);
-    float grazingScale = mix(surf.S.x, 1.0, transmissionSelector);
-    vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
-    vec4 c1 = vec4(1.0, 0.0425, 1.040, -0.040);
-    // The split-sum fit is parameterized by perceptual roughness, while R.x
-    // stores GGX alpha = perceptualRoughness^2.
+
+    // Dirt RT stores GGX alpha; NRD_MaterialFactors takes perceptual roughness.
     float perceptualRoughness = sqrt(clamp(surf.R.x, 0.0, 1.0));
-    vec4 r = fma(vec4(perceptualRoughness), c0, c1);
-    float a004 = min(r.x * r.x, exp2(-9.28 * NoV)) * r.x + r.y;
-    vec2 AB = fma(vec2(-1.04, 1.04), vec2(a004), r.zw);
-    vec3 response = F0 * AB.x + vec3(AB.y * grazingScale);
-    if (any(isnan(response)) || any(isinf(response))) return vec3(1e-5);
-    return clamp(response, vec3(1e-5), vec3(1.0));
+    vec3 specFactor = relaxNrdEnvironmentTermRtg(
+        clamp(Rf0, vec3(0.0), vec3(1.0)), NoV, perceptualRoughness);
+
+    // These two lines intentionally reproduce NRD_MaterialFactors exactly.
+    // They bias very dark/rough reflectors, preventing unstable demodulation.
+    specFactor *= mix(RELAX_NRD_ROUGHNESS_FACTOR_MIN_SCALE,
+        1.0, perceptualRoughness);
+    specFactor = mix(vec3(RELAX_NRD_MATERIAL_FACTOR_MIN_SCALE),
+        vec3(1.0), specFactor);
+
+    if (any(isnan(specFactor)) || any(isinf(specFactor)))
+        return vec3(RELAX_NRD_MATERIAL_FACTOR_MIN_SCALE);
+    return clamp(specFactor,
+        vec3(RELAX_NRD_MATERIAL_FACTOR_MIN_SCALE), vec3(1.0));
 }
 
 vec3 reproject(vec3 worldPos) {
@@ -353,7 +397,7 @@ vec3 reproject(vec3 worldPos) {
 }
 
 // -----------------------------------------------------------------------------------
-// Direct-lighting (NEE) moved to evalDirectDiffuse() / evalDirectSpecular() below
+// Direct-lighting helpers are defined next to the sun sampler below.
 // ---------------------------------------------------------------------------
 
 vec3 GetSpecularDominantDirection(vec3 N, vec3 V, float R) {
@@ -376,6 +420,28 @@ struct LobeProbs {
     vec3 specWeight, refrWeight, diffWeight;
     float F;
 };
+
+const float PT_DELTA_ROUGHNESS = 1e-5;
+
+float powerHeuristic(float pdfA, float pdfB) {
+    float a2 = pdfA * pdfA;
+    float b2 = pdfB * pdfB;
+    return a2 / max(a2 + b2, 1e-30);
+}
+
+float sunSolidAngle() {
+    return max(2.0 * PI * (1.0 - cosD_S), 1e-12);
+}
+
+float sunDirectionPdf(vec3 wi, vec3 lightDir) {
+    vec3 sunDirection = -normalize(lightDir);
+    return dot(wi, sunDirection) >= cosD_S
+        ? 1.0 / sunSolidAngle() : 0.0;
+}
+
+bool isDeltaSpecular(float roughness) {
+    return roughness <= PT_DELTA_ROUGHNESS;
+}
 
 struct MediumResult {
     vec3 absorption;
@@ -419,7 +485,7 @@ HalfVector computeHalfVector(vec3 wo, vec3 wi) {
 }
 
 // ===========================================================================
-// GGX Microfacet BRDF Evaluation
+// Disney Cook-Torrance BRDF Evaluation
 // ===========================================================================
 
 // Evaluate GGX microfacet BRDF: f(wo, wi) × NoL, and NDF sampling PDF.
@@ -468,6 +534,45 @@ bool evaluateSpecularBRDF(
     }
 
     return valid;
+}
+
+// Burley's Disney diffuse term. surf.R.x stores GGX alpha, while the Disney
+// fit is parameterized by perceptual roughness, hence the square root.
+float evaluateDisneyDiffuseFactor(
+    vec3 wo, vec3 wi, vec3 macroNormal, float roughness
+) {
+    float NoV = clamp(dot(macroNormal, wo), 0.0, 1.0);
+    float NoL = clamp(dot(macroNormal, wi), 0.0, 1.0);
+    HalfVector hv = computeHalfVector(wo, wi);
+    if (!hv.valid || NoV <= 0.0 || NoL <= 0.0) return 0.0;
+
+    float LoH = clamp(dot(wi, hv.H), 0.0, 1.0);
+    float perceptualRoughness = sqrt(clamp(roughness, 0.0, 1.0));
+    float Fd90 = 0.5 + 2.0 * perceptualRoughness * LoH * LoH;
+    float lightScatter = mix(1.0, Fd90, pow(1.0 - NoL, 5.0));
+    float viewScatter = mix(1.0, Fd90, pow(1.0 - NoV, 5.0));
+    return max(lightScatter * viewScatter, 0.0);
+}
+
+bool evaluateDisneyDiffuseBRDF(
+    vec3 wo, vec3 wi, vec3 macroNormal, vec3 geometryNormal,
+    vec3 diffuseColor, float roughness,
+    out vec3 fDiffuseTimesNoL, out float pdfCosine
+) {
+    float NoL = dot(macroNormal, wi);
+    float NoV = dot(macroNormal, wo);
+    if (NoL <= 1e-6 || NoV <= 1e-6
+            || dot(geometryNormal, wi) <= 0.0) {
+        fDiffuseTimesNoL = vec3(0.0);
+        pdfCosine = 0.0;
+        return false;
+    }
+
+    float Fd = evaluateDisneyDiffuseFactor(
+        wo, wi, macroNormal, roughness);
+    fDiffuseTimesNoL = diffuseColor * (Fd * NoL / PI);
+    pdfCosine = NoL / PI;
+    return Fd > 0.0;
 }
 
 // Walter/PBRT rough-dielectric BTDF evaluated for an NDF-sampled microfacet.
@@ -532,10 +637,13 @@ bool evaluateTransmissionBSDF(
 // BSDF Lobe Probabilities
 // ===========================================================================
 
-LobeProbs computeLobeProbs(material surf, vec3 rd_i, vec3 microNormal, float rs) {
+LobeProbs computeLobeProbs(material surf, vec3 rd_i, vec3 macroNormal, float rs) {
     LobeProbs p;
-    p.F = clamp(fresnel(-rd_i, microNormal, rs), 0.0, 1.0);
-    vec4 rC = reflectanceColor(surf.Cs, dot(rd_i, microNormal));
+    // Lobe selection must be independent of the subsequently sampled GGX
+    // half-vector. This gives the continuation strategy a well-defined PDF
+    // that can be evaluated for an arbitrary NEE direction.
+    p.F = clamp(fresnel(-rd_i, macroNormal, rs), 0.0, 1.0);
+    vec4 rC = reflectanceColor(surf.Cs, dot(rd_i, macroNormal));
 
     float transmissionSelector = clamp(surf.S.y, 0.0, 1.0);
     float diffuseSelector = 1.0 - transmissionSelector;
@@ -544,11 +652,28 @@ LobeProbs computeLobeProbs(material surf, vec3 rd_i, vec3 microNormal, float rs)
         rC.rgb * surf.S.x,
         vec3(p.F),
         transmissionSelector);
-    p.P_spec = clamp(luma(interfaceF), 0.0, 1.0);
-    p.P_refr = (1.0 - p.P_spec) * transmissionSelector;
-    p.P_diff = (1.0 - p.P_spec) * diffuseSelector;
+    // Probabilities choose a non-zero transport lobe; they are not Fresnel
+    // absorption probabilities. In particular, a metal has Cd == 0 and must
+    // never spend samples on a zero-valued diffuse branch.
+    float interfaceEnergy = clamp(luma(interfaceF), 0.0, 1.0);
+    float baseEnergy = max(luma(max(surf.Cd, vec3(0.0))), 0.0);
+    float remainingEnergy = max(1.0 - interfaceEnergy, 0.0);
+    float specImportance = interfaceEnergy;
+    float refrImportance = remainingEnergy * transmissionSelector * baseEnergy;
+    float diffImportance = remainingEnergy * diffuseSelector * baseEnergy;
+    float importanceSum = specImportance + refrImportance + diffImportance;
 
-    vec3 nonSpecColor = surf.Cd * max(vec3(0.0), vec3(1.0) - rC.rgb * surf.S.x);
+    if (importanceSum > 1e-8) {
+        p.P_spec = specImportance / importanceSum;
+        p.P_refr = refrImportance / importanceSum;
+        p.P_diff = diffImportance / importanceSum;
+    } else {
+        p.P_spec = 0.0;
+        p.P_refr = 0.0;
+        p.P_diff = 0.0;
+    }
+
+    vec3 nonSpecColor = surf.Cd;
     p.specWeight = interfaceF / max(p.P_spec, 1e-5);
     p.refrWeight = surf.Cd * transmissionSelector / max(p.P_refr, 1e-5);
     p.diffWeight = nonSpecColor * diffuseSelector / max(p.P_diff, 1e-5);
@@ -609,8 +734,8 @@ GuideInfo computeAliceGuide(vec3 ro_o, float strengthMultiplier) {
 
 vec3 sampleDiffuseWithGuide(vec3 geometryNormal, vec3 shadingNormal,
     vec3 ro_o, GuideInfo guide,
-    out vec3 next_rd, out float guideWeight) {
-    
+    out vec3 next_rd, out float guideWeight, out float sampledPdf) {
+    sampledPdf = 0.0;
     bool useGuide = getRandom() < guide.prob;
     if (useGuide) {
         next_rd = sample_alice_guiding(guide.axis, guide.kappa, rand2(ro_o));
@@ -629,6 +754,7 @@ vec3 sampleDiffuseWithGuide(vec3 geometryNormal, vec3 shadingNormal,
     float pdfUniform = 1.0 / (2.0 * PI);
     float pdfAlice = guide.prob > 0.0 ? alice_guiding_pdf(next_rd, guide.axis, guide.kappa) : 0.0;
     float pdfMix = (1.0 - guide.prob) * pdfUniform + guide.prob * pdfAlice;
+    sampledPdf = pdfMix;
     guideWeight = (pdfMix > 1e-20) ? (pdfUniform / pdfMix) : 0.0;    
     return vec3(guideWeight);
 }
@@ -704,8 +830,22 @@ PSRResult tracePSRChain(vec3 ro, vec3 rd, vec3 geometryNormal, float firstRoughn
 void handleFirstBounce_Reflection(
     vec3 rd_i, vec3 ro_o, vec3 macroNormal, vec3 geometryNormal, vec3 microNormal,
     material surf, LobeProbs lobes, float etaRatio,
-    out vec3 bsdf_weight, out vec3 next_rd
+    out vec3 bsdf_weight, out vec3 next_rd,
+    out float sampledStrategyPdf, out bool sampledDelta
 ) {
+    vec3 wo = -rd_i;
+    sampledStrategyPdf = 0.0;
+    sampledDelta = isDeltaSpecular(surf.R.x);
+
+    if (sampledDelta) {
+        next_rd = reflect(rd_i, macroNormal);
+        bsdf_weight = dot(next_rd, geometryNormal) > 0.0
+            ? evaluateSurfaceFresnel(wo, macroNormal, surf.Cs, surf.S.x,
+                surf.S.y, etaRatio)
+            : vec3(0.0);
+        return;
+    }
+
     GuideInfo guide = computeAliceGuide(ro_o, PATH_GUIDING_SPECULAR_STRENGTH * surf.R.x);
     float reflGuideProb = guide.prob; // already 0 when !valid (set in computeAliceGuide)
 
@@ -718,7 +858,6 @@ void handleFirstBounce_Reflection(
         next_rd = reflGGX_wi;
     }
 
-    vec3 wo = -rd_i;
     vec3 wi = next_rd;
     vec3 fSpecTimesNoL_val;
     float pdfNDF;
@@ -727,6 +866,7 @@ void handleFirstBounce_Reflection(
             fSpecTimesNoL_val, pdfNDF)) {
         float pdfAlice = alice_guiding_pdf(wi, guide.axis, guide.kappa);
         float pdfMix = (1.0 - reflGuideProb) * pdfNDF + reflGuideProb * pdfAlice;
+        sampledStrategyPdf = pdfMix;
         bsdf_weight = (pdfMix > 1e-8) ? (fSpecTimesNoL_val / pdfMix) : vec3(0.0);
     } else {
         bsdf_weight = vec3(0.0);
@@ -760,12 +900,19 @@ void handleFirstBounce_Refraction(
         vec3 fTransmissionTimesNoL;
         float pdfTransmission;
         vec3 transmissionColor = surf.Cd * clamp(surf.S.y, 0.0, 1.0);
-        bool validTransmission = evaluateTransmissionBSDF(
-            -rd_i, next_rd, macroNormal, microNormal,
-            transmissionColor, rs, surf.R.x,
-            fTransmissionTimesNoL, pdfTransmission);
-        bsdf_weight = validTransmission && pdfTransmission > 1e-8
-            ? fTransmissionTimesNoL / pdfTransmission : vec3(0.0);
+        if (isDeltaSpecular(surf.R.x)) {
+            float F = clamp(fresnel(-rd_i, macroNormal, rs), 0.0, 1.0);
+            // Radiance transport through a delta dielectric carries eta_i^2 /
+            // eta_t^2. The inverse factor at the exit interface cancels it.
+            bsdf_weight = transmissionColor * (1.0 - F) * (rs * rs);
+        } else {
+            bool validTransmission = evaluateTransmissionBSDF(
+                -rd_i, next_rd, macroNormal, microNormal,
+                transmissionColor, rs, surf.R.x,
+                fTransmissionTimesNoL, pdfTransmission);
+            bsdf_weight = validTransmission && pdfTransmission > 1e-8
+                ? fTransmissionTimesNoL / pdfTransmission : vec3(0.0);
+        }
     } else {
         // TIR
         next_rd = reflect(rd_i, microNormal);
@@ -779,15 +926,19 @@ void handleFirstBounce_Refraction(
 void handleFirstBounce_Diffuse(
     vec3 rd_i, vec3 ro_o, vec3 macroNormal, vec3 geometryNormal,
     material surf, LobeProbs lobes,
-    out vec3 bsdf_weight, out vec3 next_rd
+    out vec3 bsdf_weight, out vec3 next_rd, out float sampledStrategyPdf
 ) {
     GuideInfo guide = computeAliceGuide(ro_o, PATH_GUIDING_STRENGTH);
     float guideWeight;
     sampleDiffuseWithGuide(
-        geometryNormal, macroNormal, ro_o, guide, next_rd, guideWeight);
+        geometryNormal, macroNormal, ro_o, guide, next_rd, guideWeight,
+        sampledStrategyPdf);
     // Uniform-hemisphere sampling estimates (1 / 2pi) * integral L dOmega.
-    // ALICE supplies the cosine in composite, so 2 converts it to E / pi.
-    bsdf_weight = vec3(2.0 * guideWeight);
+    // ALICE supplies the cosine in composite, so 2 converts it to 1/pi. The
+    // Disney factor supplies the non-Lambertian angular response.
+    float Fd = evaluateDisneyDiffuseFactor(
+        -rd_i, next_rd, macroNormal, surf.R.x);
+    bsdf_weight = vec3(2.0 * guideWeight * Fd);
 }
 
 // ===========================================================================
@@ -798,10 +949,15 @@ void handleSecondaryBounce(
     vec3 rd_i, vec3 ro_o, vec3 macroNormal, vec3 geometryNormal, vec3 microNormal,
     material surf, LobeProbs lobes,
     out vec3 bsdf_weight, out vec3 next_rd, out int lobeType,
-    out bool sampledSpecularLobe, inout bool inside_state
+    out bool sampledSpecularLobe, out float sampledStrategyPdf,
+    out bool sampledDeltaLobe, out bool neeCompatible,
+    inout bool inside_state
 ) {
     float rnd_lobe = getRandom();
     sampledSpecularLobe = false;
+    sampledStrategyPdf = 0.0;
+    sampledDeltaLobe = false;
+    neeCompatible = false;
     float n_i = inside_state ? REFRACTIVE_INDEX : 1.0;
     float n_o = inside_state ? 1.0 : REFRACTIVE_INDEX;
     float rs = n_i / n_o;
@@ -810,10 +966,19 @@ void handleSecondaryBounce(
         // Reflection
         sampledSpecularLobe = true;
         lobeType = REFLECTION;
-        next_rd = reflect(rd_i, microNormal);
+        sampledDeltaLobe = isDeltaSpecular(surf.R.x);
+        neeCompatible = true;
+        next_rd = reflect(rd_i,
+            sampledDeltaLobe ? macroNormal : microNormal);
         if (dot(next_rd, macroNormal) > 0.0) {
             vec3 wo = -rd_i;
             vec3 wi = next_rd;
+            if (sampledDeltaLobe) {
+                vec3 F = evaluateSurfaceFresnel(
+                    wo, macroNormal, surf.Cs, surf.S.x, surf.S.y, rs);
+                bsdf_weight = F / max(lobes.P_spec, 1e-8);
+                return;
+            }
             vec3 fSpecTimesNoL_val;
             float pdfNDF;
             if (evaluateSpecularBRDF(wo, wi, macroNormal, surf.Cs, surf.S.x,
@@ -821,6 +986,7 @@ void handleSecondaryBounce(
                     fSpecTimesNoL_val, pdfNDF)) {
                 bsdf_weight = (pdfNDF > 1e-8)
                     ? (fSpecTimesNoL_val / (pdfNDF * lobes.P_spec)) : vec3(0.0);
+                sampledStrategyPdf = pdfNDF * lobes.P_spec;
             } else {
                 bsdf_weight = vec3(0.0);
             }
@@ -836,14 +1002,24 @@ void handleSecondaryBounce(
             vec3 fTransmissionTimesNoL;
             float pdfTransmission;
             vec3 transmissionColor = surf.Cd * clamp(surf.S.y, 0.0, 1.0);
-            bool validTransmission = evaluateTransmissionBSDF(
-                -rd_i, next_rd, macroNormal, microNormal,
-                transmissionColor, rs, surf.R.x,
-                fTransmissionTimesNoL, pdfTransmission);
-            bsdf_weight = validTransmission && pdfTransmission > 1e-8
-                ? fTransmissionTimesNoL
-                    / (pdfTransmission * max(lobes.P_refr, 1e-8))
-                : vec3(0.0);
+            bool validTransmission;
+            if (isDeltaSpecular(surf.R.x)) {
+                float F = clamp(
+                    fresnel(-rd_i, macroNormal, rs), 0.0, 1.0);
+                bsdf_weight = transmissionColor * (1.0 - F) * (rs * rs)
+                    / max(lobes.P_refr, 1e-8);
+                validTransmission = true;
+                sampledDeltaLobe = true;
+            } else {
+                validTransmission = evaluateTransmissionBSDF(
+                    -rd_i, next_rd, macroNormal, microNormal,
+                    transmissionColor, rs, surf.R.x,
+                    fTransmissionTimesNoL, pdfTransmission);
+                bsdf_weight = validTransmission && pdfTransmission > 1e-8
+                    ? fTransmissionTimesNoL
+                        / (pdfTransmission * max(lobes.P_refr, 1e-8))
+                    : vec3(0.0);
+            }
             inside_state = validTransmission ? !inside_state : inside_state;
         } else {
             next_rd = reflect(rd_i, microNormal);
@@ -853,9 +1029,19 @@ void handleSecondaryBounce(
     } else {
         // Diffuse
         lobeType = DIFFUSION;
+        neeCompatible = true;
         next_rd = DiffuseNormal(macroNormal, ro_o);
-        bsdf_weight = dot(next_rd, geometryNormal) > 0.0
-            ? lobes.diffWeight : vec3(0.0);
+        vec3 fDiffuseTimesNoL;
+        float pdfCosine;
+        vec3 diffuseColor = surf.Cd
+            * (1.0 - clamp(surf.S.y, 0.0, 1.0));
+        bool validDiffuse = evaluateDisneyDiffuseBRDF(
+            -rd_i, next_rd, macroNormal, geometryNormal,
+            diffuseColor, surf.R.x,
+            fDiffuseTimesNoL, pdfCosine);
+        sampledStrategyPdf = lobes.P_diff * pdfCosine;
+        bsdf_weight = validDiffuse && sampledStrategyPdf > 1e-8
+            ? fDiffuseTimesNoL / sampledStrategyPdf : vec3(0.0);
     }
 }
 
@@ -864,9 +1050,10 @@ void handleSecondaryBounce(
 // ===========================================================================
 
 bool sampleDirectSun(vec3 ro, vec3 geometryNormal, vec3 lightDir, bool inside,
-    out vec3 wi, out vec3 Li) {
+    out vec3 wi, out vec3 Li, out float lightPdf) {
     wi = -lightDir;
     Li = vec3(0.0);
+    lightPdf = 1.0 / sunSolidAngle();
     ro += (dot(lightDir, geometryNormal) > 0.15 ? lightDir : geometryNormal) * 0.001;
 
     vec3 X, Y, Z;
@@ -881,7 +1068,9 @@ bool sampleDirectSun(vec3 ro, vec3 geometryNormal, vec3 lightDir, bool inside,
     if (t > -0.5) return false;
 
     wi = -sampleDir;
-    Li = sampleSky(ro.y, wi, lightDir).xyz
+    // NEE owns only the solar disc. Atmospheric scattering remains in the
+    // BSDF-sampled no-disc environment and is therefore never double counted.
+    Li = sampleSkySunDisc(ro.y, wi, lightDir).xyz
         * payload_unpackShadow(tmp_Payload.data);
     return !any(isnan(Li)) && !any(isinf(Li));
 }
@@ -889,27 +1078,16 @@ bool sampleDirectSun(vec3 ro, vec3 geometryNormal, vec3 lightDir, bool inside,
 vec3 evalDirectDiffuse(vec3 ro, vec3 geometryNormal, vec3 shadingNormal,
     vec3 diffuseAlbedo, vec3 rd_i, vec3 lightDir, bool inside) {
     vec3 wi, Li;
-    if (!sampleDirectSun(ro, geometryNormal, lightDir, inside, wi, Li))
+    float lightPdf;
+    if (!sampleDirectSun(
+            ro, geometryNormal, lightDir, inside, wi, Li, lightPdf))
         return vec3(0.0);
 
     float OiN = dot(wi, shadingNormal);
     float oiNWeight = float(OiN > 0.0 && dot(wi, geometryNormal) > 0.0);
 
     return max(vec3(0.0), diffuseAlbedo * Li
-        * (2.0 * OiN * oiNWeight * (1.0 - cosD_S)));
-}
-
-vec3 evalDirectDiffuseAliceSample(vec3 ro, vec3 geometryNormal,
-    vec3 lightDir, bool inside, out vec3 sampledWi) {
-    vec3 Li;
-    if (!sampleDirectSun(
-            ro, geometryNormal, lightDir, inside, sampledWi, Li))
-        return vec3(0.0);
-    if (dot(sampledWi, geometryNormal) <= 0.0) return vec3(0.0);
-
-    // p_light = 1 / (2pi(1-cosD)).  ALICE applies cos(theta) and composite
-    // applies the diffuse albedo, so encode Li / (pi*p_light) here.
-    return max(vec3(0.0), Li * (2.0 * (1.0 - cosD_S)));
+        * (OiN * oiNWeight / max(PI * lightPdf, 1e-20)));
 }
 
 vec3 evalDirectDiffuseIncident(vec3 ro, vec3 geometryNormal,
@@ -920,42 +1098,14 @@ vec3 evalDirectDiffuseIncident(vec3 ro, vec3 geometryNormal,
         rd_i, lightDir, inside);
 }
 
-vec3 evalDirectSpecular(vec3 ro, vec3 macroNormal, vec3 Cs, float Sx,
-    float transmissionSelector, float roughness, vec3 rd_i,
-    vec3 lightDir, bool inside) {
-    ro += (dot(lightDir, macroNormal) > 0.15 ? lightDir : macroNormal) * 0.001;
-
-    vec3 X, Y, Z;
-    XYZ(lightDir, X, Y, Z);
-    float r1 = getRandom();
-    float alpha = getRandom() * 2.0 * PI;
-    float cosbeta = 1.0 - r1 * (1.0 - cosD_S);
-    vec3 sampleDir = cosbeta * Y + sqrt(1.0 - cosbeta * cosbeta) * (cos(alpha) * X + sin(alpha) * Z);
-
-    vec3 ro_o, rd_o;
-    float t = raycast(ro, -sampleDir, ro_o, rd_o, !inside, true);
-    if (t > -0.5) return vec3(0.0);
-
-    vec3 wi = -sampleDir;
-    vec3 Li = sampleSky(ro.y, wi, lightDir).xyz * payload_unpackShadow(tmp_Payload.data);
-
-    float IoN = abs(dot(rd_i, macroNormal));
-    float OiN = dot(wi, macroNormal);
-    float oiNWeight = float(OiN > 0.0); // branchless: 0 if back-facing, 1 otherwise
-    float safeOiN = max(OiN, 1e-6);
-
-    float a = max(roughness, 1e-6);
-    vec3 H = normalize(wi - rd_i);
-    float cosThetaH = clamp(dot(H, macroNormal), 0.0, 1.0);
-    float D = GGX_D(cosThetaH, a);
-    float G2 = GGX_G2_standard(IoN, safeOiN, a);
-    float etaRatio = inside ? REFRACTIVE_INDEX : (1.0 / REFRACTIVE_INDEX);
-    vec3 F = evaluateSurfaceFresnel(
-        -rd_i, H, Cs, Sx, transmissionSelector, etaRatio);
-
-    return max(vec3(0.0), D * G2 * F * Li
-        * (PI * 0.5 * (1.0 - cosD_S) / max(IoN, 1e-6)))
-        * oiNWeight;
+vec3 misLightContribution(
+    vec3 fTimesNoL, vec3 Li, float lightPdf, float bsdfStrategyPdf
+) {
+    float misWeight = powerHeuristic(lightPdf, bsdfStrategyPdf);
+    vec3 result = fTimesNoL * Li
+        * (misWeight / max(lightPdf, 1e-20));
+    return (!any(isnan(result)) && !any(isinf(result)))
+        ? max(result, vec3(0.0)) : vec3(0.0);
 }
 
 bool loadSecondaryRadianceCache(
@@ -1102,11 +1252,11 @@ void writeReflectionOutput(uvec2 xy, FirstBounceData fb, vec3 totalIllumination,
     float refl_vprojdist = fb.reflectionHitDistance;
     vec3 refl_color = vec3(0.0);
     if (fb.t > -0.5) {
-        vec3 demodulated = totalIllumination /
-            max(fb.specularAlbedo, vec3(1e-5));
+        vec3 demodulated = totalIllumination / max(fb.specularAlbedo,
+            vec3(RELAX_NRD_MATERIAL_FACTOR_MIN_SCALE));
         if (!any(isnan(demodulated)) && !any(isinf(demodulated))) {
             refl_color = clamp(demodulated, 0.0,
-                200.0 * div_avgExposure);
+                1000.0 * div_avgExposure);
         }
     }
     writeReflGeo(xy, pos_rel, refl_R);
@@ -1145,6 +1295,11 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     vec3 L_direct_0 = vec3(0.0);
     vec3 L_direct_0_dir = -lightDir;
     float cascadedRoughness2 = 0.0;
+    // Sampling metadata for MIS if the current continuation ray reaches the
+    // solar disc. Delta/refraction events have no competing sun-NEE strategy.
+    float lastBsdfStrategyPdf = 0.0;
+    bool lastBsdfDelta = false;
+    bool lastNeeCompatible = false;
 
     vec4 fogColor = (isEyeInWater == 2u) ? vec4(0, 0.05, 0.075, 0.1) * 5.0 : vec4(0, 0.325, 0.295, 0.3);
     vec3 globalEmission = (isEyeInWater == 2u) ? vec3(1, 0.25, 0.05) * 10.0 : vec3(0);
@@ -1159,7 +1314,8 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
     if (t < -0.5) {
         // Primary ray hit sky
-        vec3 sky = sampleSkyNoSun(ro_i.y, rd_i, lightDir).xyz;
+        vec3 sky = sampleSky(ro_i.y, rd_i, lightDir).xyz;
+        if (any(isnan(sky)) || any(isinf(sky))) sky = vec3(0.0);
         L_indirect += throughput * sky;
         throughput = vec3(0.0);
         fb.t = -1.0;
@@ -1190,7 +1346,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         MediumResult medium = evalMedium(t, rd_i, ro_i.y, inside, fogColor, globalEmission);
 
         // --- Lobe probabilities ---
-        LobeProbs lobes = computeLobeProbs(surf, rd_i, microNormal, rs);
+        LobeProbs lobes = computeLobeProbs(surf, rd_i, macroNormal, rs);
 
         // --- First bounce direction: compile-time dispatched ---
         vec3 bsdf_weight = vec3(0.0);
@@ -1204,8 +1360,12 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         #if defined(FIRST_LOBE_REFLECTION)
         {
             current_type = REFLECTION;
+            bool firstDelta;
             handleFirstBounce_Reflection(rd_i, ro_o, macroNormal, geometryNormal, microNormal,
-                surf, lobes, rs, bsdf_weight, next_rd);
+                surf, lobes, rs, bsdf_weight, next_rd,
+                lastBsdfStrategyPdf, firstDelta);
+            lastBsdfDelta = firstDelta;
+            lastNeeCompatible = true;
         }
         #elif defined(FIRST_LOBE_REFRACTION)
         {
@@ -1214,6 +1374,9 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             handleFirstBounce_Refraction(rd_i, ro_o, macroNormal, geometryNormal, microNormal,
                 surf, lobes, rs, bsdf_weight, next_rd,
                 inside, psr, wasInside, 0);
+            lastBsdfStrategyPdf = 0.0;
+            lastBsdfDelta = true;
+            lastNeeCompatible = false;
             fb.refr_dir = psr.refrDir;
             fb.t2_ior_adjusted = psr.virtualDist;
             fb.pathRoughness = psr.pathRoughness;
@@ -1222,30 +1385,59 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         {
             current_type = DIFFUSION;
             handleFirstBounce_Diffuse(rd_i, ro_o, macroNormal, geometryNormal,
-                surf, lobes, bsdf_weight, next_rd);
+                surf, lobes, bsdf_weight, next_rd,
+                lastBsdfStrategyPdf);
+            lastBsdfDelta = false;
+            lastNeeCompatible = true;
         }
         #endif
 
         // --- NEE at depth 0 ---
-        #if defined(FIRST_LOBE_REFLECTION)
-        float P_first = lobes.P_spec + lobes.P_refr * lobes.F;
-        #elif defined(FIRST_LOBE_REFRACTION)
-        float P_first = lobes.P_refr;
-        #else
-        float P_first = lobes.P_diff;
-        #endif
-        if (dot(geometryNormal, lightDir) < 0.0 && !isDarkened && P_first > 0.0) {
-            vec3 sunL = vec3(0.0);
-            if (current_type == DIFFUSION) {
-                sunL = evalDirectDiffuseAliceSample(
-                    ro_o, geometryNormal, lightDir, inside,
-                    L_direct_0_dir);
-            } else if (current_type == REFLECTION) {
-                sunL = evalDirectSpecular(ro_o, macroNormal, surf.Cs,
-                    surf.S.x, surf.S.y, surf.R.x,
-                    rd_i, lightDir, inside);
+        bool firstHasSunNee = current_type == DIFFUSION
+            || (current_type == REFLECTION
+                && !isDeltaSpecular(surf.R.x));
+        if (!isDarkened && firstHasSunNee) {
+            vec3 sunWi, sunLi;
+            float lightPdf;
+            if (sampleDirectSun(ro_o, geometryNormal, lightDir, inside,
+                    sunWi, sunLi, lightPdf)) {
+                L_direct_0_dir = sunWi;
+
+                if (current_type == DIFFUSION
+                        && dot(sunWi, geometryNormal) > 0.0
+                        && dot(sunWi, macroNormal) > 0.0) {
+                    GuideInfo directGuide = computeAliceGuide(
+                        ro_o, PATH_GUIDING_STRENGTH);
+                    float proposalPdf = (1.0 - directGuide.prob)
+                        * (1.0 / (2.0 * PI));
+                    proposalPdf += directGuide.prob * alice_guiding_pdf(
+                        sunWi, directGuide.axis, directGuide.kappa);
+                    float Fd = evaluateDisneyDiffuseFactor(
+                        -rd_i, sunWi, macroNormal, surf.R.x);
+                    float misWeight = powerHeuristic(lightPdf, proposalPdf);
+                    // ALICE/composition supplies NoL and diffuse base color.
+                    L_direct_0 = max(vec3(0.0), sunLi
+                        * (Fd * misWeight / max(PI * lightPdf, 1e-20)));
+                } else if (current_type == REFLECTION
+                        && !isDeltaSpecular(surf.R.x)
+                        && dot(sunWi, geometryNormal) > 0.0) {
+                    vec3 fSpecTimesNoL;
+                    float pdfNDF;
+                    if (evaluateSpecularBRDF(
+                            -rd_i, sunWi, macroNormal,
+                            surf.Cs, surf.S.x, surf.S.y, rs, surf.R.x,
+                            fSpecTimesNoL, pdfNDF)) {
+                        GuideInfo directGuide = computeAliceGuide(
+                            ro_o,
+                            PATH_GUIDING_SPECULAR_STRENGTH * surf.R.x);
+                        float proposalPdf = (1.0 - directGuide.prob) * pdfNDF
+                            + directGuide.prob * alice_guiding_pdf(
+                                sunWi, directGuide.axis, directGuide.kappa);
+                        L_direct_0 = misLightContribution(
+                            fSpecTimesNoL, sunLi, lightPdf, proposalPdf);
+                    }
+                }
             }
-            L_direct_0 = sunL;
         }
 
         // --- Record G-Buffer ---
@@ -1268,7 +1460,8 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     }
 
     // ===== SECONDARY LOOP =====
-    if (max(throughput.r, max(throughput.g, throughput.b)) > 0.0 && !any(isnan(throughput))) {
+    if (max(throughput.r, max(throughput.g, throughput.b)) > 0.0
+            && !any(isnan(throughput)) && !any(isinf(throughput))) {
         // Track whether we arrived via specular (not just current lobe).
         // Primary specular → secondary surface should be cache-eligible at bounce 2.
         bool arrivedViaSpecular = false;
@@ -1287,6 +1480,17 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             // --- Miss -> sky ---
             if (t2 < -0.5) {
                 vec3 sky = sampleSkyNoSun(ro_i.y, rd_i, lightDir).xyz;
+                vec3 sunDisc = sampleSkySunDisc(
+                    ro_i.y, rd_i, lightDir).xyz;
+                float discWeight = 1.0;
+                float lightPdf = sunDirectionPdf(rd_i, lightDir);
+                if (lastNeeCompatible && !lastBsdfDelta
+                        && lightPdf > 0.0) {
+                    discWeight = powerHeuristic(
+                        lastBsdfStrategyPdf, lightPdf);
+                }
+                sky += sunDisc * discWeight;
+                if (any(isnan(sky)) || any(isinf(sky))) sky = vec3(0.0);
                 vec3 skyContrib = throughput * sky;
                 if (depth >= 2) {
                     float lum = dot(skyContrib, vec3(0.2126, 0.7152, 0.0722));
@@ -1311,6 +1515,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             float n_i2 = inside ? REFRACTIVE_INDEX : 1.0;
             float n_o2 = inside ? 1.0 : REFRACTIVE_INDEX;
             float rs2 = n_i2 / n_o2;
+            bool surfaceInside = inside;
 
             // --- Medium ---
             MediumResult medium = evalMedium(t2, rd_i, ro_i.y, inside, fogColor, globalEmission);
@@ -1327,45 +1532,71 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             L_indirect += bounceEmission;
 
             // --- Lobe probabilities ---
-            LobeProbs lobes = computeLobeProbs(surf, rd_i, microNormal, rs2);
+            LobeProbs lobes = computeLobeProbs(surf, rd_i, macroNormal, rs2);
 
             // --- Secondary bounce: stochastic mixture ---
             vec3 bsdf_weight;
             vec3 next_rd;
             int current_type;
             bool sampledSpecularLobe;
+            float sampledStrategyPdf;
+            bool sampledDeltaLobe;
+            bool neeCompatible;
             handleSecondaryBounce(rd_i, ro_o, macroNormal, geometryNormal, microNormal,
                 surf, lobes, bsdf_weight, next_rd,
-                current_type, sampledSpecularLobe, inside);
+                current_type, sampledSpecularLobe, sampledStrategyPdf,
+                sampledDeltaLobe, neeCompatible, inside);
 
             float nextCascadedRoughness2 = current_type == DIFFUSION
                 ? 1.0
                 : cascadedRoughness2 + surf.R.x * surf.R.x;
 
-            // --- NEE ---
-            // The cache contains no direct-light estimate for this surface.
-            // Keep one shadow ray and divide by the sampled lobe probability.
+            // --- Sun NEE ---
+            // One visibility ray evaluates every non-delta reflection lobe.
+            // Lobe selection is solely a continuation strategy and must not
+            // decide whether direct lighting exists at this vertex.
             bool sampledDiffuseLobe = current_type == DIFFUSION;
-            float neeLobeProbability = sampledDiffuseLobe
-                ? lobes.P_diff
-                : (sampledSpecularLobe ? lobes.P_spec : 0.0);
-            if (dot(geometryNormal, lightDir) < 0.0
-                    && !isDarkened && neeLobeProbability > 1e-8) {
+            bool hasDiffuseSunNee = lobes.P_diff > 1e-8;
+            bool hasSpecularSunNee = lobes.P_spec > 1e-8
+                && !isDeltaSpecular(surf.R.x);
+            if (!isDarkened && (hasDiffuseSunNee || hasSpecularSunNee)) {
+                vec3 sunWi, sunLi;
+                float lightPdf;
                 vec3 sunL = vec3(0.0);
-                if (sampledDiffuseLobe) {
-                    vec3 selectedDiffuseAlbedo =
-                        lobes.diffWeight * lobes.P_diff;
-                    sunL = evalDirectDiffuse(
-                        ro_o, geometryNormal, macroNormal,
-                        selectedDiffuseAlbedo,
-                        rd_i, lightDir, inside);
-                } else {
-                    sunL = evalDirectSpecular(ro_o, macroNormal, surf.Cs,
-                        surf.S.x, surf.S.y, surf.R.x,
-                        rd_i, lightDir, inside);
+                if (sampleDirectSun(
+                        ro_o, geometryNormal, lightDir, surfaceInside,
+                        sunWi, sunLi, lightPdf)) {
+                    if (hasDiffuseSunNee) {
+                        vec3 diffuseColor = surf.Cd
+                            * (1.0 - clamp(surf.S.y, 0.0, 1.0));
+                        vec3 fDiffuseTimesNoL;
+                        float pdfCosine;
+                        if (evaluateDisneyDiffuseBRDF(
+                                -rd_i, sunWi, macroNormal, geometryNormal,
+                                diffuseColor, surf.R.x,
+                                fDiffuseTimesNoL, pdfCosine)) {
+                            sunL += misLightContribution(
+                                fDiffuseTimesNoL, sunLi, lightPdf,
+                                lobes.P_diff * pdfCosine);
+                        }
+                    }
+
+                    if (hasSpecularSunNee
+                            && dot(sunWi, geometryNormal) > 0.0) {
+                        vec3 fSpecTimesNoL;
+                        float pdfNDF;
+                        if (evaluateSpecularBRDF(
+                                -rd_i, sunWi, macroNormal,
+                                surf.Cs, surf.S.x, surf.S.y, rs2, surf.R.x,
+                                fSpecTimesNoL, pdfNDF)) {
+                            sunL += misLightContribution(
+                                fSpecTimesNoL, sunLi, lightPdf,
+                                lobes.P_spec * pdfNDF);
+                        }
+                    }
                 }
-                vec3 neeContrib =
-                    throughput * sunL / neeLobeProbability;
+
+                vec3 neeContrib = throughput * sunL;
                 if (depth >= 2) {
                     float lum = dot(neeContrib, vec3(0.2126, 0.7152, 0.0722));
                     neeContrib *= fireflyCap / max(lum, fireflyCap);
@@ -1415,7 +1646,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
             // --- Throughput update ---
             throughput *= bsdf_weight;
-            if (any(isnan(throughput))) {
+            if (any(isnan(throughput)) || any(isinf(throughput))) {
                 throughput = vec3(0.0);
                 break;
             }
@@ -1433,11 +1664,19 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             ro_i = ro_o + geometryNormal * ((current_type == REFRACTION) ? -0.001 : 0.001);
             rd_i = next_rd;
             arrivedViaSpecular = (current_type == REFLECTION);
+            lastBsdfStrategyPdf = sampledStrategyPdf;
+            lastBsdfDelta = sampledDeltaLobe;
+            lastNeeCompatible = neeCompatible;
         }
     }
 
     // ===== OUTPUT =====
-    vec3 totalIllumination = clamp(L_indirect + L_direct_0, 0.0, 65504.0);
+    if (any(isnan(L_indirect)) || any(isinf(L_indirect)))
+        L_indirect = vec3(0.0);
+    if (any(isnan(L_direct_0)) || any(isinf(L_direct_0)))
+        L_direct_0 = vec3(0.0);
+    vec3 totalIllumination = clamp(
+        L_indirect + L_direct_0, 0.0, 65504.0);
 
     #if defined(FIRST_LOBE_DIFFUSE)
     writeDiffuseOutput(

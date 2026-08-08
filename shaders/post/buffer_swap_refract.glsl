@@ -20,6 +20,10 @@ uniform usampler2D colortex4; // 降噪后: f16(R,G)|f16(B,roughness)|f16(varian
 
 void main() {
     ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    // This is the last compute pass before bloom. One ordinary SSBO store
+    // initializes the completion counter, including on the first loaded frame.
+    if (all(equal(pix, ivec2(0)))) bloomCompletedGroups = 0u;
+
     ivec2 texSize = textureSize(colortex4, 0);
     if (pix.x >= texSize.x || pix.y >= texSize.y) return;
 

@@ -13,7 +13,7 @@
 #define ACCUMULATION_LENGTH 32 // Refraction history length. Higher = smoother refraction, more ghosting during motion. [1 2 4 8 16 32 64]
 #define PATH_GUIDING_STRENGTH 0.75 // Total guided mixture strength. Cache probes split this probability between stable ALICE and validated RIS proposals while retaining at least 10% uniform sampling. [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.925 0.95 0.975 0.99 0.999]
 #define PATH_GUIDING_SPECULAR_STRENGTH 0.85 // Base mix probability for ALICE-guided specular reflection. Final probability = STRENGTH × roughness × rho, so smooth surfaces (low roughness) or isotropic fields (low rho) naturally suppress guiding. Guiding is only active when both roughness and rho are meaningful. [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.95 0.99]
-#define SUN_PATH_ROTATION 45.0 // Sun path rotation angle (degrees around X axis). Adjusts the sun's apparent path in the sky. [0 15 30 45 60 75 90]
+#define SUN_PATH_ROTATION 30.0 // Latitude-like sun path tilt. 30 degrees is the clear-sky spring reference used by the atmosphere calibration. [0 15 30 45 60 75 90]
 #define END_SKYBOX 1 // End skybox rendering. 1 = custom rune-ring skybox with FBM nebula background (higher GPU cost). 0 = fall back to atmospheric scattering + NEE (faster). [0 1]
 #define PATHGUIDE_SPATIAL_RADIUS 16.0 // Path-guide ReSTIR Poisson disk spatial sampling radius (pixels). Higher values explore farther neighbours at the cost of more incoherent memory access. [4.0 8.0 12.0 16.0 24.0 32.0]
 #define PATHGUIDE_MAX_TEMPORAL_M 64.0 // ReSTIR reservoir temporal memory cap. Limits the effective sample count carried forward from history. Higher values retain more history but react slower. [8.0 16.0 32.0 48.0 64.0 96.0 128.0 256.0]
@@ -100,11 +100,15 @@
 
 // -- Bloom --
 #define BLOOM_MIX 0.15 // Bloom blend strength. 0 = off (scene only), 1 = full bloom. [0.0 0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5 0.6 0.8 1.0]
+#define BLOOM_DIFFUSION_SCALE 1.0 // Multiplies the physical RGB scattering sigma at every Gaussian diffusion stage. [0.5 0.625 0.75 0.875 1.0 1.125 1.25 1.5]
+#define BLOOM_CHROMATIC_SCATTER 0.5 // Rayleigh fraction of lens-scattering power. 0 = wavelength-independent large-particle limit; 1 = pure small-particle Rayleigh limit. [0.0 0.125 0.25 0.375 0.5 0.625 0.75 0.875 1.0]
 
 // -- Exposure & Display --
 #define DISPLAY_MAX_LUMINANCE 100 // Peak brightness of your display in nits (cd/m²). Used for HDR exposure calculation. [50 75 100 150 200 300 400 500 600 700 800 900 1000]
 #define DISPLAY_PAPER_WHITE_LUMINANCE 0.5 // Target paper white luminance in sRGB normalized space (0–1). Sets the mid-gray anchor for auto exposure — lower = brighter scene. [0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
 #define EXPOSURE_CURVE_K 0.0 // Highlight compression before tonemap: f(x)=ln(k+e^x)-ln(1+k). 0=off, higher=more compression. [0.0 0.1 0.25 0.5 1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0 9.0 10.0]
+#define PUPIL_MIN_DIAMETER_MM 2.0 // Minimum physical pupil diameter in millimetres. Limits fast optical adaptation in bright scenes; neural adaptation still supplies the remaining exposure range. [1.0 1.5 2.0 2.5 3.0 3.5 4.0]
+#define PUPIL_MAX_DIAMETER_MM 8.0 // Maximum physical pupil diameter in millimetres. Limits fast optical adaptation in dark scenes; neural adaptation still supplies the remaining exposure range. [4.0 5.0 6.0 7.0 8.0 9.0 10.0]
 
 // -- Misc --
 #define FIREFLY_SUPPRESSION_MULTIPLIER 50.0 // Per-sample brightness cap multiplier (× average exposure). Lower values clamp fireflies more aggressively. [1.0 5.0 10.0 25.0 50.0 100.0 250.0 500.0]

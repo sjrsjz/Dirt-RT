@@ -11,14 +11,14 @@
 // N=0: Current Light  — uvec4(pHalf2(aliceY.xy), pHalf2(aliceY.zw), pHalf2(CoCg), pHalf2(0, sqrt(meanY2)))
 // N=1: Current Geo    — uvec4(fbits(pos.xyz), fbits(surfaceMask))
 // N=2: History Light  — uvec4(pHalf2(hist_aliceY.xy), pHalf2(hist_aliceY.zw), pHalf2(hist_CoCg), pHalf2(weight, sqrt(meanY2)))
-// N=3: History Geo    — uvec4(fbits(hist_pos.xyz), fbits(surfaceMask))
+// N=3: History Geo    — uvec4(fbits(hist_pos.xyz), oct(hist_geometryNormal))
 // N=4: Swap Light     — uvec4(pHalf2(swap_aliceY.xy), pHalf2(swap_aliceY.zw), pHalf2(swap_CoCg), pHalf2(weight, sqrt(meanY2)))
 // N=5: Path Guide     — uvec4(pHalf2(aliceY.xy), pHalf2(aliceY.zw), fbits(W), fbits(M))
 //
 // .w lane uses packHalf2x16: weight:f16 + sqrt(meanY2):f16.
 // sqrt compression keeps HDR second moments within f16 range (e.g. Y=1000 →
 // sqrt(Y²)=1000 < 65504), at the cost of relative precision halved after squaring.
-// surfaceMask lives only in N=1/N=3 (geo layers), not duplicated in light layers.
+// surfaceMask lives in N=1. N=3 stores the reprojectable history normal instead.
 
 #define DIF_N_LIGHT    0u
 #define DIF_N_GEO      1u
@@ -110,18 +110,32 @@ void readDiffuseHist(uvec2 xy, out AliceEncoding alice, out float weight, out fl
 // N=3 — History Geometry
 // ===========================================================================
 
-void writeDiffuseHistGeo(uvec2 xy, vec3 pos, float surfaceMask) {
+float encodeDiffuseHistoryNormal(vec3 n) {
+    n = normalize(n);
+    vec2 p = n.xy / (abs(n.x) + abs(n.y) + abs(n.z));
+    if (n.z < 0.0) p = (1.0 - abs(p.yx)) * vec2(p.x >= 0.0 ? 1.0 : -1.0, p.y >= 0.0 ? 1.0 : -1.0);
+    return uintBitsToFloat(packSnorm2x16(clamp(p, vec2(-1.0), vec2(1.0))));
+}
+
+vec3 decodeDiffuseHistoryNormal(float f) {
+    vec2 p = unpackSnorm2x16(floatBitsToUint(f));
+    vec3 n = vec3(p, 1.0 - abs(p.x) - abs(p.y));
+    if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+    return normalize(n);
+}
+
+void writeDiffuseHistGeo(uvec2 xy, vec3 pos, vec3 geometryNormal) {
     diffuseBuffer.data[addr(DIF_N_HISTGEO, xy)] = uvec4(
         floatBitsToUint(pos.x),
         floatBitsToUint(pos.y),
         floatBitsToUint(pos.z),
-        floatBitsToUint(surfaceMask)
+        floatBitsToUint(encodeDiffuseHistoryNormal(geometryNormal))
     );
 }
-void readDiffuseHistGeo(uvec2 xy, out vec3 pos, out float surfaceMask) {
+void readDiffuseHistGeo(uvec2 xy, out vec3 pos, out vec3 geometryNormal) {
     uvec4 v = diffuseBuffer.data[addr(DIF_N_HISTGEO, xy)];
     pos = vec3(uintBitsToFloat(v.x), uintBitsToFloat(v.y), uintBitsToFloat(v.z));
-    surfaceMask = uintBitsToFloat(v.w);
+    geometryNormal = decodeDiffuseHistoryNormal(uintBitsToFloat(v.w));
 }
 
 // ===========================================================================

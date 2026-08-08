@@ -70,7 +70,19 @@ void main() {
         readLightAbs(GEO_N_LIGHTABS, xy, lightVal_unused, absorptionVal);
 
         setSkyVars();
-        fragColor.xyz = absorptionVal * sampleSky(camPos.y, rdVal, -lightDir_global) + emisVal;
+        vec3 sky = sampleSky(camPos.y, rdVal, -lightDir_global);
+        // The ray buffer is intentionally sampled on its native grid rather
+        // than assuming texel centres. Derivatives describe that grid's pixel
+        // footprint and are used only to area-filter the finite solar disc.
+        vec3 pointSunDisc = sampleSkySunDisc(camPos.y, rdVal, -lightDir_global);
+        vec3 filteredSunDisc = sampleSkySunDiscFiltered(
+            camPos.y,
+            rdVal,
+            -lightDir_global,
+            dFdx(rdVal),
+            dFdy(rdVal));
+        sky = max(sky - pointSunDisc + filteredSunDisc, vec3(0.0));
+        fragColor.xyz = absorptionVal * sky + emisVal;
         writeDiffuseLightRTSky(xy);
         return;
     }

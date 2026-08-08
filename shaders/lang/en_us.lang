@@ -33,7 +33,7 @@ option.PATH_GUIDING_SPECULAR_STRENGTH = Specular Guiding Strength
 option.PATH_GUIDING_SPECULAR_STRENGTH.comment = Base probability of steering rough reflection rays with ALICE history. Smooth or isotropic lobes automatically receive less guiding.
 
 option.SUN_PATH_ROTATION = Sun Path Rotation
-option.SUN_PATH_ROTATION.comment = Rotates the apparent sun and moon path around the world X axis. This changes lighting direction, not day length.
+option.SUN_PATH_ROTATION.comment = Tilts the apparent sun and moon path around the world X axis like latitude. This changes lighting direction, not day length. 30° is the spring clear-sky calibration reference for the atmosphere.
 
 option.END_SKYBOX = End Skybox
 option.END_SKYBOX.comment = Selects the custom rune-ring and nebula sky in the End. Disabling it uses the cheaper atmospheric fallback.
@@ -276,6 +276,10 @@ option.ATROUS_GAMMA.comment = Controls roughness-dependent widening of the diffu
 # ===========================================================================
 option.BLOOM_MIX = Bloom Strength
 option.BLOOM_MIX.comment = Fraction of the final image contributed by bloom. Zero disables bloom blending; high values can wash out local contrast.
+option.BLOOM_DIFFUSION_SCALE = Bloom Diffusion Scale
+option.BLOOM_DIFFUSION_SCALE.comment = Multiplies the Gaussian scattering radius of all RGB channels while preserving their wavelength ratios. Higher values produce a broader lens-scattering halo.
+option.BLOOM_CHROMATIC_SCATTER = Lens Wavelength Scattering
+option.BLOOM_CHROMATIC_SCATTER.comment = Sets the small-particle Rayleigh fraction of lens-scattering power. Zero approximates wavelength-independent large-particle forward scatter; one is the pure-Rayleigh upper limit. The variance-domain blend uses representative 611/549/464 nm RGB wavelengths; pure Rayleigh gives sigma ratios of approximately 0.807, 1.000 and 1.400.
 
 # ===========================================================================
 # Exposure & Display
@@ -288,6 +292,12 @@ option.DISPLAY_PAPER_WHITE_LUMINANCE.comment = Target brightness of ordinary dif
 
 option.EXPOSURE_CURVE_K = Exposure Curve
 option.EXPOSURE_CURVE_K.comment = Compresses highlights before tone mapping. Zero disables the curve; higher values retain more bright detail but reduce highlight contrast.
+
+option.PUPIL_MIN_DIAMETER_MM = Minimum Pupil Diameter
+option.PUPIL_MIN_DIAMETER_MM.comment = Smallest pupil diameter in bright conditions, in millimetres. It limits fast optical adaptation; slower retinal/neural adaptation still supplies the remaining exposure range, so this is not used as a total-exposure floor. A typical adult range is approximately 2–4 mm.
+
+option.PUPIL_MAX_DIAMETER_MM = Maximum Pupil Diameter
+option.PUPIL_MAX_DIAMETER_MM.comment = Largest pupil diameter in dark conditions, in millimetres. It limits fast optical adaptation while slower retinal/neural adaptation continues in dark scenes. A typical adult range is approximately 6–8 mm; a 4 mm pupil represents 1x optical exposure.
 
 # ===========================================================================
 # Advanced

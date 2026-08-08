@@ -284,6 +284,9 @@ void MixDiffuse() {
         // 几何一致性测试（纯位置，ALICE 方向编码隐式保证法线一致性）
         if (!strictHistoryGeometryTest(tap.pos, fp)) continue;
 
+        float normalWeight = max(dot(fp.geometryNormal, tap.histNormal), 0.0);
+        if (normalWeight <= 0.0) continue;
+
         float d1_sq = dot(tap.pos, tap.pos);
         vec3 histPosCur = tap.pos - cameraDelta;
         float d2_sq = dot(histPosCur, histPosCur);
@@ -292,10 +295,11 @@ void MixDiffuse() {
         float scale = clamp(d2_sq * abs(histVoN) / max(d1_sq * abs(currVoN), 1e-3), 0.0, 1.0);
         float correctedTapW = min(tap.prev_weight * scale, float(TEMPORAL_MAX_HISTORY));
 
-        accumulate_alice(accumAlice, tap.data, w[i]);
-        accumMeanY2 += w[i] * tap.prev_meanY2;
-        validKernelWeight += w[i];
-        accumHistWeight += w[i] * correctedTapW;
+        float tapWeight = w[i] * normalWeight;
+        accumulate_alice(accumAlice, tap.data, tapWeight);
+        accumMeanY2 += tapWeight * tap.prev_meanY2;
+        validKernelWeight += tapWeight;
+        accumHistWeight += tapWeight * correctedTapW;
     }
 
     if (validKernelWeight < 1e-5) {

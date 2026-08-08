@@ -22,6 +22,13 @@ layout(std430, set = 3, binding = 1) buffer FrameData {
     int frame_id;
     float wetStrength_global;
     float wetness_global;
+    // One atomic increment per participating bloom workgroup. composite79
+    // clears it before bloom, including on the first loaded frame.
+    uint bloomCompletedGroups;
+    // Exposure is split into the fast optical pupil response and the slower
+    // retinal/neural response. Their product is avgExposure.
+    float pupilExposure;
+    float neuralExposure;
 };
 
 #endif // FRAME_DATA_GLSL

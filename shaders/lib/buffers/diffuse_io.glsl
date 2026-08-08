@@ -13,7 +13,7 @@ struct diffuseIlluminationData {
     AliceEncoding data_swap;
     vec3 pos;
     float surfaceMask;
-    float histSurfaceMask;
+    vec3 histNormal;
     float weight;
     float prev_weight;
     float meanY2;       // second moment E[Y²] for swap (current accumulated)
@@ -68,10 +68,8 @@ diffuseIlluminationData fetchDiffuse(ivec2 p) {
     tmp.prev_weight = weight;
     tmp.prev_meanY2 = meanY2;
 
-    // history geometry (N=3) — surfaceMask
-    float mask;
-    readDiffuseHistGeo(xy, tmp.pos, mask);
-    tmp.histSurfaceMask = mask;
+    // History geometry (N=3): world position plus oct-encoded geometry normal.
+    readDiffuseHistGeo(xy, tmp.pos, tmp.histNormal);
 #endif
     return tmp;
 }
@@ -84,6 +82,11 @@ diffuseIlluminationData blendDiffuse(diffuseIlluminationData A, diffuseIlluminat
 #ifndef DIFFUSE_BUFFER_MIN2
     t.data = mix_alice(A.data, B.data, x);
     t.pos = mix(A.pos, B.pos, x);
+    vec3 blendedNormal = mix(A.histNormal, B.histNormal, x);
+    float blendedNormalLen2 = dot(blendedNormal, blendedNormal);
+    t.histNormal = blendedNormalLen2 > 1e-8
+        ? blendedNormal * inversesqrt(blendedNormalLen2)
+        : vec3(0.0, 1.0, 0.0);
     t.prev_weight = (B.prev_weight - A.prev_weight) * x + A.prev_weight;
     t.prev_meanY2 = (B.prev_meanY2 - A.prev_meanY2) * x + A.prev_meanY2;
 #endif
@@ -102,8 +105,8 @@ diffuseIlluminationData sampleDiffuse(vec2 p) {
 
 vec3 sampleDiffusePos(vec2 p) {
     uvec2 xy = uvec2(ivec2(floor(p) + round(fract(p))));
-    vec3 pos; float mask;
-    readDiffuseHistGeo(xy, pos, mask);
+    vec3 pos, normal;
+    readDiffuseHistGeo(xy, pos, normal);
     return pos;
 }
 
@@ -116,7 +119,7 @@ void writeDiffuse(diffuseIlluminationData data, ivec2 p) {
 #if !defined(DIFFUSE_BUFFER_MIN) && !defined(DIFFUSE_BUFFER_MIN2)
     // Full write: also update hist (N=2) + hist geometry (N=3)
     writeDiffuseHist(xy, data.data, data.prev_weight, data.prev_meanY2);
-    writeDiffuseHistGeo(xy, data.pos, data.histSurfaceMask);
+    writeDiffuseHistGeo(xy, data.pos, data.histNormal);
 #endif
 }
 

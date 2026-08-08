@@ -70,6 +70,37 @@ float calculateExposure(float avgLuminance) {
     return baseExposure * exposureCorrection;
 }
 
+// Estimate the physical pupil response from adapting luminance. The
+// Stanley-Davies form uses a 20 degree adapting field (100*pi square degrees).
+// Shader radiance is converted to photometric luminance with the standard
+// daylight efficacy used by calibrated HDR radiance data.
+float calculatePupilExposure(float sceneLuminance) {
+    const float REFERENCE_PUPIL_DIAMETER_MM = 4.0;
+    const float DAYLIGHT_LUMINOUS_EFFICACY = 179.0;
+    const float ADAPTING_FIELD_AREA_DEG2 = 100.0 * PI;
+
+    float diameterA = clamp(float(PUPIL_MIN_DIAMETER_MM), 1.0, 10.0);
+    float diameterB = clamp(float(PUPIL_MAX_DIAMETER_MM), 1.0, 10.0);
+    float minDiameter = min(diameterA, diameterB);
+    float maxDiameter = max(diameterA, diameterB);
+
+    float adaptingLuminance = max(sceneLuminance * DAYLIGHT_LUMINOUS_EFFICACY, 1e-8);
+    float x = pow(adaptingLuminance * ADAPTING_FIELD_AREA_DEG2 / 846.0, 0.41);
+    float diameter = 7.75 - 5.75 * x / (x + 2.0);
+    diameter = clamp(diameter, minDiameter, maxDiameter);
+
+    float diameterRatio = diameter / REFERENCE_PUPIL_DIAMETER_MM;
+    return diameterRatio * diameterRatio;
+}
+
+float adaptExposureState(float currentValue, float targetValue, float speed) {
+    return exp2(mix(
+        log2(max(currentValue, 1e-20)),
+        log2(max(targetValue, 1e-20)),
+        1.0 - exp2(-max(dTime_global, 0.0) * speed * LOG2_E)
+    ));
+}
+
 void main() {
     // --- Delta time & state updates ---
     dTime_global = frameTimeCounter - time_global;
@@ -119,20 +150,38 @@ void main() {
     
     float currentLuma = exp2(final_log_luma);
 
-    float targetExposure = clamp(calculateExposure(currentLuma), 1.25e-2, 10.0);
+    // Pupil aperture is only the fast optical component of adaptation. It must
+    // not clamp total exposure: doing that with a 2 mm lower limit forces a
+    // 0.25x exposure floor and makes a clear outdoor scene about 20x brighter
+    // than the previous 0.0125x safety floor. The slower neural component
+    // supplies the remaining range while pupil limits still affect transients.
+    const float MIN_TOTAL_EXPOSURE = 1.25e-2;
+    const float MAX_TOTAL_EXPOSURE = 10.0;
+    float targetExposure = clamp(
+        calculateExposure(currentLuma),
+        MIN_TOTAL_EXPOSURE,
+        MAX_TOTAL_EXPOSURE);
+    float targetPupilExposure = calculatePupilExposure(currentLuma);
+    float targetNeuralExposure = targetExposure / max(targetPupilExposure, 1e-20);
 
-    avgExposure = ensurePositive(avgExposure, targetExposure);
+    pupilExposure = ensurePositive(pupilExposure, targetPupilExposure);
+    neuralExposure = ensurePositive(neuralExposure, targetNeuralExposure);
 
     if (frameCounter <= 1) {
-        avgExposure = targetExposure;
+        pupilExposure = targetPupilExposure;
+        neuralExposure = targetNeuralExposure;
     } else {
-        float adaptSpeed = (targetExposure < avgExposure) ? 3.0 : 0.8;
-        avgExposure = exp2(mix(
-            log2(avgExposure),
-            log2(targetExposure),
-            1.0 - exp2(-dTime_global * adaptSpeed * LOG2_E)
-        ));
+        float pupilSpeed = (targetPupilExposure < pupilExposure) ? 6.0 : 1.5;
+        float neuralSpeed = (targetNeuralExposure < neuralExposure) ? 1.2 : 0.35;
+        pupilExposure = adaptExposureState(
+            pupilExposure, targetPupilExposure, pupilSpeed);
+        neuralExposure = adaptExposureState(
+            neuralExposure, targetNeuralExposure, neuralSpeed);
     }
+    avgExposure = clamp(
+        pupilExposure * neuralExposure,
+        MIN_TOTAL_EXPOSURE,
+        MAX_TOTAL_EXPOSURE);
     div_avgExposure = 1.0 / max(avgExposure, 1e-20);
 
     // --- Save camera matrices ---
