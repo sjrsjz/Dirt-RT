@@ -11,7 +11,7 @@ void main() {
     uvec2 pixel = gl_GlobalInvocationID.xy;
     if (any(greaterThanEqual(pixel, resolution_global))) return;
 
-#if DEBUG_VIEW == 12 || (DEBUG_VIEW >= 23 && DEBUG_VIEW <= 30)
+#if DEBUG_VIEW == 12 || DEBUG_VIEW == 14 || (DEBUG_VIEW >= 23 && DEBUG_VIEW <= 30) || (DEBUG_VIEW >= 38 && DEBUG_VIEW <= 40)
     // A selected diagnostic stage stored its output in N=1.  Do not overwrite
     // it with the final spatially filtered result from colortex5.
     return;

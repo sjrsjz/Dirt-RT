@@ -511,6 +511,7 @@ struct FirstBounceData {
     vec3 emission_val, light_surf, absorption;
     float t, roughness, n_i, n_o, t2_ior_adjusted, pathRoughness;
     float reflectionHitDistance;
+    vec3 reflectionEndpointOffset;
     vec3 surfaceMotion;
     float motionValid;
     int type, materialID;
@@ -892,17 +893,11 @@ void handleFirstBounce_Reflection(
         return;
     }
 
-    GuideInfo guide = computeAliceGuide(ro_o, PATH_GUIDING_SPECULAR_STRENGTH * surf.R.x);
-    float reflGuideProb = guide.prob; // already 0 when !valid (set in computeAliceGuide)
-
-    vec3 reflGGX_wi = reflect(rd_i, microNormal);
-    bool useReflGuide = surf.R.x > 0.01 && reflGuideProb > 0.0 && getRandom() < reflGuideProb;
-
-    if (useReflGuide) {
-        next_rd = sample_alice_guiding(guide.axis, guide.kappa, vec2(getRandom(), getRandom()));
-    } else {
-        next_rd = reflGGX_wi;
-    }
+    // The four-moment ReLAX reconstruction uses the precomputed angular
+    // moments of this exact GGX proposal: a=E[U], B=E[UU^T]. Mixing ALICE
+    // here would make qB-mm^T a covariance of a different distribution,
+    // especially on rough surfaces where the old guide probability was high.
+    next_rd = reflect(rd_i, microNormal);
 
     vec3 wi = next_rd;
     vec3 fSpecTimesNoL_val;
@@ -910,10 +905,9 @@ void handleFirstBounce_Reflection(
     if (evaluateSpecularBRDF(wo, wi, macroNormal, surf.Cs, surf.S.x,
             surf.S.y, etaRatio, surf.R.x,
             fSpecTimesNoL_val, pdfNDF)) {
-        float pdfAlice = alice_guiding_pdf(wi, guide.axis, guide.kappa);
-        float pdfMix = (1.0 - reflGuideProb) * pdfNDF + reflGuideProb * pdfAlice;
-        sampledStrategyPdf = pdfMix;
-        bsdf_weight = (pdfMix > 1e-8) ? (fSpecTimesNoL_val / pdfMix) : vec3(0.0);
+        sampledStrategyPdf = pdfNDF;
+        bsdf_weight = (pdfNDF > 1e-8)
+            ? (fSpecTimesNoL_val / pdfNDF) : vec3(0.0);
     } else {
         bsdf_weight = vec3(0.0);
     }
@@ -1227,6 +1221,7 @@ FirstBounceData initFirstBounceData(vec3 ro, vec3 rd) {
     fb.t2_ior_adjusted = 0.0;
     fb.pathRoughness = 0.0;
     fb.reflectionHitDistance = 0.0;
+    fb.reflectionEndpointOffset = vec3(0.0);
     fb.surfaceMotion = vec3(0.0);
     fb.motionValid = 0.0;
     fb.type = -1;
@@ -1310,6 +1305,16 @@ void writeReflectionOutput(uvec2 xy, FirstBounceData fb, vec3 totalIllumination,
     }
     writeReflGeo(xy, pos_rel, refl_R);
     writeReflLight(xy, refl_color, refl_vprojdist, 0.0);
+    RelaxEndpointMoments endpoint = emptyRelaxEndpointMoments();
+    float endpointScale = clamp(VPROJDIST_SKY, 1.0, 65504.0);
+    if (fb.reflectionHitDistance > 0.0 &&
+            fb.reflectionHitDistance < 0.5 * endpointScale &&
+            !any(isnan(fb.reflectionEndpointOffset)) &&
+            !any(isinf(fb.reflectionEndpointOffset))) {
+        endpoint.mean = fb.reflectionEndpointOffset / endpointScale;
+        endpoint.secondMoment = dot(endpoint.mean, endpoint.mean);
+    }
+    writeReflEndpointMoments(xy, endpoint);
 }
 
 void writeRefractionOutput(uvec2 xy, FirstBounceData fb, vec3 totalIllumination, vec3 ro) {
@@ -1479,14 +1484,8 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                             -rd_i, sunWi, macroNormal,
                             surf.Cs, surf.S.x, surf.S.y, rs, surf.R.x,
                             fSpecTimesNoL, pdfNDF)) {
-                        GuideInfo directGuide = computeAliceGuide(
-                            ro_o,
-                            PATH_GUIDING_SPECULAR_STRENGTH * surf.R.x);
-                        float proposalPdf = (1.0 - directGuide.prob) * pdfNDF
-                            + directGuide.prob * alice_guiding_pdf(
-                                sunWi, directGuide.axis, directGuide.kappa);
                         L_direct_0 = misLightContribution(
-                            fSpecTimesNoL, sunLi, lightPdf, proposalPdf);
+                            fSpecTimesNoL, sunLi, lightPdf, pdfNDF);
                     }
                 }
             }
@@ -1526,8 +1525,11 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
             // Distance of the actual noisy specular sample. This replaces the
             // unrelated extra ray previously traced along a fitted direction.
-            if (depth == 1)
+            if (depth == 1) {
                 fb.reflectionHitDistance = (t2 > -0.5) ? t2 : VPROJDIST_SKY;
+                fb.reflectionEndpointOffset = t2 > -0.5
+                    ? (ro_o - fb.p) : vec3(0.0);
+            }
 
             // --- Miss -> sky ---
             if (t2 < -0.5) {

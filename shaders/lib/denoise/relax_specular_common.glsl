@@ -63,6 +63,46 @@ uint relaxPackHalf2(float a, float b) {
     return packHalf2x16(v);
 }
 
+// Prepass transient: 8 FP16 values in the existing rgba32ui image. Endpoint
+// moments use world axes and the common VPROJDIST_SKY scale. The RMS encoding
+// is only a storage transform; all filtering uses decoded E[|X|^2].
+struct RelaxPrepassSignal {
+    vec3 radiance;
+    float hitDistance;
+    RelaxEndpointMoments endpoint;
+};
+
+float relaxEndpointDistanceScale() {
+    // Reflection hit distance is transported through FP16 before this pass.
+    // Keep the common linear scale representable even if the Iris sky-distance
+    // option is configured above the FP16 finite maximum.
+    return clamp(VPROJDIST_SKY, 1.0, 65504.0);
+}
+
+uvec4 relaxPackPrepass(RelaxPrepassSignal s) {
+    s.endpoint = sanitizeRelaxEndpointMoments(s.endpoint);
+    return uvec4(
+        relaxPackHalf2(s.radiance.r, s.radiance.g),
+        relaxPackHalf2(s.radiance.b, s.hitDistance),
+        relaxPackHalf2(s.endpoint.mean.x, s.endpoint.mean.y),
+        relaxPackHalf2(s.endpoint.mean.z,
+            sqrt(max(s.endpoint.secondMoment, 0.0))));
+}
+
+RelaxPrepassSignal relaxUnpackPrepass(uvec4 p) {
+    RelaxPrepassSignal s;
+    vec2 rg = unpackHalf2x16(p.x);
+    vec2 bh = unpackHalf2x16(p.y);
+    vec2 meanXY = unpackHalf2x16(p.z);
+    vec2 meanZRms = unpackHalf2x16(p.w);
+    s.radiance = relaxFiniteColor(vec3(rg, bh.x));
+    s.hitDistance = max(bh.y, 0.0);
+    s.endpoint.mean = vec3(meanXY, meanZRms.x);
+    s.endpoint.secondMoment = meanZRms.y * meanZRms.y;
+    s.endpoint = sanitizeRelaxEndpointMoments(s.endpoint);
+    return s;
+}
+
 struct RelaxSlowSignal {
     vec3 radiance;
     float secondMoment;
@@ -192,17 +232,6 @@ float relaxSpecLobeTanHalfAngle(float roughness, float volumeFraction) {
     volumeFraction = clamp(volumeFraction, 0.0, 1.0);
     return roughness * roughness * volumeFraction /
         max(1.0 - volumeFraction, 1e-6);
-}
-
-float relaxDominantFactor(float NoV, float roughness) {
-    float a = 0.298475 * log(max(39.4115 - 39.0029 * roughness, 1.0001));
-    return clamp(pow(clamp(1.0 - NoV, 0.0, 1.0), 10.8649) * (1.0 - a) + a, 0.0, 1.0);
-}
-
-float relaxApplyThinLens(float hitDistance, float curvature) {
-    float d = 2.0 * curvature * hitDistance + 1.0;
-    d = abs(d) < 1e-5 ? (d < 0.0 ? -1e-5 : 1e-5) : d;
-    return hitDistance / d;
 }
 
 float relaxPlaneWeight(vec3 centerPos, vec3 centerNormal, vec3 samplePos, float threshold) {

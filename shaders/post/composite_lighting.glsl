@@ -185,8 +185,22 @@ void main() {
     fragColor.xyz = jetColormap(clamp(tmp.weight / TEMPORAL_MAX_HISTORY, 0.0, 1.0));
 
     #elif DEBUG_VIEW == 14
-    // Reflect temporal accumulation weight (heatmap)
-    fragColor.xyz = jetColormap(clamp(tmp2.weight / RELAX_SPEC_MAX_HISTORY, 0.0, 1.0));
+    // Actual temporal history contribution to the reflection radiance.
+    // Temporal stores this diagnostic in the packed color field because
+    // N=1.zw are reserved for the four-FP16 endpoint moments.
+    fragColor.xyz = jetColormap(clamp(tmp2.data_swap.r, 0.0, 1.0));
+
+    #elif DEBUG_VIEW == 38
+    // Current reflection input before temporal accumulation.
+    fragColor.xyz = tmp2.data_swap;
+
+    #elif DEBUG_VIEW == 39
+    // Previous reflection fetched at the surface-reprojected address.
+    fragColor.xyz = tmp2.data_swap;
+
+    #elif DEBUG_VIEW == 40
+    // Previous reflection fetched at the virtual-motion address.
+    fragColor.xyz = tmp2.data_swap;
 
     #elif DEBUG_VIEW == 15
     // Refract temporal accumulation weight (heatmap)

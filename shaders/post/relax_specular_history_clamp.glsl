@@ -30,6 +30,9 @@ void relaxStoreClampedHistory(uvec2 pixel, vec4 slow, RelaxFastSignal fast) {
     history.materialID = uint(max(materialID, 0));
     history.reprojectionConfidence = primaryDistance > -0.5
         ? fast.confidence : 0.0;
+    RelaxEndpointMoments endpoint = readReflEndpointMoments(pixel);
+    history.endpointMean = endpoint.mean;
+    history.endpointSecondMoment = endpoint.secondMoment;
     writeRelaxSpecularHistory(pixel, history);
 }
 
@@ -40,8 +43,12 @@ void main() {
 
     vec4 slow = texelFetch(colortex3, ivec2(pixel), 0);
     RelaxFastSignal fast = relaxUnpackFast(texelFetch(colortex5, ivec2(pixel), 0));
-    RelaxFastSignal noisyCenter = relaxUnpackFast(texelFetch(colortex6, ivec2(pixel), 0));
-    if (noisyCenter.confidence <= 0.0) {
+    RelaxPrepassSignal noisyCenter =
+        relaxUnpackPrepass(texelFetch(colortex6, ivec2(pixel), 0));
+    vec3 centerPosition;
+    float centerPrimaryDistance;
+    readGeo0(GEO_N_GEO, pixel, centerPosition, centerPrimaryDistance);
+    if (centerPrimaryDistance < -0.5) {
         relaxStoreClampedHistory(pixel, slow, fast);
         imageStore(colorimg9, ivec2(pixel), slow);
         imageStore(colorimg4, ivec2(pixel), relaxPackFast(fast));
@@ -60,8 +67,13 @@ void main() {
         ivec2 q = ivec2(pixel) + ivec2(x, y);
         if (!relaxInBounds(q, size)) continue;
         RelaxFastSignal qFast = relaxUnpackFast(texelFetch(colortex5, q, 0));
-        RelaxFastSignal qNoisy = relaxUnpackFast(texelFetch(colortex6, q, 0));
-        if (qNoisy.confidence <= 0.0 || qFast.materialID != fast.materialID) continue;
+        RelaxPrepassSignal qNoisy =
+            relaxUnpackPrepass(texelFetch(colortex6, q, 0));
+        vec3 qPosition;
+        float qPrimaryDistance;
+        readGeo0(GEO_N_GEO, uvec2(q), qPosition, qPrimaryDistance);
+        if (qPrimaryDistance < -0.5 || qFast.materialID != fast.materialID)
+            continue;
         vec3 ycocg = relaxRgbToYCoCg(qFast.radiance);
         fastM1 += ycocg;
         fastM2 += ycocg * ycocg;

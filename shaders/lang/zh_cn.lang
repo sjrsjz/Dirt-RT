@@ -29,9 +29,6 @@ option.RAY_BOUNCES.comment = 每条相机路径最多访问的表面数。增加
 option.PATH_GUIDING_STRENGTH = 路径引导强度
 option.PATH_GUIDING_STRENGTH.comment = 漫反射路径的 ALICE 引导强度，同时控制辐射率缓存探针的 ALICE+RIS 总引导概率；缓存探针始终保留至少 10% 均匀球面采样。提高可加快稳定场景收敛，过高则可能在光照变化后增加延迟或方差。
 
-option.PATH_GUIDING_SPECULAR_STRENGTH = 镜面引导强度
-option.PATH_GUIDING_SPECULAR_STRENGTH.comment = 使用 ALICE 历史引导粗糙反射射线的基础概率。光滑镜面或各向同性光场会自动减少引导。
-
 option.SUN_PATH_ROTATION = 日照路径旋转
 option.SUN_PATH_ROTATION.comment = 类似纬度地绕世界 X 轴倾斜太阳和月亮的视运动路径，只改变光照方向，不改变昼夜长度。30° 对应当前大气模型的北纬 30° 春季晴空标定基准。
 
@@ -191,12 +188,6 @@ option.RELAX_DEPTH_THRESHOLD.comment = 历史修复与 À-Trous 使用的世界�
 option.RELAX_MIN_HIT_DISTANCE_WEIGHT = 最小命中距离权重
 option.RELAX_MIN_HIT_DISTANCE_WEIGHT.comment = 预滤波中反射命中距离相似度的权重下限。提高可增强平滑，降低可保留分离的反射深度。
 
-option.RELAX_CURVATURE_STRENGTH = 曲率校正强度
-option.RELAX_CURVATURE_STRENGTH.comment = 缩放 NRD 用于虚拟反射运动的薄透镜校正。0 按平面处理，1 使用估计的表面曲率。
-
-option.RELAX_MAX_VIRTUAL_MOTION_ACCELERATION = 虚拟运动保护
-option.RELAX_MAX_VIRTUAL_MOTION_ACCELERATION.comment = 拒绝让虚拟历史运动远快于可见表面的曲率估计。降低更安全，但可能削弱曲面镜上的追踪。
-
 option.RELAX_ANTIFIREFLY_ENABLE = RELAX 萤火虫抑制
 option.RELAX_ANTIFIREFLY_ENABLE.comment = 在时域累积后启用官方的 3x3 排名条件萤火虫滤波，并保留时域二阶矩。
 value.RELAX_ANTIFIREFLY_ENABLE.1 = 开启
@@ -324,7 +315,7 @@ value.DEBUG_VIEW.10 = 镜面反照率
 value.DEBUG_VIEW.11 = 粗糙度
 value.DEBUG_VIEW.12 = 反射仅时域
 value.DEBUG_VIEW.13 = 漫反射历史权重
-value.DEBUG_VIEW.14 = 反射历史权重
+value.DEBUG_VIEW.14 = 反射实际历史贡献
 value.DEBUG_VIEW.15 = 折射历史权重
 value.DEBUG_VIEW.16 = 表面自发光
 value.DEBUG_VIEW.17 = 介质发光
@@ -348,3 +339,6 @@ value.DEBUG_VIEW.34 = 缓存最终时域值
 value.DEBUG_VIEW.35 = 运动匹配状态
 value.DEBUG_VIEW.36 = 实体世界运动
 value.DEBUG_VIEW.37 = 屏幕运动
+value.DEBUG_VIEW.38 = 反射当前帧输入
+value.DEBUG_VIEW.39 = 反射表面重投影历史
+value.DEBUG_VIEW.40 = 反射端点矩重投影历史

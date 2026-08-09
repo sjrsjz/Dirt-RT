@@ -12,7 +12,6 @@
 #define RAY_BOUNCES 5 // Max ray bounces before termination. Higher = better image quality, lower FPS. [2 3 4 5 6 7]
 #define ACCUMULATION_LENGTH 32 // Refraction history length. Higher = smoother refraction, more ghosting during motion. [1 2 4 8 16 32 64]
 #define PATH_GUIDING_STRENGTH 0.75 // Total guided mixture strength. Cache probes split this probability between stable ALICE and validated RIS proposals while retaining at least 10% uniform sampling. [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.925 0.95 0.975 0.99 0.999]
-#define PATH_GUIDING_SPECULAR_STRENGTH 0.85 // Base mix probability for ALICE-guided specular reflection. Final probability = STRENGTH × roughness × rho, so smooth surfaces (low roughness) or isotropic fields (low rho) naturally suppress guiding. Guiding is only active when both roughness and rho are meaningful. [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.95 0.99]
 #define SUN_PATH_ROTATION 30.0 // Latitude-like sun path tilt. 30 degrees is the clear-sky spring reference used by the atmosphere calibration. [0 15 30 45 60 75 90]
 #define END_SKYBOX 1 // End skybox rendering. 1 = custom rune-ring skybox with FBM nebula background (higher GPU cost). 0 = fall back to atmospheric scattering + NEE (faster). [0 1]
 #define PATHGUIDE_SPATIAL_RADIUS 16.0 // Path-guide ReSTIR Poisson disk spatial sampling radius (pixels). Higher values explore farther neighbours at the cost of more incoherent memory access. [4.0 8.0 12.0 16.0 24.0 32.0]
@@ -69,8 +68,6 @@
 #define RELAX_LOBE_ANGLE_SLACK 0.02 // Additional lobe tolerance in radians. [0.0 0.005 0.01 0.02 0.04 0.08]
 #define RELAX_DEPTH_THRESHOLD 0.003 // World-space plane-distance scale. [0.001 0.002 0.003 0.005 0.01 0.02]
 #define RELAX_MIN_HIT_DISTANCE_WEIGHT 0.1 // Minimum pre-pass hit-distance weight. [0.0 0.05 0.1 0.2 0.35 0.5]
-#define RELAX_CURVATURE_STRENGTH 1.0 // Thin-lens curvature correction. [0.0 0.25 0.5 0.75 1.0 1.25 1.5]
-#define RELAX_MAX_VIRTUAL_MOTION_ACCELERATION 2.0 // Virtual-motion acceleration guard. [0.5 1.0 1.5 2.0 3.0 4.0]
 #define RELAX_ANTIFIREFLY_ENABLE 1 // Rank-conditioned anti-firefly pass. [0 1]
 #define RELAX_HISTORY_FIX_FRAMES 3.0 // Frames repaired after disocclusion. [1.0 2.0 3.0 4.0 5.0 8.0]
 #define RELAX_HISTORY_FIX_BASE_STRIDE 14.0 // Maximum history-fix stride. [4.0 8.0 12.0 14.0 18.0 24.0]
@@ -116,7 +113,7 @@
 #define VPROJDIST_SKY 60000.0 // Virtual projected distance assigned to sky hits (m). Used by specular/refraction denoiser to tag infinity. [5000.0 10000.0 25000.0 50000.0 60000.0 100000.0 250000.0]
 
 // -- Debug view --
-#define DEBUG_VIEW 0 // Debug output mode. [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37]
+#define DEBUG_VIEW 0 // Debug output mode. [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40]
 
 /*
 const int depthtex0Format = RGBA32F;

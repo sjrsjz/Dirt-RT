@@ -25,15 +25,15 @@ void main() {
     readReflLight(pixel, raw, centerHitDistance, unusedWeight);
     raw = relaxFiniteColor(raw);
 
-    RelaxFastSignal outputSignal;
+    RelaxPrepassSignal outputSignal;
     outputSignal.radiance = raw;
     outputSignal.hitDistance = max(centerHitDistance, 0.0);
-    outputSignal.historyLength = 0.0;
-    outputSignal.confidence = primaryDistance > -0.5 ? 1.0 : 0.0;
-    outputSignal.materialID = 0u;
+    outputSignal.endpoint = primaryDistance > -0.5
+        ? readReflEndpointMoments(pixel)
+        : emptyRelaxEndpointMoments();
 
     if (primaryDistance < -0.5) {
-        imageStore(colorimg6, ivec2(pixel), relaxPackFast(outputSignal));
+        imageStore(colorimg6, ivec2(pixel), relaxPackPrepass(outputSignal));
         return;
     }
 
@@ -43,14 +43,20 @@ void main() {
     readGeo1(GEO_N_NORMALS, pixel, centerNormal, centerAlpha,
         centerMaterial, centerPathRoughness);
     float centerRoughness = relaxPerceptualRoughness(centerAlpha);
-    outputSignal.materialID = uint(max(centerMaterial, 0));
     if (RELAX_PREPASS_RADIUS <= 0.0) {
-        imageStore(colorimg6, ivec2(pixel), relaxPackFast(outputSignal));
+        imageStore(colorimg6, ivec2(pixel), relaxPackPrepass(outputSignal));
         return;
     }
     vec3 sumRadiance = raw;
-    float sumHitDistance = max(centerHitDistance, 0.0);
     float sumWeight = 1.0;
+    bool centerEndpointValid = relaxEndpointMomentsValid(outputSignal.endpoint);
+    vec3 sumEndpointMean = centerEndpointValid
+        ? outputSignal.endpoint.mean : vec3(0.0);
+    float sumEndpointSecondMoment = centerEndpointValid
+        ? outputSignal.endpoint.secondMoment : 0.0;
+    float sumEndpointWeight = centerEndpointValid ? 1.0 : 0.0;
+    float minimumHitDistance = centerEndpointValid
+        ? centerHitDistance : VPROJDIST_SKY;
     vec2 roughnessParams = relaxRoughnessWeightParams(
         centerRoughness, RELAX_ROUGHNESS_FRACTION);
     float normalParam = 1.0 / max(
@@ -89,6 +95,8 @@ void main() {
         float sampleHitDistance, sampleWeight;
         readReflLight(uvec2(q), sampleRadiance, sampleHitDistance, sampleWeight);
         sampleRadiance = relaxFiniteColor(sampleRadiance);
+        RelaxEndpointMoments sampleEndpoint =
+            readReflEndpointMoments(uvec2(q));
 
         float hitScale = max(max(centerHitDistance, sampleHitDistance), 1.0);
         float hitWeight = exp(-abs(sampleHitDistance - centerHitDistance) /
@@ -96,11 +104,29 @@ void main() {
         w *= mix(RELAX_MIN_HIT_DISTANCE_WEIGHT, 1.0, hitWeight);
 
         sumRadiance += sampleRadiance * w;
-        sumHitDistance += max(sampleHitDistance, 0.0) * w;
         sumWeight += w;
+        // A sky center remains a sky sample. For finite centers, moment
+        // filtering is a normalized linear filter of E[X] and E[|X|^2].
+        if (centerEndpointValid && relaxEndpointMomentsValid(sampleEndpoint)) {
+            sumEndpointMean += sampleEndpoint.mean * w;
+            sumEndpointSecondMoment += sampleEndpoint.secondMoment * w;
+            sumEndpointWeight += w;
+            minimumHitDistance = min(minimumHitDistance, sampleHitDistance);
+        }
     }
 
     outputSignal.radiance = relaxFiniteColor(sumRadiance / max(sumWeight, 1e-6));
-    outputSignal.hitDistance = sumHitDistance / max(sumWeight, 1e-6);
-    imageStore(colorimg6, ivec2(pixel), relaxPackFast(outputSignal));
+    if (centerEndpointValid && sumEndpointWeight > 1e-6) {
+        outputSignal.endpoint.mean = sumEndpointMean / sumEndpointWeight;
+        outputSignal.endpoint.secondMoment =
+            sumEndpointSecondMoment / sumEndpointWeight;
+        outputSignal.endpoint =
+            sanitizeRelaxEndpointMoments(outputSignal.endpoint);
+        // Match the official RELAX prepass: radiance is averaged, while the
+        // finite hit distance used by later spatial stages is the minimum.
+        outputSignal.hitDistance = minimumHitDistance;
+    } else {
+        outputSignal.endpoint = emptyRelaxEndpointMoments();
+    }
+    imageStore(colorimg6, ivec2(pixel), relaxPackPrepass(outputSignal));
 }

@@ -29,9 +29,6 @@ option.RAY_BOUNCES.comment = Maximum surfaces visited by each camera path. More 
 option.PATH_GUIDING_STRENGTH = Path Guiding Strength
 option.PATH_GUIDING_STRENGTH.comment = ALICE guiding strength for diffuse paths and the total ALICE+RIS guided probability for radiance-cache probes. Cache probes always retain at least 10% uniform-sphere sampling. Higher values can converge faster in stable scenes; excessive values can increase lag or variance after lighting changes.
 
-option.PATH_GUIDING_SPECULAR_STRENGTH = Specular Guiding Strength
-option.PATH_GUIDING_SPECULAR_STRENGTH.comment = Base probability of steering rough reflection rays with ALICE history. Smooth or isotropic lobes automatically receive less guiding.
-
 option.SUN_PATH_ROTATION = Sun Path Rotation
 option.SUN_PATH_ROTATION.comment = Tilts the apparent sun and moon path around the world X axis like latitude. This changes lighting direction, not day length. 30° is the spring clear-sky calibration reference for the atmosphere.
 
@@ -191,12 +188,6 @@ option.RELAX_DEPTH_THRESHOLD.comment = World-space plane tolerance used by histo
 option.RELAX_MIN_HIT_DISTANCE_WEIGHT = Minimum Hit-distance Weight
 option.RELAX_MIN_HIT_DISTANCE_WEIGHT.comment = Lower bound for reflection hit-distance similarity in the pre-pass. Raise it for more smoothing; lower it to preserve separated reflection depths.
 
-option.RELAX_CURVATURE_STRENGTH = Curvature Correction
-option.RELAX_CURVATURE_STRENGTH.comment = Scales NRD thin-lens correction for virtual reflection motion. Zero assumes planar reflectors; one uses the estimated surface curvature.
-
-option.RELAX_MAX_VIRTUAL_MOTION_ACCELERATION = Virtual-motion Guard
-option.RELAX_MAX_VIRTUAL_MOTION_ACCELERATION.comment = Rejects curvature estimates that move virtual history much faster than the visible surface. Lower values are safer but can reduce tracking on curved mirrors.
-
 option.RELAX_ANTIFIREFLY_ENABLE = RELAX Anti-firefly
 option.RELAX_ANTIFIREFLY_ENABLE.comment = Enables the official rank-conditioned 3x3 anti-firefly stage after temporal accumulation. It preserves the temporal second moment.
 value.RELAX_ANTIFIREFLY_ENABLE.1 = On
@@ -324,7 +315,7 @@ value.DEBUG_VIEW.10 = Specular Albedo
 value.DEBUG_VIEW.11 = Roughness
 value.DEBUG_VIEW.12 = Refl. Temporal Only
 value.DEBUG_VIEW.13 = Diffuse Weight
-value.DEBUG_VIEW.14 = Reflect Weight
+value.DEBUG_VIEW.14 = Reflect History Contribution
 value.DEBUG_VIEW.15 = Refract Weight
 value.DEBUG_VIEW.16 = Surface Emission
 value.DEBUG_VIEW.17 = Medium Emission
@@ -348,3 +339,6 @@ value.DEBUG_VIEW.34 = Cache Final Temporal
 value.DEBUG_VIEW.35 = Motion Match Status
 value.DEBUG_VIEW.36 = Entity World Motion
 value.DEBUG_VIEW.37 = Screen Motion
+value.DEBUG_VIEW.38 = Reflect Current Input
+value.DEBUG_VIEW.39 = Reflect Surface History
+value.DEBUG_VIEW.40 = Reflect Endpoint-Moment History
