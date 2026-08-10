@@ -224,7 +224,7 @@ bool sampleHistory(uvec2 gxy, inout uint seed, out StoredReservoir result) {
     if (motionValid < 0.5) return false;
 
     vec3 prevPos = curPos + camPos - prevRaytracingCamPos - surfaceMotion;
-    vec4 clip = rtPrevProjection * rtPrevModelView * vec4(prevPos, 1.0);
+    vec4 clip = rtPrevViewProjection * vec4(prevPos, 1.0);
     if (clip.w <= 1e-6) return false;
     vec2 uv = (clip.xy / clip.w) * 0.5 + 0.5;
     if (any(lessThan(uv, vec2(0.0))) || any(greaterThanEqual(uv, vec2(1.0)))) return false;

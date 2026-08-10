@@ -61,7 +61,7 @@ RelaxSurfaceFootprint relaxBuildSurfaceFootprint(
         fp.bitangent = vec3(b, 1.0 - n.y * n.y * a, -n.y);
     }
 
-    mat4 inverseCurrentViewProjection = inverse(rtProjection * rtModelView);
+    mat4 inverseCurrentViewProjection = rtInverseViewProjection;
     vec2 size = vec2(resolution_global);
     vec2 uvMin = (vec2(pixel) - TEMPORAL_CLIP_PIXEL_RADIUS) / size * 2.0 - 1.0;
     vec2 uvMax = (vec2(pixel) + TEMPORAL_CLIP_PIXEL_RADIUS) / size * 2.0 - 1.0;
@@ -305,9 +305,9 @@ RelaxEndpointProjection relaxBuildEndpointProjection(
     vec3 visualCurrent = currentSurfacePosition + zeta * meanWorld;
     vec3 visualPrevious = visualCurrent + cameraDelta;
     vec2 visualCurrentUv, visualPreviousUv;
-    if (!relaxProjectRelative(rtProjection * rtModelView,
+    if (!relaxProjectRelative(rtViewProjection,
             visualCurrent, visualCurrentUv) ||
-        !relaxProjectRelative(rtPrevProjection * rtPrevModelView,
+        !relaxProjectRelative(rtPrevViewProjection,
             visualPrevious, visualPreviousUv))
         return projection;
 

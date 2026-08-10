@@ -419,7 +419,7 @@ bool allocateRadianceCacheBrick(ivec3 worldBrick, uint frameStamp) {
     rcStore(rcMetaAddress(slot, RC_META_KEY_Z), uint(worldBrick.z));
     rcStore(rcMetaAddress(slot, RC_META_MAP_INDEX), insertionIndex);
     rcStore(rcMetaAddress(slot, RC_META_TOKEN), newToken);
-    // ray4 overwrites every current voxel. Temporal treats both RIS and
+    // ray5 overwrites every current voxel. Temporal treats both RIS and
     // filtered history as empty on this birth frame, so recycling never needs
     // a full payload clear.
     rcStore(rcMetaAddress(slot, RC_META_BIRTH_FRAME), frameStamp);
@@ -449,7 +449,7 @@ uint rcDistanceBucket(ivec3 worldBrick, vec3 cameraPosition) {
         float(RADIANCE_CACHE_DISTANCE_BUCKET_COUNT - 1));
     return uint(max(clampedBucket, 0.0));
 }
-// Called by the one-invocation ray3 allocator pass.
+// Called by the one-invocation ray4 allocator pass.
 void processRadianceCacheAllocationRequests(vec3 cameraPosition, uint frameStamp) {
     if (!radianceCacheStorageAvailable()) return;
     if (!rcFiniteWorldPosition(cameraPosition)) {

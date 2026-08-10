@@ -1,5 +1,5 @@
-// #version 460 core — declared by each enclosing rayN.rgen entry, which must #define exactly one
-// of FIRST_LOBE_DIFFUSE / FIRST_LOBE_REFLECTION / FIRST_LOBE_REFRACTION (and FIRST_LOBE_VAL).
+// #version 460 core is declared by each enclosing rayN.rgen entry. ray0
+// defines PRIMARY_GBUFFER_PASS; ray1..ray3 define one dedicated first lobe.
 // This file is never compiled alone.
 #extension GL_EXT_ray_query : enable
 #extension GL_EXT_buffer_reference : enable
@@ -22,6 +22,7 @@
 #include "/lib/constants.glsl"
 #include "/lib/settings.glsl"
 #include "/lib/rt/pom.glsl"
+#include "/lib/rt/mipmap.glsl"
 #include "/lib/sky.glsl"
 #include "/lib/math/quaternions.glsl"
 #include "/lib/buffers/buffer_io.glsl"
@@ -30,11 +31,9 @@
 #include "/lib/pbr/material.glsl"
 #include "/lib/common.glsl"
 
-// First-bounce lobe forced by the enclosing rayN.rgen entry.
-// Each entry #defines exactly one of FIRST_LOBE_DIFFUSE / FIRST_LOBE_REFLECTION / FIRST_LOBE_REFRACTION
-// and #defines FIRST_LOBE_VAL to the corresponding int (DIFFUSION=2 / REFLECTION=1 / REFRACTION=3).
-// The body uses #if defined() to produce three distinct compiled passes with zero dead code.
-#if !defined(FIRST_LOBE_DIFFUSE) && !defined(FIRST_LOBE_REFLECTION) && !defined(FIRST_LOBE_REFRACTION)
+// ray0 builds the primary-surface cache. Continuation entries define exactly
+// one of FIRST_LOBE_DIFFUSE / FIRST_LOBE_REFLECTION / FIRST_LOBE_REFRACTION.
+#if !defined(PRIMARY_GBUFFER_PASS) && !defined(FIRST_LOBE_DIFFUSE) && !defined(FIRST_LOBE_REFLECTION) && !defined(FIRST_LOBE_REFRACTION)
 #define FIRST_LOBE_DIFFUSE
 #define FIRST_LOBE_VAL 2
 #endif
@@ -73,11 +72,12 @@ layout(std430, set = 0, binding = 2, scalar) readonly buffer EntityMotionBuffer 
 
 #if !defined(RADIANCE_CACHE_TRACE)
 void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir);
+void TracePrimaryGBuffer(uvec2 coord, vec3 ro, vec3 rd);
 #endif
 
 bool isDarkened = false;
 
-#if defined(FIRST_LOBE_DIFFUSE)
+#if defined(PRIMARY_GBUFFER_PASS) || defined(FIRST_LOBE_DIFFUSE)
 void markRadianceCacheGeometryHit(uvec2 pixel, vec3 hitPosition, vec3 geometryNormal) {
     uvec2 tileMask = uvec2(RADIANCE_CACHE_MARK_TILE_SIZE - 1u);
     if (any(notEqual(pixel & tileMask, uvec2(0u)))) return;
@@ -118,12 +118,15 @@ void main() {
     wseed3.z = floatBitsToUint(seed0.z);
 
     setSkyVars();
+    #if defined(PRIMARY_GBUFFER_PASS)
+    TracePrimaryGBuffer(uvec2(gl_LaunchIDEXT.xy), origin, direction);
+    #else
     Trace(uvec2(gl_LaunchIDEXT.xy), origin, direction, -lightDir_global);
+    #endif
 
-    // Per-frame-once global state: only diffuse pass (ray0) pixel (0,0).
-    // rtPrev=rtModelView is non-idempotent — if all 3 passes run it,
-    // rtPrev gets overwritten to the current frame's matrix → reprojection failure → ghosting.
-    #if defined(FIRST_LOBE_DIFFUSE)
+    // Per-frame-once global state: only primary pass pixel (0,0). Updating the
+    // previous matrices from any continuation pass would break reprojection.
+    #if defined(PRIMARY_GBUFFER_PASS)
     if (gl_LaunchIDEXT.xy == vec2(0)) {
         world_type_global = int(cam.world_type);
         frame_id = int(cam.frameId);
@@ -131,9 +134,8 @@ void main() {
         camY_global = (cam.viewInverse * vec4(normalize(cam.corners[0] - cam.corners[2]), 0)).xyz;
         camX_global = (cam.viewInverse * vec4(normalize(cam.corners[0] - cam.corners[1]), 0)).xyz;
 
-        // Save current frame matrices as "previous" (for next frame's temporal reprojection)
-        rtPrevModelView = rtModelView;
-        rtPrevProjection = rtProjection;
+        // Save the already-composed transform for next-frame reprojection.
+        rtPrevViewProjection = rtViewProjection;
 
         // ModelView: pure rotation (transpose of viewInverse), no translation
         rtModelView = mat4(transpose(mat3(cam.viewInverse)));
@@ -143,14 +145,16 @@ void main() {
         float w = cam.corners[1].x - cam.corners[0].x;
         float h = cam.corners[2].y - cam.corners[0].y;
         float farD = 2048.0;
-        rtProjection = mat4(0.0);
-        rtProjection[0][0] = (2.0 * zNear) / w;
-        rtProjection[1][1] = (2.0 * zNear) / h;
-        rtProjection[2][0] = (cam.corners[1].x + cam.corners[0].x) / w;
-        rtProjection[2][1] = (cam.corners[2].y + cam.corners[0].y) / h;
-        rtProjection[2][2] = -(farD + zNear) / (farD - zNear);
-        rtProjection[2][3] = -1.0;
-        rtProjection[3][2] = -(2.0 * farD * zNear) / (farD - zNear);
+        mat4 projection = mat4(0.0);
+        projection[0][0] = (2.0 * zNear) / w;
+        projection[1][1] = (2.0 * zNear) / h;
+        projection[2][0] = (cam.corners[1].x + cam.corners[0].x) / w;
+        projection[2][1] = (cam.corners[2].y + cam.corners[0].y) / h;
+        projection[2][2] = -(farD + zNear) / (farD - zNear);
+        projection[2][3] = -1.0;
+        projection[3][2] = -(2.0 * farD * zNear) / (farD - zNear);
+        rtViewProjection = projection * rtModelView;
+        rtInverseViewProjection = inverse(rtViewProjection);
     }
     #endif
 }
@@ -242,25 +246,41 @@ Material evaluateMaterial(Payload pld, vec3 rd_i, uint bounce) {
     vec3 bitangent = cross(tangent, geomN) * bitangentSign;
     mat3 tbn = mat3(tangent, bitangent, geomN);
 
+    float hitDistance;
+    payload_unpackHitPos(pld.data, hitDistance);
+    vec2 mipResolution = max(vec2(resolution_global),
+        vec2(gl_LaunchSizeEXT.xy));
+    float pixelConeSpread = rtPixelConeSpread(cam.corners[0],
+        cam.corners[1], cam.corners[2], mipResolution);
+
     vec2 sampleUV = uv;
     vec4 albedoTex;
     vec4 specularTex;
     vec4 normalTex;
 
     if (entityTextureId != 0u) {
-        albedoTex = texture(entityTextures[nonuniformEXT(entityTextureId - 1u)], uv);
+        uint textureIndex = entityTextureId - 1u;
+        ivec2 textureResolution = textureSize(
+            entityTextures[nonuniformEXT(textureIndex)], 0);
+        float mipLevel = rtTextureLod(textureResolution,
+            vec4(0.0, 0.0, 1.0, 1.0), hitDistance, rd_i, geomN,
+            bounce, pixelConeSpread);
+        albedoTex = textureLod(
+            entityTextures[nonuniformEXT(textureIndex)], uv, mipLevel);
         specularTex = vec4(0.0, 0.04, 0.0, 1.0);
         normalTex = vec4(0.5, 0.5, 1.0, 1.0);
     } else {
     vec2 localCoord = getRelativeUV(uv, atlas);
 
     // --- POM — first hit only ---
-    vec2 res = vec2(textureSize(blockTexNormal, 0));
+    ivec2 textureResolution = textureSize(blockTex, 0);
+    float mipLevel = rtTextureLod(textureResolution, atlas,
+        hitDistance, rd_i, geomN, bounce, pixelConeSpread);
 
 #if POM_ENABLED == 1
-    vec2 derivatives;
     if (bounce == 0u) {
-        sampleUV = computeParallaxUV(blockTexNormal, localCoord, atlas, rd_i, tbn, derivatives);
+        sampleUV = computeParallaxUV(blockTexNormal, localCoord, atlas,
+            rd_i, tbn, mipLevel);
     } else {
         sampleUV = uv;
     }
@@ -268,18 +288,20 @@ Material evaluateMaterial(Payload pld, vec3 rd_i, uint bounce) {
     sampleUV = uv;
 #endif
 
-    // --- Sample textures (bicubic albedo+specular first hit, bilinear otherwise) ---
-    albedoTex = texture(blockTex, sampleUV);
-    specularTex = texture(blockTexSpecular, sampleUV);
+    // Explicit LOD is mandatory in RT: implicit texture() derivatives are not
+    // available in ray stages and otherwise collapse to mip 0.
+    albedoTex = textureLod(blockTex, sampleUV, mipLevel);
+    specularTex = textureLod(blockTexSpecular, sampleUV, mipLevel);
 
 #if POM_ENABLED == 1
-    if (bounce == 0u) {
-        normalTex = textureBicubic(blockTexNormal, sampleUV, atlas, res);
+    if (bounce == 0u && mipLevel < 0.5) {
+        normalTex = textureBicubic(blockTexNormal, sampleUV, atlas,
+            vec2(textureResolution));
     } else {
-        normalTex = texture(blockTexNormal, sampleUV);
+        normalTex = textureLod(blockTexNormal, sampleUV, mipLevel);
     }
 #else
-    normalTex = texture(blockTexNormal, sampleUV);
+    normalTex = textureLod(blockTexNormal, sampleUV, mipLevel);
 #endif
     }
 
@@ -435,7 +457,7 @@ vec3 evaluateSpecularAlbedo(
 
 vec3 reproject(vec3 worldPos) {
     vec3 prevPlayerPos = worldPos - prevRaytracingCamPos;
-    vec4 clipPos = rtPrevProjection * rtPrevModelView * vec4(prevPlayerPos, 1.0);
+    vec4 clipPos = rtPrevViewProjection * vec4(prevPlayerPos, 1.0);
     vec3 ndc = clipPos.xyz / clipPos.w;
     return ndc * 0.5 + 0.5;
 }
@@ -1259,18 +1281,55 @@ void recordFirstBounceGBuffer(
     fb.transmissionAlbedo = nonSpecularAlbedo * transmissionSelector;
 }
 
+void writePrimarySurfaceGBuffer(uvec2 xy, FirstBounceData fb,
+        material surf, vec3 ro) {
+    vec3 posRel = fb.p - ro;
+    writeGeo0(GEO_N_GEO, xy, posRel, fb.t);
+    writeGeo1(GEO_N_NORMALS, xy, fb.geometry_n, fb.roughness,
+        fb.materialID, fb.roughness);
+    writeMicroNormal(GEO_N_MICRONORMAL, xy, fb.macro_n);
+    writeAlbedosPath(GEO_N_ALBEDOS, xy,
+        fb.specularAlbedo, fb.diffuseAlbedo);
+    writeMisc(GEO_N_MISC, xy,
+        fb.transmissionAlbedo, fb.emission_val, fb.rd_i);
+    writeLightAbs(GEO_N_LIGHTABS, xy, fb.light_surf, fb.absorption);
+    writeSurfaceMotion(xy, fb.surfaceMotion, fb.motionValid);
+    writePrimaryMaterial(xy, surf.Cs, surf.Cd, surf.S);
+}
+
+void loadPrimarySurfaceGBuffer(uvec2 xy, vec3 ro,
+        out FirstBounceData fb, out material surf) {
+    fb = initFirstBounceData(ro, vec3(0.0, 0.0, -1.0));
+
+    vec3 posRel;
+    readGeo0(GEO_N_GEO, xy, posRel, fb.t);
+    fb.p = ro + posRel;
+    readGeo1(GEO_N_NORMALS, xy, fb.geometry_n, fb.roughness,
+        fb.materialID, fb.pathRoughness);
+    fb.macro_n = readMicroNormal(GEO_N_MICRONORMAL, xy);
+    fb.micro_n = fb.macro_n;
+    #if defined(FIRST_LOBE_REFLECTION)
+    fb.specularAlbedo = readPrimarySpecularAlbedo(xy);
+    #endif
+    #if defined(FIRST_LOBE_REFRACTION)
+    readPrimaryTransmissionAndRay(xy,
+        fb.transmissionAlbedo, fb.rd_i);
+    #else
+    fb.rd_i = readPrimaryRayDirection(xy);
+    #endif
+    fb.rd_o = fb.rd_i;
+    fb.refr_dir = fb.rd_i;
+
+    vec3 Cs, Cd;
+    vec2 S;
+    readPrimaryMaterial(xy, Cs, Cd, S);
+    surf = newMaterial(Cs, Cd, S, vec4(fb.roughness, 0.0, 0.0, 0.0),
+        vec3(0.0));
+}
+
 void writeDiffuseOutput(uvec2 xy, FirstBounceData fb, vec3 L_indirect,
     vec3 L_direct_0, vec3 L_direct_0_dir, vec3 ro) {
     vec3 pos_rel = fb.p - ro;
-    writeGeo0(GEO_N_GEO, xy, pos_rel, fb.t);
-    // Stable material continuity is required by RELAX. The previous first-lobe
-    // value in this slot was never consumed by composition.
-    writeGeo1(GEO_N_NORMALS, xy, fb.geometry_n, fb.roughness, fb.materialID, fb.roughness);
-    writeMicroNormal(GEO_N_MICRONORMAL, xy, fb.macro_n);
-    writeAlbedosPath(GEO_N_ALBEDOS, xy, fb.specularAlbedo, fb.diffuseAlbedo);
-    writeMisc(GEO_N_MISC, xy, fb.transmissionAlbedo, fb.emission_val, fb.rd_i);
-    writeLightAbs(GEO_N_LIGHTABS, xy, fb.light_surf, fb.absorption);
-    writeSurfaceMotion(xy, fb.surfaceMotion, fb.motionValid);
 
     AliceEncoding combinedAlice = init_alice();
     float mask = 0.0;
@@ -1338,6 +1397,54 @@ void writeRefractionOutput(uvec2 xy, FirstBounceData fb, vec3 totalIllumination,
     writePathRoughness(GEO_N_NORMALS, xy, fb.pathRoughness);
 }
 
+#if defined(PRIMARY_GBUFFER_PASS)
+void TracePrimaryGBuffer(uvec2 xy, vec3 ro, vec3 rd) {
+    uint eyeMedium = cam.flags & 3u;
+    bool inside = eyeMedium != 0u;
+    vec4 fogColor = eyeMedium == 2u
+        ? vec4(0.0, 0.05, 0.075, 0.1) * 5.0
+        : vec4(0.0, 0.325, 0.295, 0.3);
+    vec3 globalEmission = eyeMedium == 2u
+        ? vec3(1.0, 0.25, 0.05) * 10.0 : vec3(0.0);
+
+    FirstBounceData fb = initFirstBounceData(ro, rd);
+    material surf = newMaterial(vec3(0.0), vec3(0.0), vec2(0.0),
+        vec4(1.0, 0.0, 0.0, 0.0), vec3(0.0));
+
+    vec3 hitPosition, hitDirection;
+    float t = raycast(ro, rd, hitPosition, hitDirection, !inside, false);
+    if (t < -0.5) {
+        fb.t = -1.0;
+        fb.absorption = inside ? vec3(0.0) : vec3(1.0);
+    } else {
+        vec4 primaryMotion = getPrimarySurfaceMotion(tmp_Payload);
+        fb.surfaceMotion = primaryMotion.xyz;
+        fb.motionValid = primaryMotion.w;
+
+        Material surfaceMat = evaluateMaterial(tmp_Payload, rd, 0u);
+        vec3 geomN = payload_unpackGeomNormal(tmp_Payload.data);
+        vec3 geometryNormal = faceforward(geomN, geomN, rd);
+        vec3 macroNormal = normalize(faceforward(surfaceMat.macroNormal,
+            surfaceMat.macroNormal, -geometryNormal));
+        int blockID;
+        payload_unpackShadow(tmp_Payload.data, blockID);
+        surf = materialFromEvaluated(surfaceMat, blockID);
+        int materialID = getRelaxMaterialID(tmp_Payload, blockID);
+        markRadianceCacheGeometryHit(xy, hitPosition, geometryNormal);
+
+        float nI = inside ? REFRACTIVE_INDEX : 1.0;
+        float nO = inside ? 1.0 : REFRACTIVE_INDEX;
+        MediumResult medium = evalMedium(t, rd, ro.y, inside,
+            fogColor, globalEmission);
+        recordFirstBounceGBuffer(hitPosition, ro, macroNormal,
+            geometryNormal, macroNormal, surf, materialID, rd, rd, t,
+            nI, nO, -1, medium.emission, medium.absorption, fb);
+    }
+
+    writePrimarySurfaceGBuffer(xy, fb, surf, ro);
+}
+#endif
+
 // -----------------------------------------------------------------------------------
 // Core: Forward Path Tracing
 // -----------------------------------------------------------------------------------
@@ -1370,6 +1477,110 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     FirstBounceData fb = initFirstBounceData(ro, rd);
 
     // ===== FIRST BOUNCE =====
+    #if defined(FIRST_LOBE_DIFFUSE) || defined(FIRST_LOBE_REFLECTION) || defined(FIRST_LOBE_REFRACTION)
+    material surf;
+    loadPrimarySurfaceGBuffer(xy, ro, fb, surf);
+    vec3 ro_o = fb.p;
+    vec3 rd_o = fb.rd_i;
+
+    if (fb.t < -0.5) {
+        throughput = vec3(0.0);
+    } else {
+        vec3 geometryNormal = fb.geometry_n;
+        vec3 macroNormal = fb.macro_n;
+        vec3 microNormal = GGXNormal(macroNormal, surf.R.x, ro_o);
+        float n_i = inside ? REFRACTIVE_INDEX : 1.0;
+        float n_o = inside ? 1.0 : REFRACTIVE_INDEX;
+        float rs = n_i / n_o;
+        LobeProbs lobes = computeLobeProbs(surf, fb.rd_i, macroNormal, rs);
+
+        vec3 bsdf_weight = vec3(0.0);
+        vec3 next_rd = fb.rd_i;
+        int current_type = -1;
+        PSRResult psr;
+        psr.virtualDist = 0.0;
+        psr.pathRoughness = 0.0;
+        psr.refrDir = fb.rd_i;
+
+        #if defined(FIRST_LOBE_REFLECTION)
+        current_type = REFLECTION;
+        bool firstDelta;
+        handleFirstBounce_Reflection(fb.rd_i, ro_o, macroNormal,
+            geometryNormal, microNormal, surf, lobes, rs, bsdf_weight,
+            next_rd, lastBsdfStrategyPdf, firstDelta);
+        lastBsdfDelta = firstDelta;
+        lastNeeCompatible = true;
+        #elif defined(FIRST_LOBE_REFRACTION)
+        current_type = REFRACTION;
+        bool wasInside = inside;
+        handleFirstBounce_Refraction(fb.rd_i, ro_o, macroNormal,
+            geometryNormal, microNormal, surf, lobes, rs, bsdf_weight,
+            next_rd, inside, psr, wasInside, 0);
+        lastBsdfStrategyPdf = 0.0;
+        lastBsdfDelta = true;
+        lastNeeCompatible = false;
+        fb.refr_dir = psr.refrDir;
+        fb.t2_ior_adjusted = psr.virtualDist;
+        fb.pathRoughness = psr.pathRoughness;
+        #else
+        current_type = DIFFUSION;
+        handleFirstBounce_Diffuse(fb.rd_i, ro_o, macroNormal,
+            geometryNormal, surf, lobes, bsdf_weight, next_rd,
+            lastBsdfStrategyPdf);
+        lastBsdfDelta = false;
+        lastNeeCompatible = true;
+        #endif
+
+        bool firstHasSunNee = current_type == DIFFUSION
+            || (current_type == REFLECTION && !isDeltaSpecular(surf.R.x));
+        if (!isDarkened && firstHasSunNee) {
+            vec3 sunWi, sunLi;
+            float lightPdf;
+            if (sampleDirectSun(ro_o, geometryNormal, lightDir, inside,
+                    sunWi, sunLi, lightPdf)) {
+                L_direct_0_dir = sunWi;
+                if (current_type == DIFFUSION
+                        && dot(sunWi, geometryNormal) > 0.0
+                        && dot(sunWi, macroNormal) > 0.0) {
+                    GuideInfo directGuide = computeAliceGuide(
+                        ro_o, PATH_GUIDING_STRENGTH);
+                    float proposalPdf = (1.0 - directGuide.prob)
+                        * (1.0 / (2.0 * PI));
+                    proposalPdf += directGuide.prob * alice_guiding_pdf(
+                        sunWi, directGuide.axis, directGuide.kappa);
+                    float Fd = evaluateDisneyDiffuseFactor(
+                        -fb.rd_i, sunWi, macroNormal, surf.R.x);
+                    float misWeight = powerHeuristic(lightPdf, proposalPdf);
+                    L_direct_0 = max(vec3(0.0), sunLi
+                        * (Fd * misWeight / max(PI * lightPdf, 1e-20)));
+                } else if (current_type == REFLECTION
+                        && !isDeltaSpecular(surf.R.x)
+                        && dot(sunWi, geometryNormal) > 0.0) {
+                    vec3 fSpecTimesNoL;
+                    float pdfNDF;
+                    if (evaluateSpecularBRDF(-fb.rd_i, sunWi, macroNormal,
+                            surf.Cs, surf.S.x, surf.S.y, rs, surf.R.x,
+                            fSpecTimesNoL, pdfNDF)) {
+                        L_direct_0 = misLightContribution(
+                            fSpecTimesNoL, sunLi, lightPdf, pdfNDF);
+                    }
+                }
+            }
+        }
+
+        fb.rd_o = next_rd;
+        fb.micro_n = microNormal;
+        fb.type = current_type;
+        fb.n_i = n_i;
+        fb.n_o = current_type == REFRACTION ? n_o : n_i;
+        cascadedRoughness2 = current_type == DIFFUSION
+            ? 1.0 : surf.R.x * surf.R.x;
+        throughput *= bsdf_weight;
+        ro_i = ro_o + geometryNormal
+            * (current_type == REFRACTION ? -0.001 : 0.001);
+        rd_i = next_rd;
+    }
+    #else
     vec3 ro_o, rd_o;
     float t = raycast(ro_i, rd_i, ro_o, rd_o, !inside, false);
 
@@ -1516,6 +1727,8 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         ro_i = ro_o + geometryNormal * ((current_type == REFRACTION) ? -0.001 : 0.001);
         rd_i = next_rd;
     }
+
+    #endif
 
     // ===== SECONDARY LOOP =====
     if (max(throughput.r, max(throughput.g, throughput.b)) > 0.0

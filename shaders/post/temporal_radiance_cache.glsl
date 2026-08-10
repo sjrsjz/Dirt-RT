@@ -141,7 +141,7 @@ RadianceCache radianceCacheCurrentEstimate(RadianceCache current) {
     if (!isValidRadianceCacheReservoir(current)) return emptyCache();
 
     // CURRENT is a one-sample unbiased estimate of all four ALICE moments. Its
-    // importance correction is normally already baked into alice by ray4, but
+    // importance correction is normally already baked into alice by ray5, but
     // canonicalizing W here keeps the filtered planes well-defined if the
     // producer representation changes later.
     current.alice.aliceR *= current.W;

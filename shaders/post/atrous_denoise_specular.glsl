@@ -99,12 +99,6 @@ float GetSpecularNormalWeight_ATrous(vec2 params, vec3 n0, vec3 n, vec3 v0, vec3
 }
 
 // 简化版法线权重参数 (仅用于角度)
-float GetNormalWeightParam2(float angleFraction) {
-    float angle = atan(GetSpecLobeTanHalfAngle(1.0, angleFraction));
-    angle = 1.0 / max(angle, 0.001);
-    return angle;
-}
-
 // 平面距离权重 (À-trous 版本)
 float GetPlaneDistanceWeight_Atrous(vec3 centerWorldPos, vec3 centerNormal, vec3 sampleWorldPos, float threshold) {
     float distanceToCenterPointPlane = abs(dot(sampleWorldPos - centerWorldPos, centerNormal));
@@ -122,10 +116,10 @@ void main() {
     vec4 centerGeom = texelFetch(colortex3, pix, 0);
     uvec4 centerLight = texelFetch(colortex4, pix, 0);
 
-    vec3 cPos, cR, cRad, cH;
+    vec3 cPos, cRad, cH;
     float cRough, cVar, cVproj;
-    unpackSpecularSample(PackedLightSample(centerGeom, centerLight),
-        cPos, cR, cRad, cRough, cVar, cVproj, cH);
+    unpackSpecularFilterSample(centerGeom, centerLight,
+        cPos, cRad, cRough, cVar, cVproj, cH);
 
     // 天空 (variance<0): 透传
     if (cVar < 0.0) {
@@ -149,8 +143,6 @@ void main() {
         cRough, specularLobeAngleFraction, specularLobeAngleSlack);
 
     // 4. 简化版法线权重参数 (仅角度，用于粗糙表面)
-    float diffuseLobeAngleFraction = 0.5; // 简化版使用
-    float specularNormalWeightParamSimplified = GetNormalWeightParam2(diffuseLobeAngleFraction);
 
     // 5. 几何平面距离阈值
     float depthThreshold = 0.1 * max(length(cPos), 0.01); // gDepthThreshold
@@ -187,10 +179,10 @@ void main() {
 
         vec4 sG = texelFetch(colortex3, samplePos, 0);
         uvec4 sL = texelFetch(colortex4, samplePos, 0);
-        vec3 sPos, sR, sRad, sH;
+        vec3 sPos, sRad, sH;
         float sRough, sVar, sVproj;
-        unpackSpecularSample(PackedLightSample(sG, sL),
-            sPos, sR, sRad, sRough, sVar, sVproj, sH);
+        unpackSpecularFilterSample(sG, sL,
+            sPos, sRad, sRough, sVar, sVproj, sH);
 
         if (sVar < 0.0) continue; // 天空
 
@@ -211,7 +203,6 @@ void main() {
                 specularNormalWeightParams, cH, sH, centerV, sampleV);
 
             // 4. 简化版法线权重 (仅角度，作为后备)
-            float angles = acos(clamp(dot(cH, sH), -1.0, 1.0));
 
             // 5. 粗糙度权重
             float roughnessWSpecular = ComputeWeight(sRough, roughnessWeightParams.x, roughnessWeightParams.y);
@@ -245,5 +236,6 @@ void main() {
     if (any(isnan(filteredRadiance))) filteredRadiance = vec3(0.0);
 
     // 输出: 仅颜色+方差变化, roughness/virtualProjDist/H 透传
-    color = packSpecularSample(cPos, cR, filteredRadiance, cRough, filteredVariance, cVproj, cH).data1;
+    color = packSpecularFilterLight(filteredRadiance, cRough,
+        filteredVariance, cVproj, cH);
 }

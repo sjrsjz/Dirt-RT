@@ -94,12 +94,6 @@ float GetSpecularNormalWeight_ATrous(vec2 params, vec3 n0, vec3 n, vec3 v0, vec3
 }
 
 // 简化版法线权重参数 (仅用于角度)
-float GetNormalWeightParam2(float angleFraction) {
-    float angle = atan(GetSpecLobeTanHalfAngle(1.0, angleFraction));
-    angle = 1.0 / max(angle, 0.001);
-    return angle;
-}
-
 // 平面距离权重 (À-trous 版本)
 float GetPlaneDistanceWeight_Atrous(vec3 centerWorldPos, vec3 centerNormal, vec3 sampleWorldPos, float threshold) {
     float distanceToCenterPointPlane = abs(dot(sampleWorldPos - centerWorldPos, centerNormal));
@@ -107,12 +101,10 @@ float GetPlaneDistanceWeight_Atrous(vec3 centerWorldPos, vec3 centerNormal, vec3
 }
 
 // 从共享内存解包镜面样本
-void unpackSpecularSampleSM(uint tile_idx, out vec3 pos, out vec3 R, out vec3 radiance,
+void unpackSpecularSampleSM(uint tile_idx, out vec3 pos, out vec3 radiance,
     out float roughness, out float variance, out float virtualProjDist, out vec3 H) {
-    PackedLightSample s;
-    s.data0 = sm_geometry[tile_idx];
-    s.data1 = sm_light[tile_idx];
-    unpackSpecularSample(s, pos, R, radiance, roughness, variance, virtualProjDist, H);
+    unpackSpecularFilterSample(sm_geometry[tile_idx], sm_light[tile_idx],
+        pos, radiance, roughness, variance, virtualProjDist, H);
 }
 
 void main() {
@@ -149,9 +141,9 @@ void main() {
     uint cy = lid.y + uint(HALO);
     uint center_idx = cy * uint(TILE_SIZE) + cx;
 
-    vec3 cPos, cR, cRad, cH;
+    vec3 cPos, cRad, cH;
     float cRough, cVar, cVproj;
-    unpackSpecularSampleSM(center_idx, cPos, cR, cRad, cRough, cVar, cVproj, cH);
+    unpackSpecularSampleSM(center_idx, cPos, cRad, cRough, cVar, cVproj, cH);
 
     // 天空: 早退, 保留 swap4 写入的 mask
     if (cVar < 0.0) return;
@@ -172,8 +164,6 @@ void main() {
         cRough, specularLobeAngleFraction, specularLobeAngleSlack);
 
     // 4. 简化版法线权重参数 (仅角度，用于粗糙表面)
-    float diffuseLobeAngleFraction = 0.5; // 简化版使用
-    float specularNormalWeightParamSimplified = GetNormalWeightParam2(diffuseLobeAngleFraction);
 
     // 5. 几何平面距离阈值
     float depthThreshold = 0.1 * max(length(cPos), 0.01); // gDepthThreshold
@@ -212,9 +202,9 @@ void main() {
         if (sx < 0 || sy < 0 || sx >= int(TILE_SIZE) || sy >= int(TILE_SIZE)) continue;
         uint sample_idx = uint(sy) * uint(TILE_SIZE) + uint(sx);
 
-        vec3 sPos, sR, sRad, sH;
+        vec3 sPos, sRad, sH;
         float sRough, sVar, sVproj;
-        unpackSpecularSampleSM(sample_idx, sPos, sR, sRad, sRough, sVar, sVproj, sH);
+        unpackSpecularSampleSM(sample_idx, sPos, sRad, sRough, sVar, sVproj, sH);
 
         if (sVar < 0.0) continue; // 天空
 
@@ -233,7 +223,6 @@ void main() {
                 specularNormalWeightParams, cH, sH, centerV, sampleV);
 
             // 4. 简化版法线权重 (仅角度，作为后备)
-            float angles = acos(clamp(dot(cH, sH), -1.0, 1.0));
 
             // 5. 粗糙度权重
             float roughnessWSpecular = ComputeWeight(sRough, roughnessWeightParams.x, roughnessWeightParams.y);
@@ -266,5 +255,6 @@ void main() {
 
     if (any(isnan(filteredRadiance))) filteredRadiance = vec3(0.0);
 
-    imageStore(colorimg4, pix, packSpecularSample(cPos, cR, filteredRadiance, cRough, filteredVariance, cVproj, cH).data1);
+    imageStore(colorimg4, pix, packSpecularFilterLight(filteredRadiance,
+        cRough, filteredVariance, cVproj, cH));
 }

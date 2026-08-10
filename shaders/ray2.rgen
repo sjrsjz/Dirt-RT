@@ -1,5 +1,5 @@
 #version 460 core
-// First-bounce REFRACTION path-tracing pass (see ray0.rgen).
-#define FIRST_LOBE_REFRACTION
-#define FIRST_LOBE_VAL 3
+// Reflection continuation. The primary surface is loaded from ray0's G-buffer.
+#define FIRST_LOBE_REFLECTION
+#define FIRST_LOBE_VAL 1
 #include "/lib/rt/raytrace_rgen.glsl"

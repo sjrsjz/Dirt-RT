@@ -55,6 +55,31 @@ void unpackSpecularSample(PackedLightSample s,
     H = decodeNormal(uintBitsToFloat(s.data1.w));
 }
 
+// A-trous only filters radiance/variance. Avoid decoding the stored ray
+// direction and avoid constructing data0 again when the pass writes data1.
+void unpackSpecularFilterSample(vec4 geometry, uvec4 light,
+    out vec3 pos, out vec3 radiance, out float roughness,
+    out float variance, out float virtualProjDist, out vec3 H) {
+    pos = geometry.xyz;
+    vec2 rg = unpackHalf2x16(light.x);
+    vec2 br = unpackHalf2x16(light.y);
+    vec2 vv = unpackHalf2x16(light.z);
+    radiance = vec3(rg, br.x);
+    roughness = br.y;
+    variance = vv.x;
+    virtualProjDist = vv.y;
+    H = decodeNormal(uintBitsToFloat(light.w));
+}
+
+uvec4 packSpecularFilterLight(vec3 radiance, float roughness,
+    float variance, float virtualProjDist, vec3 H) {
+    return uvec4(
+        packHalf2x16(clamp(radiance.rg, -65504.0, 65504.0)),
+        packHalf2x16(clamp(vec2(radiance.b, roughness), -65504.0, 65504.0)),
+        packHalf2x16(clamp(vec2(variance, virtualProjDist), -65504.0, 65504.0)),
+        floatBitsToUint(encodeNormal(H)));
+}
+
 // ===========================================================================
 // SpecularRT pack/unpack — compatible with raytrace_rgen and temporal interfaces
 // ===========================================================================

@@ -13,6 +13,8 @@
 #include "/lib/rt/payload.glsl"
 #include "/lib/rt/fragment_info.glsl"
 #include "/lib/rt/volume_extinction.glsl"
+#include "/lib/rt/mipmap.glsl"
+#include "/lib/buffers/frame_data.glsl"
 
 layout(location = 6) rayPayloadInEXT Payload payload;
 
@@ -57,13 +59,16 @@ void main() {
     // === Quad-derived data for material evaluation in rgen ===
     float bitangentSign;
     int blockID;
+    vec2 uv;
+    vec4 atlas;
+    vec3 geomN;
     {
         vec3 barys = vec3(1.0 - baryCoord.x - baryCoord.y, baryCoord.x, baryCoord.y);
-        vec2 uv = getFragmentUV(quad, barys, isSideA);
-        vec4 atlas = entityTextureIndex >= 0
+        uv = getFragmentUV(quad, barys, isSideA);
+        atlas = entityTextureIndex >= 0
             ? vec4(0.0, 0.0, 1.0, 1.0)
             : getTextureAtlasBox(quad, isSideA);
-        vec3 geomN = interpolateVertexNormal(quad, baryCoord, sideB);
+        geomN = interpolateVertexNormal(quad, baryCoord, sideB);
         vec3 tangent = interpolateVertexTangent(quad, baryCoord, sideB);
         bitangentSign = float(quad.vertices[0].tangent.w) * 0.0078125;
         blockID = quad.vertices[0].block_id.x;
@@ -83,10 +88,27 @@ void main() {
     vec3 shadowTrans = payload_unpackShadow(payload.data);
 
     if (inside) {
-        vec2 uv = getFragmentUV(quad, baryCoord);
-        vec4 albedo = entityTextureIndex >= 0
-            ? texture(entityTextures[nonuniformEXT(entityTextureIndex)], uv)
-            : texture(blockTex, uv);
+        vec2 mipResolution = max(vec2(resolution_global),
+            vec2(gl_LaunchSizeEXT.xy));
+        float pixelConeSpread = rtPixelConeSpread(cam.corners[0],
+            cam.corners[1], cam.corners[2], mipResolution);
+        vec4 albedo;
+        if (entityTextureIndex >= 0) {
+            ivec2 textureResolution = textureSize(
+                entityTextures[nonuniformEXT(entityTextureIndex)], 0);
+            float mipLevel = rtTextureLod(textureResolution, atlas,
+                gl_HitTEXT, gl_WorldRayDirectionEXT, geomN, 0u,
+                pixelConeSpread);
+            albedo = textureLod(
+                entityTextures[nonuniformEXT(entityTextureIndex)],
+                uv, mipLevel);
+        } else {
+            ivec2 textureResolution = textureSize(blockTex, 0);
+            float mipLevel = rtTextureLod(textureResolution, atlas,
+                gl_HitTEXT, gl_WorldRayDirectionEXT, geomN, 0u,
+                pixelConeSpread);
+            albedo = textureLod(blockTex, uv, mipLevel);
+        }
         float segDist = clamp(gl_HitTEXT - prevDist, 0.0, 100.0);
         shadowTrans = applyVolumeExtinction(shadowTrans, segDist, albedo, blockID);
     }

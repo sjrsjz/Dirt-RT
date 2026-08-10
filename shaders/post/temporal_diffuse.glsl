@@ -107,7 +107,7 @@ bool buildTemporalFootprint(uvec2 pix, vec3 currentPos, vec3 geometryNormal, vec
         fp.bitangent = vec3(c, 1.0 - fp.geometryNormal.y * fp.geometryNormal.y * a, -fp.geometryNormal.y);
     }
 
-    mat4 invVP = inverse(rtProjection * rtModelView);
+    mat4 invVP = rtInverseViewProjection;
     vec2 curRes = vec2(resolution);
     vec2 uvMin = (vec2(pix) - TEMPORAL_CLIP_PIXEL_RADIUS) / curRes * 2.0 - 1.0;
     vec2 uvMax = (vec2(pix) + TEMPORAL_CLIP_PIXEL_RADIUS) / curRes * 2.0 - 1.0;
@@ -432,7 +432,7 @@ void main() {
     }
     cameraDelta -= surfaceMotion;
 
-    vec4 clipPos = rtPrevProjection * rtPrevModelView * vec4(current_data.pos + cameraDelta, 1.0);
+    vec4 clipPos = rtPrevViewProjection * vec4(current_data.pos + cameraDelta, 1.0);
     prevScreenPos = abs(clipPos.w) > 1e-6 ? (clipPos.xyz / clipPos.w) * 0.5 + 0.5 : vec3(-1.0);
 
     MixDiffuse();

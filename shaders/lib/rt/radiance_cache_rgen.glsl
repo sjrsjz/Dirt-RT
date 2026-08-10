@@ -1,4 +1,4 @@
-// #version 460 core — declared by ray3.rgen.
+// #version 460 core — declared by ray5.rgen.
 #define RADIANCE_CACHE_TRACE
 #define FIRST_LOBE_DIFFUSE
 #define FIRST_LOBE_VAL 2

@@ -14,7 +14,7 @@
 // N=3: vec4(packHalf(trR,trG), packHalf(trB,emR), packHalf(emG,emB), oct(rd))
 // N=4: vec4(packHalf(ltR,ltG), packHalf(ltB,abR), packHalf(abG,abB), pad)
 
-// N=0..5 layer constants (semantic)
+// N=0..7 layer constants (semantic)
 #define GEO_N_GEO          0u
 #define GEO_N_NORMALS      1u
 #define GEO_N_ALBEDOS      2u
@@ -22,6 +22,8 @@
 #define GEO_N_LIGHTABS     4u
 #define GEO_N_MICRONORMAL  5u  // oct(macroNormal) — surface normal with detail map
 #define GEO_N_MOTION       6u  // xyz=currentWorld-previousWorld, w=history validity
+
+#define GEO_N_PRIMARY_MAT  7u  // packed half(Cs.rgb, Cd.rgb, S.xy)
 
 // --- N=0 ---
 void writeGeo0(uint N, uvec2 xy, vec3 pos, float dist) {
@@ -83,6 +85,12 @@ void readAlbedosPath(uint N, uvec2 xy, out vec3 spec, out vec3 diff) {
     diff = vec3(sd.y, db.x, db.y);
 }
 
+vec3 readPrimarySpecularAlbedo(uvec2 xy) {
+    vec4 v = geomBuffer.data[addr(GEO_N_ALBEDOS, xy)];
+    vec2 sg = unpackHalf2x16(floatBitsToUint(v.x));
+    return vec3(sg, unpackHalf2x16(floatBitsToUint(v.y)).x);
+}
+
 // --- N=3 ---
 void writeMisc(uint N, uvec2 xy, vec3 trans, vec3 emis, vec3 rd) {
     geomBuffer.data[addr(N, xy)] = vec4(
@@ -100,6 +108,18 @@ void readMisc(uint N, uvec2 xy, out vec3 trans, out vec3 emis, out vec3 rd) {
     trans = vec3(tg.x, tg.y, te.x);
     emis  = vec3(te.y, eb.x, eb.y);
     rd    = decodeNormal(v.w);
+}
+
+void readPrimaryTransmissionAndRay(uvec2 xy, out vec3 trans, out vec3 rd) {
+    vec4 v = geomBuffer.data[addr(GEO_N_MISC, xy)];
+    vec2 tg = unpackHalf2x16(floatBitsToUint(v.x));
+    vec2 te = unpackHalf2x16(floatBitsToUint(v.y));
+    trans = vec3(tg, te.x);
+    rd = decodeNormal(v.w);
+}
+
+vec3 readPrimaryRayDirection(uvec2 xy) {
+    return decodeNormal(geomBuffer.data[addr(GEO_N_MISC, xy)].w);
 }
 
 // --- N=4 ---
@@ -126,6 +146,29 @@ void writeMicroNormal(uint N, uvec2 xy, vec3 microN) {
 }
 vec3 readMicroNormal(uint N, uvec2 xy) {
     return decodeNormal(geomBuffer.data[addr(N, xy)].x);
+}
+
+// --- N=7 ---
+// The primary visibility pass evaluates the texture-backed material once.
+// Dedicated lobe passes consume this compact transport representation instead
+// of tracing and shading the primary surface again.
+void writePrimaryMaterial(uvec2 xy, vec3 Cs, vec3 Cd, vec2 S) {
+    geomBuffer.data[addr(GEO_N_PRIMARY_MAT, xy)] = vec4(
+        uintBitsToFloat(packHalf2x16(clamp(Cs.rg, -65504.0, 65504.0))),
+        uintBitsToFloat(packHalf2x16(clamp(vec2(Cs.b, Cd.r), -65504.0, 65504.0))),
+        uintBitsToFloat(packHalf2x16(clamp(Cd.gb, -65504.0, 65504.0))),
+        uintBitsToFloat(packHalf2x16(clamp(S, -65504.0, 65504.0)))
+    );
+}
+
+void readPrimaryMaterial(uvec2 xy, out vec3 Cs, out vec3 Cd, out vec2 S) {
+    vec4 v = geomBuffer.data[addr(GEO_N_PRIMARY_MAT, xy)];
+    vec2 csRG = unpackHalf2x16(floatBitsToUint(v.x));
+    vec2 csBcdR = unpackHalf2x16(floatBitsToUint(v.y));
+    vec2 cdGB = unpackHalf2x16(floatBitsToUint(v.z));
+    Cs = vec3(csRG, csBcdR.x);
+    Cd = vec3(csBcdR.y, cdGB);
+    S = unpackHalf2x16(floatBitsToUint(v.w));
 }
 
 #endif // BUFFERS_GBUFFER_GLSL

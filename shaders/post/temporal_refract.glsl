@@ -21,7 +21,7 @@ vec3 cameraDelta;
 
 vec3 reproject(vec3 pos_rel) {
     vec3 prevPlayerPos = pos_rel + cameraDelta;
-    vec4 clipPos = rtPrevProjection * rtPrevModelView * vec4(prevPlayerPos, 1.0);
+    vec4 clipPos = rtPrevViewProjection * vec4(prevPlayerPos, 1.0);
     vec3 ndc = clipPos.xyz / clipPos.w;
     return ndc * 0.5 + 0.5;
 }

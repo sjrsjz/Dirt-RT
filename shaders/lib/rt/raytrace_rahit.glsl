@@ -7,11 +7,14 @@
 #extension GL_EXT_shader_8bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types : require
 #extension GL_EXT_scalar_block_layout : require
+#extension GL_ARB_shader_texture_lod : enable
 
 #include "/lib/rt/data.glsl"
 #include "/lib/rt/payload.glsl"
 #include "/lib/rt/fragment_info.glsl"
 #include "/lib/rt/volume_extinction.glsl"
+#include "/lib/rt/mipmap.glsl"
+#include "/lib/buffers/frame_data.glsl"
 layout(location = 6) rayPayloadInEXT Payload payload;
 
 hitAttributeEXT vec2 baryCoord;
@@ -39,12 +42,36 @@ Quad getRayQuad() {
 
 void main() {
     Quad quad = getRayQuad();
+    bool sideB = getTriangleSide();
     vec2 uv = getFragmentUV(quad, baryCoord);
     int entityTextureIndex = quad.vertices[0].block_id.x == -2
         ? int(quad.vertices[0].block_id.y) - 1 : -1;
-    vec4 texColor = entityTextureIndex >= 0
-        ? texture(entityTextures[nonuniformEXT(entityTextureIndex)], uv)
-        : texture(blockTex, uv);
+    vec4 atlas = entityTextureIndex >= 0
+        ? vec4(0.0, 0.0, 1.0, 1.0)
+        : getTextureAtlasBox(quad, !sideB);
+    vec3 geomN = interpolateVertexNormal(quad, baryCoord, sideB);
+    vec2 mipResolution = max(vec2(resolution_global),
+        vec2(gl_LaunchSizeEXT.xy));
+    float pixelConeSpread = rtPixelConeSpread(cam.corners[0],
+        cam.corners[1], cam.corners[2], mipResolution);
+
+    vec4 texColor;
+    if (entityTextureIndex >= 0) {
+        ivec2 textureResolution = textureSize(
+            entityTextures[nonuniformEXT(entityTextureIndex)], 0);
+        float mipLevel = rtTextureLod(textureResolution, atlas,
+            gl_HitTEXT, gl_WorldRayDirectionEXT, geomN, 0u,
+            pixelConeSpread);
+        texColor = textureLod(
+            entityTextures[nonuniformEXT(entityTextureIndex)], uv,
+            mipLevel);
+    } else {
+        ivec2 textureResolution = textureSize(blockTex, 0);
+        float mipLevel = rtTextureLod(textureResolution, atlas,
+            gl_HitTEXT, gl_WorldRayDirectionEXT, geomN, 0u,
+            pixelConeSpread);
+        texColor = textureLod(blockTex, uv, mipLevel);
+    }
 
     bool inside, handedness, isNEE;
     float prevDist = payload_unpackFlags(payload.data, inside, handedness, isNEE);

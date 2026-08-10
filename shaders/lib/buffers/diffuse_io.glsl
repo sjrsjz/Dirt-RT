@@ -124,7 +124,7 @@ void writeDiffuse(diffuseIlluminationData data, ivec2 p) {
 }
 
 // ===========================================================================
-// Diffuse prev-frame (ray0.rgen guiding)
+// Diffuse prev-frame (ray1.rgen guiding)
 // ===========================================================================
 
 #if defined(PREV_DIFFUSE_BUFFER)
@@ -133,7 +133,7 @@ DiffuseIlluminationWriteData fetchPrevDiffuse(ivec2 p) {
     uvec2 xy = uvec2(p);
     DiffuseIlluminationWriteData t;
 
-    // swap = previous frame final denoised result (used by ray0.rgen for guiding)
+    // swap = previous frame final denoised result (used by ray1.rgen for guiding)
     AliceEncoding alice;
     float weight, meanY2;
     readDiffuseSwap(xy, alice, weight, meanY2);
@@ -141,7 +141,7 @@ DiffuseIlluminationWriteData fetchPrevDiffuse(ivec2 p) {
     t.weight = weight;
     t.meanY2 = meanY2;
 
-    // Read position+mask from current geometry (unchanged by ray0 since it only writes N=0,1)
+    // Read position+mask from the primary G-buffer published by ray0.
     float mask;
     readDiffuseGeo(xy, t.pos, mask);
     t.surfaceMask = mask;

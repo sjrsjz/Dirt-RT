@@ -32,41 +32,46 @@ vec2 pom_localUV(vec2 uv, vec4 atlas) {
 }
 
 // ---------------------------------------------------------------------------
-// Height-map sample — res and rcpRes passed from caller (computed ONCE).
+// Height-map sample — texture resolution is queried once by the caller.
 // ---------------------------------------------------------------------------
-float pom_sampleHeight(sampler2D heightTex, vec2 coord, vec4 atlas, vec2 res, vec2 rcpRes) {
+float pom_sampleHeight(sampler2D heightTex, vec2 coord, vec4 atlas,
+        vec2 res, float mipLevel, int fetchMip) {
     #if LINEAR_SAMPLING == 1
-    vec2 pixel = (atlas.xy + coord * atlas.zw) * res;
-    vec2 i = floor(pixel);
-    vec2 f = pixel - i;
+    // The old path issued four already-filtered texture() calls and blended
+    // them a second time. A hardware linear lookup is exact away from a sprite
+    // boundary. Only the one-texel wrap seam needs a four-texel fallback.
+    vec2 local = fract(coord);
+    ivec2 spriteOrigin = ivec2(round(atlas.xy * res));
+    ivec2 spriteSize = max(ivec2(round(atlas.zw * res)), ivec2(1));
+    vec2 spritePos = local * vec2(spriteSize) - 0.5;
+    ivec2 base = ivec2(floor(spritePos));
+    bool interior = all(greaterThanEqual(base, ivec2(0)))
+        && all(lessThan(base + ivec2(1), spriteSize));
 
-    vec2 base_uv = (i * rcpRes - atlas.xy) / atlas.zw;
-    vec2 dx = vec2(rcpRes.x / atlas.z, 0.0);
-    vec2 dy = vec2(0.0, rcpRes.y / atlas.w);
-
-    float h00 = texture(heightTex, pom_getTexCoord(base_uv, atlas)).a;
-    float h10 = texture(heightTex, pom_getTexCoord(base_uv + dx, atlas)).a;
-    float h01 = texture(heightTex, pom_getTexCoord(base_uv + dy, atlas)).a;
-    float h11 = texture(heightTex, pom_getTexCoord(base_uv + dx + dy, atlas)).a;
-
-    return mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y) * POM_DEPTH - POM_DEPTH;
+    float height;
+    if (interior) {
+        vec2 uv = atlas.xy + local * atlas.zw;
+        height = textureLod(heightTex, uv, mipLevel).a;
+    } else {
+        vec2 f = fract(spritePos);
+        ivec2 p0 = ivec2(
+            (base.x % spriteSize.x + spriteSize.x) % spriteSize.x,
+            (base.y % spriteSize.y + spriteSize.y) % spriteSize.y);
+        ivec2 p1 = (p0 + ivec2(1)) % spriteSize;
+        float h00 = texelFetch(heightTex, spriteOrigin + p0, fetchMip).a;
+        float h10 = texelFetch(heightTex,
+            spriteOrigin + ivec2(p1.x, p0.y), fetchMip).a;
+        float h01 = texelFetch(heightTex,
+            spriteOrigin + ivec2(p0.x, p1.y), fetchMip).a;
+        float h11 = texelFetch(heightTex,
+            spriteOrigin + p1, fetchMip).a;
+        height = mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y);
+    }
+    return height * POM_DEPTH - POM_DEPTH;
     #else
-    return texture(heightTex, pom_getTexCoord(coord, atlas)).a * POM_DEPTH - POM_DEPTH;
+    return textureLod(heightTex, pom_getTexCoord(coord, atlas),
+        mipLevel).a * POM_DEPTH - POM_DEPTH;
     #endif
-}
-
-// ---------------------------------------------------------------------------
-// Height-map derivatives (for normal reconstruction)
-// ---------------------------------------------------------------------------
-vec2 pom_computeDerivatives(sampler2D heightTex, vec2 coord, vec4 atlas, vec2 res, vec2 rcpRes) {
-    const float offset = 0.00025;
-    float x_h_L = pom_sampleHeight(heightTex, coord + vec2(-offset * 2.0, 0.0), atlas, res, rcpRes);
-    float x_h_R = pom_sampleHeight(heightTex, coord + vec2(offset * 2.0, 0.0), atlas, res, rcpRes);
-    float y_h_L = pom_sampleHeight(heightTex, coord + vec2(0.0, -offset), atlas, res, rcpRes);
-    float y_h_R = pom_sampleHeight(heightTex, coord + vec2(0.0, offset), atlas, res, rcpRes);
-
-    return vec2((x_h_L - x_h_R) / (2.0 * offset),
-        (y_h_L - y_h_R) / (2.0 * offset));
 }
 
 // ===========================================================================
@@ -80,7 +85,6 @@ vec2 pom_computeDerivatives(sampler2D heightTex, vec2 coord, vec4 atlas, vec2 re
 //   tbn        — tangent-to-world matrix
 //
 // Returns:    — global UV (atlas-space) after POM correction
-//   derivatives — (out) UV derivatives for normal reconstruction
 // ===========================================================================
 vec2 computeParallaxUV(
     sampler2D heightTex,
@@ -88,30 +92,31 @@ vec2 computeParallaxUV(
     vec4 atlasBox,
     vec3 viewDir,
     mat3 tbn,
-    out vec2 derivatives
+    float mipLevel
 ) {
-    vec2 res = vec2(textureSize(heightTex, 0)); // ONE query total
-    vec2 rcpRes = 1.0 / res;
+    int fetchMip = int(floor(mipLevel + 0.5));
+    vec2 res = vec2(textureSize(heightTex, fetchMip));
+    int activeSteps = max(POM_STEPS >> min(fetchMip, 3), 4);
 
     vec3 V = normalize(transpose(tbn) * viewDir);
 
     if (V.z >= 0.0) {
-        vec2 realCoord = pom_getTexCoord(localUV, atlasBox);
-        derivatives = pom_computeDerivatives(heightTex, localUV, atlasBox, res, rcpRes);
-        return realCoord;
+        return pom_getTexCoord(localUV, atlasBox);
     }
 
     vec2 currentTexCoord = localUV;
-    vec2 dtex = V.xy * POM_DEPTH / (-V.z * float(POM_STEPS));
+    vec2 dtex = V.xy * POM_DEPTH / (-V.z * float(activeSteps));
     float currentHeight = 0.0;
-    float stepSize = POM_DEPTH / float(POM_STEPS);
+    float stepSize = POM_DEPTH / float(activeSteps);
 
-    float heightFromTexture = pom_sampleHeight(heightTex, currentTexCoord, atlasBox, res, rcpRes);
+    float heightFromTexture = pom_sampleHeight(heightTex, currentTexCoord,
+        atlasBox, res, mipLevel, fetchMip);
     int steps = 0;
 
-    while (currentHeight > heightFromTexture && steps < POM_STEPS) {
+    while (currentHeight > heightFromTexture && steps < activeSteps) {
         currentTexCoord += dtex;
-        heightFromTexture = pom_sampleHeight(heightTex, currentTexCoord, atlasBox, res, rcpRes);
+        heightFromTexture = pom_sampleHeight(heightTex, currentTexCoord,
+            atlasBox, res, mipLevel, fetchMip);
         currentHeight -= stepSize;
         steps++;
     }
@@ -125,7 +130,8 @@ vec2 computeParallaxUV(
 
         vec2 midTexCoord = prevTexCoord + dtex;
         float midHeight = prevHeight - stepSize;
-        float hft = pom_sampleHeight(heightTex, currentTexCoord, atlasBox, res, rcpRes);
+        float hft = pom_sampleHeight(heightTex, midTexCoord, atlasBox,
+            res, mipLevel, fetchMip);
 
         if (hft > midHeight) {
             currentTexCoord = midTexCoord;
@@ -136,9 +142,7 @@ vec2 computeParallaxUV(
         }
     }
 
-    vec2 realCoord = pom_getTexCoord(currentTexCoord, atlasBox);
-    derivatives = pom_computeDerivatives(heightTex, currentTexCoord, atlasBox, res, rcpRes);
-    return realCoord;
+    return pom_getTexCoord(currentTexCoord, atlasBox);
 }
 
 #endif // POM_GLSL

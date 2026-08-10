@@ -366,7 +366,7 @@ void main() {
             readGeo0(GEO_N_GEO, xy, relativePos, distance);
             vec3 previousRelativePos = relativePos
                 + camPos - prevRaytracingCamPos - surfaceMotion;
-            vec4 previousClip = rtPrevProjection * rtPrevModelView
+            vec4 previousClip = rtPrevViewProjection
                 * vec4(previousRelativePos, 1.0);
             if (abs(previousClip.w) < 1e-6) {
                 fragColor.xyz = vec3(1.0, 0.0, 1.0);

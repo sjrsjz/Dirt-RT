@@ -47,13 +47,13 @@ vec2 relaxCurrentUv(uvec2 pixel) {
 
 vec2 relaxProjectPrevious(vec3 currentRelativePosition, vec3 cameraDelta) {
     vec3 previousRelativePosition = currentRelativePosition + cameraDelta;
-    vec4 clip = rtPrevProjection * rtPrevModelView * vec4(previousRelativePosition, 1.0);
+    vec4 clip = rtPrevViewProjection * vec4(previousRelativePosition, 1.0);
     if (abs(clip.w) < 1e-8) return vec2(-2.0);
     return clip.xy / clip.w * 0.5 + 0.5;
 }
 
 vec2 relaxProjectPreviousRelative(vec3 previousRelativePosition) {
-    vec4 clip = rtPrevProjection * rtPrevModelView * vec4(previousRelativePosition, 1.0);
+    vec4 clip = rtPrevViewProjection * vec4(previousRelativePosition, 1.0);
     if (abs(clip.w) < 1e-8) return vec2(-2.0);
     return clip.xy / clip.w * 0.5 + 0.5;
 }
