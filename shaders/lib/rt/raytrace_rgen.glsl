@@ -1311,7 +1311,14 @@ void writeReflectionOutput(uvec2 xy, FirstBounceData fb, vec3 totalIllumination,
             fb.reflectionHitDistance < 0.5 * endpointScale &&
             !any(isnan(fb.reflectionEndpointOffset)) &&
             !any(isinf(fb.reflectionEndpointOffset))) {
-        endpoint.mean = fb.reflectionEndpointOffset / endpointScale;
+        // A reflected feature moves as the virtual image behind the local
+        // macro plane, not as the real secondary hit in front of it. Mirror
+        // the hit displacement at the primary reflector before storing its
+        // moments. This orthogonal transform preserves E[|X|^2] and makes the
+        // delta-specular endpoint an exact virtual reprojection point.
+        vec3 virtualEndpointOffset = reflect(
+            fb.reflectionEndpointOffset, fb.macro_n);
+        endpoint.mean = virtualEndpointOffset / endpointScale;
         endpoint.secondMoment = dot(endpoint.mean, endpoint.mean);
     }
     writeReflEndpointMoments(xy, endpoint);

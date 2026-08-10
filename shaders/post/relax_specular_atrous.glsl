@@ -48,6 +48,19 @@ void relaxStoreAtrousDebug(ivec2 p, RelaxSpatialSignal s) {
 #endif
 }
 
+void relaxResolveAtrous(ivec2 p, RelaxSpatialSignal s) {
+#if defined(RELAX_ATROUS_RESOLVE)
+#if DEBUG_VIEW == 9 || DEBUG_VIEW == 12 || DEBUG_VIEW == 14 || \
+        (DEBUG_VIEW >= 23 && DEBUG_VIEW <= 30) || \
+        (DEBUG_VIEW >= 38 && DEBUG_VIEW <= 40)
+    // Preserve a diagnostic result written by its owning pass.
+#else
+    writeReflLight(uvec2(p), relaxFiniteColor(s.radiance),
+        s.hitDistance, s.historyLength);
+#endif
+#endif
+}
+
 #if defined(RELAX_ATROUS_SHARED)
 
 #define RELAX_ATROUS_GROUP_SIZE 16
@@ -124,6 +137,7 @@ void main() {
 
     if (center.historyLength <= 0.0) {
         relaxStoreAtrous(pixel, center);
+        relaxResolveAtrous(pixel, center);
         relaxStoreAtrousDebug(pixel, center);
         return;
     }
@@ -261,5 +275,6 @@ void main() {
     outputSignal.variance = sumVariance /
         max(sumWeight * sumWeight, 1e-8);
     relaxStoreAtrous(pixel, outputSignal);
+    relaxResolveAtrous(pixel, outputSignal);
     relaxStoreAtrousDebug(pixel, outputSignal);
 }

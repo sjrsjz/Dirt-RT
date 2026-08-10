@@ -341,4 +341,4 @@ value.DEBUG_VIEW.36 = 实体世界运动
 value.DEBUG_VIEW.37 = 屏幕运动
 value.DEBUG_VIEW.38 = 反射当前帧输入
 value.DEBUG_VIEW.39 = 反射表面重投影历史
-value.DEBUG_VIEW.40 = 反射端点矩重投影历史
+value.DEBUG_VIEW.40 = 反射几何重建历史

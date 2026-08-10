@@ -1,1 +1,1 @@
-#include "/post/buffer_swap_diffuse.glsl"
+#include "/post/relax_endpoint_spatial.glsl"

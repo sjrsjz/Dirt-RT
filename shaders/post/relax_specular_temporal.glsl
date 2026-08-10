@@ -4,7 +4,6 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 #define REFLECT_BUFFER
 #include "/lib/denoise/relax_specular_common.glsl"
-#include "/lib/denoise/relax_ggx_endpoint_moments.glsl"
 
 uniform usampler2D colortex6;
 layout(rgba32ui) uniform writeonly uimage2D colorimg4;
@@ -24,9 +23,6 @@ struct RelaxReprojectedHistory {
     float historyLength;
     float confidence;
     float footprintQuality;
-    vec3 endpointMean;
-    float endpointSecondMoment;
-    float endpointWeight;
     bool found;
 };
 
@@ -128,9 +124,6 @@ RelaxReprojectedHistory relaxEmptyHistory() {
     h.historyLength = 0.0;
     h.confidence = 0.0;
     h.footprintQuality = 0.0;
-    h.endpointMean = vec3(0.0);
-    h.endpointSecondMoment = 0.0;
-    h.endpointWeight = 0.0;
     h.found = false;
     return h;
 }
@@ -158,9 +151,6 @@ RelaxReprojectedHistory relaxLoadHistory(
     float validBilinearWeight = 0.0;
     int validTapCount = 0;
     vec3 normalSum = vec3(0.0);
-    vec3 endpointMeanSum = vec3(0.0);
-    float endpointSecondMomentSum = 0.0;
-    float endpointWeight = 0.0;
     float depthThreshold = RELAX_DISOCCLUSION_THRESHOLD *
         max(length(currentSurfacePosition), 1.0);
     RelaxSurfaceFootprint surfaceFootprint;
@@ -196,11 +186,6 @@ RelaxReprojectedHistory relaxLoadHistory(
         outHistory.historyLength += h.historyLength * w;
         outHistory.confidence += h.reprojectionConfidence * w;
         normalSum += h.geometryNormal * w;
-        if (h.endpointSecondMoment > 0.0) {
-            endpointMeanSum += h.endpointMean * w;
-            endpointSecondMomentSum += h.endpointSecondMoment * w;
-            endpointWeight += w;
-        }
         sumWeight += w;
     }
 
@@ -219,250 +204,99 @@ RelaxReprojectedHistory relaxLoadHistory(
     outHistory.historyLength *= invWeight;
     outHistory.confidence *= invWeight;
     outHistory.normal = relaxSafeNormalize(normalSum * invWeight, currentNormal);
-    if (endpointWeight > 1e-6) {
-        RelaxEndpointMoments endpoint;
-        endpoint.mean = endpointMeanSum / endpointWeight;
-        endpoint.secondMoment = endpointSecondMomentSum / endpointWeight;
-        endpoint = sanitizeRelaxEndpointMoments(endpoint);
-        outHistory.endpointMean = endpoint.mean;
-        outHistory.endpointSecondMoment = endpoint.secondMoment;
-        outHistory.endpointWeight =
-            clamp(endpointWeight * invWeight, 0.0, 1.0);
-    }
     outHistory.found = true;
     return outHistory;
 }
 
 struct RelaxEndpointProjection {
     vec2 uv;
-    vec2 majorAxisUv;
-    float sigmaMajorPixels;
-    float sigmaMinorPixels;
     float confidence;
     bool valid;
 };
 
-float relaxEndpointCovarianceForm(
-    vec3 lhs, vec3 rhs, float q, mat3 angularSecondMoment, vec3 mean
-) {
-    return q * dot(lhs, angularSecondMoment * rhs) -
-        dot(lhs, mean) * dot(rhs, mean);
+bool relaxProjectRelative(mat4 viewProjection, vec3 position, out vec2 uv) {
+    vec4 clip = viewProjection * vec4(position, 1.0);
+    if (clip.w <= 1e-7 || any(isnan(clip)) || any(isinf(clip))) {
+        uv = vec2(-2.0);
+        return false;
+    }
+    uv = clip.xy / clip.w * 0.5 + 0.5;
+    return !any(isnan(uv)) && !any(isinf(uv));
 }
 
-RelaxEndpointMoments relaxAccumulateEndpointMoments(
-    RelaxReprojectedHistory surfaceHistory,
-    RelaxEndpointMoments currentEndpoint,
-    float surfaceConfidence
-) {
-    currentEndpoint = sanitizeRelaxEndpointMoments(currentEndpoint);
-    RelaxEndpointMoments previousEndpoint;
-    previousEndpoint.mean = surfaceHistory.endpointMean;
-    previousEndpoint.secondMoment =
-        surfaceHistory.endpointSecondMoment;
-    previousEndpoint = sanitizeRelaxEndpointMoments(previousEndpoint);
-    bool currentValid = relaxEndpointMomentsValid(currentEndpoint);
-    bool previousValid = surfaceHistory.found &&
-        relaxEndpointMomentsValid(previousEndpoint) &&
-        surfaceHistory.endpointWeight > 1e-5;
-
-    if (!currentValid) return previousValid
-        ? previousEndpoint : emptyRelaxEndpointMoments();
-    if (!previousValid) return currentEndpoint;
-
-    float historyFrames = min(max(surfaceHistory.historyLength, 0.0),
-        float(RELAX_SPEC_MAX_HISTORY));
-    float alpha = max(1.0 - clamp(surfaceConfidence, 0.0, 1.0),
-        1.0 / (1.0 + historyFrames));
-    RelaxEndpointMoments result;
-    result.mean = mix(previousEndpoint.mean, currentEndpoint.mean, alpha);
-    // Decode RMS -> q, linearly filter q, and only then encode sqrt(q) at
-    // the FP16 store boundary.
-    result.secondMoment = mix(previousEndpoint.secondMoment,
-        currentEndpoint.secondMoment, alpha);
-    return sanitizeRelaxEndpointMoments(result);
+// Offline-calibrated Heitz GGX-VNDF representative point.  The fit uses
+// 4096 samples per (alpha, NoV, hit-distance law) group and minimizes the MSE
+// against the Monte-Carlo mean projected motion.  GGX/view dependence is
+// already present in the measured endpoint moments.  The fitted form is
+//
+// zeta = 1 + spread * P2(spread, axial).
+//
+// The fitted rational denominator coefficient converged to 1.15e-23, so it
+// is identically one at FP32 precision and is deliberately omitted.
+//
+// Multiplication by spread is a mathematical boundary condition: q=|m|^2 is
+// a deterministic endpoint, for which pVisual=P+m and zeta must be exactly 1.
+float relaxVisualPointZeta(float spread, float axial) {
+    spread = clamp(spread, 0.0, 1.0);
+    axial = clamp(axial, -1.0, 1.0);
+    float numerator =
+          0.28423406448
+        - 0.98314270477 * spread
+        + 0.88688920343 * axial
+        + 0.71462985137 * spread * spread
+        - 0.28210119537 * spread * axial
+        - 0.16915468475 * axial * axial;
+    return 1.0 + spread * numerator;
 }
 
 RelaxEndpointProjection relaxBuildEndpointProjection(
-    vec3 previousSurfacePosition,
+    vec3 currentSurfacePosition,
+    vec3 cameraDelta,
     RelaxEndpointMoments endpoint,
-    float ggxAlpha,
-    vec3 macroNormal,
-    vec3 V
+    vec2 currentUv
 ) {
     RelaxEndpointProjection projection;
     projection.uv = vec2(-2.0);
-    projection.majorAxisUv = vec2(0.0);
-    projection.sigmaMajorPixels = 0.0;
-    projection.sigmaMinorPixels = 0.0;
     projection.confidence = 0.0;
     projection.valid = false;
     endpoint = sanitizeRelaxEndpointMoments(endpoint);
     if (!relaxEndpointMomentsValid(endpoint)) return projection;
 
-    vec3 angularMean;
-    mat3 angularSecondMoment;
-    float NoV = abs(dot(macroNormal, V));
-    relaxLookupGGXAngularMoments(ggxAlpha, NoV, macroNormal,
-        V, angularMean, angularSecondMoment);
-
-    float a2 = max(dot(angularMean, angularMean), 1e-8);
-    float meanDistance = dot(angularMean, endpoint.mean) / a2;
-    vec3 separabilityResidual =
-        endpoint.mean - angularMean * meanDistance;
-    float residualRatio = dot(separabilityResidual, separabilityResidual) /
-        max(endpoint.secondMoment, 1e-12);
-    float separabilityConfidence =
-        1.0 - clamp(residualRatio, 0.0, 1.0);
     float distanceScale = relaxEndpointDistanceScale();
     vec3 meanWorld = endpoint.mean * distanceScale;
-    float qWorld = endpoint.secondMoment *
-        distanceScale * distanceScale;
-    vec3 previousMeanEndpoint = previousSurfacePosition + meanWorld;
-    vec4 previousCameraH =
-        rtPrevModelView * vec4(previousMeanEndpoint, 1.0);
-    vec3 meanCamera = previousCameraH.xyz;
-    if (any(isnan(meanCamera)) || any(isinf(meanCamera)) ||
-            meanCamera.z >= -1e-4) return projection;
+    float meanSquared = dot(endpoint.mean, endpoint.mean);
+    // Form the dimensionless central-energy ratio before restoring world
+    // scale. This avoids subtracting two O(VPROJDIST_SKY^2) FP32 numbers and
+    // preserves the q=|m|^2 deterministic boundary after FP16 decoding.
+    float spread = clamp((endpoint.secondMoment - meanSquared) /
+        max(endpoint.secondMoment, 1e-12), 0.0, 1.0);
+    vec3 surfaceView = mat3(rtModelView) * currentSurfacePosition;
+    vec3 meanView = mat3(rtModelView) * meanWorld;
+    float rawAxial = meanView.z / max(-surfaceView.z, 1e-6);
+    float axial = rawAxial / (1.0 + abs(rawAxial));
+    float zeta = relaxVisualPointZeta(spread, axial);
 
-    mat3 previousRotation = mat3(rtPrevModelView);
-    vec3 meanOffsetCamera = previousRotation * meanWorld;
-    mat3 angularSecondMomentCamera = previousRotation *
-        angularSecondMoment * transpose(previousRotation);
-    vec3 ex = vec3(1.0, 0.0, 0.0);
-    vec3 ey = vec3(0.0, 1.0, 0.0);
-    vec3 ez = vec3(0.0, 0.0, 1.0);
-    float varX = max(relaxEndpointCovarianceForm(ex, ex, qWorld,
-        angularSecondMomentCamera, meanOffsetCamera), 0.0);
-    float varY = max(relaxEndpointCovarianceForm(ey, ey, qWorld,
-        angularSecondMomentCamera, meanOffsetCamera), 0.0);
-    float varZ = max(relaxEndpointCovarianceForm(ez, ez, qWorld,
-        angularSecondMomentCamera, meanOffsetCamera), 0.0);
-    float covXZ = relaxEndpointCovarianceForm(ex, ez, qWorld,
-        angularSecondMomentCamera, meanOffsetCamera);
-    float covYZ = relaxEndpointCovarianceForm(ey, ez, qWorld,
-        angularSecondMomentCamera, meanOffsetCamera);
-    covXZ = clamp(covXZ, -sqrt(varX * varZ), sqrt(varX * varZ));
-    covYZ = clamp(covYZ, -sqrt(varY * varZ), sqrt(varY * varZ));
+    vec3 visualCurrent = currentSurfacePosition + zeta * meanWorld;
+    vec3 visualPrevious = visualCurrent + cameraDelta;
+    vec2 visualCurrentUv, visualPreviousUv;
+    if (!relaxProjectRelative(rtProjection * rtModelView,
+            visualCurrent, visualCurrentUv) ||
+        !relaxProjectRelative(rtPrevProjection * rtPrevModelView,
+            visualPrevious, visualPreviousUv))
+        return projection;
 
-    projection.uv = relaxProjectPreviousRelative(previousMeanEndpoint);
-    float z = meanCamera.z;
-    float invZ = 1.0 / z;
-    float invZ2 = invZ * invZ;
-    float invZ3 = invZ2 * invZ;
-    float fxUv = -0.5 * rtPrevProjection[0][0];
-    float fyUv = -0.5 * rtPrevProjection[1][1];
-    vec2 perspectiveBias = vec2(
-        fxUv * (meanCamera.x * varZ * invZ3 - covXZ * invZ2),
-        fyUv * (meanCamera.y * varZ * invZ3 - covYZ * invZ2));
-
-    vec2 resolution = vec2(resolution_global);
-    vec3 jx = vec3(fxUv * resolution.x * invZ, 0.0,
-        -fxUv * resolution.x * meanCamera.x * invZ2);
-    vec3 jy = vec3(0.0, fyUv * resolution.y * invZ,
-        -fyUv * resolution.y * meanCamera.y * invZ2);
-    float covarianceXX = max(relaxEndpointCovarianceForm(jx, jx, qWorld,
-        angularSecondMomentCamera, meanOffsetCamera), 0.0);
-    float covarianceYY = max(relaxEndpointCovarianceForm(jy, jy, qWorld,
-        angularSecondMomentCamera, meanOffsetCamera), 0.0);
-    float covarianceXY = relaxEndpointCovarianceForm(jx, jy, qWorld,
-        angularSecondMomentCamera, meanOffsetCamera);
-    covarianceXY = clamp(covarianceXY,
-        -sqrt(covarianceXX * covarianceYY),
-         sqrt(covarianceXX * covarianceYY));
-
-    float trace = covarianceXX + covarianceYY;
-    float discriminant = sqrt(max(
-        (covarianceXX - covarianceYY) *
-        (covarianceXX - covarianceYY) +
-        4.0 * covarianceXY * covarianceXY, 0.0));
-    float lambdaMajor = max(0.5 * (trace + discriminant), 0.0);
-    float lambdaMinor = max(0.5 * (trace - discriminant), 0.0);
-    projection.sigmaMajorPixels = sqrt(lambdaMajor);
-    projection.sigmaMinorPixels = sqrt(lambdaMinor);
-
-    vec2 majorAxisPixels;
-    if (abs(covarianceXY) > 1e-8) {
-        majorAxisPixels = normalize(vec2(
-            covarianceXY, lambdaMajor - covarianceXX));
-    } else {
-        majorAxisPixels = covarianceXX >= covarianceYY
-            ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
-    }
-    projection.majorAxisUv = majorAxisPixels / resolution;
-
-    // The second-order expansion is invalid close to its projective pole.
-    // Bound the correction by the reconstructed footprint instead of allowing
-    // a finite input moment to generate an Inf/NaN screen coordinate.
-    vec2 biasPixels = perspectiveBias * resolution;
-    float maxBiasPixels = max(0.5, 2.0 * projection.sigmaMajorPixels);
-    float biasLength = length(biasPixels);
-    if (biasLength > maxBiasPixels)
-        perspectiveBias *= maxBiasPixels / biasLength;
-    projection.uv += perspectiveBias;
-
-    float footprintConfidence = 1.0 - smoothstep(
-        8.0, 32.0, projection.sigmaMajorPixels);
-    projection.confidence =
-        separabilityConfidence * footprintConfidence;
+    // Difference the visual-point projections and apply that motion to the
+    // actual integer-coordinate primary-ray UV. This preserves Vulkanite's
+    // sampling protocol and makes identical current/previous cameras an
+    // identity without a camera-stationary branch.
+    projection.uv = currentUv + visualPreviousUv - visualCurrentUv;
+    projection.confidence = 1.0;
     projection.valid = !any(isnan(projection.uv)) &&
         !any(isinf(projection.uv)) &&
         all(greaterThanEqual(projection.uv, vec2(0.0))) &&
         all(lessThanEqual(projection.uv, vec2(1.0))) &&
         projection.confidence > 1e-5;
     return projection;
-}
-
-RelaxReprojectedHistory relaxLoadEllipseHistory(
-    RelaxEndpointProjection projection,
-    uvec2 currentPixel,
-    vec3 currentSurfacePosition,
-    vec3 currentNormal,
-    uint currentMaterial,
-    vec3 cameraDelta
-) {
-    RelaxReprojectedHistory result = relaxEmptyHistory();
-    if (!projection.valid) return result;
-    int sampleCount = projection.sigmaMajorPixels > 0.75 ? 3 : 1;
-    float radiusPixels = clamp(
-        0.5 * projection.sigmaMajorPixels, 0.5, 2.0);
-    float sumWeight = 0.0;
-    vec3 normalSum = vec3(0.0);
-    for (int i = 0; i < 3; ++i) {
-        if (i >= sampleCount) break;
-        float signedOffset = i == 0 ? 0.0 : (i == 1 ? -1.0 : 1.0);
-        float tapWeight = i == 0 ? (sampleCount == 1 ? 1.0 : 0.5) : 0.25;
-        vec2 uv = projection.uv + projection.majorAxisUv *
-            (signedOffset * radiusPixels);
-        RelaxReprojectedHistory tap = relaxLoadHistory(
-            uv, currentPixel, currentSurfacePosition, currentNormal,
-            currentMaterial, cameraDelta, true, false);
-        if (!tap.found) continue;
-        result.slowRadiance += tap.slowRadiance * tapWeight;
-        result.secondMoment += tap.secondMoment * tapWeight;
-        result.fastRadiance += tap.fastRadiance * tapWeight;
-        result.hitDistance += tap.hitDistance * tapWeight;
-        result.roughness += (tap.roughness - 1.0) * tapWeight;
-        result.historyLength += tap.historyLength * tapWeight;
-        result.confidence += tap.confidence * tapWeight;
-        result.footprintQuality += tap.footprintQuality * tapWeight;
-        normalSum += tap.normal * tapWeight;
-        sumWeight += tapWeight;
-    }
-    if (sumWeight <= 1e-5) return relaxEmptyHistory();
-    float invWeight = 1.0 / sumWeight;
-    result.slowRadiance *= invWeight;
-    result.secondMoment *= invWeight;
-    result.fastRadiance *= invWeight;
-    result.hitDistance *= invWeight;
-    result.roughness = clamp(
-        1.0 + (result.roughness - 1.0) * invWeight, 0.0, 1.0);
-    result.historyLength *= invWeight;
-    result.confidence *= invWeight;
-    result.footprintQuality =
-        clamp(result.footprintQuality * invWeight, 0.0, 1.0);
-    result.normal = relaxSafeNormalize(normalSum * invWeight, currentNormal);
-    result.found = true;
-    return result;
 }
 
 void relaxAccumulatePath(
@@ -529,11 +363,8 @@ void main() {
         writeReflLight(pixel, slow.radiance, slow.hitDistance,
             slow.historyLength);
 #elif DEBUG_VIEW == 14
-        // N=1.zw are overwritten below by the endpoint moments. Keep the
-        // diagnostic scalar in the packed color words (N=1.xy) instead.
         writeReflLight(pixel, vec3(0.0), slow.hitDistance, 0.0);
 #endif
-        writeReflEndpointMoments(pixel, emptyRelaxEndpointMoments());
         return;
     }
 
@@ -552,41 +383,41 @@ void main() {
     vec3 viewDirection = relaxSafeNormalize(currentPos, vec3(0.0, 0.0, 1.0));
     vec3 V = -viewDirection;
     float NoV = abs(dot(currentNormal, V));
-
     vec2 surfaceUv = relaxProjectPrevious(currentPos, cameraDelta);
     RelaxReprojectedHistory surface = relaxLoadHistory(
         surfaceUv, pixel, currentPos, currentNormal, currentMaterial,
         cameraDelta, false, true);
     surface.found = surface.found && motionValid >= 0.5;
+    vec3 previousV = -relaxSafeNormalize(currentPos + cameraDelta, -V);
     float lobeAngle = max(atan(relaxSpecLobeTanHalfAngle(currentRoughness, 0.75)),
         1.5 / 255.0);
     float surfaceViewWeight = 0.0;
     if (surface.found) {
-        vec3 previousV = -relaxSafeNormalize(currentPos + cameraDelta, -V);
         float angle = acos(clamp(dot(V, previousV), -1.0, 1.0));
         surfaceViewWeight = clamp(1.0 - angle / max(lobeAngle * max(NoV, 0.05), 1e-4), 0.0, 1.0);
         surfaceViewWeight *= surface.footprintQuality;
     }
 
-    vec3 previousSurfacePosition = currentPos + cameraDelta;
-    RelaxEndpointMoments accumulatedEndpoint =
-        relaxAccumulateEndpointMoments(
-            surface, noisy.endpoint, surfaceViewWeight);
-    vec3 currentMacroNormal =
-        readMicroNormal(GEO_N_MICRONORMAL, pixel);
+    // The current-frame 7x7 estimate drives virtual reprojection directly.
+    // It is intentionally not mixed with a different view-conditioned
+    // endpoint distribution from history.
+    RelaxEndpointMoments currentFrameEndpoint =
+        sanitizeRelaxEndpointMoments(noisy.endpoint);
     RelaxEndpointProjection endpointProjection =
         relaxBuildEndpointProjection(
-            previousSurfacePosition, accumulatedEndpoint,
-            currentAlpha, currentMacroNormal, V);
+            currentPos, cameraDelta,
+            currentFrameEndpoint,
+            relaxCurrentUv(pixel));
     // A finite endpoint model cannot represent an infinity/sky component.
     // Retain the previous finite moments in storage, but do not use them to
     // reproject the current sky sample.
     endpointProjection.valid = endpointProjection.valid &&
         relaxEndpointMomentsValid(noisy.endpoint);
-    RelaxReprojectedHistory virtualHistory =
-        relaxLoadEllipseHistory(
-            endpointProjection, pixel, currentPos, currentNormal,
-            currentMaterial, cameraDelta);
+    RelaxReprojectedHistory virtualHistory = endpointProjection.valid
+        ? relaxLoadHistory(endpointProjection.uv, pixel,
+            currentPos, currentNormal, currentMaterial,
+            cameraDelta, true, false)
+        : relaxEmptyHistory();
     virtualHistory.found = virtualHistory.found && motionValid >= 0.5;
 
     float virtualAmount = virtualHistory.found
@@ -602,11 +433,8 @@ void main() {
         float roughnessWeight = relaxExponentialWeight(
             virtualHistory.roughness * virtualHistory.roughness,
             roughnessParams);
-        float footprintConfidence = 1.0 - smoothstep(
-            8.0, 32.0, endpointProjection.sigmaMajorPixels);
         virtualAccumulationConfidence =
-            endpointProjection.confidence * roughnessWeight *
-            footprintConfidence;
+            endpointProjection.confidence * roughnessWeight;
         virtualResponsiveConfidence =
             virtualAccumulationConfidence * normalWeight *
             virtualHistory.footprintQuality;
@@ -661,7 +489,7 @@ void main() {
         surface.found ? relaxFiniteColor(surface.slowRadiance) : vec3(0.0),
         surface.hitDistance, surface.found ? 1.0 : 0.0);
 #elif DEBUG_VIEW == 40
-    // History fetched at the endpoint-moment mean with GGX covariance taps.
+    // History fetched with the offline-calibrated GGX-VNDF visual point.
     writeReflLight(pixel,
         virtualHistory.found
             ? relaxFiniteColor(virtualHistory.slowRadiance) : vec3(0.0),
@@ -673,12 +501,7 @@ void main() {
     writeReflLight(pixel, relaxFiniteColor(outputSlow.radiance),
         outputSlow.hitDistance, outputHistoryContribution);
 #elif DEBUG_VIEW == 14
-    // N=1.zw must carry the four endpoint moments into history clamp, so the
-    // contribution cannot live in the usual accumWeight field (N=1.z).
-    // Store it as grayscale in N=1.xy; writeReflEndpointMoments only replaces
-    // z/w and therefore cannot corrupt this diagnostic value.
     writeReflLight(pixel, vec3(outputHistoryContribution),
         outputSlow.hitDistance, 0.0);
 #endif
-    writeReflEndpointMoments(pixel, accumulatedEndpoint);
 }

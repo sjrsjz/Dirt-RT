@@ -64,8 +64,9 @@ uint relaxPackHalf2(float a, float b) {
 }
 
 // Prepass transient: 8 FP16 values in the existing rgba32ui image. Endpoint
-// moments use world axes and the common VPROJDIST_SKY scale. The RMS encoding
-// is only a storage transform; all filtering uses decoded E[|X|^2].
+// moments are virtual-image offsets in world axes and use the common
+// VPROJDIST_SKY scale. The RMS encoding is only a storage transform; all
+// filtering uses decoded E[|X|^2].
 struct RelaxPrepassSignal {
     vec3 radiance;
     float hitDistance;
@@ -81,25 +82,20 @@ float relaxEndpointDistanceScale() {
 
 uvec4 relaxPackPrepass(RelaxPrepassSignal s) {
     s.endpoint = sanitizeRelaxEndpointMoments(s.endpoint);
+    uvec2 packedEndpoint = relaxPackEndpointMoments(s.endpoint);
     return uvec4(
         relaxPackHalf2(s.radiance.r, s.radiance.g),
         relaxPackHalf2(s.radiance.b, s.hitDistance),
-        relaxPackHalf2(s.endpoint.mean.x, s.endpoint.mean.y),
-        relaxPackHalf2(s.endpoint.mean.z,
-            sqrt(max(s.endpoint.secondMoment, 0.0))));
+        packedEndpoint);
 }
 
 RelaxPrepassSignal relaxUnpackPrepass(uvec4 p) {
     RelaxPrepassSignal s;
     vec2 rg = unpackHalf2x16(p.x);
     vec2 bh = unpackHalf2x16(p.y);
-    vec2 meanXY = unpackHalf2x16(p.z);
-    vec2 meanZRms = unpackHalf2x16(p.w);
     s.radiance = relaxFiniteColor(vec3(rg, bh.x));
     s.hitDistance = max(bh.y, 0.0);
-    s.endpoint.mean = vec3(meanXY, meanZRms.x);
-    s.endpoint.secondMoment = meanZRms.y * meanZRms.y;
-    s.endpoint = sanitizeRelaxEndpointMoments(s.endpoint);
+    s.endpoint = relaxUnpackEndpointMoments(p.zw);
     return s;
 }
 

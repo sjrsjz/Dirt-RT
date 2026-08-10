@@ -1,1 +1,1 @@
-#include "/post/restir_path_guide.glsl"
+#include "/post/buffer_swap_diffuse.glsl"

@@ -30,10 +30,16 @@ void relaxStoreClampedHistory(uvec2 pixel, vec4 slow, RelaxFastSignal fast) {
     history.materialID = uint(max(materialID, 0));
     history.reprojectionConfidence = primaryDistance > -0.5
         ? fast.confidence : 0.0;
-    RelaxEndpointMoments endpoint = readReflEndpointMoments(pixel);
-    history.endpointMean = endpoint.mean;
-    history.endpointSecondMoment = endpoint.secondMoment;
+#if DEBUG_VIEW == 9
+    // HISTMETA.zw hold the current-frame spatial endpoint moments. Preserve
+    // them across the history metadata write for the final diagnostic read.
+    RelaxEndpointMoments spatialEndpointDebug =
+        readReflSpatialEndpointMoments(pixel);
+#endif
     writeRelaxSpecularHistory(pixel, history);
+#if DEBUG_VIEW == 9
+    writeReflSpatialEndpointMoments(pixel, spatialEndpointDebug);
+#endif
 }
 
 void main() {

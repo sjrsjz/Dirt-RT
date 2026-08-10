@@ -159,11 +159,18 @@ void main() {
     }
 
     #elif DEBUG_VIEW == 9
-    // Sampled reflection ray hit distance (rainbow colormap, log scale)
+    // Representative RT endpoint after the 7x7 moment-space filter:
+    // length(E[X]). The fourth moment is deliberately not visualized here.
     {
+        RelaxEndpointMoments endpoint =
+            readReflSpatialEndpointMoments(xy);
         vec3 dummyColor;
-        float d, dummyW;
-        readReflLight(xy, dummyColor, d, dummyW);
+        float rawDistance, dummyW;
+        readReflLight(xy, dummyColor, rawDistance, dummyW);
+        float d = relaxEndpointMomentsValid(endpoint)
+            ? length(endpoint.mean) *
+                clamp(VPROJDIST_SKY, 1.0, 65504.0)
+            : rawDistance;
         fragColor.xyz = (d >= VPROJDIST_SKY * 0.99) ? vec3(1.0) : jetColormap(logDistNorm(d));
     }
 
@@ -186,8 +193,6 @@ void main() {
 
     #elif DEBUG_VIEW == 14
     // Actual temporal history contribution to the reflection radiance.
-    // Temporal stores this diagnostic in the packed color field because
-    // N=1.zw are reserved for the four-FP16 endpoint moments.
     fragColor.xyz = jetColormap(clamp(tmp2.data_swap.r, 0.0, 1.0));
 
     #elif DEBUG_VIEW == 38

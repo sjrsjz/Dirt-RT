@@ -147,10 +147,8 @@ float alice_radial_estimator_variance(vec4 encoded, float N) {
 vec2 alice_eigen_std(float omega, float kappa) {
     float k2 = kappa * kappa;
     float denom = 3.0 + k2;
-    return vec2(
-        2.0 * omega * sqrt(max(0.0, 1.0 - k2)),
-        2.0 * omega * sqrt(1.0 + k2)
-    ) / denom;
+    float two_omega = 2.0 * omega;
+    return vec2(sqrt(max(0.0, 1.0 - k2)), sqrt(1.0 + k2)) * two_omega / denom;
 }
 
 // ------------------------------------------------------------

@@ -69,6 +69,16 @@ float relevant_power(const float R) {
     return max(1.0f, p_exact);
 }
 
+float fastpow(float EX, float EX2, const float p) {
+    const float alpha = 2.0 - pow(2.0, 2.0 - p);
+    return mix(EX, EX2, alpha);
+}
+
+float fastinvpow(float invW, const float p) {
+    const float alpha = pow(2.0, 2.0 - p) - 1.0;
+    return mix(invW, invW * invW, alpha);
+}
+
 // ---------------------------------------------------------------------------
 // 主函数
 // ---------------------------------------------------------------------------
@@ -108,7 +118,7 @@ void main() {
 
     // ---- 初始化累积器 ----------------------------------------------------
     float sumWeight = 1.0;
-    float sumVarEnergy = center_var_est;
+    vec2 sumVarEnergy = vec2(center_var_est);
     AliceEncoding accumAlice = center_alice;
 
     // ---- Poisson 圆盘采样 (大核 R0=8,16,32) -----------------------------------
@@ -131,10 +141,7 @@ void main() {
             sample_alice, sample_var_est);
 
         if (dot(sample_world_pos, sample_world_pos) < 1e-6) continue; // 天空
-        sample_alice.aliceY.w = abs(sample_alice.aliceY.w);
-
-        vec3 delta = (sample_world_pos - center_pos) * inv_pixel_footprint;
-        float w_geometry = abs(dot(delta, center_normal));
+        float w_geometry = abs(dot(sample_world_pos - center_pos, center_normal)) * inv_pixel_footprint;
 
         vec4 s_enc = sample_alice.aliceY;
         float s_len_v = length(s_enc.xyz);
@@ -149,8 +156,7 @@ void main() {
         // ---- 累积 ----------------------------------------------------
         accumulate_alice(accumAlice, sample_alice, w0);
         sumWeight += w0;
-
-        sumVarEnergy += pow(w0, power) * sample_var_est;
+        sumVarEnergy += vec2(w0, w0 * w0) * sample_var_est;
     }
 
     float inv_sumWeight = 1.0 / sumWeight;
@@ -158,18 +164,14 @@ void main() {
     // ---- 归一化并输出 ----------------------------------------------------
     accumAlice = scale_alice(accumAlice, inv_sumWeight);
 
-    float varEnergyOut = sumVarEnergy * pow(inv_sumWeight, power);
-    out_light_sample = uvec4(
+    float varEnergyOut = fastpow(sumVarEnergy.x, sumVarEnergy.y, power) * fastinvpow(inv_sumWeight, power);
+    uvec3 packedAlice = uvec3(
         packHalf2x16(clamp(accumAlice.aliceY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(accumAlice.aliceY.zw, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(clamp(accumAlice.CoCg,        vec2(-65504.0), vec2(65504.0))),
-        floatBitsToUint(varEnergyOut));
+        packHalf2x16(clamp(accumAlice.CoCg,        vec2(-65504.0), vec2(65504.0))));
+    out_light_sample = uvec4(packedAlice, floatBitsToUint(varEnergyOut));
 
     #if FINAL_DENOISE_PASS
-    out_light_sample_blurred = uvec4(
-        packHalf2x16(clamp(accumAlice.aliceY.xy, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(clamp(accumAlice.aliceY.zw, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(clamp(accumAlice.CoCg,        vec2(-65504.0), vec2(65504.0))),
-        0u);
+    out_light_sample_blurred = uvec4(packedAlice, 0u);
     #endif
 }

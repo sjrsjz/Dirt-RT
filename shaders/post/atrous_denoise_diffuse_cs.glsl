@@ -53,6 +53,16 @@ float relevant_power(const float R) {
     return max(1.0f, p_exact);
 }
 
+float fastpow(float EX, float EX2, const float p) {
+    const float alpha = 2.0 - pow(2.0, 2.0 - p);
+    return mix(EX, EX2, alpha);
+}
+
+float fastinvpow(float invW, const float p) {
+    const float alpha = pow(2.0, 2.0 - p) - 1.0;
+    return mix(invW, invW * invW, alpha);
+}
+
 // ---------------------------------------------------------------------------
 // 主函数
 // ---------------------------------------------------------------------------
@@ -129,7 +139,8 @@ void main() {
 
     // ---- 初始化累积器 ----------------------------------------------------
     float sumWeight = 1.0;
-    float sumVarEnergy = center_var_est;
+    vec2 sumVarEnergy = vec2(center_var_est);
+
     AliceEncoding accumAlice = center_alice;
 
     // 3×3 网格采样核 (小核 R0=1,2,4, 权重预计算)
@@ -157,11 +168,7 @@ void main() {
         float sample_var_est;
         unpackLightSampleSM(sample_idx, sample_world_pos,
             sample_alice, sample_var_est);
-
-        sample_alice.aliceY.w = abs(sample_alice.aliceY.w);
-
-        vec3 delta = (sample_world_pos - center_pos) * inv_pixel_footprint;
-        float w_geometry = abs(dot(delta, center_normal));
+        float w_geometry = abs(dot(sample_world_pos - center_pos, center_normal)) * inv_pixel_footprint;
 
         vec3 s_v = sample_alice.aliceY.xyz;
         vec2 s_std = sm_std[sample_idx]; // 共享内存预计算的 eigen_std
@@ -174,14 +181,13 @@ void main() {
 
         accumulate_alice(accumAlice, sample_alice, w0);
         sumWeight += w0;
-
-        sumVarEnergy += pow(w0, power) * sample_var_est;
+        sumVarEnergy += vec2(w0, w0 * w0) * sample_var_est;
     }
 
     float inv_sumWeight = 1.0 / sumWeight;
     accumAlice = scale_alice(accumAlice, inv_sumWeight);
 
-    float varEnergyOut = sumVarEnergy * pow(inv_sumWeight, power);
+    float varEnergyOut = fastpow(sumVarEnergy.x, sumVarEnergy.y, power) * fastinvpow(inv_sumWeight, power);
     imageStore(colorimg4, pix, uvec4(
         packHalf2x16(clamp(accumAlice.aliceY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(accumAlice.aliceY.zw, vec2(-65504.0), vec2(65504.0))),

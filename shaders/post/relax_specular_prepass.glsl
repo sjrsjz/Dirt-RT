@@ -29,7 +29,7 @@ void main() {
     outputSignal.radiance = raw;
     outputSignal.hitDistance = max(centerHitDistance, 0.0);
     outputSignal.endpoint = primaryDistance > -0.5
-        ? readReflEndpointMoments(pixel)
+        ? readReflSpatialEndpointMoments(pixel)
         : emptyRelaxEndpointMoments();
 
     if (primaryDistance < -0.5) {
@@ -49,14 +49,7 @@ void main() {
     }
     vec3 sumRadiance = raw;
     float sumWeight = 1.0;
-    bool centerEndpointValid = relaxEndpointMomentsValid(outputSignal.endpoint);
-    vec3 sumEndpointMean = centerEndpointValid
-        ? outputSignal.endpoint.mean : vec3(0.0);
-    float sumEndpointSecondMoment = centerEndpointValid
-        ? outputSignal.endpoint.secondMoment : 0.0;
-    float sumEndpointWeight = centerEndpointValid ? 1.0 : 0.0;
-    float minimumHitDistance = centerEndpointValid
-        ? centerHitDistance : VPROJDIST_SKY;
+    float minimumHitDistance = centerHitDistance;
     vec2 roughnessParams = relaxRoughnessWeightParams(
         centerRoughness, RELAX_ROUGHNESS_FRACTION);
     float normalParam = 1.0 / max(
@@ -95,9 +88,6 @@ void main() {
         float sampleHitDistance, sampleWeight;
         readReflLight(uvec2(q), sampleRadiance, sampleHitDistance, sampleWeight);
         sampleRadiance = relaxFiniteColor(sampleRadiance);
-        RelaxEndpointMoments sampleEndpoint =
-            readReflEndpointMoments(uvec2(q));
-
         float hitScale = max(max(centerHitDistance, sampleHitDistance), 1.0);
         float hitWeight = exp(-abs(sampleHitDistance - centerHitDistance) /
             (hitScale * mix(0.02, 0.5, centerRoughness) + 1e-5));
@@ -105,28 +95,13 @@ void main() {
 
         sumRadiance += sampleRadiance * w;
         sumWeight += w;
-        // A sky center remains a sky sample. For finite centers, moment
-        // filtering is a normalized linear filter of E[X] and E[|X|^2].
-        if (centerEndpointValid && relaxEndpointMomentsValid(sampleEndpoint)) {
-            sumEndpointMean += sampleEndpoint.mean * w;
-            sumEndpointSecondMoment += sampleEndpoint.secondMoment * w;
-            sumEndpointWeight += w;
-            minimumHitDistance = min(minimumHitDistance, sampleHitDistance);
-        }
+        minimumHitDistance = min(minimumHitDistance, sampleHitDistance);
     }
 
     outputSignal.radiance = relaxFiniteColor(sumRadiance / max(sumWeight, 1e-6));
-    if (centerEndpointValid && sumEndpointWeight > 1e-6) {
-        outputSignal.endpoint.mean = sumEndpointMean / sumEndpointWeight;
-        outputSignal.endpoint.secondMoment =
-            sumEndpointSecondMoment / sumEndpointWeight;
-        outputSignal.endpoint =
-            sanitizeRelaxEndpointMoments(outputSignal.endpoint);
-        // Match the official RELAX prepass: radiance is averaged, while the
-        // finite hit distance used by later spatial stages is the minimum.
-        outputSignal.hitDistance = minimumHitDistance;
-    } else {
-        outputSignal.endpoint = emptyRelaxEndpointMoments();
-    }
+    // Match the official RELAX prepass: radiance is averaged, while the
+    // finite hit distance used by later spatial stages is the minimum. The
+    // independently filtered endpoint tuple is passed through unchanged.
+    outputSignal.hitDistance = minimumHitDistance;
     imageStore(colorimg6, ivec2(pixel), relaxPackPrepass(outputSignal));
 }

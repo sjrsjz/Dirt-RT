@@ -31,10 +31,6 @@ struct RelaxSpecularHistory {
     float historyLength;
     uint materialID;
     float reprojectionConfidence;
-    // World-axis endpoint moments, normalized by VPROJDIST_SKY. The fourth
-    // FP16 stores sqrt(E[|X|^2]) and is squared immediately after loading.
-    vec3 endpointMean;
-    float endpointSecondMoment;
 };
 
 struct RelaxEndpointMoments {
@@ -67,76 +63,118 @@ RelaxEndpointMoments sanitizeRelaxEndpointMoments(RelaxEndpointMoments m) {
     return m;
 }
 
+uvec2 relaxPackEndpointMoments(RelaxEndpointMoments moments) {
+    moments = sanitizeRelaxEndpointMoments(moments);
+
+    uint packedMeanXY = packHalf2x16(moments.mean.xy);
+    uint meanZBits = packHalf2x16(vec2(moments.mean.z, 0.0)) & 0xffffu;
+
+    vec2 storedMeanXY = unpackHalf2x16(packedMeanXY);
+    float storedMeanZ = unpackHalf2x16(meanZBits).x;
+    vec3 storedMean = vec3(storedMeanXY, storedMeanZ);
+
+    float centralSecondMoment = max(moments.secondMoment - dot(moments.mean, moments.mean), 0.0);
+    float storedMeanSquared = dot(storedMean, storedMean);
+    float targetSecondMoment = clamp(storedMeanSquared + centralSecondMoment, storedMeanSquared, 1.0);
+
+    float targetRoot = sqrt(targetSecondMoment);
+    uint rootBits = packHalf2x16(vec2(targetRoot, 0.0)) & 0xffffu;
+
+    return uvec2(packedMeanXY, meanZBits | (rootBits << 16u));
+}
+
+RelaxEndpointMoments relaxUnpackEndpointMoments(uvec2 packed_) {
+    vec2 meanXY = unpackHalf2x16(packed_.x);
+    vec2 meanZRms = unpackHalf2x16(packed_.y);
+    RelaxEndpointMoments moments;
+    moments.mean = vec3(meanXY, meanZRms.x);
+    moments.secondMoment = meanZRms.y * meanZRms.y;
+    return sanitizeRelaxEndpointMoments(moments);
+}
+
 // --- N=0: Current Geometry + Direction ---
 void writeReflGeo(uvec2 xy, vec3 pos, vec3 R) {
     reflectBuffer.data[addr(SPEC_N_GEO, xy)] = vec4(pos, encodeNormal(R));
 }
 void readReflGeo(uvec2 xy, out vec3 pos, out vec3 R) {
     vec4 v = reflectBuffer.data[addr(SPEC_N_GEO, xy)];
-    pos = v.xyz; R = decodeNormal(v.w);
+    pos = v.xyz;
+    R = decodeNormal(v.w);
 }
 void writeRefrGeo(uvec2 xy, vec3 pos, vec3 T) {
     refractBuffer.data[addr(SPEC_N_GEO, xy)] = vec4(pos, encodeNormal(T));
 }
 void readRefrGeo(uvec2 xy, out vec3 pos, out vec3 T) {
     vec4 v = refractBuffer.data[addr(SPEC_N_GEO, xy)];
-    pos = v.xyz; T = decodeNormal(v.w);
+    pos = v.xyz;
+    T = decodeNormal(v.w);
 }
 
 // --- N=1: Current Light ---
 void writeReflLight(uvec2 xy, vec3 color, float vprojDist, float accumWeight) {
     reflectBuffer.data[addr(SPEC_N_LIGHT, xy)] = vec4(
-        pack2HalfClamped(color.r, color.g),
-        pack2HalfClamped(color.b, vprojDist),
-        accumWeight,
-        0.0
-    );
+            pack2HalfClamped(color.r, color.g),
+            pack2HalfClamped(color.b, vprojDist),
+            accumWeight,
+            0.0
+        );
 }
 void readReflLight(uvec2 xy, out vec3 color, out float vprojDist, out float accumWeight) {
     vec4 v = reflectBuffer.data[addr(SPEC_N_LIGHT, xy)];
     vec2 rg = unpackHalf2x16(floatBitsToUint(v.x));
     vec2 bv = unpackHalf2x16(floatBitsToUint(v.y));
-    color      = vec3(rg.x, rg.y, bv.x);
-    vprojDist  = bv.y;
+    color = vec3(rg.x, rg.y, bv.x);
+    vprojDist = bv.y;
     accumWeight = v.z;
 }
 
-// N=1.zw carry the ray's endpoint sample into prepass, then carry the newly
-// accumulated four-FP16 endpoint state to the history-store pass.
+// N=1.zw carry the ray's endpoint sample into the spatial endpoint pass.
 // No pass reads these words while another invocation writes neighbouring
 // pixels, so this introduces no SSBO read/write race.
 void writeReflEndpointMoments(uvec2 xy, RelaxEndpointMoments moments) {
-    moments = sanitizeRelaxEndpointMoments(moments);
+    uvec2 packed_ = relaxPackEndpointMoments(moments);
     uint address = addr(SPEC_N_LIGHT, xy);
-    reflectBuffer.data[address].z = pack2HalfClamped(
-        moments.mean.x, moments.mean.y);
-    reflectBuffer.data[address].w = pack2HalfClamped(
-        moments.mean.z, sqrt(max(moments.secondMoment, 0.0)));
+    reflectBuffer.data[address].z = uintBitsToFloat(packed_.x);
+    reflectBuffer.data[address].w = uintBitsToFloat(packed_.y);
 }
 
 RelaxEndpointMoments readReflEndpointMoments(uvec2 xy) {
     vec4 v = reflectBuffer.data[addr(SPEC_N_LIGHT, xy)];
-    vec2 meanXY = unpackHalf2x16(floatBitsToUint(v.z));
-    vec2 meanZRms = unpackHalf2x16(floatBitsToUint(v.w));
-    RelaxEndpointMoments moments;
-    moments.mean = vec3(meanXY, meanZRms.x);
-    moments.secondMoment = meanZRms.y * meanZRms.y;
-    return sanitizeRelaxEndpointMoments(moments);
+    return relaxUnpackEndpointMoments(uvec2(
+            floatBitsToUint(v.z), floatBitsToUint(v.w)));
+}
+
+// Independent current-frame endpoint estimate. HISTMETA.zw are not consumed
+// by radiance history, so reuse them after the ray pass instead of allocating
+// another full virtual layer.
+void writeReflSpatialEndpointMoments(
+    uvec2 xy, RelaxEndpointMoments moments
+) {
+    uvec2 packed_ = relaxPackEndpointMoments(moments);
+    uint address = addr(SPEC_N_HISTMETA, xy);
+    reflectBuffer.data[address].zw = vec2(
+            uintBitsToFloat(packed_.x), uintBitsToFloat(packed_.y));
+}
+
+RelaxEndpointMoments readReflSpatialEndpointMoments(uvec2 xy) {
+    vec2 packed_ = reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)].zw;
+    return relaxUnpackEndpointMoments(uvec2(
+            floatBitsToUint(packed_.x), floatBitsToUint(packed_.y)));
 }
 void writeRefrLight(uvec2 xy, vec3 color, float vprojDist, float accumWeight) {
     refractBuffer.data[addr(SPEC_N_LIGHT, xy)] = vec4(
-        pack2HalfClamped(color.r, color.g),
-        pack2HalfClamped(color.b, vprojDist),
-        accumWeight,
-        0.0
-    );
+            pack2HalfClamped(color.r, color.g),
+            pack2HalfClamped(color.b, vprojDist),
+            accumWeight,
+            0.0
+        );
 }
 void readRefrLight(uvec2 xy, out vec3 color, out float vprojDist, out float accumWeight) {
     vec4 v = refractBuffer.data[addr(SPEC_N_LIGHT, xy)];
     vec2 rg = unpackHalf2x16(floatBitsToUint(v.x));
     vec2 bv = unpackHalf2x16(floatBitsToUint(v.y));
-    color       = vec3(rg.x, rg.y, bv.x);
-    vprojDist   = bv.y;
+    color = vec3(rg.x, rg.y, bv.x);
+    vprojDist = bv.y;
     accumWeight = v.z;
 }
 
@@ -146,74 +184,70 @@ void writeReflHistGeo(uvec2 xy, vec3 pos, vec3 R) {
 }
 void readReflHistGeo(uvec2 xy, out vec3 pos, out vec3 R) {
     vec4 v = reflectBuffer.data[addr(SPEC_N_HISTGEO, xy)];
-    pos = v.xyz; R = decodeNormal(v.w);
+    pos = v.xyz;
+    R = decodeNormal(v.w);
 }
 void writeRefrHistGeo(uvec2 xy, vec3 pos, vec3 T) {
     refractBuffer.data[addr(SPEC_N_HISTGEO, xy)] = vec4(pos, encodeNormal(T));
 }
 void readRefrHistGeo(uvec2 xy, out vec3 pos, out vec3 T) {
     vec4 v = refractBuffer.data[addr(SPEC_N_HISTGEO, xy)];
-    pos = v.xyz; T = decodeNormal(v.w);
+    pos = v.xyz;
+    T = decodeNormal(v.w);
 }
 
 // --- N=3: History Light ---
 void writeReflHistLight(uvec2 xy, vec3 color, float vprojDist, float weight) {
     reflectBuffer.data[addr(SPEC_N_HISTLIGHT, xy)] = vec4(
-        pack2HalfClamped(color.r, color.g),
-        pack2HalfClamped(color.b, vprojDist),
-        weight,
-        0.0
-    );
+            pack2HalfClamped(color.r, color.g),
+            pack2HalfClamped(color.b, vprojDist),
+            weight,
+            0.0
+        );
 }
 void readReflHistLight(uvec2 xy, out vec3 color, out float vprojDist, out float weight) {
     vec4 v = reflectBuffer.data[addr(SPEC_N_HISTLIGHT, xy)];
     vec2 rg = unpackHalf2x16(floatBitsToUint(v.x));
     vec2 bv = unpackHalf2x16(floatBitsToUint(v.y));
-    color     = vec3(rg.x, rg.y, bv.x);
+    color = vec3(rg.x, rg.y, bv.x);
     vprojDist = bv.y;
-    weight    = v.z;
+    weight = v.z;
 }
 void writeRefrHistLight(uvec2 xy, vec3 color, float vprojDist, float weight) {
     refractBuffer.data[addr(SPEC_N_HISTLIGHT, xy)] = vec4(
-        pack2HalfClamped(color.r, color.g),
-        pack2HalfClamped(color.b, vprojDist),
-        weight,
-        0.0
-    );
+            pack2HalfClamped(color.r, color.g),
+            pack2HalfClamped(color.b, vprojDist),
+            weight,
+            0.0
+        );
 }
 void readRefrHistLight(uvec2 xy, out vec3 color, out float vprojDist, out float weight) {
     vec4 v = refractBuffer.data[addr(SPEC_N_HISTLIGHT, xy)];
     vec2 rg = unpackHalf2x16(floatBitsToUint(v.x));
     vec2 bv = unpackHalf2x16(floatBitsToUint(v.y));
-    color     = vec3(rg.x, rg.y, bv.x);
+    color = vec3(rg.x, rg.y, bv.x);
     vprojDist = bv.y;
-    weight    = v.z;
+    weight = v.z;
 }
 
 // Reflection-only RELAX history. Five tiled virtual images share binding 3;
 // refraction continues to use the four legacy images above.
 void writeRelaxSpecularHistory(uvec2 xy, RelaxSpecularHistory h) {
-    RelaxEndpointMoments endpointMoments;
-    endpointMoments.mean = h.endpointMean;
-    endpointMoments.secondMoment = h.endpointSecondMoment;
-    endpointMoments = sanitizeRelaxEndpointMoments(endpointMoments);
     uint packedMeta = (h.materialID & 0xffffu) |
-        ((packHalf2x16(vec2(clamp(h.reprojectionConfidence, 0.0, 1.0), 0.0))
-            & 0xffffu) << 16u);
+            ((packHalf2x16(vec2(clamp(h.reprojectionConfidence, 0.0, 1.0), 0.0))
+                & 0xffffu) << 16u);
     reflectBuffer.data[addr(SPEC_N_HISTGEO, xy)] = vec4(
-        h.surfacePosition, encodeNormal(h.geometryNormal));
+            h.surfacePosition, encodeNormal(h.geometryNormal));
     reflectBuffer.data[addr(SPEC_N_HISTLIGHT, xy)] = vec4(
-        pack2HalfClamped(h.slowRadiance.r, h.slowRadiance.g),
-        pack2HalfClamped(h.slowRadiance.b,
-            encodeSqrtMomentFP16(h.secondMoment)),
-        pack2HalfClamped(h.responsiveRadiance.r, h.responsiveRadiance.g),
-        pack2HalfClamped(h.responsiveRadiance.b, h.hitDistance));
+            pack2HalfClamped(h.slowRadiance.r, h.slowRadiance.g),
+            pack2HalfClamped(h.slowRadiance.b,
+                encodeSqrtMomentFP16(h.secondMoment)),
+            pack2HalfClamped(h.responsiveRadiance.r, h.responsiveRadiance.g),
+            pack2HalfClamped(h.responsiveRadiance.b, h.hitDistance));
     reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)] = vec4(
-        pack2HalfClamped(h.roughness, h.historyLength),
-        uintBitsToFloat(packedMeta),
-        pack2HalfClamped(endpointMoments.mean.x, endpointMoments.mean.y),
-        pack2HalfClamped(endpointMoments.mean.z,
-            sqrt(max(endpointMoments.secondMoment, 0.0))));
+            pack2HalfClamped(h.roughness, h.historyLength),
+            uintBitsToFloat(packedMeta),
+            0.0, 0.0);
 }
 
 RelaxSpecularHistory readRelaxSpecularHistory(uvec2 xy) {
@@ -227,20 +261,16 @@ RelaxSpecularHistory readRelaxSpecularHistory(uvec2 xy) {
     vec2 fastBHit = unpackHalf2x16(floatBitsToUint(s.w));
     vec2 roughHistory = unpackHalf2x16(floatBitsToUint(m.x));
     uint packedMeta = floatBitsToUint(m.y);
-    vec2 endpointMeanXY = unpackHalf2x16(floatBitsToUint(m.z));
-    vec2 endpointMeanZRms = unpackHalf2x16(floatBitsToUint(m.w));
     float packedConfidence =
         unpackHalf2x16((packedMeta >> 16u) & 0xffffu).x;
     bool valid = !any(isnan(g.xyz)) && !any(isinf(g.xyz)) &&
-        !any(isnan(slowRG)) && !any(isinf(slowRG)) &&
-        !any(isnan(slowBM2)) && !any(isinf(slowBM2)) &&
-        !any(isnan(fastRG)) && !any(isinf(fastRG)) &&
-        !any(isnan(fastBHit)) && !any(isinf(fastBHit)) &&
-        !any(isnan(roughHistory)) && !any(isinf(roughHistory)) &&
-        !any(isnan(endpointMeanXY)) && !any(isinf(endpointMeanXY)) &&
-        !any(isnan(endpointMeanZRms)) && !any(isinf(endpointMeanZRms)) &&
-        !isnan(packedConfidence) && !isinf(packedConfidence) &&
-        roughHistory.y >= 0.0 && roughHistory.y <= 255.0;
+            !any(isnan(slowRG)) && !any(isinf(slowRG)) &&
+            !any(isnan(slowBM2)) && !any(isinf(slowBM2)) &&
+            !any(isnan(fastRG)) && !any(isinf(fastRG)) &&
+            !any(isnan(fastBHit)) && !any(isinf(fastBHit)) &&
+            !any(isnan(roughHistory)) && !any(isinf(roughHistory)) &&
+            !isnan(packedConfidence) && !isinf(packedConfidence) &&
+            roughHistory.y >= 0.0 && roughHistory.y <= 255.0;
     h.surfacePosition = g.xyz;
     h.geometryNormal = decodeNormal(g.w);
     h.slowRadiance = vec3(slowRG, slowBM2.x);
@@ -251,12 +281,6 @@ RelaxSpecularHistory readRelaxSpecularHistory(uvec2 xy) {
     h.historyLength = roughHistory.y;
     h.materialID = valid ? (packedMeta & 0xffffu) : 0u;
     h.reprojectionConfidence = clamp(packedConfidence, 0.0, 1.0);
-    RelaxEndpointMoments endpointMoments;
-    endpointMoments.mean = vec3(endpointMeanXY, endpointMeanZRms.x);
-    endpointMoments.secondMoment = endpointMeanZRms.y * endpointMeanZRms.y;
-    endpointMoments = sanitizeRelaxEndpointMoments(endpointMoments);
-    h.endpointMean = endpointMoments.mean;
-    h.endpointSecondMoment = endpointMoments.secondMoment;
     if (!valid) {
         h.surfacePosition = vec3(0.0);
         h.geometryNormal = vec3(0.0, 1.0, 0.0);
@@ -267,8 +291,6 @@ RelaxSpecularHistory readRelaxSpecularHistory(uvec2 xy) {
         h.roughness = 1.0;
         h.historyLength = 0.0;
         h.reprojectionConfidence = 0.0;
-        h.endpointMean = vec3(0.0);
-        h.endpointSecondMoment = 0.0;
     }
     return h;
 }
