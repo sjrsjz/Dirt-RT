@@ -5,6 +5,13 @@ layout(local_size_x = 8, local_size_y = 8) in;
 #define REFLECT_BUFFER
 #include "/lib/denoise/relax_specular_common.glsl"
 
+layout(rgba32ui) uniform writeonly uimage2D colorimg6;
+
+void storeSpatialEndpoint(ivec2 pixel, RelaxEndpointMoments endpoint) {
+    uvec2 packedEndpoint = relaxPackEndpointMoments(endpoint);
+    imageStore(colorimg6, pixel, uvec4(packedEndpoint, 0u, 0u));
+}
+
 #define ENDPOINT_GROUP_SIZE 8
 #define ENDPOINT_FILTER_RADIUS 3
 #define ENDPOINT_TILE_SIZE (ENDPOINT_GROUP_SIZE + 2 * ENDPOINT_FILTER_RADIUS) // 14
@@ -74,7 +81,7 @@ void main() {
     center.secondMoment = centerPacked.w;
 
     if (!relaxEndpointMomentsValid(center)) {
-        writeReflSpatialEndpointMoments(uvec2(pixel), emptyRelaxEndpointMoments());
+        storeSpatialEndpoint(pixel, emptyRelaxEndpointMoments());
         return;
     }
 
@@ -145,5 +152,5 @@ void main() {
     filtered.secondMoment = sumSecondMoment * inverseWeight;
     filtered = sanitizeRelaxEndpointMoments(filtered);
 
-    writeReflSpatialEndpointMoments(uvec2(pixel), filtered);
+    storeSpatialEndpoint(pixel, filtered);
 }

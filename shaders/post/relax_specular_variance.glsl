@@ -34,12 +34,12 @@ void main() {
         sky.radiance = relaxFiniteColor(slowRaw.rgb);
         sky.roughness = 1.0;
         sky.variance = 0.0;
-        sky.hitDistance = 0.0;
+        sky.endpointDistance = 0.0;
         sky.historyLength = 0.0;
         sky.confidence = 0.0;
         imageStore(colorimg6, ivec2(pixel), relaxPackSpatial(sky));
 #if DEBUG_VIEW == 25
-        writeReflLight(pixel, sky.radiance, sky.hitDistance,
+        writeReflLight(pixel, sky.radiance, sky.endpointDistance,
             sky.historyLength);
 #endif
         return;
@@ -84,13 +84,13 @@ void main() {
     spatial.radiance = relaxFiniteColor(filteredMoments.rgb);
     spatial.roughness = centerRoughness;
     spatial.variance = variance;
-    spatial.hitDistance = fast.hitDistance;
+    spatial.endpointDistance = fast.endpointDistance;
     spatial.historyLength = fast.historyLength;
     spatial.confidence = fast.confidence;
     imageStore(colorimg6, ivec2(pixel), relaxPackSpatial(spatial));
 #if DEBUG_VIEW == 25
     // Spatial preparation output before the first A-trous pass.
     writeReflLight(pixel, relaxFiniteColor(spatial.radiance),
-        spatial.hitDistance, spatial.historyLength);
+        spatial.endpointDistance, spatial.historyLength);
 #endif
 }

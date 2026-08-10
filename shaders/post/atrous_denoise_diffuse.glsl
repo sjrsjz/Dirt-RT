@@ -53,38 +53,58 @@ void unpackLightSample(ivec2 coord, out vec3 pos, out float oct_normal,
     pos = sample_data0.xyz;
     oct_normal = sample_data0.w;
     encoded.aliceY = vec4(unpackHalf2x16(light.x), unpackHalf2x16(light.y));
-    encoded.CoCg   = unpackHalf2x16(light.z);
+    encoded.CoCg = unpackHalf2x16(light.z);
     variance = uintBitsToFloat(light.w);
+}
+
+// xy = eigen stddev, z = variance anisotropy, w = |v|^2.
+// The trace is reconstructed as 3 * sigma_perp^2 + anisotropy.
+vec4 makeBuresData(vec4 encoded) {
+    float len_v_sq = dot(encoded.xyz, encoded.xyz);
+    float kappa = alice_kappa(sqrt(len_v_sq), encoded.w);
+    vec2 stddev = alice_eigen_std(encoded.w, kappa);
+    vec2 stddev_sq = stddev * stddev;
+    return vec4(stddev, stddev_sq.y - stddev_sq.x, len_v_sq);
+}
+
+float buresDistanceSq(vec3 center_v, vec4 center_data, float center_trace,
+    vec3 sample_v, vec4 sample_data) {
+    float dot_v = dot(center_v, sample_v);
+    float c_sq = 0.0;
+    if (center_data.w > 0.0 && sample_data.w > 1e-16) {
+        c_sq = min(1.0, dot_v * dot_v * center_data.w / sample_data.w);
+    }
+
+    float sample_std_perp_sq = sample_data.x * sample_data.x;
+    float sample_trace = 3.0 * sample_std_perp_sq + sample_data.z;
+    float cross_ab = center_data.x * sample_data.y
+            + center_data.y * sample_data.x;
+    float cross_2d = sqrt(max(0.0, cross_ab * cross_ab
+                    + c_sq * center_data.z * sample_data.z));
+
+    vec3 delta_v = center_v - sample_v;
+    float mean_distance_sq = dot(delta_v, delta_v);
+    float cross_trace = center_data.x * sample_data.x + cross_2d;
+    return max(0.0, mean_distance_sq + center_trace + sample_trace
+            - 2.0 * cross_trace);
 }
 
 // à-trous 分数阶方差传播指数
 // 注意，fs 采样使用的是泊松核，结论可能不完全适用，但仍然可以作为一个近似值
-float relevant_power(const float R) {
-    if (R <= 1.0f) {
-        return 2.0f;
-    }
-    const float R2 = R * R;
-    const float rho = exp(-1.5f * R2 / (R2 - 1.0f));
-    const float p_exact = 2.0f - ATROUS_GAMMA * (log(1.0f + 8.0f * rho) / 2.197224577f);
-    return max(1.0f, p_exact);
-}
-
-float fastpow(float EX, float EX2, const float p) {
-    const float alpha = 2.0 - pow(2.0, 2.0 - p);
-    return mix(EX, EX2, alpha);
-}
-
-float fastinvpow(float invW, const float p) {
-    const float alpha = pow(2.0, 2.0 - p) - 1.0;
-    return mix(invW, invW * invW, alpha);
-}
+#if R0 == 8
+#define ATROUS_POWER_COEFFICIENT 0.4644479501
+#elif R0 == 16
+#define ATROUS_POWER_COEFFICIENT 0.4657344365
+#elif R0 == 32
+#define ATROUS_POWER_COEFFICIENT 0.4660551979
+#endif
 
 // ---------------------------------------------------------------------------
 // 主函数
 // ---------------------------------------------------------------------------
 
 void main() {
-    ivec2 texSize = textureSize(colortex3, 0) - 1;
+    ivec2 texSize = textureSize(colortex3, 0);
     ivec2 pix = ivec2(gl_FragCoord.xy);
 
     // ---- 中心像素基础数据 -------------------------------------------------
@@ -95,9 +115,12 @@ void main() {
     unpackLightSample(pix, center_pos, center_oct_n, center_alice, center_var_est);
 
     // 天空像素跳过 (colortex3.xyz = 0 for sky)
-    if (dot(center_pos, center_pos) < 1e-6) return;
+    float center_pos_sq = dot(center_pos, center_pos);
+    if (center_pos_sq < 1e-6) return;
 
-    const float power = relevant_power(R0 * 2); // 乘 2 是因为方差估计是给下一级用的
+    const float power = max(1.0, 2.0
+                - ATROUS_GAMMA * ATROUS_POWER_COEFFICIENT);
+    const float variance_mix = 2.0 - exp2(2.0 - power);
 
     center_var_est = max(center_var_est, 1e-12);
 
@@ -107,14 +130,16 @@ void main() {
     // ---- 预计算中心像素的统计特征 -----------------------------------------
     // 中心 ALICE 编码: aliceY = vec4(v, ω)
     vec4 c_enc = center_alice.aliceY;
-    float c_len_v = length(c_enc.xyz);
-    float c_omega = c_enc.w;
-    float c_kappa = alice_kappa(c_len_v, c_omega);
-    vec2 c_std = alice_eigen_std(c_omega, c_kappa);
+    vec4 c_bures = makeBuresData(c_enc);
+    float c_len_v_sq = c_bures.w;
+    c_bures.w = c_len_v_sq > 1e-16 ? 1.0 / c_len_v_sq : 0.0;
+    float c_trace = 3.0 * c_bures.x * c_bures.x + c_bures.z;
 
-    float dist_to_cam = max(length(center_pos), 0.001);
-    float inv_pixel_footprint = 1.0 / (ATROUS_POSITION_PARAM
-                * max(dist_to_cam / float(resolution_global.y), 0.00001));
+    float resolution_y = float(resolution_global.y);
+    float dist_to_cam = max(sqrt(center_pos_sq), 0.001);
+    float inv_pixel_footprint = resolution_y / (ATROUS_POSITION_PARAM
+                * max(dist_to_cam, resolution_y * 0.00001));
+    float center_plane_distance = dot(center_pos, center_normal);
 
     // ---- 初始化累积器 ----------------------------------------------------
     float sumWeight = 1.0;
@@ -124,14 +149,16 @@ void main() {
     // ---- Poisson 圆盘采样 (大核 R0=8,16,32) -----------------------------------
     // 旋转器 + 高斯核权重, 均匀圆盘覆盖替代 3×3 网格
     float theta = 2.0 * PI * fract(rand(vec2(pix)) + R0 * 0.6180339887498949);
-    mat2 rotM = mat2(cos(theta), -sin(theta), sin(theta), cos(theta)) * R0 * 1.75;
+    float cos_theta = cos(theta) * R0 * 1.75;
+    float sin_theta = sin(theta) * R0 * 1.75;
+    mat2 rotM = mat2(cos_theta, -sin_theta, sin_theta, cos_theta);
 
     for (int k = 0; k < POISSON_N; k++) {
         vec4 ps = POISSON_8[k];
         vec2 offset = rotM * ps.xy;
         ivec2 sample_coord = pix + ivec2(round(offset));
 
-        if (sample_coord != clamp(sample_coord, ivec2(0), texSize)) continue;
+        if (any(greaterThanEqual(uvec2(sample_coord), uvec2(texSize)))) continue;
 
         vec3 sample_world_pos;
         float sample_oct_n;
@@ -141,13 +168,13 @@ void main() {
             sample_alice, sample_var_est);
 
         if (dot(sample_world_pos, sample_world_pos) < 1e-6) continue; // 天空
-        float w_geometry = abs(dot(sample_world_pos - center_pos, center_normal)) * inv_pixel_footprint;
+        float w_geometry = abs(dot(sample_world_pos, center_normal)
+                    - center_plane_distance) * inv_pixel_footprint;
 
         vec4 s_enc = sample_alice.aliceY;
-        float s_len_v = length(s_enc.xyz);
-        float s_kappa = alice_kappa(s_len_v, s_enc.w);
-        vec2 s_std = alice_eigen_std(s_enc.w, s_kappa);
-        float d_bures_sq = alice_bures_distance_sq_precomputed(c_enc.xyz, c_std, s_enc.xyz, s_std);
+        vec4 s_bures = makeBuresData(s_enc);
+        float d_bures_sq = buresDistanceSq(c_enc.xyz, c_bures, c_trace,
+                s_enc.xyz, s_bures);
         float w_luma = ATROUS_PHI_L * d_bures_sq / max(center_var_est + sample_var_est, 1e-12);
 
         const float w_kernel = ps.w;
@@ -156,7 +183,8 @@ void main() {
         // ---- 累积 ----------------------------------------------------
         accumulate_alice(accumAlice, sample_alice, w0);
         sumWeight += w0;
-        sumVarEnergy += vec2(w0, w0 * w0) * sample_var_est;
+        float weighted_var = w0 * sample_var_est;
+        sumVarEnergy += vec2(weighted_var, w0 * weighted_var);
     }
 
     float inv_sumWeight = 1.0 / sumWeight;
@@ -164,11 +192,12 @@ void main() {
     // ---- 归一化并输出 ----------------------------------------------------
     accumAlice = scale_alice(accumAlice, inv_sumWeight);
 
-    float varEnergyOut = fastpow(sumVarEnergy.x, sumVarEnergy.y, power) * fastinvpow(inv_sumWeight, power);
+    float varEnergyOut = mix(sumVarEnergy.x, sumVarEnergy.y, variance_mix)
+            * pow(inv_sumWeight, power);
     uvec3 packedAlice = uvec3(
-        packHalf2x16(clamp(accumAlice.aliceY.xy, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(clamp(accumAlice.aliceY.zw, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(clamp(accumAlice.CoCg,        vec2(-65504.0), vec2(65504.0))));
+            packHalf2x16(clamp(accumAlice.aliceY.xy, vec2(-65504.0), vec2(65504.0))),
+            packHalf2x16(clamp(accumAlice.aliceY.zw, vec2(-65504.0), vec2(65504.0))),
+            packHalf2x16(clamp(accumAlice.CoCg, vec2(-65504.0), vec2(65504.0))));
     out_light_sample = uvec4(packedAlice, floatBitsToUint(varEnergyOut));
 
     #if FINAL_DENOISE_PASS

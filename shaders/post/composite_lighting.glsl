@@ -163,14 +163,11 @@ void main() {
     // length(E[X]). The fourth moment is deliberately not visualized here.
     {
         RelaxEndpointMoments endpoint =
-            readReflSpatialEndpointMoments(xy);
-        vec3 dummyColor;
-        float rawDistance, dummyW;
-        readReflLight(xy, dummyColor, rawDistance, dummyW);
+            readReflEndpointMoments(xy);
         float d = relaxEndpointMomentsValid(endpoint)
             ? length(endpoint.mean) *
                 clamp(VPROJDIST_SKY, 1.0, 65504.0)
-            : rawDistance;
+            : 0.0;
         fragColor.xyz = (d >= VPROJDIST_SKY * 0.99) ? vec3(1.0) : jetColormap(logDistNorm(d));
     }
 

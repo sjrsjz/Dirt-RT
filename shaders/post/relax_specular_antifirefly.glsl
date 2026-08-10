@@ -20,7 +20,7 @@ void main() {
         imageStore(colorimg3, ivec2(pixel), center);
 #if DEBUG_VIEW == 24
         writeReflLight(pixel, relaxFiniteColor(center.rgb),
-            centerFast.hitDistance, centerFast.historyLength);
+            centerFast.endpointDistance, centerFast.historyLength);
 #endif
         return;
     }
@@ -58,6 +58,6 @@ void main() {
     imageStore(colorimg3, ivec2(pixel), vec4(outputColor, center.a));
 #if DEBUG_VIEW == 24
     writeReflLight(pixel, relaxFiniteColor(outputColor),
-        centerFast.hitDistance, centerFast.historyLength);
+        centerFast.endpointDistance, centerFast.historyLength);
 #endif
 }

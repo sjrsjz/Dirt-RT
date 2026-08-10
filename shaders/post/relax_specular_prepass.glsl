@@ -5,6 +5,7 @@ layout(local_size_x = 8, local_size_y = 8) in;
 #define REFLECT_BUFFER
 #include "/lib/denoise/relax_specular_common.glsl"
 
+uniform usampler2D colortex6;
 layout(rgba32ui) uniform writeonly uimage2D colorimg6;
 
 const ivec2 RELAX_PREPASS_OFFSETS[8] = ivec2[](
@@ -21,15 +22,15 @@ void main() {
     readGeo0(GEO_N_GEO, pixel, centerPos, primaryDistance);
 
     vec3 raw;
-    float centerHitDistance, unusedWeight;
-    readReflLight(pixel, raw, centerHitDistance, unusedWeight);
+    float unusedDistance, unusedWeight;
+    readReflLight(pixel, raw, unusedDistance, unusedWeight);
     raw = relaxFiniteColor(raw);
 
     RelaxPrepassSignal outputSignal;
     outputSignal.radiance = raw;
-    outputSignal.hitDistance = max(centerHitDistance, 0.0);
     outputSignal.endpoint = primaryDistance > -0.5
-        ? readReflSpatialEndpointMoments(pixel)
+        ? relaxUnpackEndpointMoments(
+            texelFetch(colortex6, ivec2(pixel), 0).xy)
         : emptyRelaxEndpointMoments();
 
     if (primaryDistance < -0.5) {
@@ -49,7 +50,6 @@ void main() {
     }
     vec3 sumRadiance = raw;
     float sumWeight = 1.0;
-    float minimumHitDistance = centerHitDistance;
     vec2 roughnessParams = relaxRoughnessWeightParams(
         centerRoughness, RELAX_ROUGHNESS_FRACTION);
     float normalParam = 1.0 / max(
@@ -85,23 +85,14 @@ void main() {
         if (w <= 1e-4) continue;
 
         vec3 sampleRadiance;
-        float sampleHitDistance, sampleWeight;
-        readReflLight(uvec2(q), sampleRadiance, sampleHitDistance, sampleWeight);
+        float sampleUnusedDistance, sampleWeight;
+        readReflLight(uvec2(q), sampleRadiance, sampleUnusedDistance, sampleWeight);
         sampleRadiance = relaxFiniteColor(sampleRadiance);
-        float hitScale = max(max(centerHitDistance, sampleHitDistance), 1.0);
-        float hitWeight = exp(-abs(sampleHitDistance - centerHitDistance) /
-            (hitScale * mix(0.02, 0.5, centerRoughness) + 1e-5));
-        w *= mix(RELAX_MIN_HIT_DISTANCE_WEIGHT, 1.0, hitWeight);
 
         sumRadiance += sampleRadiance * w;
         sumWeight += w;
-        minimumHitDistance = min(minimumHitDistance, sampleHitDistance);
     }
 
     outputSignal.radiance = relaxFiniteColor(sumRadiance / max(sumWeight, 1e-6));
-    // Match the official RELAX prepass: radiance is averaged, while the
-    // finite hit distance used by later spatial stages is the minimum. The
-    // independently filtered endpoint tuple is passed through unchanged.
-    outputSignal.hitDistance = minimumHitDistance;
     imageStore(colorimg6, ivec2(pixel), relaxPackPrepass(outputSignal));
 }

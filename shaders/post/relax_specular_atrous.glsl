@@ -44,7 +44,7 @@ void relaxStoreAtrous(ivec2 p, RelaxSpatialSignal s) {
 void relaxStoreAtrousDebug(ivec2 p, RelaxSpatialSignal s) {
 #if DEBUG_VIEW == RELAX_ATROUS_DEBUG_VIEW
     writeReflLight(uvec2(p), relaxFiniteColor(s.radiance),
-        s.hitDistance, s.historyLength);
+        s.endpointDistance, s.historyLength);
 #endif
 }
 
@@ -56,7 +56,7 @@ void relaxResolveAtrous(ivec2 p, RelaxSpatialSignal s) {
     // Preserve a diagnostic result written by its owning pass.
 #else
     writeReflLight(uvec2(p), relaxFiniteColor(s.radiance),
-        s.hitDistance, s.historyLength);
+        s.endpointDistance, s.historyLength);
 #endif
 #endif
 }
@@ -237,15 +237,12 @@ void main() {
         w *= relaxExponentialWeight(
             sampleSignal.roughness, roughnessParams);
 
-        // The primary G-buffer cannot distinguish two unrelated reflected
-        // surfaces seen through the same glossy primary surface.  At wide
-        // steps their hit distances are the missing discontinuity signal;
-        // without it, a bright distant/sky sample leaks into a nearby dark
-        // reflection with a sparse, screen-aligned footprint.
-        float hitScale = max(max(center.hitDistance,
-            sampleSignal.hitDistance), 1.0);
-        float hitWeight = exp(-abs(sampleSignal.hitDistance -
-            center.hitDistance) / (hitScale * mix(0.02, 0.5,
+        // length(E[X]) from the temporally filtered four-moment endpoint
+        // state replaces ReLAX's separately accumulated hit distance.
+        float hitScale = max(max(center.endpointDistance,
+            sampleSignal.endpointDistance), 1.0);
+        float hitWeight = exp(-abs(sampleSignal.endpointDistance -
+            center.endpointDistance) / (hitScale * mix(0.02, 0.5,
                 center.roughness) + 1e-5));
         w *= mix(RELAX_MIN_HIT_DISTANCE_WEIGHT, 1.0, hitWeight);
 

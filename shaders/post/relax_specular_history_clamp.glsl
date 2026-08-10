@@ -24,22 +24,14 @@ void relaxStoreClampedHistory(uvec2 pixel, vec4 slow, RelaxFastSignal fast) {
     history.slowRadiance = relaxFiniteColor(slow.rgb);
     history.secondMoment = max(slow.a, 0.0);
     history.responsiveRadiance = relaxFiniteColor(fast.radiance);
-    history.hitDistance = max(fast.hitDistance, 0.0);
+    history.endpoint = primaryDistance > -0.5
+        ? readReflEndpointMoments(pixel) : emptyRelaxEndpointMoments();
     history.roughness = relaxPerceptualRoughness(ggxAlpha);
     history.historyLength = primaryDistance > -0.5 ? fast.historyLength : 0.0;
     history.materialID = uint(max(materialID, 0));
     history.reprojectionConfidence = primaryDistance > -0.5
         ? fast.confidence : 0.0;
-#if DEBUG_VIEW == 9
-    // HISTMETA.zw hold the current-frame spatial endpoint moments. Preserve
-    // them across the history metadata write for the final diagnostic read.
-    RelaxEndpointMoments spatialEndpointDebug =
-        readReflSpatialEndpointMoments(pixel);
-#endif
     writeRelaxSpecularHistory(pixel, history);
-#if DEBUG_VIEW == 9
-    writeReflSpatialEndpointMoments(pixel, spatialEndpointDebug);
-#endif
 }
 
 void main() {
@@ -59,7 +51,7 @@ void main() {
         imageStore(colorimg9, ivec2(pixel), slow);
         imageStore(colorimg4, ivec2(pixel), relaxPackFast(fast));
 #if DEBUG_VIEW == 23
-        writeReflLight(pixel, relaxFiniteColor(slow.rgb), fast.hitDistance,
+        writeReflLight(pixel, relaxFiniteColor(slow.rgb), fast.endpointDistance,
             fast.historyLength);
 #endif
         return;
@@ -150,7 +142,7 @@ void main() {
     imageStore(colorimg9, ivec2(pixel), slow);
     imageStore(colorimg4, ivec2(pixel), relaxPackFast(fast));
 #if DEBUG_VIEW == 23
-    writeReflLight(pixel, relaxFiniteColor(slow.rgb), fast.hitDistance,
+    writeReflLight(pixel, relaxFiniteColor(slow.rgb), fast.endpointDistance,
         fast.historyLength);
 #endif
 }

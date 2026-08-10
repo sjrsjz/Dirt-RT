@@ -20,22 +20,22 @@
 #define SPEC_N_HISTLIGHT 3u
 #define SPEC_N_HISTMETA  4u
 
+struct RelaxEndpointMoments {
+    vec3 mean;
+    float secondMoment;
+};
+
 struct RelaxSpecularHistory {
     vec3 surfacePosition;
     vec3 geometryNormal;
     vec3 slowRadiance;
     float secondMoment;
     vec3 responsiveRadiance;
-    float hitDistance;
+    RelaxEndpointMoments endpoint;
     float roughness;
     float historyLength;
     uint materialID;
     float reprojectionConfidence;
-};
-
-struct RelaxEndpointMoments {
-    vec3 mean;
-    float secondMoment;
 };
 
 RelaxEndpointMoments emptyRelaxEndpointMoments() {
@@ -144,23 +144,6 @@ RelaxEndpointMoments readReflEndpointMoments(uvec2 xy) {
             floatBitsToUint(v.z), floatBitsToUint(v.w)));
 }
 
-// Independent current-frame endpoint estimate. HISTMETA.zw are not consumed
-// by radiance history, so reuse them after the ray pass instead of allocating
-// another full virtual layer.
-void writeReflSpatialEndpointMoments(
-    uvec2 xy, RelaxEndpointMoments moments
-) {
-    uvec2 packed_ = relaxPackEndpointMoments(moments);
-    uint address = addr(SPEC_N_HISTMETA, xy);
-    reflectBuffer.data[address].zw = vec2(
-            uintBitsToFloat(packed_.x), uintBitsToFloat(packed_.y));
-}
-
-RelaxEndpointMoments readReflSpatialEndpointMoments(uvec2 xy) {
-    vec2 packed_ = reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)].zw;
-    return relaxUnpackEndpointMoments(uvec2(
-            floatBitsToUint(packed_.x), floatBitsToUint(packed_.y)));
-}
 void writeRefrLight(uvec2 xy, vec3 color, float vprojDist, float accumWeight) {
     refractBuffer.data[addr(SPEC_N_LIGHT, xy)] = vec4(
             pack2HalfClamped(color.r, color.g),
@@ -238,16 +221,18 @@ void writeRelaxSpecularHistory(uvec2 xy, RelaxSpecularHistory h) {
                 & 0xffffu) << 16u);
     reflectBuffer.data[addr(SPEC_N_HISTGEO, xy)] = vec4(
             h.surfacePosition, encodeNormal(h.geometryNormal));
+    uvec2 packedEndpoint = relaxPackEndpointMoments(h.endpoint);
     reflectBuffer.data[addr(SPEC_N_HISTLIGHT, xy)] = vec4(
             pack2HalfClamped(h.slowRadiance.r, h.slowRadiance.g),
             pack2HalfClamped(h.slowRadiance.b,
-                encodeSqrtMomentFP16(h.secondMoment)),
+            encodeSqrtMomentFP16(h.secondMoment)),
             pack2HalfClamped(h.responsiveRadiance.r, h.responsiveRadiance.g),
-            pack2HalfClamped(h.responsiveRadiance.b, h.hitDistance));
+            pack2HalfClamped(h.responsiveRadiance.b, 0.0));
     reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)] = vec4(
             pack2HalfClamped(h.roughness, h.historyLength),
             uintBitsToFloat(packedMeta),
-            0.0, 0.0);
+            uintBitsToFloat(packedEndpoint.x),
+            uintBitsToFloat(packedEndpoint.y));
 }
 
 RelaxSpecularHistory readRelaxSpecularHistory(uvec2 xy) {
@@ -258,7 +243,7 @@ RelaxSpecularHistory readRelaxSpecularHistory(uvec2 xy) {
     vec2 slowRG = unpackHalf2x16(floatBitsToUint(s.x));
     vec2 slowBM2 = unpackHalf2x16(floatBitsToUint(s.y));
     vec2 fastRG = unpackHalf2x16(floatBitsToUint(s.z));
-    vec2 fastBHit = unpackHalf2x16(floatBitsToUint(s.w));
+    vec2 fastBUnused = unpackHalf2x16(floatBitsToUint(s.w));
     vec2 roughHistory = unpackHalf2x16(floatBitsToUint(m.x));
     uint packedMeta = floatBitsToUint(m.y);
     float packedConfidence =
@@ -267,7 +252,7 @@ RelaxSpecularHistory readRelaxSpecularHistory(uvec2 xy) {
             !any(isnan(slowRG)) && !any(isinf(slowRG)) &&
             !any(isnan(slowBM2)) && !any(isinf(slowBM2)) &&
             !any(isnan(fastRG)) && !any(isinf(fastRG)) &&
-            !any(isnan(fastBHit)) && !any(isinf(fastBHit)) &&
+            !any(isnan(fastBUnused)) && !any(isinf(fastBUnused)) &&
             !any(isnan(roughHistory)) && !any(isinf(roughHistory)) &&
             !isnan(packedConfidence) && !isinf(packedConfidence) &&
             roughHistory.y >= 0.0 && roughHistory.y <= 255.0;
@@ -275,8 +260,9 @@ RelaxSpecularHistory readRelaxSpecularHistory(uvec2 xy) {
     h.geometryNormal = decodeNormal(g.w);
     h.slowRadiance = vec3(slowRG, slowBM2.x);
     h.secondMoment = decodeSqrtMomentFP16(slowBM2.y);
-    h.responsiveRadiance = vec3(fastRG, fastBHit.x);
-    h.hitDistance = fastBHit.y;
+    h.responsiveRadiance = vec3(fastRG, fastBUnused.x);
+    h.endpoint = relaxUnpackEndpointMoments(uvec2(
+            floatBitsToUint(m.z), floatBitsToUint(m.w)));
     h.roughness = roughHistory.x;
     h.historyLength = roughHistory.y;
     h.materialID = valid ? (packedMeta & 0xffffu) : 0u;
@@ -287,7 +273,7 @@ RelaxSpecularHistory readRelaxSpecularHistory(uvec2 xy) {
         h.slowRadiance = vec3(0.0);
         h.secondMoment = 0.0;
         h.responsiveRadiance = vec3(0.0);
-        h.hitDistance = 0.0;
+        h.endpoint = emptyRelaxEndpointMoments();
         h.roughness = 1.0;
         h.historyLength = 0.0;
         h.reprojectionConfidence = 0.0;

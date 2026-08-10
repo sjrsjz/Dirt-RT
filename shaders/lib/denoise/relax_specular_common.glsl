@@ -69,15 +69,19 @@ uint relaxPackHalf2(float a, float b) {
 // filtering uses decoded E[|X|^2].
 struct RelaxPrepassSignal {
     vec3 radiance;
-    float hitDistance;
     RelaxEndpointMoments endpoint;
 };
 
 float relaxEndpointDistanceScale() {
-    // Reflection hit distance is transported through FP16 before this pass.
-    // Keep the common linear scale representable even if the Iris sky-distance
-    // option is configured above the FP16 finite maximum.
+    // Endpoint offsets are normalized before FP16 storage. Keep the common
+    // linear scale representable even if the Iris option exceeds FP16 range.
     return clamp(VPROJDIST_SKY, 1.0, 65504.0);
+}
+
+float relaxEndpointMeanDistance(RelaxEndpointMoments endpoint) {
+    endpoint = sanitizeRelaxEndpointMoments(endpoint);
+    return relaxEndpointMomentsValid(endpoint)
+        ? length(endpoint.mean) * relaxEndpointDistanceScale() : 0.0;
 }
 
 uvec4 relaxPackPrepass(RelaxPrepassSignal s) {
@@ -85,7 +89,7 @@ uvec4 relaxPackPrepass(RelaxPrepassSignal s) {
     uvec2 packedEndpoint = relaxPackEndpointMoments(s.endpoint);
     return uvec4(
         relaxPackHalf2(s.radiance.r, s.radiance.g),
-        relaxPackHalf2(s.radiance.b, s.hitDistance),
+        relaxPackHalf2(s.radiance.b, 0.0),
         packedEndpoint);
 }
 
@@ -94,7 +98,6 @@ RelaxPrepassSignal relaxUnpackPrepass(uvec4 p) {
     vec2 rg = unpackHalf2x16(p.x);
     vec2 bh = unpackHalf2x16(p.y);
     s.radiance = relaxFiniteColor(vec3(rg, bh.x));
-    s.hitDistance = max(bh.y, 0.0);
     s.endpoint = relaxUnpackEndpointMoments(p.zw);
     return s;
 }
@@ -102,14 +105,15 @@ RelaxPrepassSignal relaxUnpackPrepass(uvec4 p) {
 struct RelaxSlowSignal {
     vec3 radiance;
     float secondMoment;
-    float hitDistance;
     float historyLength;
     float confidence;
 };
 
 struct RelaxFastSignal {
     vec3 radiance;
-    float hitDistance;
+    // Derived every frame from the temporally filtered four endpoint moments.
+    // This is transient spatial-filter metadata, not an independent history.
+    float endpointDistance;
     float historyLength;
     float confidence;
     uint materialID;
@@ -120,28 +124,26 @@ uvec4 relaxPackSlow(RelaxSlowSignal s) {
         relaxPackHalf2(s.radiance.r, s.radiance.g),
         relaxPackHalf2(s.radiance.b,
             encodeSqrtMomentFP16(s.secondMoment)),
-        relaxPackHalf2(s.hitDistance, s.historyLength),
-        relaxPackHalf2(s.confidence, 0.0));
+        relaxPackHalf2(s.historyLength, s.confidence),
+        0u);
 }
 
 RelaxSlowSignal relaxUnpackSlow(uvec4 p) {
     RelaxSlowSignal s;
     vec2 rg = unpackHalf2x16(p.x);
     vec2 bm = unpackHalf2x16(p.y);
-    vec2 hh = unpackHalf2x16(p.z);
-    vec2 c0 = unpackHalf2x16(p.w);
+    vec2 hc = unpackHalf2x16(p.z);
     s.radiance = vec3(rg, bm.x);
     s.secondMoment = decodeSqrtMomentFP16(bm.y);
-    s.hitDistance = max(hh.x, 0.0);
-    s.historyLength = max(hh.y, 0.0);
-    s.confidence = clamp(c0.x, 0.0, 1.0);
+    s.historyLength = max(hc.x, 0.0);
+    s.confidence = clamp(hc.y, 0.0, 1.0);
     return s;
 }
 
 uvec4 relaxPackFast(RelaxFastSignal s) {
     return uvec4(
         relaxPackHalf2(s.radiance.r, s.radiance.g),
-        relaxPackHalf2(s.radiance.b, s.hitDistance),
+        relaxPackHalf2(s.radiance.b, s.endpointDistance),
         relaxPackHalf2(s.historyLength, s.confidence), s.materialID);
 }
 
@@ -151,7 +153,7 @@ RelaxFastSignal relaxUnpackFast(uvec4 p) {
     vec2 bh = unpackHalf2x16(p.y);
     vec2 hc = unpackHalf2x16(p.z);
     s.radiance = vec3(rg, bh.x);
-    s.hitDistance = max(bh.y, 0.0);
+    s.endpointDistance = max(bh.y, 0.0);
     s.historyLength = max(hc.x, 0.0);
     s.confidence = clamp(hc.y, 0.0, 1.0);
     s.materialID = p.w;
@@ -162,7 +164,7 @@ struct RelaxSpatialSignal {
     vec3 radiance;
     float roughness;
     float variance;
-    float hitDistance;
+    float endpointDistance;
     float historyLength;
     float confidence;
 };
@@ -171,7 +173,7 @@ uvec4 relaxPackSpatial(RelaxSpatialSignal s) {
     return uvec4(
         relaxPackHalf2(s.radiance.r, s.radiance.g),
         relaxPackHalf2(s.radiance.b, s.roughness),
-        relaxPackHalf2(s.variance, s.hitDistance),
+        relaxPackHalf2(s.variance, s.endpointDistance),
         relaxPackHalf2(s.historyLength, s.confidence));
 }
 
@@ -184,7 +186,7 @@ RelaxSpatialSignal relaxUnpackSpatial(uvec4 p) {
     s.radiance = vec3(rg, br.x);
     s.roughness = clamp(br.y, 0.0, 1.0);
     s.variance = max(vh.x, 0.0);
-    s.hitDistance = max(vh.y, 0.0);
+    s.endpointDistance = max(vh.y, 0.0);
     s.historyLength = max(hc.x, 0.0);
     s.confidence = clamp(hc.y, 0.0, 1.0);
     return s;

@@ -17,7 +17,7 @@ struct RelaxReprojectedHistory {
     vec3 slowRadiance;
     float secondMoment;
     vec3 fastRadiance;
-    float hitDistance;
+    RelaxEndpointMoments endpoint;
     vec3 normal;
     float roughness;
     float historyLength;
@@ -118,7 +118,7 @@ RelaxReprojectedHistory relaxEmptyHistory() {
     h.slowRadiance = vec3(0.0);
     h.secondMoment = 0.0;
     h.fastRadiance = vec3(0.0);
-    h.hitDistance = 0.0;
+    h.endpoint = emptyRelaxEndpointMoments();
     h.normal = vec3(0.0, 1.0, 0.0);
     h.roughness = 1.0;
     h.historyLength = 0.0;
@@ -151,6 +151,9 @@ RelaxReprojectedHistory relaxLoadHistory(
     float validBilinearWeight = 0.0;
     int validTapCount = 0;
     vec3 normalSum = vec3(0.0);
+    vec3 endpointMeanSum = vec3(0.0);
+    float endpointSecondMomentSum = 0.0;
+    float endpointWeight = 0.0;
     float depthThreshold = RELAX_DISOCCLUSION_THRESHOLD *
         max(length(currentSurfacePosition), 1.0);
     RelaxSurfaceFootprint surfaceFootprint;
@@ -181,7 +184,24 @@ RelaxReprojectedHistory relaxLoadHistory(
         outHistory.slowRadiance += h.slowRadiance * w;
         outHistory.secondMoment += h.secondMoment * w;
         outHistory.fastRadiance += h.responsiveRadiance * w;
-        outHistory.hitDistance += h.hitDistance * w;
+        if (relaxEndpointMomentsValid(h.endpoint)) {
+            // History moments are relative to the history pixel's primary
+            // surface. Rebase them to the current primary surface expressed
+            // in previous-frame camera-relative coordinates before mixing.
+            vec3 targetPreviousSurface = currentSurfacePosition + cameraDelta;
+            vec3 originDelta = (h.surfacePosition - targetPreviousSurface) /
+                relaxEndpointDistanceScale();
+            RelaxEndpointMoments rebasedEndpoint;
+            rebasedEndpoint.mean = h.endpoint.mean + originDelta;
+            rebasedEndpoint.secondMoment = h.endpoint.secondMoment +
+                dot(originDelta, h.endpoint.mean + rebasedEndpoint.mean);
+            rebasedEndpoint = sanitizeRelaxEndpointMoments(rebasedEndpoint);
+            if (relaxEndpointMomentsValid(rebasedEndpoint)) {
+                endpointMeanSum += rebasedEndpoint.mean * w;
+                endpointSecondMomentSum += rebasedEndpoint.secondMoment * w;
+                endpointWeight += w;
+            }
+        }
         outHistory.roughness += (h.roughness - 1.0) * w;
         outHistory.historyLength += h.historyLength * w;
         outHistory.confidence += h.reprojectionConfidence * w;
@@ -199,7 +219,13 @@ RelaxReprojectedHistory relaxLoadHistory(
     outHistory.slowRadiance *= invWeight;
     outHistory.secondMoment *= invWeight;
     outHistory.fastRadiance *= invWeight;
-    outHistory.hitDistance *= invWeight;
+    if (endpointWeight > 1e-5) {
+        float inverseEndpointWeight = 1.0 / endpointWeight;
+        outHistory.endpoint.mean = endpointMeanSum * inverseEndpointWeight;
+        outHistory.endpoint.secondMoment = endpointSecondMomentSum *
+            inverseEndpointWeight;
+        outHistory.endpoint = sanitizeRelaxEndpointMoments(outHistory.endpoint);
+    }
     outHistory.roughness = clamp(1.0 + (outHistory.roughness - 1.0) * invWeight, 0.0, 1.0);
     outHistory.historyLength *= invWeight;
     outHistory.confidence *= invWeight;
@@ -303,7 +329,6 @@ void relaxAccumulatePath(
     RelaxReprojectedHistory h,
     vec3 noisyRadiance,
     float noisyM2,
-    float noisyHitDistance,
     float slowConfidence,
     float responsiveConfidence,
     out RelaxSlowSignal slow,
@@ -321,12 +346,11 @@ void relaxAccumulatePath(
 
     slow.radiance = mix(h.slowRadiance, noisyRadiance, slowAlpha);
     slow.secondMoment = mix(h.secondMoment, noisyM2, slowAlpha);
-    slow.hitDistance = mix(h.hitDistance, noisyHitDistance, max(slowAlpha, 0.1));
     slow.historyLength = min(historyLength + 1.0, float(RELAX_SPEC_MAX_HISTORY));
     slow.confidence = slowConfidence;
 
     fast.radiance = mix(h.fastRadiance, noisyRadiance, fastAlpha);
-    fast.hitDistance = mix(h.hitDistance, noisyHitDistance, max(fastAlpha, 0.1));
+    fast.endpointDistance = 0.0;
     fast.historyLength = slow.historyLength;
     fast.confidence = responsiveConfidence;
     fast.materialID = 0u;
@@ -348,22 +372,21 @@ void main() {
         RelaxSlowSignal slow;
         slow.radiance = noisy.radiance;
         slow.secondMoment = noisyM2;
-        slow.hitDistance = noisy.hitDistance;
         slow.historyLength = 0.0;
         slow.confidence = 0.0;
         RelaxFastSignal fast;
         fast.radiance = noisy.radiance;
-        fast.hitDistance = noisy.hitDistance;
+        fast.endpointDistance = 0.0;
         fast.historyLength = 0.0;
         fast.confidence = 0.0;
         fast.materialID = 0u;
         imageStore(colorimg4, ivec2(pixel), relaxPackSlow(slow));
         imageStore(colorimg5, ivec2(pixel), relaxPackFast(fast));
 #if DEBUG_VIEW == 12 || (DEBUG_VIEW >= 38 && DEBUG_VIEW <= 40)
-        writeReflLight(pixel, slow.radiance, slow.hitDistance,
+        writeReflLight(pixel, slow.radiance, fast.endpointDistance,
             slow.historyLength);
 #elif DEBUG_VIEW == 14
-        writeReflLight(pixel, vec3(0.0), slow.hitDistance, 0.0);
+        writeReflLight(pixel, vec3(0.0), fast.endpointDistance, 0.0);
 #endif
         return;
     }
@@ -403,6 +426,25 @@ void main() {
     // endpoint distribution from history.
     RelaxEndpointMoments currentFrameEndpoint =
         sanitizeRelaxEndpointMoments(noisy.endpoint);
+
+    // Endpoint moments belong to the primary surface, so their temporal
+    // correspondence is the surface reprojection (not the reflected image
+    // reprojection). The exact moment rebase above makes both E[X] and
+    // E[|X|^2] refer to the current surface before this EMA is evaluated.
+    RelaxEndpointMoments temporalEndpoint = currentFrameEndpoint;
+    if (relaxEndpointMomentsValid(currentFrameEndpoint) && surface.found &&
+        relaxEndpointMomentsValid(surface.endpoint)) {
+        float endpointFrames = min(surface.historyLength,
+            float(RELAX_SPEC_MAX_HISTORY));
+        float endpointAlpha = max(1.0 - surface.footprintQuality,
+            1.0 / (1.0 + endpointFrames));
+        temporalEndpoint.mean = mix(surface.endpoint.mean,
+            currentFrameEndpoint.mean, endpointAlpha);
+        temporalEndpoint.secondMoment = mix(surface.endpoint.secondMoment,
+            currentFrameEndpoint.secondMoment, endpointAlpha);
+        temporalEndpoint = sanitizeRelaxEndpointMoments(temporalEndpoint);
+    }
+    float endpointDistance = relaxEndpointMeanDistance(temporalEndpoint);
     RelaxEndpointProjection endpointProjection =
         relaxBuildEndpointProjection(
             currentPos, cameraDelta,
@@ -447,12 +489,12 @@ void main() {
     RelaxFastSignal surfaceFast, virtualFast;
     float surfaceHistoryContribution;
     float virtualHistoryContribution;
-    relaxAccumulatePath(surface, noisy.radiance, noisyM2, noisy.hitDistance,
+    relaxAccumulatePath(surface, noisy.radiance, noisyM2,
         surfaceViewWeight, surfaceViewWeight,
         surfaceSlow, surfaceFast,
         surfaceHistoryContribution);
     relaxAccumulatePath(virtualHistory, noisy.radiance, noisyM2,
-        noisy.hitDistance, virtualAccumulationConfidence,
+        virtualAccumulationConfidence,
         virtualResponsiveConfidence,
         virtualSlow, virtualFast,
         virtualHistoryContribution);
@@ -461,14 +503,13 @@ void main() {
     RelaxFastSignal outputFast;
     outputSlow.radiance = mix(surfaceSlow.radiance, virtualSlow.radiance, virtualAmount);
     outputSlow.secondMoment = mix(surfaceSlow.secondMoment, virtualSlow.secondMoment, virtualAmount);
-    outputSlow.hitDistance = mix(surfaceSlow.hitDistance, virtualSlow.hitDistance, virtualAmount);
     outputSlow.historyLength = mix(surfaceSlow.historyLength, virtualSlow.historyLength, virtualAmount);
     outputSlow.historyLength *= sqrt(max(surface.footprintQuality, 1.0 / max(outputSlow.historyLength, 1.0)));
     outputSlow.historyLength = clamp(outputSlow.historyLength, 1.0, float(RELAX_SPEC_MAX_HISTORY));
     outputSlow.confidence = mix(surfaceViewWeight,
         virtualAccumulationConfidence, virtualAmount);
     outputFast.radiance = mix(surfaceFast.radiance, virtualFast.radiance, virtualAmount);
-    outputFast.hitDistance = mix(surfaceFast.hitDistance, virtualFast.hitDistance, virtualAmount);
+    outputFast.endpointDistance = endpointDistance;
     outputFast.historyLength = outputSlow.historyLength;
     outputFast.confidence = outputSlow.confidence;
     outputFast.materialID = currentMaterial;
@@ -482,26 +523,36 @@ void main() {
     imageStore(colorimg5, ivec2(pixel), relaxPackFast(outputFast));
 #if DEBUG_VIEW == 38
     // Current prepass signal. This bypasses all temporal and spatial reuse.
-    writeReflLight(pixel, noisy.radiance, noisy.hitDistance, 0.0);
+    writeReflLight(pixel, noisy.radiance, endpointDistance, 0.0);
 #elif DEBUG_VIEW == 39
     // The history value actually fetched through surface reprojection.
     writeReflLight(pixel,
         surface.found ? relaxFiniteColor(surface.slowRadiance) : vec3(0.0),
-        surface.hitDistance, surface.found ? 1.0 : 0.0);
+        relaxEndpointMeanDistance(surface.endpoint),
+        surface.found ? 1.0 : 0.0);
 #elif DEBUG_VIEW == 40
     // History fetched with the offline-calibrated GGX-VNDF visual point.
     writeReflLight(pixel,
         virtualHistory.found
             ? relaxFiniteColor(virtualHistory.slowRadiance) : vec3(0.0),
-        virtualHistory.hitDistance, virtualHistory.found ? 1.0 : 0.0);
+        relaxEndpointMeanDistance(virtualHistory.endpoint),
+        virtualHistory.found ? 1.0 : 0.0);
 #elif DEBUG_VIEW == 12
     // Preserve the temporal-only result in ReflectBuffer N=1.  The later
     // RELAX passes may still execute, but resolve leaves this value untouched
     // in temporal diagnostic views, so no spatial stage contributes.
     writeReflLight(pixel, relaxFiniteColor(outputSlow.radiance),
-        outputSlow.hitDistance, outputHistoryContribution);
+        endpointDistance, outputHistoryContribution);
 #elif DEBUG_VIEW == 14
     writeReflLight(pixel, vec3(outputHistoryContribution),
-        outputSlow.hitDistance, 0.0);
+        endpointDistance, 0.0);
+#endif
+#if DEBUG_VIEW == 9
+    // View 9 remains the current-frame 7x7 spatial result by definition.
+    writeReflEndpointMoments(pixel, currentFrameEndpoint);
+#else
+    // Keep moment history intact even when a diagnostic write above replaces
+    // the other words of ReflectBuffer N=1.
+    writeReflEndpointMoments(pixel, temporalEndpoint);
 #endif
 }
