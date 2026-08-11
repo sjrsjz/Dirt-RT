@@ -1,4 +1,4 @@
-#version 460
+#version 460 core
 #extension GL_EXT_ray_tracing : enable
 
 #include "/lib/rt/payload.glsl"

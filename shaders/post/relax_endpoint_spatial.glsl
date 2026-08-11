@@ -1,6 +1,6 @@
-#version 430 compatibility
+#version 430 core
 
-layout(local_size_x = 8, local_size_y = 8) in;
+layout(local_size_x = 16, local_size_y = 16) in;
 
 #define REFLECT_BUFFER
 #include "/lib/denoise/relax_specular_common.glsl"
@@ -12,10 +12,10 @@ void storeSpatialEndpoint(ivec2 pixel, RelaxEndpointMoments endpoint) {
     imageStore(colorimg6, pixel, uvec4(packedEndpoint, 0u, 0u));
 }
 
-#define ENDPOINT_GROUP_SIZE 8
+#define ENDPOINT_GROUP_SIZE 16
 #define ENDPOINT_FILTER_RADIUS 3
-#define ENDPOINT_TILE_SIZE (ENDPOINT_GROUP_SIZE + 2 * ENDPOINT_FILTER_RADIUS) // 14
-#define ENDPOINT_TILE_AREA (ENDPOINT_TILE_SIZE * ENDPOINT_TILE_SIZE)           // 196
+#define ENDPOINT_TILE_SIZE (ENDPOINT_GROUP_SIZE + 2 * ENDPOINT_FILTER_RADIUS) // 22
+#define ENDPOINT_TILE_AREA (ENDPOINT_TILE_SIZE * ENDPOINT_TILE_SIZE)           // 484
 
 shared vec4 sm_moments[ENDPOINT_TILE_AREA]; // xyz: mean, w: secondMoment
 shared vec4 sm_pos_rough[ENDPOINT_TILE_AREA]; // xyz: position, w: perceptualRoughness
@@ -33,7 +33,8 @@ void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     ivec2 tileOrigin = ivec2(gl_WorkGroupID.xy) * ENDPOINT_GROUP_SIZE - ivec2(ENDPOINT_FILTER_RADIUS);
 
-    for (uint i = gl_LocalInvocationIndex; i < uint(ENDPOINT_TILE_AREA); i += 64u) {
+    for (uint i = gl_LocalInvocationIndex; i < uint(ENDPOINT_TILE_AREA);
+            i += uint(ENDPOINT_GROUP_SIZE * ENDPOINT_GROUP_SIZE)) {
         uint tx = i % uint(ENDPOINT_TILE_SIZE);
         uint ty = i / uint(ENDPOINT_TILE_SIZE);
         ivec2 q = clamp(tileOrigin + ivec2(tx, ty), ivec2(0), size - ivec2(1));
@@ -67,7 +68,6 @@ void main() {
         sm_normal[i] = normal;
     }
 
-    memoryBarrierShared();
     barrier();
 
     if (!relaxInBounds(pixel, size)) return;
@@ -103,13 +103,20 @@ void main() {
     float invTwoRoughnessSigma2 = 0.5 / max(roughnessSigma * roughnessSigma, 1e-8);
 
     float invEndpointScale = 1.0 / relaxEndpointDistanceScale();
+    float centerPlaneDistance = dot(centerPosition, centerNormal);
+
+    // Ignore taps whose spatial-only Gaussian contribution is below 1e-3.
+    // Smooth surfaces use the support their narrow kernel actually needs;
+    // rough surfaces retain the complete 7x7 footprint.
+    int filterRadius = clamp(int(ceil(3.7169221888 * spatialSigma)),
+        1, ENDPOINT_FILTER_RADIUS);
 
     vec3 sumMean = vec3(0.0);
     float sumSecondMoment = 0.0;
     float sumWeight = 0.0;
 
-    for (int oy = -ENDPOINT_FILTER_RADIUS; oy <= ENDPOINT_FILTER_RADIUS; ++oy) {
-        for (int ox = -ENDPOINT_FILTER_RADIUS; ox <= ENDPOINT_FILTER_RADIUS; ++ox) {
+    for (int oy = -filterRadius; oy <= filterRadius; ++oy) {
+        for (int ox = -filterRadius; ox <= filterRadius; ++ox) {
             int sampleIndex = centerIndex + (oy * ENDPOINT_TILE_SIZE + ox);
 
             vec4 sampleMomentsPacked = sm_moments[sampleIndex];
@@ -129,7 +136,8 @@ void main() {
             float rebasedSecondMoment = sampleSecondMoment + dot(originDelta, sampleMean + rebasedMean);
 
             float radiusSquared = float(ox * ox + oy * oy);
-            float planeDistance = abs(dot(samplePosition - centerPosition, centerNormal));
+            float planeDistance = abs(dot(samplePosition, centerNormal) -
+                centerPlaneDistance);
             float normalDifference = 1.0 - clamp(dot(centerNormal, sampleNormal), -1.0, 1.0);
             float roughnessDifference = sampleRoughness - centerRoughness;
 
@@ -138,7 +146,7 @@ void main() {
                     normalDifference * invNormalSigma +
                     (roughnessDifference * roughnessDifference) * invTwoRoughnessSigma2;
 
-            float weight = endpointPresence * exp(-exponent);
+            float weight = exp(-exponent);
 
             sumMean += rebasedMean * weight;
             sumSecondMoment += rebasedSecondMoment * weight;

@@ -1,4 +1,4 @@
-#version 430 compatibility
+#version 430 core
 #include "/lib/constants.glsl"
 #include "/lib/common.glsl"
 #include "/lib/buffers/frame_data.glsl"

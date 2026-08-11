@@ -1,4 +1,4 @@
-#version 430 compatibility
+#version 430 core
 
 // ===========================================================================
 // Pass 100 CS: 漫反射时域累积 (当前像素梯形 → 历史空间厚梯形版)
@@ -40,13 +40,21 @@ uniform vec2 resolution;
 #define AABB_SM_W (TILE_SIZE + 2u * AABB_HALO)
 #define AABB_SM_H (TILE_SIZE + 2u * AABB_HALO)
 
-struct AABBTileSample {
-    bool valid;
-    vec4 aliceY;
-    vec2 CoCg;
-};
+// SoA avoids the 16-byte struct padding around bool/vec2. aux.xy stores CoCg,
+// aux.z stores the center second moment, and aux.w is the surface-valid flag.
+// At the default 20x20 tile this uses 12.8 KiB instead of about 19.2 KiB.
+shared vec4 sm_aabbAliceY[AABB_SM_H * AABB_SM_W];
+shared vec4 sm_aabbAux[AABB_SM_H * AABB_SM_W];
 
-shared AABBTileSample sm_aabbTile[AABB_SM_H][AABB_SM_W];
+void loadAABBTileSample(uint index, uvec2 xy) {
+    AliceEncoding alice;
+    float meanY2;
+    readDiffuseLightRT(xy, alice, meanY2);
+    float valid = readDiffuseSurfaceMask(xy) > 0.5 ? 1.0 : 0.0;
+    sm_aabbAliceY[index] = valid > 0.5 ? alice.aliceY : vec4(0.0);
+    sm_aabbAux[index] = valid > 0.5
+        ? vec4(alice.CoCg, meanY2, valid) : vec4(0.0);
+}
 #endif
 
 // ===========================================================================
@@ -61,6 +69,12 @@ struct TemporalFootprint {
     vec2 plane0, plane1, plane2, plane3;
     float depthHalfExtent;
     float planeEdgeEpsilon;
+};
+
+struct TemporalFootprintFast {
+    vec3 origin;
+    vec3 geometryNormal;
+    float depthHalfExtent;
 };
 
 vec3 prevScreenPos;
@@ -155,6 +169,52 @@ bool strictHistoryGeometryTest(vec3 histPos, TemporalFootprint fp) {
     return true;
 }
 
+bool buildTemporalFootprintFast(
+    vec3 currentPos,
+    vec3 surfaceNormal,
+    vec3 camDelta,
+    out TemporalFootprintFast fp
+) {
+    float normalLengthSquared = dot(surfaceNormal, surfaceNormal);
+    if (normalLengthSquared < 1e-8) return false;
+    fp.geometryNormal = surfaceNormal * inversesqrt(normalLengthSquared);
+    fp.origin = currentPos + camDelta;
+
+    float positionLengthSquared = dot(currentPos, currentPos);
+    float positionLength = sqrt(max(positionLengthSquared, 1e-8));
+    float noV = abs(dot(currentPos, fp.geometryNormal)) / positionLength;
+    float pixelWorldSize = max(positionLength /
+        max(float(resolution_global.y), 1.0), 1e-4);
+
+    // A two-pixel diagonal at unit aspect is approximately 4*d/resY in
+    // world space. Division by NoV reproduces the ray/plane expansion at
+    // grazing angles without reconstructing four near/far ray pairs.
+    fp.depthHalfExtent = max(4.0 * TEMPORAL_CLIP_PIXEL_RADIUS *
+        pixelWorldSize * TEMPORAL_DEPTH_FOOTPRINT_SCALE / max(noV, 0.05),
+        1e-5);
+    return true;
+}
+
+bool strictHistoryGeometryTestFast(
+    vec3 historyPosition,
+    TemporalFootprintFast fp,
+    uvec2 currentPixel,
+    vec3 camDelta
+) {
+    vec3 historyDelta = historyPosition - fp.origin;
+    if (abs(dot(historyDelta, fp.geometryNormal)) > fp.depthHalfExtent)
+        return false;
+
+    vec3 historyCurrentSpace = historyPosition - camDelta;
+    vec4 clip = rtViewProjection * vec4(historyCurrentSpace, 1.0);
+    if (clip.w <= 1e-7 || any(isnan(clip)) || any(isinf(clip))) return false;
+    vec2 projectedPixel = (clip.xy / clip.w * 0.5 + 0.5) *
+        vec2(resolution_global);
+    vec2 extent = vec2(TEMPORAL_CLIP_PIXEL_RADIUS +
+        TEMPORAL_GEOMETRY_EPSILON);
+    return all(lessThanEqual(abs(projectedPixel - vec2(currentPixel)), extent));
+}
+
 // ===========================================================================
 // AABB 邻域钳制
 // ===========================================================================
@@ -178,16 +238,19 @@ void computeAABB_CS(out vec4 minAY, out vec4 maxAY, out vec2 minCC, out vec2 max
         for (int dx = -TEMPORAL_AABB_NEIGHBOR_RADIUS; dx <= TEMPORAL_AABB_NEIGHBOR_RADIUS; dx++) {
             if (dx == 0 && dy == 0) continue;
 
-            AABBTileSample s = sm_aabbTile[cy + dy][cx + dx];
-            if (!s.valid) continue;
+            uint sampleIndex = uint(cy + dy) * AABB_SM_W + uint(cx + dx);
+            vec4 sampleAux = sm_aabbAux[sampleIndex];
+            if (sampleAux.w <= 0.5) continue;
+            vec4 sampleAliceY = sm_aabbAliceY[sampleIndex];
+            vec2 sampleCoCg = sampleAux.xy;
 
-            minAY = min(minAY, s.aliceY);
-            maxAY = max(maxAY, s.aliceY);
-            minCC = min(minCC, s.CoCg);
-            maxCC = max(maxCC, s.CoCg);
+            minAY = min(minAY, sampleAliceY);
+            maxAY = max(maxAY, sampleAliceY);
+            minCC = min(minCC, sampleCoCg);
+            maxCC = max(maxCC, sampleCoCg);
 
-            sumAY += s.aliceY;
-            sumSqAY += s.aliceY * s.aliceY;
+            sumAY += sampleAliceY;
+            sumSqAY += sampleAliceY * sampleAliceY;
             validCnt++;
         }
     }
@@ -250,8 +313,9 @@ void MixDiffuse() {
         return;
     }
 
-    TemporalFootprint fp;
-    if (!buildTemporalFootprint(uvec2(gl_GlobalInvocationID.xy), current_data.pos, geometryNormal, cameraDelta, fp)) {
+    TemporalFootprintFast fp;
+    if (!buildTemporalFootprintFast(current_data.pos, geometryNormal,
+            cameraDelta, fp)) {
         resetToCurrentSample();
         return;
     }
@@ -282,7 +346,8 @@ void MixDiffuse() {
         diffuseIlluminationData tap = fetchDiffuse(sampleTexel);
         if (tap.prev_weight < TEMPORAL_HISTORY_MIN_WEIGHT) continue;
         // 几何一致性测试（纯位置，ALICE 方向编码隐式保证法线一致性）
-        if (!strictHistoryGeometryTest(tap.pos, fp)) continue;
+        if (!strictHistoryGeometryTestFast(tap.pos, fp,
+                uvec2(gl_GlobalInvocationID.xy), cameraDelta)) continue;
 
         float normalWeight = max(dot(fp.geometryNormal, tap.histNormal), 0.0);
         if (normalWeight <= 0.0) continue;
@@ -355,30 +420,27 @@ void main() {
         uint tid = gl_LocalInvocationID.y * TILE_SIZE + gl_LocalInvocationID.x;
         uint totalSamples = AABB_SM_W * AABB_SM_H;
 
+        uint centerCol = gl_LocalInvocationID.x + AABB_HALO;
+        uint centerRow = gl_LocalInvocationID.y + AABB_HALO;
+        uint centerIndex = centerRow * AABB_SM_W + centerCol;
+        ivec2 centerCoord = clamp(ivec2(pix), ivec2(0),
+            ivec2(resolution) - 1);
+        loadAABBTileSample(centerIndex, uvec2(centerCoord));
+
         for (uint i = tid; i < totalSamples; i += TILE_SIZE * TILE_SIZE) {
             uint row = i / AABB_SM_W;
             uint col = i % AABB_SM_W;
 
+            bool interior = col >= AABB_HALO &&
+                col < AABB_HALO + TILE_SIZE && row >= AABB_HALO &&
+                row < AABB_HALO + TILE_SIZE;
+            if (interior) continue;
+
             ivec2 gc = ivec2(gl_WorkGroupID.xy * TILE_SIZE) - ivec2(AABB_HALO) + ivec2(col, row);
             ivec2 clamped = clamp(gc, ivec2(0), ivec2(resolution) - 1);
-            uvec2 loadXY = uvec2(clamped);
-
-            AABBTileSample s;
-            AliceEncoding alice;
-            float meanY2_unused;
-            readDiffuseLightRT(loadXY, alice, meanY2_unused);
-            s.valid = readDiffuseSurfaceMask(loadXY) > 0.5;
-            if (s.valid) {
-                s.aliceY = alice.aliceY;
-                s.CoCg = alice.CoCg;
-            } else {
-                s.aliceY = vec4(0.0);
-                s.CoCg = vec2(0.0);
-            }
-            sm_aabbTile[row][col] = s;
+            loadAABBTileSample(i, uvec2(clamped));
         }
     }
-    memoryBarrierShared();
     barrier();
     #endif
 
@@ -389,13 +451,21 @@ void main() {
     }
     {
         // 从 DiffuseBuffer N=0 读 ALICE + meanY2，surfaceMask 从 N=1 读
-        uvec2 _xy = uvec2(pix);
-        AliceEncoding alice;
-        float meanY2;
-        readDiffuseLightRT(_xy, alice, meanY2);
-        current_data.data_swap = alice;
-        current_data.meanY2 = meanY2;
-        current_data.surfaceMask = readDiffuseSurfaceMask(_xy);
+        #if TEMPORAL_AABB_ENABLE
+        uint outputCenterCol = gl_LocalInvocationID.x + AABB_HALO;
+        uint outputCenterRow = gl_LocalInvocationID.y + AABB_HALO;
+        uint outputCenterIndex = outputCenterRow * AABB_SM_W + outputCenterCol;
+        vec4 centerAux = sm_aabbAux[outputCenterIndex];
+        current_data.data_swap.aliceY = sm_aabbAliceY[outputCenterIndex];
+        current_data.data_swap.CoCg = centerAux.xy;
+        current_data.meanY2 = centerAux.z;
+        current_data.surfaceMask = centerAux.w;
+        #else
+        AliceEncoding centerAlice;
+        readDiffuseLightRT(pix, centerAlice, current_data.meanY2);
+        current_data.data_swap = centerAlice;
+        current_data.surfaceMask = readDiffuseSurfaceMask(pix);
+        #endif
         current_data.weight = 1.0;
         // 从 Geo1 取 geometryNormal（仅用于 buildTemporalFootprint 切空间）
         float _r;

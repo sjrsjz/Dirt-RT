@@ -1,4 +1,4 @@
-#version 430 compatibility
+#version 430 core
 
 // ===========================================================================
 // Pass: ReSTIR 空域+时域加权蓄水池 (composite58)
@@ -140,6 +140,13 @@ Reservoir spatialReservoir(uvec2 gid, vec3 centerNormal, vec3 centerPos, inout u
     reservoirInit(r);
     ivec2 texSize = ivec2(resolution_global);
 
+    float centerDistance = max(length(centerPos), 0.01);
+    float pixelFootprint = max(centerDistance /
+        max(float(resolution_global.y), 1.0), 1e-4);
+    float invGeometryScale = 1.0 / max(
+        float(ATROUS_POSITION_PARAM) * pixelFootprint, 1e-6);
+    float centerPlaneDistance = dot(centerPos, centerNormal);
+
     float theta = 2.0 * PI * nextFloat(seed);
     mat2 rot = mat2(cos(theta), -sin(theta), sin(theta), cos(theta)) * PATHGUIDE_SPATIAL_RADIUS;
 
@@ -163,11 +170,9 @@ Reservoir spatialReservoir(uvec2 gid, vec3 centerNormal, vec3 centerPos, inout u
         // Plane distance in units of the center pixel's world-space footprint.
         // ATROUS_POSITION_PARAM is a scale, so it belongs in the denominator;
         // multiplying by its small value would make almost every edge weight 1.
-        float centerDistance = max(length(centerPos), 0.01);
-        float pixelFootprint = max(centerDistance / float(resolution_global.y), 1e-4);
-        float planeDistance = abs(dot(pos - centerPos, centerNormal));
-        float geomW = exp2(-planeDistance
-                / max(float(ATROUS_POSITION_PARAM) * pixelFootprint, 1e-6));
+        float planeDistance = abs(dot(pos, centerNormal) -
+            centerPlaneDistance);
+        float geomW = exp2(-planeDistance * invGeometryScale);
         if (geomW <= 1e-4) continue;
 
         float target = max(guideTarget(y, centerNormal), 0.0);
@@ -208,14 +213,12 @@ StoredReservoir loadStored(ivec2 pix) {
     return s;
 }
 
-bool sampleHistory(uvec2 gxy, inout uint seed, out StoredReservoir result) {
+bool sampleHistory(uvec2 gxy, vec3 curPos, float curDist, inout uint seed,
+        out StoredReservoir result) {
     result.y = vec4(0.0);
     result.W = 0.0;
     result.M = 0.0;
 
-    vec3 curPos;
-    float curDist;
-    readGeo0(GEO_N_GEO, gxy, curPos, curDist);
     if (curDist <= -0.5) return false;
 
     vec3 surfaceMotion;
@@ -271,10 +274,18 @@ void main() {
     float centerDist;
     {
         readGeo0(GEO_N_GEO, gxy, centerPos, centerDist);
-        float rough, pathR;
-        int it;
-        readGeo1(GEO_N_NORMALS, gxy, centerNormal, rough, it, pathR);
     }
+
+    // Guiding is consumed only by surface rays. Skip eight scattered probes,
+    // random rotation and history reprojection for sky pixels.
+    if (centerDist <= -0.5) {
+        imageStore(colorimg6, pix, uvec4(0u));
+        return;
+    }
+    float roughnessUnused, pathRoughnessUnused;
+    int materialUnused;
+    readGeo1(GEO_N_NORMALS, gxy, centerNormal, roughnessUnused,
+        materialUnused, pathRoughnessUnused);
 
     // Phase 2: Poisson 盘空间蓄水池
     Reservoir r = spatialReservoir(gid, centerNormal, centerPos, seed);
@@ -284,7 +295,7 @@ void main() {
 
     // Phase 4+5: 历史重投影 + RIS 合并
     StoredReservoir hist;
-    if (sampleHistory(gxy, seed, hist)) {
+    if (sampleHistory(gxy, centerPos, centerDist, seed, hist)) {
         float temporalConf = clamp(uintBitsToFloat(texelFetch(colortex6, pix, 0).r), 0.0, 1.0);
         combineWithHistory(r, hist, temporalConf, centerNormal, seed);
     }

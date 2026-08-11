@@ -1,4 +1,4 @@
-#version 430 compatibility
+#version 430 core
 
 // One-dispatch 3x3 bloom pyramid. Each group builds an L0..L3 tile locally;
 // the last completed group builds the small L4..L8 tail.

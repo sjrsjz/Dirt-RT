@@ -1287,9 +1287,8 @@ void writePrimarySurfaceGBuffer(uvec2 xy, FirstBounceData fb,
     writeGeo0(GEO_N_GEO, xy, posRel, fb.t);
     writeGeo1(GEO_N_NORMALS, xy, fb.geometry_n, fb.roughness,
         fb.materialID, fb.roughness);
-    writeMicroNormal(GEO_N_MICRONORMAL, xy, fb.macro_n);
     writeAlbedosPath(GEO_N_ALBEDOS, xy,
-        fb.specularAlbedo, fb.diffuseAlbedo);
+        fb.specularAlbedo, fb.diffuseAlbedo, fb.macro_n);
     writeMisc(GEO_N_MISC, xy,
         fb.transmissionAlbedo, fb.emission_val, fb.rd_i);
     writeLightAbs(GEO_N_LIGHTABS, xy, fb.light_surf, fb.absorption);
@@ -1306,11 +1305,13 @@ void loadPrimarySurfaceGBuffer(uvec2 xy, vec3 ro,
     fb.p = ro + posRel;
     readGeo1(GEO_N_NORMALS, xy, fb.geometry_n, fb.roughness,
         fb.materialID, fb.pathRoughness);
-    fb.macro_n = readMicroNormal(GEO_N_MICRONORMAL, xy);
-    fb.micro_n = fb.macro_n;
     #if defined(FIRST_LOBE_REFLECTION)
-    fb.specularAlbedo = readPrimarySpecularAlbedo(xy);
+    fb.specularAlbedo = readPrimarySpecularAlbedoMicroNormal(xy,
+        fb.macro_n);
+    #else
+    fb.macro_n = readMicroNormal(GEO_N_MICRONORMAL, xy);
     #endif
+    fb.micro_n = fb.macro_n;
     #if defined(FIRST_LOBE_REFRACTION)
     readPrimaryTransmissionAndRay(xy,
         fb.transmissionAlbedo, fb.rd_i);

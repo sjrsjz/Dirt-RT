@@ -1,4 +1,4 @@
-#version 430
+#version 430 core
 #include "/lib/buffers/frame_data.glsl"
 
 uniform sampler2D gtexture;

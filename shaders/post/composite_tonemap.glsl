@@ -1,4 +1,4 @@
-#version 430
+#version 430 core
 
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/buffer_io.glsl"

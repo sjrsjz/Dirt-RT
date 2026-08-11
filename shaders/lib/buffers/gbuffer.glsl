@@ -10,20 +10,20 @@
 // ===========================================================================
 // N=0: vec4(worldPos.xyz, distance)
 // N=1: vec4(oct(geometryNormal), roughness, float(illumType), pathRoughness)
-// N=2: vec4(packHalf(spR,spG), packHalf(spB,dfR), packHalf(dfG,dfB), pad)
+// N=2: vec4(packHalf(spR,spG), packHalf(spB,dfR), packHalf(dfG,dfB), oct(microN))
 // N=3: vec4(packHalf(trR,trG), packHalf(trB,emR), packHalf(emG,emB), oct(rd))
 // N=4: vec4(packHalf(ltR,ltG), packHalf(ltB,abR), packHalf(abG,abB), pad)
 
-// N=0..7 layer constants (semantic)
+// N=0..6 layer constants (semantic)
 #define GEO_N_GEO          0u
 #define GEO_N_NORMALS      1u
 #define GEO_N_ALBEDOS      2u
 #define GEO_N_MISC         3u
 #define GEO_N_LIGHTABS     4u
-#define GEO_N_MICRONORMAL  5u  // oct(macroNormal) — surface normal with detail map
-#define GEO_N_MOTION       6u  // xyz=currentWorld-previousWorld, w=history validity
+#define GEO_N_MICRONORMAL  GEO_N_ALBEDOS // Compatibility alias: stored in N=2.w
+#define GEO_N_MOTION       5u  // xyz=currentWorld-previousWorld, w=history validity
 
-#define GEO_N_PRIMARY_MAT  7u  // packed half(Cs.rgb, Cd.rgb, S.xy)
+#define GEO_N_PRIMARY_MAT  6u  // packed half(Cs.rgb, Cd.rgb, S.xy)
 
 // --- N=0 ---
 void writeGeo0(uint N, uvec2 xy, vec3 pos, float dist) {
@@ -68,12 +68,12 @@ float readPathRoughness(uint N, uvec2 xy) {
 }
 
 // --- N=2 ---
-void writeAlbedosPath(uint N, uvec2 xy, vec3 spec, vec3 diff) {
+void writeAlbedosPath(uint N, uvec2 xy, vec3 spec, vec3 diff, vec3 microN) {
     geomBuffer.data[addr(N, xy)] = vec4(
         uintBitsToFloat(packHalf2x16(vec2(clamp(spec.r, -65504.0, 65504.0), clamp(spec.g, -65504.0, 65504.0)))),
         uintBitsToFloat(packHalf2x16(vec2(clamp(spec.b, -65504.0, 65504.0), clamp(diff.r, -65504.0, 65504.0)))),
         uintBitsToFloat(packHalf2x16(vec2(clamp(diff.g, -65504.0, 65504.0), clamp(diff.b, -65504.0, 65504.0)))),
-        0.0
+        encodeNormal(microN)
     );
 }
 void readAlbedosPath(uint N, uvec2 xy, out vec3 spec, out vec3 diff) {
@@ -85,9 +85,27 @@ void readAlbedosPath(uint N, uvec2 xy, out vec3 spec, out vec3 diff) {
     diff = vec3(sd.y, db.x, db.y);
 }
 
+void readAlbedosPathMicroNormal(uint N, uvec2 xy, out vec3 spec,
+        out vec3 diff, out vec3 microN) {
+    vec4 v = geomBuffer.data[addr(N, xy)];
+    vec2 sg = unpackHalf2x16(floatBitsToUint(v.x));
+    vec2 sd = unpackHalf2x16(floatBitsToUint(v.y));
+    vec2 db = unpackHalf2x16(floatBitsToUint(v.z));
+    spec = vec3(sg.x, sg.y, sd.x);
+    diff = vec3(sd.y, db.x, db.y);
+    microN = decodeNormal(v.w);
+}
+
 vec3 readPrimarySpecularAlbedo(uvec2 xy) {
     vec4 v = geomBuffer.data[addr(GEO_N_ALBEDOS, xy)];
     vec2 sg = unpackHalf2x16(floatBitsToUint(v.x));
+    return vec3(sg, unpackHalf2x16(floatBitsToUint(v.y)).x);
+}
+
+vec3 readPrimarySpecularAlbedoMicroNormal(uvec2 xy, out vec3 microN) {
+    vec4 v = geomBuffer.data[addr(GEO_N_ALBEDOS, xy)];
+    vec2 sg = unpackHalf2x16(floatBitsToUint(v.x));
+    microN = decodeNormal(v.w);
     return vec3(sg, unpackHalf2x16(floatBitsToUint(v.y)).x);
 }
 
@@ -142,10 +160,11 @@ void readLightAbs(uint N, uvec2 xy, out vec3 light, out vec3 absorption) {
 
 // --- N=5 ---
 void writeMicroNormal(uint N, uvec2 xy, vec3 microN) {
-    geomBuffer.data[addr(N, xy)] = vec4(encodeNormal(microN), 0.0, 0.0, 0.0);
+    uint index = addr(GEO_N_ALBEDOS, xy);
+    geomBuffer.data[index].w = encodeNormal(microN);
 }
 vec3 readMicroNormal(uint N, uvec2 xy) {
-    return decodeNormal(geomBuffer.data[addr(N, xy)].x);
+    return decodeNormal(geomBuffer.data[addr(GEO_N_ALBEDOS, xy)].w);
 }
 
 // --- N=7 ---

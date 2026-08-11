@@ -1,4 +1,4 @@
-#version 430
+#version 430 core
 
 uniform sampler2D gtexture;
 

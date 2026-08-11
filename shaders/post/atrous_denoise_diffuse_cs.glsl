@@ -1,4 +1,4 @@
-#version 430 compatibility
+#version 430 core
 #define DIFFUSE_BUFFER_MIN2
 #include "/lib/constants.glsl"
 #include "/lib/common.glsl"

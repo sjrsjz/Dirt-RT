@@ -1,4 +1,4 @@
-#version 430 compatibility
+#version 430 core
 #ifndef TEMPORAL_RADIANCE_CACHE_GLSL
 #define TEMPORAL_RADIANCE_CACHE_GLSL
 

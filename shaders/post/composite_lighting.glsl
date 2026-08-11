@@ -1,4 +1,4 @@
-#version 430 compatibility
+#version 430 core
 
 // ===========================================================================
 // Pass fog: 最终合成 — 雾效、天空、光照组合 (Final Composite)
@@ -102,8 +102,9 @@ void main() {
     float rough, pathR;
     int illumType;
     readGeo1(GEO_N_NORMALS, xy, geometryNormal, rough, illumType, pathR);
-    vec3 microN = readMicroNormal(GEO_N_MICRONORMAL, xy);
-    readAlbedosPath(GEO_N_ALBEDOS, xy, specAlbedo, diffAlbedo);
+    vec3 microN;
+    readAlbedosPathMicroNormal(GEO_N_ALBEDOS, xy, specAlbedo,
+        diffAlbedo, microN);
     readMisc(GEO_N_MISC, xy, transAlbedo, emisVal, rdVal);
     readLightAbs(GEO_N_LIGHTABS, xy, lightVal, absorptionVal);
 

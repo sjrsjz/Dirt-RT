@@ -1,4 +1,4 @@
-#version 430 compatibility
+#version 430 core
 
 // ===========================================================================
 // Pass swap2_c: Diffuse Variance Filter → Colortex Push (Compute)
@@ -57,12 +57,15 @@ struct TileSample {
     bool valid;
 };
 
-shared TileSample sm_tile[SM_H][SM_W];
-// Preserve the sanitized (pre-canonicalization) center state for output.
-// Only the 16x16 interior is written/read; halo CoCg is never consumed.
-// Expected worst-case shared allocation is 29376 bytes (below 32 KiB).
-shared vec4 sm_output_alice_y[16][16];
-shared vec2 sm_output_cocg[16][16];
+const uint SM_AREA = SM_W * SM_H;
+// SoA storage avoids struct-stride padding. Validity is stored in position.w;
+// the variance scratch only covers the 16x16 output interior.
+shared vec4 sm_position_validity[SM_AREA];
+shared vec4 sm_alice_y[SM_AREA];
+shared vec2 sm_moments[SM_AREA];
+shared float sm_est_var[16u * 16u];
+// Shared allocation is 20384 bytes; the old AoS plus output staging used
+// 29376 bytes and was the dominant occupancy limiter in this pass.
 
 // ---------------------------------------------------------------------------
 // Sanitization & canonicalisation
@@ -143,6 +146,26 @@ void loadSwapSample(uvec2 xy, out vec4 aliceY, out vec4 outputAliceY,
     m2 = canonicalMeanY2(aliceY, m2);
 }
 
+void loadTileSample(uint index, ivec2 gc, ivec2 texMax) {
+    ivec2 clamped = clamp(gc, ivec2(0), texMax);
+    vec3 pos;
+    float mask;
+    readDiffuseGeo(uvec2(clamped), pos, mask);
+
+    bool valid = mask > 0.5 && all(equal(gc, clamped));
+    sm_position_validity[index] = vec4(pos, valid ? 1.0 : 0.0);
+    sm_alice_y[index] = vec4(0.0);
+    sm_moments[index] = vec2(0.0);
+    if (valid) {
+        vec4 outputAliceY;
+        vec2 outputCoCg;
+        float m2, weight;
+        loadSwapSample(uvec2(gc), sm_alice_y[index], outputAliceY,
+            outputCoCg, m2, weight);
+        sm_moments[index] = vec2(m2, weight);
+    }
+}
+
 // ===========================================================================
 // Main
 // ===========================================================================
@@ -153,51 +176,52 @@ void main() {
     ivec2 texMax = ivec2(resolution) - 1;
     ivec2 tileOrigin = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO);
 
-    // ---- Phase 1: load geometry + light in one 2D cooperative traversal ----
-    for (uint r = lid.y; r < SM_H; r += 16u) {
-        for (uint c = lid.x; c < SM_W; c += 16u) {
-            ivec2 gc = tileOrigin + ivec2(c, r);
-            ivec2 clamped = clamp(gc, ivec2(0), texMax);
-            vec3 pos;
-            float mask;
-            readDiffuseGeo(uvec2(clamped), pos, mask);
+    // ---- Phase 1: each lane owns its center; lanes cooperate on the halo ----
+    // Keeping the center output in registers removes 6 KiB of LDS without
+    // introducing a second global read.
+    uint cx = lid.x + HALO, cy = lid.y + HALO;
+    uint centerIndex = cy * SM_W + cx;
+    ivec2 centerCoord = ivec2(gid);
+    ivec2 centerClamped = clamp(centerCoord, ivec2(0), texMax);
+    vec3 centerPos;
+    float centerMask;
+    readDiffuseGeo(uvec2(centerClamped), centerPos, centerMask);
+    bool centerValid = centerMask > 0.5 &&
+        all(equal(centerCoord, centerClamped));
+    sm_position_validity[centerIndex] =
+        vec4(centerPos, centerValid ? 1.0 : 0.0);
+    sm_alice_y[centerIndex] = vec4(0.0);
+    sm_moments[centerIndex] = vec2(0.0);
 
-            bool valid = mask > 0.5 && all(equal(gc, clamped));
-            sm_tile[r][c].p = pos;
-            sm_tile[r][c].valid = valid;
-            sm_tile[r][c].aliceY = vec4(0.0);
-            sm_tile[r][c].meanY2 = 0.0;
-            sm_tile[r][c].weight = 1.0;
-            sm_tile[r][c].estVar = 0.0;
+    AliceEncoding outAlice;
+    outAlice.aliceY = vec4(0.0);
+    outAlice.CoCg = vec2(0.0);
+    if (centerValid) {
+        float centerM2, centerWeight;
+        loadSwapSample(gid, sm_alice_y[centerIndex], outAlice.aliceY,
+            outAlice.CoCg, centerM2, centerWeight);
+        sm_moments[centerIndex] = vec2(centerM2, centerWeight);
+    }
 
-            if (valid) {
-                vec4 outputAliceY;
-                vec2 outputCoCg;
-                loadSwapSample(uvec2(gc), sm_tile[r][c].aliceY,
-                    outputAliceY, outputCoCg, sm_tile[r][c].meanY2,
-                    sm_tile[r][c].weight);
-
-                bool interior = r >= HALO && r < HALO + 16u
-                        && c >= HALO && c < HALO + 16u;
-                if (interior) {
-                    sm_output_alice_y[r - HALO][c - HALO] = outputAliceY;
-                    sm_output_cocg[r - HALO][c - HALO] = outputCoCg;
-                }
-            }
-        }
+    uint tid = gl_LocalInvocationIndex;
+    for (uint i = tid; i < SM_AREA; i += 256u) {
+        uint tx = i % SM_W;
+        uint ty = i / SM_W;
+        bool interior = tx >= HALO && tx < HALO + 16u &&
+            ty >= HALO && ty < HALO + 16u;
+        if (!interior)
+            loadTileSample(i, tileOrigin + ivec2(tx, ty), texMax);
     }
     barrier();
 
     // ---- Phase 2: bounds & sky ----
-    uint cx = lid.x + HALO, cy = lid.y + HALO;
-    TileSample ctr = sm_tile[cy][cx];
+    vec4 ctrPositionValidity = sm_position_validity[centerIndex];
+    vec4 ctrAliceY = sm_alice_y[centerIndex];
+    vec2 ctrMoments = sm_moments[centerIndex];
     bool inBounds = all(lessThan(gid, uvec2(resolution)));
-    bool isActive = inBounds && ctr.valid;
+    bool isActive = inBounds && ctrPositionValidity.w > 0.5;
 
     vec3 centerN = vec3(0.0);
-    AliceEncoding outAlice;
-    outAlice.aliceY = vec4(0.0);
-    outAlice.CoCg = vec2(0.0);
 
     if (isActive) {
         // ---- Phase 3: center normal & temporal variance ----
@@ -205,20 +229,18 @@ void main() {
         int _it;
         readGeo1(GEO_N_NORMALS, gid, centerN, _r, _it, _pr);
 
-        outAlice.aliceY = sm_output_alice_y[lid.y][lid.x];
-        outAlice.CoCg = sm_output_cocg[lid.y][lid.x];
-        vec4 cState = ctr.aliceY;
-        float cN = ctr.weight;
-        float temporalVar = temporalEstVar(cState, ctr.meanY2, cN);
+        vec4 cState = ctrAliceY;
+        float cN = ctrMoments.y;
+        float temporalVar = temporalEstVar(cState, ctrMoments.x, cN);
 
         // Center-only geometry work is invariant across all 49 taps.
-        float centerDistance = max(length(ctr.p), 0.01);
+        float centerDistance = max(length(ctrPositionValidity.xyz), 0.01);
         float resolutionY = max(resolution.y, 1.0);
         float footprintDistance = max(centerDistance, resolutionY * 1e-4);
         float invGeometryScale = resolutionY / max(
                     VAR_FILTER_POSITION_PARAM * footprintDistance,
                     resolutionY * 1e-6);
-        float centerPlaneDistance = dot(ctr.p, centerN);
+        float centerPlaneDistance = dot(ctrPositionValidity.xyz, centerN);
 
         // ---- Phase 4: spatially-pooled variance ----
         // Pool neighbor moments with mass_i = wSpatial_i · N_i.
@@ -231,18 +253,22 @@ void main() {
             for (int kx = -3; kx <= 3; ++kx) {
                 int sx = int(cx) + kx;
                 int sy = int(cy) + ky;
-                TileSample s = sm_tile[sy][sx];
-                if (!s.valid) continue;
+                uint sampleIndex = uint(sy) * SM_W + uint(sx);
+                vec4 samplePositionValidity =
+                    sm_position_validity[sampleIndex];
+                if (samplePositionValidity.w <= 0.5) continue;
+                vec2 sampleMoments = sm_moments[sampleIndex];
 
-                float planeDist = abs(dot(s.p, centerN) - centerPlaneDistance);
+                float planeDist = abs(dot(samplePositionValidity.xyz,
+                    centerN) - centerPlaneDistance);
                 float kernel = VAR_KERNEL_1D[abs(kx)] * VAR_KERNEL_1D[abs(ky)];
                 float wS = kernel * exp2(-planeDist * invGeometryScale);
-                float mass = wS * s.weight;
+                float mass = wS * sampleMoments.y;
 
                 sumMass += mass;
                 sumSqW += mass * wS; // Σ N_i·w_i² (not (N_i·w_i)²)
-                sumState += mass * s.aliceY;
-                sumM2 += mass * s.meanY2;
+                sumState += mass * sm_alice_y[sampleIndex];
+                sumM2 += mass * sampleMoments.x;
             }
         }
 
@@ -269,16 +295,17 @@ void main() {
 
         float outSigma = mix(sqrt(max(spatialVar, 0.0)),
                 sqrt(max(temporalVar, 0.0)), trust);
-        sm_tile[cy][cx].estVar = sanitizeNonnegative(outSigma * outSigma);
+        sm_est_var[lid.y * 16u + lid.x] =
+            sanitizeNonnegative(outSigma * outSigma);
     } else {
         // No invocation may return before the workgroup-wide blur barrier.
-        sm_tile[cy][cx].estVar = 0.0;
+        sm_est_var[lid.y * 16u + lid.x] = 0.0;
     }
 
     barrier();
 
     if (!inBounds) return;
-    if (!ctr.valid) {
+    if (ctrPositionValidity.w <= 0.5) {
         imageStore(colorimg3, ivec2(gid), vec4(0.0));
         imageStore(colorimg4, ivec2(gid), uvec4(0u));
         return;
@@ -296,16 +323,20 @@ void main() {
     for (int ky = minKy; ky <= maxKy; ++ky) {
         for (int kx = minKx; kx <= maxKx; ++kx) {
             int sx = int(cx) + kx, sy = int(cy) + ky;
-            if (!sm_tile[sy][sx].valid) continue;
+            uint sampleIndex = uint(sy) * SM_W + uint(sx);
+            if (sm_position_validity[sampleIndex].w <= 0.5) continue;
             float w = VAR_BLUR_1D[abs(kx)] * VAR_BLUR_1D[abs(ky)];
-            blurredVar += w * sm_tile[sy][sx].estVar;
+            uint varianceIndex = uint(int(lid.y) + ky) * 16u +
+                uint(int(lid.x) + kx);
+            blurredVar += w * sm_est_var[varianceIndex];
             blurW += w;
         }
     }
     float estVar = sanitizeNonnegative(blurredVar / blurW);
 
     // ---- Phase 6: output ----
-    imageStore(colorimg3, ivec2(gid), vec4(ctr.p, encodeNormal(centerN)));
+    imageStore(colorimg3, ivec2(gid),
+        vec4(ctrPositionValidity.xyz, encodeNormal(centerN)));
     imageStore(colorimg4, ivec2(gid), uvec4(
             packHalf2x16(clamp(outAlice.aliceY.xy, vec2(-65504.0), vec2(65504.0))),
             packHalf2x16(clamp(outAlice.aliceY.zw, vec2(-65504.0), vec2(65504.0))),

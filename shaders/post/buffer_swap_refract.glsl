@@ -1,4 +1,4 @@
-#version 430 compatibility
+#version 430 core
 
 // ===========================================================================
 // Pass swap7: 折射缓冲写回 (Compute) — swap_color + color(flip) + lpos + lnormal

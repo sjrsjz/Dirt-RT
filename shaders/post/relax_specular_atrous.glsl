@@ -1,4 +1,4 @@
-#version 430 compatibility
+#version 430 core
 
 #if defined(RELAX_ATROUS_SHARED)
 layout(local_size_x = 16, local_size_y = 16) in;

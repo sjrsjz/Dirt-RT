@@ -1,4 +1,4 @@
-#version 430 compatibility
+#version 430 core
 // Vertical 33-tap Gaussian, LOD-aware, 1x256 workgroup + shared memory
 layout(local_size_x = 1, local_size_y = 256) in;
 layout(rgba32f) uniform image2D bloomBlur;

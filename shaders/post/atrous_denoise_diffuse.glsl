@@ -1,4 +1,4 @@
-#version 430 compatibility
+#version 430 core
 #define DIFFUSE_BUFFER_MIN2
 #include "/lib/constants.glsl"
 #include "/lib/common.glsl"
@@ -200,7 +200,7 @@ void main() {
             packHalf2x16(clamp(accumAlice.CoCg, vec2(-65504.0), vec2(65504.0))));
     out_light_sample = uvec4(packedAlice, floatBitsToUint(varEnergyOut));
 
-    #if FINAL_DENOISE_PASS
+    #ifdef FINAL_DENOISE_PASS
     out_light_sample_blurred = uvec4(packedAlice, 0u);
     #endif
 }

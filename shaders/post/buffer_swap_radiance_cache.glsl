@@ -1,4 +1,4 @@
-#version 430 compatibility
+#version 430 core
 #ifndef BUFFER_SWAP_RADIANCE_CACHE_GLSL
 #define BUFFER_SWAP_RADIANCE_CACHE_GLSL
 // Compatibility pass: sparse temporal accumulation writes history in place.

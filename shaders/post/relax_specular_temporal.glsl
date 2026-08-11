@@ -1,4 +1,4 @@
-#version 430 compatibility
+#version 430 core
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -26,91 +26,22 @@ struct RelaxReprojectedHistory {
     bool found;
 };
 
-float relaxCross2(vec2 a, vec2 b) {
-    return a.x * b.y - a.y * b.x;
-}
-
-struct RelaxSurfaceFootprint {
-    vec3 origin;
-    vec3 tangent;
-    vec3 bitangent;
-    vec2 c0;
-    vec2 c1;
-    vec2 c2;
-    vec2 c3;
-    float epsilon;
-    bool valid;
-};
-
-RelaxSurfaceFootprint relaxBuildSurfaceFootprint(
-    uvec2 pixel,
-    vec3 currentPosition,
-    vec3 currentNormal
-) {
-    RelaxSurfaceFootprint fp;
-    fp.origin = currentPosition;
-    fp.valid = false;
-    vec3 n = relaxSafeNormalize(currentNormal, vec3(0.0, 1.0, 0.0));
-    if (n.z < -0.999999) {
-        fp.tangent = vec3(0.0, -1.0, 0.0);
-        fp.bitangent = vec3(-1.0, 0.0, 0.0);
-    } else {
-        float a = 1.0 / (1.0 + n.z);
-        float b = -n.x * n.y * a;
-        fp.tangent = vec3(1.0 - n.x * n.x * a, b, -n.x);
-        fp.bitangent = vec3(b, 1.0 - n.y * n.y * a, -n.y);
-    }
-
-    mat4 inverseCurrentViewProjection = rtInverseViewProjection;
-    vec2 size = vec2(resolution_global);
-    vec2 uvMin = (vec2(pixel) - TEMPORAL_CLIP_PIXEL_RADIUS) / size * 2.0 - 1.0;
-    vec2 uvMax = (vec2(pixel) + TEMPORAL_CLIP_PIXEL_RADIUS) / size * 2.0 - 1.0;
-    vec2 corners[4] = vec2[4](
-        vec2(uvMin.x, uvMin.y), vec2(uvMax.x, uvMin.y),
-        vec2(uvMax.x, uvMax.y), vec2(uvMin.x, uvMax.y));
-    vec2 planeCorners[4];
-
-    for (int i = 0; i < 4; ++i) {
-        vec4 nearH = inverseCurrentViewProjection * vec4(corners[i], -1.0, 1.0);
-        vec4 farH = inverseCurrentViewProjection * vec4(corners[i], 1.0, 1.0);
-        if (abs(nearH.w) < 1e-8 || abs(farH.w) < 1e-8) return fp;
-        vec3 rayOrigin = nearH.xyz / nearH.w;
-        vec3 rayDirection = farH.xyz / farH.w - rayOrigin;
-        float denominator = dot(rayDirection, n);
-        if (abs(denominator) < 1e-7) return fp;
-        vec3 cornerPosition = rayOrigin + rayDirection *
-            (dot(currentPosition - rayOrigin, n) / denominator);
-        vec3 cornerDelta = cornerPosition - currentPosition;
-        planeCorners[i] = vec2(dot(cornerDelta, fp.tangent),
-            dot(cornerDelta, fp.bitangent));
-    }
-
-    fp.c0 = planeCorners[0];
-    fp.c1 = planeCorners[1];
-    fp.c2 = planeCorners[2];
-    fp.c3 = planeCorners[3];
-    float footprintDiameter = max(
-        length(fp.c2 - fp.c0), length(fp.c3 - fp.c1));
-    fp.epsilon = TEMPORAL_GEOMETRY_EPSILON * max(footprintDiameter, 1.0);
-    fp.valid = true;
-    return fp;
-}
-
 bool relaxSurfaceFootprintContains(
-    RelaxSurfaceFootprint fp,
+    uvec2 currentPixel,
     vec3 historyPositionCurrentSpace
 ) {
-    if (!fp.valid) return false;
-    vec3 delta = historyPositionCurrentSpace - fp.origin;
-    vec2 p = vec2(dot(delta, fp.tangent), dot(delta, fp.bitangent));
-    float e0 = relaxCross2(fp.c1 - fp.c0, p - fp.c0);
-    float e1 = relaxCross2(fp.c2 - fp.c1, p - fp.c1);
-    float e2 = relaxCross2(fp.c3 - fp.c2, p - fp.c2);
-    float e3 = relaxCross2(fp.c0 - fp.c3, p - fp.c3);
-    return (e0 >= -fp.epsilon && e1 >= -fp.epsilon &&
-            e2 >= -fp.epsilon && e3 >= -fp.epsilon) ||
-        (e0 <= fp.epsilon && e1 <= fp.epsilon &&
-            e2 <= fp.epsilon && e3 <= fp.epsilon);
+    // For a point already accepted by the plane-distance test, projecting it
+    // into the current frame is equivalent to testing it against the four
+    // ray/plane footprint corners. This replaces eight inverse-VP transforms,
+    // four ray-plane intersections and a large live footprint structure with
+    // at most one forward projection per candidate history tap.
+    vec4 clip = rtViewProjection * vec4(historyPositionCurrentSpace, 1.0);
+    if (clip.w <= 1e-7 || any(isnan(clip)) || any(isinf(clip))) return false;
+    vec2 projectedPixel = (clip.xy / clip.w * 0.5 + 0.5) *
+        vec2(resolution_global);
+    vec2 extent = vec2(TEMPORAL_CLIP_PIXEL_RADIUS +
+        TEMPORAL_GEOMETRY_EPSILON);
+    return all(lessThanEqual(abs(projectedPixel - vec2(currentPixel)), extent));
 }
 
 RelaxReprojectedHistory relaxEmptyHistory() {
@@ -136,7 +67,8 @@ RelaxReprojectedHistory relaxLoadHistory(
     uint currentMaterial,
     vec3 cameraDelta,
     bool requireFullFootprint,
-    bool requireSurfaceFootprint
+    bool requireSurfaceFootprint,
+    bool loadEndpoint
 ) {
     RelaxReprojectedHistory outHistory = relaxEmptyHistory();
     ivec2 size = ivec2(resolution_global);
@@ -156,15 +88,11 @@ RelaxReprojectedHistory relaxLoadHistory(
     float endpointWeight = 0.0;
     float depthThreshold = RELAX_DISOCCLUSION_THRESHOLD *
         max(length(currentSurfacePosition), 1.0);
-    RelaxSurfaceFootprint surfaceFootprint;
-    if (requireSurfaceFootprint)
-        surfaceFootprint = relaxBuildSurfaceFootprint(
-            currentPixel, currentSurfacePosition, currentNormal);
-
     for (int i = 0; i < 4; ++i) {
         ivec2 p = origin + ivec2(i & 1, i >> 1);
         if (!relaxInBounds(p, size)) continue;
-        RelaxSpecularHistory h = readRelaxSpecularHistory(uvec2(p));
+        RelaxSpecularHistory h = readRelaxSpecularHistory(uvec2(p),
+            loadEndpoint);
         if (h.historyLength < 0.5 || h.materialID != currentMaterial) continue;
 
         vec3 previousSurfaceCurrentSpace = h.surfacePosition - cameraDelta;
@@ -174,7 +102,7 @@ RelaxReprojectedHistory relaxLoadHistory(
         if (planeDistance > depthThreshold) continue;
         if (dot(currentNormal, h.geometryNormal) <= 0.0) continue;
         if (requireSurfaceFootprint && !relaxSurfaceFootprintContains(
-            surfaceFootprint, previousSurfaceCurrentSpace)) continue;
+            currentPixel, previousSurfaceCurrentSpace)) continue;
 
         float w = bilinear[i];
         validBilinearWeight += w;
@@ -184,7 +112,7 @@ RelaxReprojectedHistory relaxLoadHistory(
         outHistory.slowRadiance += h.slowRadiance * w;
         outHistory.secondMoment += h.secondMoment * w;
         outHistory.fastRadiance += h.responsiveRadiance * w;
-        if (relaxEndpointMomentsValid(h.endpoint)) {
+        if (loadEndpoint && relaxEndpointMomentsValid(h.endpoint)) {
             // History moments are relative to the history pixel's primary
             // surface. Rebase them to the current primary surface expressed
             // in previous-frame camera-relative coordinates before mixing.
@@ -409,15 +337,22 @@ void main() {
     vec2 surfaceUv = relaxProjectPrevious(currentPos, cameraDelta);
     RelaxReprojectedHistory surface = relaxLoadHistory(
         surfaceUv, pixel, currentPos, currentNormal, currentMaterial,
-        cameraDelta, false, true);
+        cameraDelta, false, true, true);
     surface.found = surface.found && motionValid >= 0.5;
     vec3 previousV = -relaxSafeNormalize(currentPos + cameraDelta, -V);
-    float lobeAngle = max(atan(relaxSpecLobeTanHalfAngle(currentRoughness, 0.75)),
-        1.5 / 255.0);
+    // Compare unit-vector chord lengths in dot space. For theta in the RELAX
+    // lobe range, chord(theta) tracks theta closely and avoids atan + acos.
+    float lobeTangent = relaxSpecLobeTanHalfAngle(currentRoughness, 0.75);
+    float lobeChord = sqrt(max(2.0 - 2.0 * inversesqrt(
+        1.0 + lobeTangent * lobeTangent), 0.0));
+    lobeChord = max(lobeChord, 1.5 / 255.0);
     float surfaceViewWeight = 0.0;
     if (surface.found) {
-        float angle = acos(clamp(dot(V, previousV), -1.0, 1.0));
-        surfaceViewWeight = clamp(1.0 - angle / max(lobeAngle * max(NoV, 0.05), 1e-4), 0.0, 1.0);
+        float viewChord = sqrt(max(2.0 - 2.0 *
+            clamp(dot(V, previousV), -1.0, 1.0), 0.0));
+        float acceptedChord = max(lobeChord * max(NoV, 0.05), 1e-4);
+        surfaceViewWeight = clamp(1.0 - viewChord / acceptedChord,
+            0.0, 1.0);
         surfaceViewWeight *= surface.footprintQuality;
     }
 
@@ -458,7 +393,7 @@ void main() {
     RelaxReprojectedHistory virtualHistory = endpointProjection.valid
         ? relaxLoadHistory(endpointProjection.uv, pixel,
             currentPos, currentNormal, currentMaterial,
-            cameraDelta, true, false)
+            cameraDelta, true, false, DEBUG_VIEW == 40)
         : relaxEmptyHistory();
     virtualHistory.found = virtualHistory.found && motionValid >= 0.5;
 

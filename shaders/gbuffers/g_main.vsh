@@ -1,4 +1,12 @@
-#version 430 compatibility
+#version 430 core
+in vec3 vaPosition;
+in vec3 vaNormal;
+in vec2 vaUV0;
+
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform mat4 textureMatrix;
+uniform mat3 normalMatrix;
 uniform mat4 gbufferModelViewInverse;
 uniform mat4 gbufferModelView;
 uniform vec3 shadowLightPosition;
@@ -7,10 +15,10 @@ out vec3 normal;
 out vec3 position;
 out vec3 viewPos;  // view-space position for linear depth in fragment shader
 void main() {
-
-    gl_Position = ftransform();
-    position=gl_Vertex.xyz;
-    normal=(gl_NormalMatrix *gl_Normal)*mat3(gbufferModelView);
-    texCoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
-    viewPos = (gbufferModelView * gl_Vertex).xyz;  // distance from camera = length(viewPos)
+    gl_Position = projectionMatrix * modelViewMatrix *
+        vec4(vaPosition, 1.0);
+    position = vaPosition;
+    normal = (normalMatrix * vaNormal) * mat3(gbufferModelView);
+    texCoord = (textureMatrix * vec4(vaUV0, 0.0, 1.0)).xy;
+    viewPos = (gbufferModelView * vec4(vaPosition, 1.0)).xyz;
 }

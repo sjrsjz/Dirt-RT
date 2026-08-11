@@ -1,4 +1,4 @@
-#version 430 compatibility
+#version 430 core
 // Horizontal 33-tap Gaussian, LOD-aware, 256x1 workgroup + shared memory
 layout(local_size_x = 256, local_size_y = 1) in;
 layout(rgba32f) uniform image2D bloomAtlas;
