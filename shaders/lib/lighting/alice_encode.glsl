@@ -34,14 +34,19 @@ AliceEncoding radiance_to_alice(vec3 color, vec3 dir)
 vec3 project_alice_irradiance(AliceEncoding encoded, vec3 N)
 {
     float total_omega = encoded.aliceY.w;
+    if (total_omega <= 1e-10) return vec3(0.0);
+
     float irradiance = alice_irradiance(encoded.aliceY, N);
-    float attenuation = (total_omega > 1e-10) ? (irradiance / total_omega) : 0.0;
-    float Co = encoded.CoCg.x * attenuation;
-    float Cg = encoded.CoCg.y * attenuation;
-    float B = irradiance - 1.1404 * Co - 1.4304 * Cg;
-    float R = B + 2.0 * Co;
-    float G = irradiance - 0.1404 * Co + 0.5696 * Cg;
-    return max(vec3(R, G, B), vec3(0.0));
+    float attenuation = irradiance / total_omega;
+
+    float Y  = total_omega;
+    float Co = encoded.CoCg.x;
+    float Cg = encoded.CoCg.y;
+
+    float t = Y - Cg;
+    vec3 total_RGB = vec3(t + Co, Y + Cg, t - Co);
+
+    return max(total_RGB * attenuation, vec3(0.0));
 }
 
 // Dual-vector packing for temporal storage

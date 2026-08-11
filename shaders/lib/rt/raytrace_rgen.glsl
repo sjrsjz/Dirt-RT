@@ -596,7 +596,7 @@ HalfVector computeHalfVector(vec3 wo, vec3 wi) {
 // Disney Cook-Torrance BRDF Evaluation
 // ===========================================================================
 
-// Evaluate GGX microfacet BRDF: f(wo, wi) × NoL, and NDF sampling PDF.
+// Evaluate GGX microfacet BRDF: f(wo, wi) × NoL, and VNDF sampling PDF.
 // Returns false if any degenerate angle; caller treats as bsdf_weight = 0.
 // The caller applies MIS weighting externally (pdfMix or pdfNDF×P_spec).
 vec3 evaluateSurfaceFresnel(vec3 wo, vec3 H, vec3 Cs, float Sx,
@@ -635,7 +635,7 @@ bool evaluateSpecularBRDF(
                 wo, hv.H, Cs, Sx, transmissionSelector, etaRatio);
 
         fSpecTimesNoL = Fh * D * G2 * NoL / max(4.0 * NoV * NoL, 1e-8);
-        pdfNDF = GGX_ndf_pdf(wo, wi, macroNormal, rough);
+        pdfNDF = GGX_vndf_pdf(wo, wi, macroNormal, rough);
     } else {
         fSpecTimesNoL = vec3(0.0);
         pdfNDF = 0.0;
@@ -683,7 +683,7 @@ bool evaluateDisneyDiffuseBRDF(
     return Fd > 0.0;
 }
 
-// Walter/PBRT rough-dielectric BTDF evaluated for an NDF-sampled microfacet.
+// Walter/PBRT rough-dielectric BTDF evaluated for a VNDF-sampled microfacet.
 // etaRatio is eta_i / eta_t, matching GLSL refract().  The returned value is
 // f_t * abs(NoL), and pdfNDF is the corresponding solid-angle PDF of wi.
 bool evaluateTransmissionBSDF(
@@ -729,7 +729,7 @@ bool evaluateTransmissionBSDF(
     btdf /= max(etaP * etaP, 1e-8);
 
     float dH_dWi = abs(LiH) / denom2;
-    pdfNDF = GGXpdf(NoH, 0.0, rough) * dH_dWi;
+    pdfNDF = GGX_vndf_half_pdf(wo, H, macroNormal, rough) * dH_dWi;
     fTransmissionTimesNoL = transmissionColor * btdf * NoL;
     bool finiteResult = !isnan(pdfNDF) && !isinf(pdfNDF)
             && !any(isnan(fTransmissionTimesNoL))
@@ -956,13 +956,16 @@ void handleFirstBounce_Reflection(
         return;
     }
 
-    // The four-moment ReLAX reconstruction uses the precomputed angular
-    // moments of this exact GGX proposal: a=E[U], B=E[UU^T]. Mixing ALICE
-    // here would make qB-mm^T a covariance of a different distribution,
-    // especially on rough surfaces where the old guide probability was high.
+    // Keep the continuation strategy equal to the VNDF density returned by
+    // evaluateSpecularBRDF. Mixing a separate guide here would require a
+    // mixture PDF for both throughput and NEE MIS.
     next_rd = reflect(rd_i, microNormal);
-    if (dot(next_rd, geometryNormal) < 0.0)
-        next_rd = reflect(next_rd, geometryNormal);
+    // Folding an invalid VNDF reflection about the geometry normal changes
+    // the sampling density and biases f/pdf. Reject it instead.
+    if (dot(next_rd, geometryNormal) <= 0.0) {
+        bsdf_weight = vec3(0.0);
+        return;
+    }
 
     vec3 wi = next_rd;
     vec3 fSpecTimesNoL_val;
@@ -1075,8 +1078,14 @@ void handleSecondaryBounce(
         neeCompatible = true;
         next_rd = reflect(rd_i,
                 sampledDeltaLobe ? macroNormal : microNormal);
-        if (dot(next_rd, geometryNormal) < 0.0)
-            next_rd = reflect(next_rd, geometryNormal);
+        if (dot(next_rd, geometryNormal) < 0.0) {
+            if (sampledDeltaLobe)
+                next_rd = reflect(next_rd, geometryNormal);
+            else {
+                bsdf_weight = vec3(0.0);
+                return;
+            }
+        }
         if (dot(next_rd, macroNormal) > 0.0) {
             vec3 wo = -rd_i;
             vec3 wi = next_rd;
@@ -1542,7 +1551,9 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         // The diffuse continuation never consumes a GGX micro-normal.
         vec3 microNormal = macroNormal;
         #else
-        vec3 microNormal = isDeltaSpecular(surf.R.x) ? macroNormal : GGXNormal(macroNormal, surf.R.x, rtBlueNoise2D(xy, 0u));
+        vec3 microNormal = isDeltaSpecular(surf.R.x) ? macroNormal
+            : GGXVNDFNormal(macroNormal, -fb.rd_i, surf.R.x,
+                rtBlueNoise2D(xy, 0u));
         #endif
         float n_i = inside ? REFRACTIVE_INDEX : 1.0;
         float n_o = inside ? 1.0 : REFRACTIVE_INDEX;
@@ -1672,7 +1683,9 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         #if defined(FIRST_LOBE_DIFFUSE)
         vec3 microNormal = macroNormal;
         #else
-        vec3 microNormal = isDeltaSpecular(surf.R.x) ? macroNormal : GGXNormal(macroNormal, surf.R.x, rtBlueNoise2D(xy, 0u));
+        vec3 microNormal = isDeltaSpecular(surf.R.x) ? macroNormal
+            : GGXVNDFNormal(macroNormal, -rd_i, surf.R.x,
+                rtBlueNoise2D(xy, 0u));
         #endif
         float n_i = inside ? REFRACTIVE_INDEX : 1.0;
         float n_o = inside ? 1.0 : REFRACTIVE_INDEX;
@@ -1847,7 +1860,8 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             int blockID;
             payload_unpackShadow(tmp_Payload.data, blockID);
             material surf = materialFromEvaluated(surfaceMat, blockID);
-            vec3 microNormal = GGXNormal(macroNormal, surf.R.x, ro_o);
+            vec3 microNormal = isDeltaSpecular(surf.R.x) ? macroNormal
+                : GGXVNDFNormal(macroNormal, -rd_i, surf.R.x, ro_o);
             float n_i2 = inside ? REFRACTIVE_INDEX : 1.0;
             float n_o2 = inside ? 1.0 : REFRACTIVE_INDEX;
             float rs2 = n_i2 / n_o2;

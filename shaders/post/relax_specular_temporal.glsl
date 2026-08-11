@@ -13,6 +13,15 @@ layout(rgba32ui) uniform writeonly uimage2D colorimg5;
 #define TEMPORAL_GEOMETRY_EPSILON 1e-5
 #endif
 
+// Curvature is only a translation-parallax correction.  It is faded out for
+// broad lobes, where a one-pixel normal derivative is not a stable coherent
+// mirror model, and bounded away from the thin-lens focal singularity.
+const float RELAX_CURVATURE_MIN_PARALLAX_PIXELS = 1.0 / 256.0;
+const float RELAX_CURVATURE_ROUGHNESS_FADE_BEGIN = 0.2;
+const float RELAX_CURVATURE_ROUGHNESS_FADE_END = 0.65;
+const float RELAX_CURVATURE_MIN_FOCUS_DENOMINATOR = 0.25;
+const float RELAX_CURVATURE_MAX_MOTION_ACCELERATION = 4.0;
+
 struct RelaxReprojectedHistory {
     vec3 slowRadiance;
     float secondMoment;
@@ -178,36 +187,150 @@ bool relaxProjectRelative(mat4 viewProjection, vec3 position, out vec2 uv) {
     return !any(isnan(uv)) && !any(isinf(uv));
 }
 
-// Offline-calibrated Heitz GGX-VNDF representative point.  The fit uses
-// 4096 samples per (alpha, NoV, hit-distance law) group and minimizes the MSE
-// against the Monte-Carlo mean projected motion.  GGX/view dependence is
-// already present in the measured endpoint moments.  The fitted form is
-//
-// zeta = 1 + spread * P2(spread, axial).
-//
-// The fitted rational denominator coefficient converged to 1.15e-23, so it
-// is identically one at FP32 precision and is deliberately omitted.
-//
-// Multiplication by spread is a mathematical boundary condition: q=|m|^2 is
-// a deterministic endpoint, for which pVisual=P+m and zeta must be exactly 1.
-float relaxVisualPointZeta(float spread, float axial) {
-    spread = clamp(spread, 0.0, 1.0);
-    axial = clamp(axial, -1.0, 1.0);
-    float numerator =
-          0.28423406448
-        - 0.98314270477 * spread
-        + 0.88688920343 * axial
-        + 0.71462985137 * spread * spread
-        - 0.28210119537 * spread * axial
-        - 0.16915468475 * axial * axial;
-    return 1.0 + spread * numerator;
+bool relaxLoadCurvatureEdge(
+    ivec2 samplePixel,
+    vec3 currentSurfacePosition,
+    vec3 currentNormal,
+    uint currentMaterial,
+    out vec3 tangentEdge,
+    out vec3 normalDelta
+) {
+    tangentEdge = vec3(0.0);
+    normalDelta = vec3(0.0);
+    ivec2 size = ivec2(resolution_global);
+    if (!relaxInBounds(samplePixel, size)) return false;
+
+    vec3 samplePosition;
+    float samplePrimaryDistance;
+    readGeo0(GEO_N_GEO, uvec2(samplePixel), samplePosition,
+        samplePrimaryDistance);
+    if (samplePrimaryDistance < -0.5 || any(isnan(samplePosition)) ||
+            any(isinf(samplePosition)))
+        return false;
+
+    vec3 sampleNormal;
+    float sampleAlpha, samplePathRoughness;
+    int sampleMaterial;
+    readGeo1(GEO_N_NORMALS, uvec2(samplePixel), sampleNormal, sampleAlpha,
+        sampleMaterial, samplePathRoughness);
+    if (uint(max(sampleMaterial, 0)) != currentMaterial ||
+            dot(currentNormal, sampleNormal) <= 0.5)
+        return false;
+
+    // Do not estimate a derivative through silhouettes or disconnected
+    // surfaces. The tangent-plane intersection below supplies the edge used
+    // by the second fundamental form; the actual neighbor is only a guard.
+    float planeThreshold = RELAX_DISOCCLUSION_THRESHOLD *
+        max(length(currentSurfacePosition), 1.0);
+    if (abs(dot(samplePosition - currentSurfacePosition, currentNormal)) >
+            planeThreshold)
+        return false;
+
+    vec3 sampleRay = relaxSafeNormalize(samplePosition, vec3(0.0));
+    float rayPlaneDenominator = dot(currentNormal, sampleRay);
+    if (abs(rayPlaneDenominator) <= 1e-4) return false;
+    float tangentDistance = dot(currentSurfacePosition, currentNormal) /
+        rayPlaneDenominator;
+    if (tangentDistance <= 1e-5 || isnan(tangentDistance) ||
+            isinf(tangentDistance))
+        return false;
+
+    tangentEdge = sampleRay * tangentDistance - currentSurfacePosition;
+    normalDelta = sampleNormal - currentNormal;
+    return dot(tangentEdge, tangentEdge) > 1e-10;
+}
+
+struct RelaxDirectionalCurvature {
+    float value;
+    float parallaxPixels;
+};
+
+RelaxDirectionalCurvature relaxEstimateDirectionalCurvature(
+    uvec2 currentPixel,
+    vec3 currentSurfacePosition,
+    vec3 currentNormal,
+    uint currentMaterial,
+    float perceptualRoughness,
+    vec3 cameraDelta,
+    vec2 surfacePreviousUv
+) {
+    RelaxDirectionalCurvature result;
+    result.value = 0.0;
+    result.parallaxPixels = 0.0;
+
+    // Subtracting these two previous-frame projections removes camera
+    // rotation and leaves only translation/object-motion parallax. Therefore
+    // pure optical-center rotation can never select or apply curvature.
+    vec2 zeroParallaxUv;
+    if (!relaxProjectRelative(rtPrevViewProjection,
+            currentSurfacePosition, zeroParallaxUv) ||
+            any(isnan(surfacePreviousUv)) || any(isinf(surfacePreviousUv)))
+        return result;
+    vec2 parallaxPixels = (zeroParallaxUv - surfacePreviousUv) *
+        vec2(resolution_global);
+    result.parallaxPixels = length(parallaxPixels);
+    if (result.parallaxPixels < RELAX_CURVATURE_MIN_PARALLAX_PIXELS)
+        return result;
+
+    vec2 direction = parallaxPixels / result.parallaxPixels;
+    ivec2 pixel = ivec2(currentPixel);
+    ivec2 xOffset = ivec2(direction.x < 0.0 ? -1 : 1, 0);
+    ivec2 yOffset = ivec2(0, direction.y < 0.0 ? -1 : 1);
+    vec3 edge = vec3(0.0);
+    vec3 normalDelta = vec3(0.0);
+    float usedWeight = 0.0;
+
+    vec3 axisEdge, axisNormalDelta;
+    float axisWeight = abs(direction.x);
+    if (axisWeight > 1e-4 && relaxLoadCurvatureEdge(pixel + xOffset,
+            currentSurfacePosition, currentNormal, currentMaterial,
+            axisEdge, axisNormalDelta)) {
+        edge += axisEdge * axisWeight;
+        normalDelta += axisNormalDelta * axisWeight;
+        usedWeight += axisWeight;
+    }
+    axisWeight = abs(direction.y);
+    if (axisWeight > 1e-4 && relaxLoadCurvatureEdge(pixel + yOffset,
+            currentSurfacePosition, currentNormal, currentMaterial,
+            axisEdge, axisNormalDelta)) {
+        edge += axisEdge * axisWeight;
+        normalDelta += axisNormalDelta * axisWeight;
+        usedWeight += axisWeight;
+    }
+    if (usedWeight <= 1e-4) return result;
+
+    edge /= usedWeight;
+    normalDelta /= usedWeight;
+    float edgeLengthSquared = dot(edge, edge);
+    if (edgeLengthSquared <= 1e-10) return result;
+    float curvature = dot(normalDelta, edge) / edgeLengthSquared;
+    if (isnan(curvature) || isinf(curvature)) return result;
+
+    float coherentMirrorAmount = 1.0 - smoothstep(
+        RELAX_CURVATURE_ROUGHNESS_FADE_BEGIN,
+        RELAX_CURVATURE_ROUGHNESS_FADE_END,
+        perceptualRoughness);
+    result.value = curvature * coherentMirrorAmount;
+    return result;
+}
+
+bool relaxApplyThinMirror(float offset, float curvature, out float focused) {
+    float denominator = 1.0 + 2.0 * curvature * offset;
+    if (denominator < RELAX_CURVATURE_MIN_FOCUS_DENOMINATOR ||
+            isnan(denominator) || isinf(denominator)) {
+        focused = offset;
+        return false;
+    }
+    focused = offset / denominator;
+    return !isnan(focused) && !isinf(focused) &&
+        (offset == 0.0 || focused * offset > 0.0);
 }
 
 RelaxEndpointProjection relaxBuildEndpointProjection(
     vec3 currentSurfacePosition,
     vec3 cameraDelta,
     RelaxEndpointMoments endpoint,
-    vec2 currentUv
+    RelaxDirectionalCurvature directionalCurvature
 ) {
     RelaxEndpointProjection projection;
     projection.uv = vec2(-2.0);
@@ -218,33 +341,94 @@ RelaxEndpointProjection relaxBuildEndpointProjection(
 
     float distanceScale = relaxEndpointDistanceScale();
     vec3 meanWorld = endpoint.mean * distanceScale;
-    float meanSquared = dot(endpoint.mean, endpoint.mean);
-    // Form the dimensionless central-energy ratio before restoring world
-    // scale. This avoids subtracting two O(VPROJDIST_SKY^2) FP32 numbers and
-    // preserves the q=|m|^2 deterministic boundary after FP16 decoding.
-    float spread = clamp((endpoint.secondMoment - meanSquared) /
-        max(endpoint.secondMoment, 1e-12), 0.0, 1.0);
-    vec3 surfaceView = mat3(rtModelView) * currentSurfacePosition;
-    vec3 meanView = mat3(rtModelView) * meanWorld;
-    float rawAxial = meanView.z / max(-surfaceView.z, 1e-6);
-    float axial = rawAxial / (1.0 + abs(rawAxial));
-    float zeta = relaxVisualPointZeta(spread, axial);
+    float centralEnergyNormalized = max(endpoint.secondMoment
+        - dot(endpoint.mean, endpoint.mean), 0.0);
+    float axialVariance = centralEnergyNormalized
+        * distanceScale * distanceScale / 3.0;
 
-    vec3 visualCurrent = currentSurfacePosition + zeta * meanWorld;
-    vec3 visualPrevious = visualCurrent + cameraDelta;
-    vec2 visualCurrentUv, visualPreviousUv;
-    if (!relaxProjectRelative(rtViewProjection,
-            visualCurrent, visualCurrentUv) ||
-        !relaxProjectRelative(rtPrevViewProjection,
-            visualPrevious, visualPreviousUv))
+    // A temporal sample belongs to the primary pixel, not to the screen-space
+    // projection of its rough VNDF endpoint. Collapse the measured endpoint
+    // moments onto the current primary ray so every support point projects to
+    // the current pixel. Pure camera rotation is then exactly depth-invariant.
+    float surfaceDistance = length(currentSurfacePosition);
+    if (surfaceDistance <= 1e-7) return projection;
+    vec3 primaryRay = currentSurfacePosition / surfaceDistance;
+    float axialMeanOffset = dot(meanWorld, primaryRay);
+    float axialSigma = sqrt(max(axialVariance, 0.0));
+    float nearAxialOffset = axialMeanOffset - axialSigma;
+    float farAxialOffset = axialMeanOffset + axialSigma;
+
+    // Apply the local thin-mirror equation to the virtual offset measured
+    // from the primary surface, never to the camera-to-surface distance. The
+    // two transformed support points remain scalar multiples of primaryRay,
+    // preserving exact pure-rotation reprojection.
+    float focusedNearOffset, focusedFarOffset;
+    bool curvatureApplied = abs(directionalCurvature.value) > 1e-12 &&
+        relaxApplyThinMirror(nearAxialOffset, directionalCurvature.value,
+            focusedNearOffset) &&
+        relaxApplyThinMirror(farAxialOffset, directionalCurvature.value,
+            focusedFarOffset);
+    if (!curvatureApplied) {
+        focusedNearOffset = nearAxialOffset;
+        focusedFarOffset = farAxialOffset;
+    }
+
+    float nearVirtualDistance = surfaceDistance + focusedNearOffset;
+    float farVirtualDistance = surfaceDistance + focusedFarOffset;
+    if (nearVirtualDistance <= 1e-5 || isnan(farVirtualDistance)
+            || isinf(farVirtualDistance))
         return projection;
 
-    // Difference the visual-point projections and apply that motion to the
-    // actual integer-coordinate primary-ray UV. This preserves Vulkanite's
-    // sampling protocol and makes identical current/previous cameras an
-    // identity without a camera-stationary branch.
-    projection.uv = currentUv + visualPreviousUv - visualCurrentUv;
-    projection.confidence = 1.0;
+    vec3 nearPrevious = primaryRay * nearVirtualDistance + cameraDelta;
+    vec3 farPrevious = primaryRay * farVirtualDistance + cameraDelta;
+    vec2 nearPreviousUv, farPreviousUv;
+    if (!relaxProjectRelative(rtPrevViewProjection,
+            nearPrevious, nearPreviousUv) ||
+        !relaxProjectRelative(rtPrevViewProjection,
+            farPrevious, farPreviousUv))
+        return projection;
+
+    projection.uv = 0.5 * (nearPreviousUv + farPreviousUv);
+
+    // Reject a noisy/focal curvature estimate if it accelerates the virtual
+    // address by more than the underlying translation parallax can explain.
+    // Fall back to the uncurved axial model instead of discarding history.
+    if (curvatureApplied) {
+        vec2 uncurvedMeanUv;
+        vec3 uncurvedMeanPrevious = primaryRay *
+            (surfaceDistance + axialMeanOffset) + cameraDelta;
+        bool uncurvedMeanValid = relaxProjectRelative(rtPrevViewProjection,
+            uncurvedMeanPrevious, uncurvedMeanUv);
+        float correctionPixels = uncurvedMeanValid
+            ? length((projection.uv - uncurvedMeanUv) *
+                vec2(resolution_global))
+            : 1e20;
+        float allowedCorrectionPixels = max(1.0,
+            RELAX_CURVATURE_MAX_MOTION_ACCELERATION *
+                directionalCurvature.parallaxPixels);
+        if (correctionPixels > allowedCorrectionPixels) {
+            float uncurvedNearDistance = surfaceDistance + nearAxialOffset;
+            float uncurvedFarDistance = surfaceDistance + farAxialOffset;
+            if (uncurvedNearDistance <= 1e-5 ||
+                    isnan(uncurvedFarDistance) || isinf(uncurvedFarDistance))
+                return projection;
+            nearPrevious = primaryRay *
+                uncurvedNearDistance + cameraDelta;
+            farPrevious = primaryRay *
+                uncurvedFarDistance + cameraDelta;
+            if (!relaxProjectRelative(rtPrevViewProjection,
+                    nearPrevious, nearPreviousUv) ||
+                !relaxProjectRelative(rtPrevViewProjection,
+                    farPrevious, farPreviousUv))
+                return projection;
+            projection.uv = 0.5 * (nearPreviousUv + farPreviousUv);
+        }
+    }
+
+    vec2 sigmaMotionPixels = 0.5 * (farPreviousUv - nearPreviousUv)
+        * vec2(resolution_global);
+    float motionVariancePixels = dot(sigmaMotionPixels, sigmaMotionPixels);
+    projection.confidence = 1.0 / (1.0 + motionVariancePixels);
     projection.valid = !any(isnan(projection.uv)) &&
         !any(isinf(projection.uv)) &&
         all(greaterThanEqual(projection.uv, vec2(0.0))) &&
@@ -380,11 +564,20 @@ void main() {
         temporalEndpoint = sanitizeRelaxEndpointMoments(temporalEndpoint);
     }
     float endpointDistance = relaxEndpointMeanDistance(temporalEndpoint);
+    RelaxDirectionalCurvature directionalCurvature;
+    directionalCurvature.value = 0.0;
+    directionalCurvature.parallaxPixels = 0.0;
+    if (motionValid >= 0.5 &&
+            relaxEndpointMomentsValid(currentFrameEndpoint) &&
+            currentRoughness < RELAX_CURVATURE_ROUGHNESS_FADE_END) {
+        directionalCurvature = relaxEstimateDirectionalCurvature(pixel,
+            currentPos, currentNormal, currentMaterial, currentRoughness,
+            cameraDelta, surfaceUv);
+    }
     RelaxEndpointProjection endpointProjection =
         relaxBuildEndpointProjection(
             currentPos, cameraDelta,
-            currentFrameEndpoint,
-            relaxCurrentUv(pixel));
+            currentFrameEndpoint, directionalCurvature);
     // A finite endpoint model cannot represent an infinity/sky component.
     // Retain the previous finite moments in storage, but do not use them to
     // reproject the current sky sample.

@@ -173,6 +173,47 @@ vec3 GGXNormal(vec3 macroNormal, float roughness, vec3 pos) {
     return GGXNormal(macroNormal, roughness, rand2(pos));
 }
 
+// Heitz's isotropic GGX visible-normal sampler. viewDirection points from the
+// surface toward the previous vertex and must lie in macroNormal's hemisphere.
+// Unlike GGXNormal(), this samples D_visible(H | V), not D(H) * NoH.
+vec3 GGXVNDFNormal(vec3 macroNormal, vec3 viewDirection,
+        float roughness, vec2 xi) {
+    vec3 N = normalize(macroNormal);
+    vec3 V = normalize(viewDirection);
+    if (dot(N, V) < 0.0) N = -N;
+
+    vec3 helper = abs(N.z) < 0.999
+        ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    vec3 T = normalize(cross(helper, N));
+    vec3 B = cross(N, T);
+    vec3 localV = vec3(dot(V, T), dot(V, B), max(dot(V, N), 1e-6));
+
+    float alpha = max(roughness, 1e-4);
+    vec3 stretchedV = normalize(vec3(alpha * localV.xy, localV.z));
+    float lensq = dot(stretchedV.xy, stretchedV.xy);
+    vec3 T1 = lensq > 1e-12
+        ? vec3(-stretchedV.y, stretchedV.x, 0.0) * inversesqrt(lensq)
+        : vec3(1.0, 0.0, 0.0);
+    vec3 T2 = cross(stretchedV, T1);
+
+    float radius = sqrt(xi.x);
+    float phi = 2.0 * PI * xi.y;
+    float t1 = radius * cos(phi);
+    float t2 = radius * sin(phi);
+    float blend = 0.5 * (1.0 + stretchedV.z);
+    t2 = mix(sqrt(max(1.0 - t1 * t1, 0.0)), t2, blend);
+    vec3 stretchedH = t1 * T1 + t2 * T2
+        + sqrt(max(1.0 - t1 * t1 - t2 * t2, 0.0)) * stretchedV;
+    vec3 localH = normalize(vec3(
+        alpha * stretchedH.xy, max(stretchedH.z, 0.0)));
+    return normalize(T * localH.x + B * localH.y + N * localH.z);
+}
+
+vec3 GGXVNDFNormal(vec3 macroNormal, vec3 viewDirection,
+        float roughness, vec3 pos) {
+    return GGXVNDFNormal(macroNormal, viewDirection, roughness, rand2(pos));
+}
+
 vec3 DiffuseNormal(vec3 macroNormal, vec3 pos) {
     vec3 randN0;
     randN0.y = -length(macroNormal.xz);
@@ -217,6 +258,44 @@ float GGX_D(float costheta, float a) {
 float GGXpdf(float costheta, float fai, float a) {
     float NoH = max(costheta, 0.0);
     return GGX_D(NoH, a) * NoH;
+}
+
+float GGX_G1_standard(float NoV, float roughness) {
+    return 1.0 / (1.0 + GGX_Lamda(max(NoV, 1e-6), roughness));
+}
+
+// Visible-half-vector density with respect to solid angle of H.
+float GGX_vndf_half_pdf(vec3 wo, vec3 H, vec3 macroNormal,
+        float roughness) {
+    float NoV = dot(macroNormal, wo);
+    float NoH = dot(macroNormal, H);
+    float VoH = dot(wo, H);
+    if (NoV <= 1e-6 || NoH <= 1e-6 || VoH <= 1e-6)
+        return 0.0;
+    return GGX_D(NoH, roughness) * GGX_G1_standard(NoV, roughness)
+        * VoH / NoV;
+}
+
+// VNDF-sampled reflection direction density.  The reflection Jacobian
+// 1/(4*VoH) cancels the VoH in the visible-normal density.
+float GGX_vndf_pdf(vec3 wo, vec3 wi, vec3 macroNormal, float roughness) {
+    float NoV = dot(macroNormal, wo);
+    float NoL = dot(macroNormal, wi);
+    if (NoV <= 1e-6 || NoL <= 1e-6)
+        return 0.0;
+
+    vec3 Hsum = wo + wi;
+    float Hlen2 = dot(Hsum, Hsum);
+    if (Hlen2 <= 1e-12)
+        return 0.0;
+    vec3 H = Hsum * inversesqrt(Hlen2);
+    float NoH = dot(macroNormal, H);
+    float VoH = dot(wo, H);
+    if (NoH <= 1e-6 || VoH <= 1e-6)
+        return 0.0;
+
+    return GGX_D(NoH, roughness) * GGX_G1_standard(NoV, roughness)
+        / (4.0 * NoV);
 }
 
 // NDF-sampled reflection direction PDF for GGX.
