@@ -71,7 +71,46 @@ void relaxResolveAtrous(ivec2 p, RelaxSpatialSignal s) {
     (RELAX_ATROUS_TILE_SIZE * RELAX_ATROUS_TILE_SIZE)
 
 shared vec4 relaxSharedGeometry[RELAX_ATROUS_TILE_AREA];
-shared uvec4 relaxSharedSignal[RELAX_ATROUS_TILE_AREA];
+// Neighbor taps consume radiance, roughness, variance and endpoint distance;
+// history is only a validity test and confidence is center-only. Keep the
+// first three packed words and encode invalid history as negative variance.
+shared uvec2 relaxSharedRadianceRough[RELAX_ATROUS_TILE_AREA];
+shared uint relaxSharedVarianceEndpoint[RELAX_ATROUS_TILE_AREA];
+
+uvec2 relaxLoadSharedTileSample(uint index, ivec2 q, ivec2 size) {
+    uvec4 packedSignal = uvec4(0u);
+    if (relaxInBounds(q, size)) {
+        relaxSharedGeometry[index] = texelFetch(colortex9, q, 0);
+        packedSignal = relaxFetchAtrousPacked(q);
+        float historyLength = unpackHalf2x16(packedSignal.w).x;
+        relaxSharedRadianceRough[index] = packedSignal.xy;
+        relaxSharedVarianceEndpoint[index] = historyLength > 0.0
+            ? packedSignal.z : relaxPackHalf2(-1.0, 0.0);
+    } else {
+        relaxSharedGeometry[index] = vec4(0.0);
+        relaxSharedRadianceRough[index] = uvec2(0u);
+        relaxSharedVarianceEndpoint[index] =
+            relaxPackHalf2(-1.0, 0.0);
+    }
+    // Only the center needs the unabridged variance/endpoint + metadata.
+    return packedSignal.zw;
+}
+
+RelaxSpatialSignal relaxUnpackSharedNeighbor(uint index) {
+    uvec2 radianceRough = relaxSharedRadianceRough[index];
+    vec2 rg = unpackHalf2x16(radianceRough.x);
+    vec2 br = unpackHalf2x16(radianceRough.y);
+    vec2 varianceEndpoint =
+        unpackHalf2x16(relaxSharedVarianceEndpoint[index]);
+    RelaxSpatialSignal signal;
+    signal.radiance = vec3(rg, br.x);
+    signal.roughness = clamp(br.y, 0.0, 1.0);
+    signal.variance = max(varianceEndpoint.x, 0.0);
+    signal.endpointDistance = max(varianceEndpoint.y, 0.0);
+    signal.historyLength = varianceEndpoint.x < 0.0 ? 0.0 : 1.0;
+    signal.confidence = 0.0;
+    return signal;
+}
 
 #else
 
@@ -100,20 +139,26 @@ void main() {
         ivec2(gl_WorkGroupID.xy) * RELAX_ATROUS_GROUP_SIZE -
         ivec2(RELAX_ATROUS_HALO);
 
+    ivec2 centerTile = ivec2(gl_LocalInvocationID.xy) +
+        ivec2(RELAX_ATROUS_HALO);
+    uint centerIndex = uint(centerTile.y * RELAX_ATROUS_TILE_SIZE +
+        centerTile.x);
+    uvec2 centerVarianceMetadata =
+        relaxLoadSharedTileSample(centerIndex, pixel, size);
+
     // Every invocation reaches the barrier, including workgroups partially
     // outside the image. Invalid halo entries carry zero history and are never
     // consumed as valid samples.
     for (uint i = localIndex; i < uint(RELAX_ATROUS_TILE_AREA); i += 256u) {
         int tx = int(i % uint(RELAX_ATROUS_TILE_SIZE));
         int ty = int(i / uint(RELAX_ATROUS_TILE_SIZE));
+        bool interior = tx >= RELAX_ATROUS_HALO &&
+            tx < RELAX_ATROUS_HALO + RELAX_ATROUS_GROUP_SIZE &&
+            ty >= RELAX_ATROUS_HALO &&
+            ty < RELAX_ATROUS_HALO + RELAX_ATROUS_GROUP_SIZE;
+        if (interior) continue;
         ivec2 q = tileOrigin + ivec2(tx, ty);
-        if (relaxInBounds(q, size)) {
-            relaxSharedGeometry[i] = texelFetch(colortex9, q, 0);
-            relaxSharedSignal[i] = relaxFetchAtrousPacked(q);
-        } else {
-            relaxSharedGeometry[i] = vec4(0.0);
-            relaxSharedSignal[i] = uvec4(0u);
-        }
+        relaxLoadSharedTileSample(i, q, size);
     }
     memoryBarrierShared();
     barrier();
@@ -124,12 +169,11 @@ void main() {
     vec4 centerGeometry;
     RelaxSpatialSignal center;
 #if defined(RELAX_ATROUS_SHARED)
-    ivec2 centerTile = ivec2(gl_LocalInvocationID.xy) +
-        ivec2(RELAX_ATROUS_HALO);
-    uint centerIndex = uint(centerTile.y * RELAX_ATROUS_TILE_SIZE +
-        centerTile.x);
     centerGeometry = relaxSharedGeometry[centerIndex];
-    center = relaxUnpackSpatial(relaxSharedSignal[centerIndex]);
+    uvec2 centerRadianceRough =
+        relaxSharedRadianceRough[centerIndex];
+    center = relaxUnpackSpatial(uvec4(centerRadianceRough,
+        centerVarianceMetadata));
 #else
     centerGeometry = texelFetch(colortex9, pixel, 0);
     center = relaxLoadAtrous(pixel);
@@ -208,7 +252,7 @@ void main() {
         q = pixel + tileOffset;
         kernelWeight = gridWeight[i];
         sampleGeometry = relaxSharedGeometry[sampleIndex];
-        sampleSignal = relaxUnpackSpatial(relaxSharedSignal[sampleIndex]);
+        sampleSignal = relaxUnpackSharedNeighbor(sampleIndex);
 #else
         vec4 poisson = RELAX_POISSON_8[i];
         q = pixel + ivec2(round(rotation * poisson.xy));

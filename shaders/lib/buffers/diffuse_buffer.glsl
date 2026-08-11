@@ -41,8 +41,11 @@ void writeDiffuseLightRT(uvec2 xy, AliceEncoding alice, float meanY2) {
         packHalf2x16(vec2(0.0, sqrtM2))
     );
 }
+uvec4 readDiffuseLightRTRaw(uvec2 xy) {
+    return diffuseBuffer.data[addr(DIF_N_LIGHT, xy)];
+}
 void readDiffuseLightRT(uvec2 xy, out AliceEncoding alice, out float meanY2) {
-    uvec4 v = diffuseBuffer.data[addr(DIF_N_LIGHT, xy)];
+    uvec4 v = readDiffuseLightRTRaw(xy);
     vec2 ay_xy = unpackHalf2x16(v.x);
     vec2 ay_zw = unpackHalf2x16(v.y);
     vec2 cocg  = unpackHalf2x16(v.z);
@@ -152,8 +155,11 @@ void writeDiffuseSwap(uvec2 xy, AliceEncoding alice, float weight, float meanY2)
         packHalf2x16(vec2(weight, sqrtM2))
     );
 }
+uvec4 readDiffuseSwapRaw(uvec2 xy) {
+    return diffuseBuffer.data[addr(DIF_N_SWAP, xy)];
+}
 void readDiffuseSwap(uvec2 xy, out AliceEncoding alice, out float weight, out float meanY2) {
-    uvec4 v = diffuseBuffer.data[addr(DIF_N_SWAP, xy)];
+    uvec4 v = readDiffuseSwapRaw(xy);
     vec2 ay_xy = unpackHalf2x16(v.x);
     vec2 ay_zw = unpackHalf2x16(v.y);
     vec2 cocg  = unpackHalf2x16(v.z);

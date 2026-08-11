@@ -27,15 +27,48 @@ const float hw[3] = float[](1.0, 0.66667, 0.44444);
 #define VAR_FILTER_POSITION_PARAM ATROUS_POSITION_PARAM
 #endif
 
-struct TileSample {
-    vec4 pos_oct;    // refraction endpoint position + packed direction
-    vec4 color_vproj;
-    vec4 H_rough;    // geometry normal + path roughness; roughness < 0 is sky
-};
-shared TileSample sm[TILE_AREA];
+// Refraction geometry is already 16-byte packed, while light is four FP16
+// values and the G-buffer normal is oct-encoded. Preserve those source
+// encodings in LDS and unpack only the fields consumed by a tap.
+shared vec4 sm_refr_geo[TILE_AREA];
+shared float sm_luma[TILE_AREA];
+shared uvec2 sm_surface_packed[TILE_AREA]; // oct(H), fbits(path roughness)
 
 float luma(vec3 c) {
     return dot(c, vec3(0.299, 0.587, 0.114));
+}
+
+uvec2 loadTileSample(uint index, uvec2 xy) {
+    float primaryDistance =
+        geomBuffer.data[addr(GEO_N_GEO, xy)].w;
+
+    sm_refr_geo[index] = vec4(0.0);
+    sm_luma[index] = 0.0;
+    sm_surface_packed[index] = uvec2(0u,
+        floatBitsToUint(-1.0));
+
+    uvec2 packedLight = uvec2(0u);
+    if (primaryDistance > -0.5) {
+        vec4 surface = geomBuffer.data[addr(GEO_N_NORMALS, xy)];
+        vec4 refrGeo = refractBuffer.data[addr(SPEC_N_GEO, xy)];
+        vec4 refrLight = refractBuffer.data[addr(SPEC_N_LIGHT, xy)];
+        packedLight = uvec2(floatBitsToUint(refrLight.x),
+            floatBitsToUint(refrLight.y));
+        vec2 rg = unpackHalf2x16(packedLight.x);
+        vec2 bv = unpackHalf2x16(packedLight.y);
+        vec3 color = vec3(rg, bv.x);
+        if (any(isnan(color)) || any(isinf(color))) {
+            color = vec3(0.0);
+            packedLight = uvec2(0u,
+                packHalf2x16(vec2(0.0, bv.y)));
+        }
+
+        sm_refr_geo[index] = refrGeo;
+        sm_luma[index] = luma(color);
+        sm_surface_packed[index] = uvec2(floatBitsToUint(surface.x),
+            floatBitsToUint(max(surface.w, 0.0)));
+    }
+    return packedLight;
 }
 
 void main() {
@@ -45,64 +78,46 @@ void main() {
     uint tid = gl_LocalInvocationIndex;
     ivec2 tileOrigin = ivec2(gl_WorkGroupID.xy * 16u) - ivec2(HALO);
 
-    // All source planes are independent. Load them in one traversal and use a
-    // single visibility barrier (the previous code used four traversals and
-    // four barriers for the same 20x20 tile).
+    uint cx = lid.x + HALO;
+    uint cy = lid.y + HALO;
+    uint centerIndex = cy * TILE + cx;
+    ivec2 centerCoord = clamp(ivec2(gid), ivec2(0), texSize - 1);
+    uvec2 centerLightPacked =
+        loadTileSample(centerIndex, uvec2(centerCoord));
+
+    // Each lane owns its interior sample; lanes cooperate only on the halo.
+    // Center RGB/vproj remains in registers while LDS stores neighbor luma.
     for (uint i = tid; i < TILE_AREA; i += 256u) {
         uint tx = i % TILE;
         uint ty = i / TILE;
+        bool interior = tx >= HALO && tx < HALO + 16u &&
+            ty >= HALO && ty < HALO + 16u;
+        if (interior) continue;
         ivec2 cc = clamp(tileOrigin + ivec2(tx, ty), ivec2(0), texSize - 1);
-        uvec2 xy = uvec2(cc);
-
-        vec3 primaryPosition;
-        float primaryDistance;
-        readGeo0(GEO_N_GEO, xy, primaryPosition, primaryDistance);
-
-        sm[i].pos_oct = vec4(0.0);
-        sm[i].color_vproj = vec4(0.0);
-        sm[i].H_rough = vec4(0.0, 0.0, 0.0, -1.0);
-        if (primaryDistance > -0.5) {
-            vec3 H;
-            float roughnessUnused, pathRoughness;
-            int materialUnused;
-            readGeo1(GEO_N_NORMALS, xy, H, roughnessUnused,
-                materialUnused, pathRoughness);
-
-            vec3 endpointPosition, direction;
-            readRefrGeo(xy, endpointPosition, direction);
-
-            vec3 color;
-            float virtualProjectionDistance, accumulatedWeightUnused;
-            readRefrLight(xy, color, virtualProjectionDistance,
-                accumulatedWeightUnused);
-            if (any(isnan(color)) || any(isinf(color))) color = vec3(0.0);
-
-            sm[i].pos_oct = vec4(endpointPosition, encodeNormal(direction));
-            sm[i].color_vproj = vec4(color, virtualProjectionDistance);
-            sm[i].H_rough = vec4(H, max(pathRoughness, 0.0));
-        }
+        loadTileSample(i, uvec2(cc));
     }
     barrier();
 
     if (any(greaterThanEqual(gid, uvec2(resolution)))) return;
 
-    uint cx = lid.x + HALO;
-    uint cy = lid.y + HALO;
-    TileSample c = sm[cy * TILE + cx];
+    uvec2 cSurface = sm_surface_packed[centerIndex];
+    float cRough = uintBitsToFloat(cSurface.y);
 
-    if (c.H_rough.w < 0.0) {
+    if (cRough < 0.0) {
         imageStore(colorimg3, ivec2(gid), vec4(0.0));
         imageStore(colorimg4, ivec2(gid),
             uvec4(0u, 0u, packHalf2x16(vec2(-1.0, 0.0)), 0u));
         return;
     }
 
-    vec3 cPos = c.pos_oct.xyz;
-    vec3 cR = decodeNormal(c.pos_oct.w);
-    vec3 cH = c.H_rough.xyz;
-    vec3 cColor = c.color_vproj.xyz;
-    float cVproj = c.color_vproj.w;
-    float cRough = c.H_rough.w;
+    vec4 cGeo = sm_refr_geo[centerIndex];
+    vec2 cRG = unpackHalf2x16(centerLightPacked.x);
+    vec2 cBV = unpackHalf2x16(centerLightPacked.y);
+    vec3 cPos = cGeo.xyz;
+    vec3 cR = decodeNormal(cGeo.w);
+    vec3 cH = decodeNormal(uintBitsToFloat(cSurface.x));
+    vec3 cColor = vec3(cRG, cBV.x);
+    float cVproj = cBV.y;
 
     // These terms are center-invariant. The former helper recomputed the
     // center distance, pixel footprint and reciprocal for every one of 25 taps.
@@ -115,16 +130,21 @@ void main() {
     float sumW = 0.0, sumL = 0.0, sumL2 = 0.0;
     for (int ky = -2; ky <= 2; ++ky) {
         for (int kx = -2; kx <= 2; ++kx) {
-            TileSample s = sm[(cy + uint(ky)) * TILE + (cx + uint(kx))];
-            if (s.H_rough.w < 0.0) continue;
+            uint sampleIndex =
+                (cy + uint(ky)) * TILE + (cx + uint(kx));
+            uvec2 sampleSurface = sm_surface_packed[sampleIndex];
+            if (uintBitsToFloat(sampleSurface.y) < 0.0) continue;
+            vec4 sampleGeo = sm_refr_geo[sampleIndex];
+            vec3 sampleH = decodeNormal(
+                uintBitsToFloat(sampleSurface.x));
 
-            float normalDot = clamp(dot(cH, s.H_rough.xyz), 0.0, 1.0);
-            float planeDistance = abs(dot(s.pos_oct.xyz, cH) -
+            float normalDot = clamp(dot(cH, sampleH), 0.0, 1.0);
+            float planeDistance = abs(dot(sampleGeo.xyz, cH) -
                 centerPlaneDistance);
             float geometryWeight = pow(normalDot, VAR_FILTER_NORMAL_POWER) *
                 exp2(-planeDistance * invDepthScale * LOG2_E);
             float w = hw[abs(kx)] * hw[abs(ky)] * geometryWeight;
-            float L = luma(s.color_vproj.xyz);
+            float L = sm_luma[sampleIndex];
             sumW += w;
             sumL += w * L;
             sumL2 += w * L * L;

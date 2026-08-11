@@ -17,9 +17,11 @@ void storeSpatialEndpoint(ivec2 pixel, RelaxEndpointMoments endpoint) {
 #define ENDPOINT_TILE_SIZE (ENDPOINT_GROUP_SIZE + 2 * ENDPOINT_FILTER_RADIUS) // 22
 #define ENDPOINT_TILE_AREA (ENDPOINT_TILE_SIZE * ENDPOINT_TILE_SIZE)           // 484
 
-shared vec4 sm_moments[ENDPOINT_TILE_AREA]; // xyz: mean, w: secondMoment
-shared vec4 sm_pos_rough[ENDPOINT_TILE_AREA]; // xyz: position, w: perceptualRoughness
-shared vec3 sm_normal[ENDPOINT_TILE_AREA]; // xyz: normalized normal
+// Endpoint moments and normals already have lossless-for-source packed forms.
+// Keep those encodings in LDS and decode only after rejecting empty taps.
+shared uvec2 sm_moments_packed[ENDPOINT_TILE_AREA];
+shared vec4 sm_pos_rough[ENDPOINT_TILE_AREA];
+shared uint sm_normal_packed[ENDPOINT_TILE_AREA];
 
 bool isFiniteVec3(vec3 v) {
     return all(lessThan(abs(v), vec3(1e30)));
@@ -39,7 +41,7 @@ void main() {
         uint ty = i / uint(ENDPOINT_TILE_SIZE);
         ivec2 q = clamp(tileOrigin + ivec2(tx, ty), ivec2(0), size - ivec2(1));
 
-        RelaxEndpointMoments moments = readReflEndpointMoments(uvec2(q));
+        uvec2 packedMoments = readReflEndpointMomentsRaw(uvec2(q));
         vec3 position;
         float primaryDistance;
         readGeo0(GEO_N_GEO, uvec2(q), position, primaryDistance);
@@ -52,20 +54,17 @@ void main() {
                 isFiniteVec3(normal) && isFiniteFloat(alpha);
 
         if (!finiteGeometry) {
-            moments = emptyRelaxEndpointMoments();
+            packedMoments = uvec2(0u);
             position = vec3(0.0);
-            normal = vec3(0.0, 1.0, 0.0);
             alpha = 1.0;
-        } else {
-            moments = sanitizeRelaxEndpointMoments(moments);
-            normal = relaxSafeNormalize(normal, vec3(0.0, 1.0, 0.0));
         }
 
         float perceptualRoughness = relaxPerceptualRoughness(alpha);
 
-        sm_moments[i] = vec4(moments.mean, moments.secondMoment);
+        sm_moments_packed[i] = packedMoments;
         sm_pos_rough[i] = vec4(position, perceptualRoughness);
-        sm_normal[i] = normal;
+        sm_normal_packed[i] = finiteGeometry
+            ? floatBitsToUint(surfaceData.x) : 0u;
     }
 
     barrier();
@@ -75,10 +74,8 @@ void main() {
     ivec2 centerTile = ivec2(gl_LocalInvocationID.xy) + ivec2(ENDPOINT_FILTER_RADIUS);
     int centerIndex = centerTile.y * ENDPOINT_TILE_SIZE + centerTile.x;
 
-    vec4 centerPacked = sm_moments[centerIndex];
-    RelaxEndpointMoments center;
-    center.mean = centerPacked.xyz;
-    center.secondMoment = centerPacked.w;
+    RelaxEndpointMoments center =
+        relaxUnpackEndpointMoments(sm_moments_packed[centerIndex]);
 
     if (!relaxEndpointMomentsValid(center)) {
         storeSpatialEndpoint(pixel, emptyRelaxEndpointMoments());
@@ -88,7 +85,8 @@ void main() {
     vec4 centerPosRough = sm_pos_rough[centerIndex];
     vec3 centerPosition = centerPosRough.xyz;
     float centerRoughness = centerPosRough.w;
-    vec3 centerNormal = sm_normal[centerIndex];
+    vec3 centerNormal = decodeNormal(
+        uintBitsToFloat(sm_normal_packed[centerIndex]));
 
     float spatialSigma = 0.12 + 2.88 * centerRoughness;
     float invTwoSpatialSigma2 = 0.5 / max(spatialSigma * spatialSigma, 1e-8);
@@ -119,9 +117,15 @@ void main() {
         for (int ox = -filterRadius; ox <= filterRadius; ++ox) {
             int sampleIndex = centerIndex + (oy * ENDPOINT_TILE_SIZE + ox);
 
-            vec4 sampleMomentsPacked = sm_moments[sampleIndex];
-            vec3 sampleMean = sampleMomentsPacked.xyz;
-            float sampleSecondMoment = sampleMomentsPacked.w;
+            uvec2 sampleMomentsPacked =
+                sm_moments_packed[sampleIndex];
+            // The high half is sqrt(secondMoment), so reject empty taps before
+            // paying for the full endpoint decode and geometry fetches.
+            if ((sampleMomentsPacked.y >> 16u) == 0u) continue;
+            RelaxEndpointMoments sampleMoments =
+                relaxUnpackEndpointMoments(sampleMomentsPacked);
+            vec3 sampleMean = sampleMoments.mean;
+            float sampleSecondMoment = sampleMoments.secondMoment;
 
             float endpointPresence = step(1e-20, sampleSecondMoment);
             if (endpointPresence <= 0.0) continue; // 快速跳过无效/空样本
@@ -129,7 +133,8 @@ void main() {
             vec4 samplePosRough = sm_pos_rough[sampleIndex];
             vec3 samplePosition = samplePosRough.xyz;
             float sampleRoughness = samplePosRough.w;
-            vec3 sampleNormal = sm_normal[sampleIndex];
+            vec3 sampleNormal = decodeNormal(
+                uintBitsToFloat(sm_normal_packed[sampleIndex]));
 
             vec3 originDelta = (samplePosition - centerPosition) * invEndpointScale;
             vec3 rebasedMean = sampleMean + originDelta;

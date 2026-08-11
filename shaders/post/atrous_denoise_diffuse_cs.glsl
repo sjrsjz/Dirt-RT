@@ -25,24 +25,32 @@ layout(rgba32ui) uniform uimage2D colorimg4;
 #define TILE_AREA (TILE_SIZE * TILE_SIZE)
 
 shared vec4 sm_geometry[TILE_AREA];
-shared vec4 sm_alice_y[TILE_AREA];
-shared vec2 sm_cocg[TILE_AREA];
-shared float sm_variance[TILE_AREA];
-shared vec2 sm_stddev[TILE_AREA];
-// Negative marks an out-of-image tile entry; zero is a valid isotropic sample.
-// Worst case (R0=4): 576 * 56 bytes = 32256 bytes of shared memory.
-shared float sm_inv_len_v_sq[TILE_AREA];
+// Alice/CoCg retain their source FP16 representation; variance remains the
+// original FP32 word. Bures standard deviations are sufficient at FP16
+// precision, while inverse vector length is cheaper to reconstruct per tap
+// than to reserve another four LDS bytes for every tile sample.
+shared uvec4 sm_light_packed[TILE_AREA];
+shared uint sm_stddev_packed[TILE_AREA];
+// 36 bytes/sample. Worst case (R0=4): 576 * 36 = 20736 bytes,
+// down from 32256 bytes and below the three-workgroup 64-KiB threshold.
 
 // ---------------------------------------------------------------------------
 // 辅助函数
 // ---------------------------------------------------------------------------
 
-void makeBuresData(vec4 encoded, float omega, out vec2 stddev,
-    out float inv_len_v_sq) {
+vec2 makeBuresStddev(vec4 encoded, float omega) {
     float len_v_sq = dot(encoded.xyz, encoded.xyz);
     float kappa = alice_kappa(sqrt(len_v_sq), omega);
-    stddev = alice_eigen_std(omega, kappa);
-    inv_len_v_sq = len_v_sq > 1e-16 ? 1.0 / len_v_sq : 0.0;
+    return alice_eigen_std(omega, kappa);
+}
+
+void unpackDiffuseTileLight(uint tileIndex, out AliceEncoding alice,
+    out float variance) {
+    uvec4 light = sm_light_packed[tileIndex];
+    alice.aliceY = vec4(unpackHalf2x16(light.x),
+        unpackHalf2x16(light.y));
+    alice.CoCg = unpackHalf2x16(light.z);
+    variance = uintBitsToFloat(light.w);
 }
 
 float buresDistanceSqSM(vec3 center_v, vec2 center_stddev,
@@ -98,24 +106,21 @@ void main() {
             ivec2 gc = tile_origin + ivec2(tx, ty);
             ivec2 cc = clamp(gc, ivec2(0), texSize - 1);
 
-            sm_geometry[i] = texelFetch(colortex3, cc, 0);
-
             if (gc == cc) {
                 uvec4 light = texelFetch(colortex4, cc, 0);
-                vec4 alice_y = vec4(unpackHalf2x16(light.x), unpackHalf2x16(light.y));
-                sm_alice_y[i] = alice_y;
-                sm_cocg[i] = unpackHalf2x16(light.z);
-                sm_variance[i] = uintBitsToFloat(light.w);
+                vec4 aliceY = vec4(unpackHalf2x16(light.x),
+                    unpackHalf2x16(light.y));
+                vec2 stddev = makeBuresStddev(aliceY, abs(aliceY.w));
 
-                // Decode and build reusable Bures invariants once per tile pixel.
-                makeBuresData(alice_y, abs(alice_y.w), sm_stddev[i],
-                    sm_inv_len_v_sq[i]);
+                sm_geometry[i] = texelFetch(colortex3, cc, 0);
+                sm_light_packed[i] = light;
+                sm_stddev_packed[i] = packHalf2x16(clamp(stddev,
+                    vec2(0.0), vec2(65504.0)));
             } else {
-                sm_alice_y[i] = vec4(0.0);
-                sm_cocg[i] = vec2(0.0);
-                sm_variance[i] = 0.0;
-                sm_stddev[i] = vec2(0.0);
-                sm_inv_len_v_sq[i] = -1.0;
+                sm_geometry[i] = vec4(0.0);
+                sm_light_packed[i] = uvec4(0u, 0u, 0u,
+                    floatBitsToUint(-1.0));
+                sm_stddev_packed[i] = 0u;
             }
         }
     }
@@ -131,7 +136,7 @@ void main() {
     uint cy = local_id.y + uint(R0);
     uint center_idx = cy * uint(TILE_SIZE) + cx;
 
-    if (sm_inv_len_v_sq[center_idx] < 0.0) return;
+    if (uintBitsToFloat(sm_light_packed[center_idx].w) < 0.0) return;
 
     const float power = max(1.0, 2.0
                 - ATROUS_GAMMA * ATROUS_POWER_COEFFICIENT);
@@ -139,20 +144,22 @@ void main() {
 
     AliceEncoding center_alice;
     vec3 center_pos = sm_geometry[center_idx].xyz;
-    center_alice.aliceY = sm_alice_y[center_idx];
-    center_alice.CoCg = sm_cocg[center_idx];
-    float center_var_est = max(sm_variance[center_idx], 1e-12);
+    float center_var_raw;
+    unpackDiffuseTileLight(center_idx, center_alice, center_var_raw);
+    float center_var_est = max(center_var_raw, 1e-12);
 
     // ---- 从共享内存解码中心法线（colortex3.w = oct(centerNormal)）-------
     vec3 center_normal = decodeNormal(sm_geometry[center_idx].w);
 
     // ---- 预计算中心像素的统计特征 -----------------------------------------
     vec4 c_enc = center_alice.aliceY;
-    vec2 c_stddev = sm_stddev[center_idx];
+    vec2 c_stddev = unpackHalf2x16(sm_stddev_packed[center_idx]);
     vec2 c_stddev_sq = c_stddev * c_stddev;
     float c_trace = 2.0 * c_stddev_sq.x + c_stddev_sq.y;
     float c_anisotropy = c_stddev_sq.y - c_stddev_sq.x;
-    float c_inv_len_v_sq = sm_inv_len_v_sq[center_idx];
+    float c_len_v_sq = dot(c_enc.xyz, c_enc.xyz);
+    float c_inv_len_v_sq = c_len_v_sq > 1e-16
+        ? 1.0 / c_len_v_sq : 0.0;
 
     float resolution_y = float(resolution_global.y);
     float dist_to_cam = max(length(center_pos), 0.001);
@@ -184,21 +191,23 @@ void main() {
         uint sy = cy + uint(dy * R0);
         uint sample_idx = sy * uint(TILE_SIZE) + sx;
 
-        float s_inv_len_v_sq = sm_inv_len_v_sq[sample_idx];
-        if (s_inv_len_v_sq < 0.0) continue;
-
         AliceEncoding sample_alice;
         vec3 sample_world_pos = sm_geometry[sample_idx].xyz;
-        sample_alice.aliceY = sm_alice_y[sample_idx];
-        sample_alice.CoCg = sm_cocg[sample_idx];
-        float sample_var_est = sm_variance[sample_idx];
+        float sample_var_est;
+        unpackDiffuseTileLight(sample_idx, sample_alice,
+            sample_var_est);
+        if (sample_var_est < 0.0) continue;
         float w_geometry = abs(dot(sample_world_pos, center_normal)
                     - center_plane_distance) * inv_pixel_footprint;
 
         vec3 s_v = sample_alice.aliceY.xyz;
+        float s_len_v_sq = dot(s_v, s_v);
+        float s_inv_len_v_sq = s_len_v_sq > 1e-16
+            ? 1.0 / s_len_v_sq : 0.0;
         float d_bures_sq = buresDistanceSqSM(c_enc.xyz, c_stddev,
                 c_inv_len_v_sq, c_trace, c_anisotropy, s_v,
-                sm_stddev[sample_idx], s_inv_len_v_sq);
+                unpackHalf2x16(sm_stddev_packed[sample_idx]),
+                s_inv_len_v_sq);
         float w_luma = ATROUS_PHI_L * d_bures_sq / max(center_var_est + sample_var_est, 1e-12);
 
         const float w_kernel = GRID_3x3[k].z;

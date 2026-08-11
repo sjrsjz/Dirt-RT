@@ -1,2 +1,2 @@
-#define GBUFFERS_BLOCK
+#define GBUFFERS_TERRAIN
 #include "/gbuffers/g_main.fsh"

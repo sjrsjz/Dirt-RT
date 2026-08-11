@@ -40,20 +40,30 @@ uniform vec2 resolution;
 #define AABB_SM_W (TILE_SIZE + 2u * AABB_HALO)
 #define AABB_SM_H (TILE_SIZE + 2u * AABB_HALO)
 
-// SoA avoids the 16-byte struct padding around bool/vec2. aux.xy stores CoCg,
-// aux.z stores the center second moment, and aux.w is the surface-valid flag.
-// At the default 20x20 tile this uses 12.8 KiB instead of about 19.2 KiB.
-shared vec4 sm_aabbAliceY[AABB_SM_H * AABB_SM_W];
-shared vec4 sm_aabbAux[AABB_SM_H * AABB_SM_W];
+// Keep the source FP16 encoding in LDS and decode only when a tap is consumed.
+// N=0.w's unused low half carries validity; its high half remains sqrt(meanY2).
+// At the default 20x20 tile this uses 6.4 KiB instead of 12.8 KiB.
+shared uvec4 sm_aabbPacked[AABB_SM_H * AABB_SM_W];
+
+bool aabbPackedValid(uvec4 packedLight) {
+    return (packedLight.w & 0xffffu) != 0u;
+}
+
+void unpackAABBLight(uvec4 packedLight, out vec4 aliceY, out vec2 CoCg) {
+    aliceY = vec4(unpackHalf2x16(packedLight.x),
+        unpackHalf2x16(packedLight.y));
+    CoCg = unpackHalf2x16(packedLight.z);
+}
 
 void loadAABBTileSample(uint index, uvec2 xy) {
-    AliceEncoding alice;
-    float meanY2;
-    readDiffuseLightRT(xy, alice, meanY2);
-    float valid = readDiffuseSurfaceMask(xy) > 0.5 ? 1.0 : 0.0;
-    sm_aabbAliceY[index] = valid > 0.5 ? alice.aliceY : vec4(0.0);
-    sm_aabbAux[index] = valid > 0.5
-        ? vec4(alice.CoCg, meanY2, valid) : vec4(0.0);
+    uvec4 packedLight = readDiffuseLightRTRaw(xy);
+    if (readDiffuseSurfaceMask(xy) > 0.5) {
+        // Low half was written as zero by writeDiffuseLightRT.
+        packedLight.w = (packedLight.w & 0xffff0000u) | 1u;
+        sm_aabbPacked[index] = packedLight;
+    } else {
+        sm_aabbPacked[index] = uvec4(0u);
+    }
 }
 #endif
 
@@ -239,10 +249,11 @@ void computeAABB_CS(out vec4 minAY, out vec4 maxAY, out vec2 minCC, out vec2 max
             if (dx == 0 && dy == 0) continue;
 
             uint sampleIndex = uint(cy + dy) * AABB_SM_W + uint(cx + dx);
-            vec4 sampleAux = sm_aabbAux[sampleIndex];
-            if (sampleAux.w <= 0.5) continue;
-            vec4 sampleAliceY = sm_aabbAliceY[sampleIndex];
-            vec2 sampleCoCg = sampleAux.xy;
+            uvec4 samplePacked = sm_aabbPacked[sampleIndex];
+            if (!aabbPackedValid(samplePacked)) continue;
+            vec4 sampleAliceY;
+            vec2 sampleCoCg;
+            unpackAABBLight(samplePacked, sampleAliceY, sampleCoCg);
 
             minAY = min(minAY, sampleAliceY);
             maxAY = max(maxAY, sampleAliceY);
@@ -455,11 +466,12 @@ void main() {
         uint outputCenterCol = gl_LocalInvocationID.x + AABB_HALO;
         uint outputCenterRow = gl_LocalInvocationID.y + AABB_HALO;
         uint outputCenterIndex = outputCenterRow * AABB_SM_W + outputCenterCol;
-        vec4 centerAux = sm_aabbAux[outputCenterIndex];
-        current_data.data_swap.aliceY = sm_aabbAliceY[outputCenterIndex];
-        current_data.data_swap.CoCg = centerAux.xy;
-        current_data.meanY2 = centerAux.z;
-        current_data.surfaceMask = centerAux.w;
+        uvec4 centerPacked = sm_aabbPacked[outputCenterIndex];
+        unpackAABBLight(centerPacked, current_data.data_swap.aliceY,
+            current_data.data_swap.CoCg);
+        float centerSqrtM2 = unpackHalf2x16(centerPacked.w).y;
+        current_data.meanY2 = centerSqrtM2 * centerSqrtM2;
+        current_data.surfaceMask = aabbPackedValid(centerPacked) ? 1.0 : 0.0;
         #else
         AliceEncoding centerAlice;
         readDiffuseLightRT(pix, centerAlice, current_data.meanY2);

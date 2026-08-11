@@ -20,5 +20,7 @@ void main() {
     position = vaPosition;
     normal = (normalMatrix * vaNormal) * mat3(gbufferModelView);
     texCoord = (textureMatrix * vec4(vaUV0, 0.0, 1.0)).xy;
-    viewPos = (gbufferModelView * vec4(vaPosition, 1.0)).xyz;
+    // modelViewMatrix contains per-draw chunk/entity transforms. Using only
+    // gbufferModelView drops that translation and corrupts the overlay depth.
+    viewPos = (modelViewMatrix * vec4(vaPosition, 1.0)).xyz;
 }

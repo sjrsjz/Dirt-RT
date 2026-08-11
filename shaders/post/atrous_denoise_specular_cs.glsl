@@ -27,7 +27,11 @@ layout(rgba32ui) uniform uimage2D colorimg4;
 #define TILE_SIZE (16 + 2 * HALO)
 #define TILE_AREA (TILE_SIZE * TILE_SIZE)
 
-shared vec4 sm_geometry[TILE_AREA];
+// colortex3.w stores the ray direction, which this filter never consumes.
+// SoA position storage avoids paying its four-byte LDS lane for every sample.
+shared float sm_position_x[TILE_AREA];
+shared float sm_position_y[TILE_AREA];
+shared float sm_position_z[TILE_AREA];
 shared uvec4 sm_light[TILE_AREA];
 
 // NRD-style 粗糙度权重参数 (返回 (a, -b) 用于 ComputeWeight)
@@ -103,8 +107,17 @@ float GetPlaneDistanceWeight_Atrous(vec3 centerWorldPos, vec3 centerNormal, vec3
 // 从共享内存解包镜面样本
 void unpackSpecularSampleSM(uint tile_idx, out vec3 pos, out vec3 radiance,
     out float roughness, out float variance, out float virtualProjDist, out vec3 H) {
-    unpackSpecularFilterSample(sm_geometry[tile_idx], sm_light[tile_idx],
-        pos, radiance, roughness, variance, virtualProjDist, H);
+    pos = vec3(sm_position_x[tile_idx], sm_position_y[tile_idx],
+        sm_position_z[tile_idx]);
+    uvec4 light = sm_light[tile_idx];
+    vec2 rg = unpackHalf2x16(light.x);
+    vec2 br = unpackHalf2x16(light.y);
+    vec2 vv = unpackHalf2x16(light.z);
+    radiance = vec3(rg, br.x);
+    roughness = br.y;
+    variance = vv.x;
+    virtualProjDist = vv.y;
+    H = decodeNormal(uintBitsToFloat(light.w));
 }
 
 void main() {
@@ -123,17 +136,21 @@ void main() {
         ivec2 gc = tile_origin + ivec2(tx, ty);
         ivec2 cc = clamp(gc, ivec2(0), texSize - 1);
         if (gc == cc) {
-            sm_geometry[i] = texelFetch(colortex3, cc, 0);
+            vec3 position = texelFetch(colortex3, cc, 0).xyz;
+            sm_position_x[i] = position.x;
+            sm_position_y[i] = position.y;
+            sm_position_z[i] = position.z;
             sm_light[i] = texelFetch(colortex4, cc, 0);
         } else {
             // 越界: 天空 mask (variance<0)
-            sm_geometry[i] = vec4(0.0);
+            sm_position_x[i] = 0.0;
+            sm_position_y[i] = 0.0;
+            sm_position_z[i] = 0.0;
             sm_light[i] = uvec4(0u, 0u, packHalf2x16(vec2(-1.0, 0.0)), 0u);
         }
     }
 
     barrier();
-    memoryBarrierShared();
 
     if (pix.x >= texSize.x || pix.y >= texSize.y) return;
 

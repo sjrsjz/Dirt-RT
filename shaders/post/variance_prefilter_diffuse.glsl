@@ -58,14 +58,14 @@ struct TileSample {
 };
 
 const uint SM_AREA = SM_W * SM_H;
-// SoA storage avoids struct-stride padding. Validity is stored in position.w;
-// the variance scratch only covers the 16x16 output interior.
+// Geometry stays FP32, while Alice and moment state keep the source buffer's
+// FP16 encoding in LDS. Decode happens only when a tap is consumed. Validity
+// is stored in position.w; variance scratch covers only the 16x16 interior.
 shared vec4 sm_position_validity[SM_AREA];
-shared vec4 sm_alice_y[SM_AREA];
-shared vec2 sm_moments[SM_AREA];
+shared uvec2 sm_alice_y_packed[SM_AREA];
+shared uint sm_moments_packed[SM_AREA];
 shared float sm_est_var[16u * 16u];
-// Shared allocation is 20384 bytes; the old AoS plus output staging used
-// 29376 bytes and was the dominant occupancy limiter in this pass.
+// Shared allocation is 14576 bytes, down from 20384 bytes.
 
 // ---------------------------------------------------------------------------
 // Sanitization & canonicalisation
@@ -134,16 +134,37 @@ const float VAR_BLUR_1D[2] = { 1.0, 0.6065306597 };
 // Swap-buffer load
 // ---------------------------------------------------------------------------
 
-void loadSwapSample(uvec2 xy, out vec4 aliceY, out vec4 outputAliceY,
-    out vec2 outputCoCg, out float m2, out float w) {
+AliceEncoding decodeSwapAlice(uvec4 packedLight) {
     AliceEncoding alice;
-    readDiffuseSwap(xy, alice, w, m2);
-    alice = sanitizeAlice(alice);
-    outputAliceY = alice.aliceY;
-    outputCoCg = alice.CoCg;
-    aliceY = canonicalAliceY(outputAliceY);
-    w = clamp(sanitizeNonnegative(w), 1.0, float(TEMPORAL_MAX_HISTORY));
+    alice.aliceY = vec4(unpackHalf2x16(packedLight.x),
+        unpackHalf2x16(packedLight.y));
+    alice.CoCg = unpackHalf2x16(packedLight.z);
+    return sanitizeAlice(alice);
+}
+
+void encodeTileLight(uvec4 packedLight, out uvec2 packedAliceY,
+    out uint packedMoments) {
+    AliceEncoding alice = decodeSwapAlice(packedLight);
+    vec2 sourceMoments = unpackHalf2x16(packedLight.w);
+    float w = clamp(sanitizeNonnegative(sourceMoments.x), 1.0,
+        float(TEMPORAL_MAX_HISTORY));
+    float m2 = sourceMoments.y * sourceMoments.y;
+    vec4 aliceY = canonicalAliceY(alice.aliceY);
     m2 = canonicalMeanY2(aliceY, m2);
+    packedAliceY = uvec2(packHalf2x16(aliceY.xy),
+        packHalf2x16(aliceY.zw));
+    packedMoments = packHalf2x16(vec2(w,
+        min(sqrt(max(m2, 0.0)), 65504.0)));
+}
+
+vec4 decodeTileAliceY(uvec2 packedAliceY) {
+    return vec4(unpackHalf2x16(packedAliceY.x),
+        unpackHalf2x16(packedAliceY.y));
+}
+
+vec2 decodeTileMoments(uint packedMoments) {
+    vec2 weightRootM2 = unpackHalf2x16(packedMoments);
+    return vec2(weightRootM2.y * weightRootM2.y, weightRootM2.x);
 }
 
 void loadTileSample(uint index, ivec2 gc, ivec2 texMax) {
@@ -154,15 +175,11 @@ void loadTileSample(uint index, ivec2 gc, ivec2 texMax) {
 
     bool valid = mask > 0.5 && all(equal(gc, clamped));
     sm_position_validity[index] = vec4(pos, valid ? 1.0 : 0.0);
-    sm_alice_y[index] = vec4(0.0);
-    sm_moments[index] = vec2(0.0);
+    sm_alice_y_packed[index] = uvec2(0u);
+    sm_moments_packed[index] = 0u;
     if (valid) {
-        vec4 outputAliceY;
-        vec2 outputCoCg;
-        float m2, weight;
-        loadSwapSample(uvec2(gc), sm_alice_y[index], outputAliceY,
-            outputCoCg, m2, weight);
-        sm_moments[index] = vec2(m2, weight);
+        encodeTileLight(readDiffuseSwapRaw(uvec2(gc)),
+            sm_alice_y_packed[index], sm_moments_packed[index]);
     }
 }
 
@@ -190,17 +207,17 @@ void main() {
         all(equal(centerCoord, centerClamped));
     sm_position_validity[centerIndex] =
         vec4(centerPos, centerValid ? 1.0 : 0.0);
-    sm_alice_y[centerIndex] = vec4(0.0);
-    sm_moments[centerIndex] = vec2(0.0);
+    sm_alice_y_packed[centerIndex] = uvec2(0u);
+    sm_moments_packed[centerIndex] = 0u;
 
     AliceEncoding outAlice;
     outAlice.aliceY = vec4(0.0);
     outAlice.CoCg = vec2(0.0);
     if (centerValid) {
-        float centerM2, centerWeight;
-        loadSwapSample(gid, sm_alice_y[centerIndex], outAlice.aliceY,
-            outAlice.CoCg, centerM2, centerWeight);
-        sm_moments[centerIndex] = vec2(centerM2, centerWeight);
+        uvec4 centerLight = readDiffuseSwapRaw(gid);
+        outAlice = decodeSwapAlice(centerLight);
+        encodeTileLight(centerLight, sm_alice_y_packed[centerIndex],
+            sm_moments_packed[centerIndex]);
     }
 
     uint tid = gl_LocalInvocationIndex;
@@ -216,8 +233,8 @@ void main() {
 
     // ---- Phase 2: bounds & sky ----
     vec4 ctrPositionValidity = sm_position_validity[centerIndex];
-    vec4 ctrAliceY = sm_alice_y[centerIndex];
-    vec2 ctrMoments = sm_moments[centerIndex];
+    vec4 ctrAliceY = decodeTileAliceY(sm_alice_y_packed[centerIndex]);
+    vec2 ctrMoments = decodeTileMoments(sm_moments_packed[centerIndex]);
     bool inBounds = all(lessThan(gid, uvec2(resolution)));
     bool isActive = inBounds && ctrPositionValidity.w > 0.5;
 
@@ -257,7 +274,8 @@ void main() {
                 vec4 samplePositionValidity =
                     sm_position_validity[sampleIndex];
                 if (samplePositionValidity.w <= 0.5) continue;
-                vec2 sampleMoments = sm_moments[sampleIndex];
+                vec2 sampleMoments =
+                    decodeTileMoments(sm_moments_packed[sampleIndex]);
 
                 float planeDist = abs(dot(samplePositionValidity.xyz,
                     centerN) - centerPlaneDistance);
@@ -267,7 +285,8 @@ void main() {
 
                 sumMass += mass;
                 sumSqW += mass * wS; // Σ N_i·w_i² (not (N_i·w_i)²)
-                sumState += mass * sm_alice_y[sampleIndex];
+                sumState += mass *
+                    decodeTileAliceY(sm_alice_y_packed[sampleIndex]);
                 sumM2 += mass * sampleMoments.x;
             }
         }

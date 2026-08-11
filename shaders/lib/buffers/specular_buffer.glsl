@@ -138,10 +138,13 @@ void writeReflEndpointMoments(uvec2 xy, RelaxEndpointMoments moments) {
     reflectBuffer.data[address].w = uintBitsToFloat(packed_.y);
 }
 
-RelaxEndpointMoments readReflEndpointMoments(uvec2 xy) {
+uvec2 readReflEndpointMomentsRaw(uvec2 xy) {
     vec4 v = reflectBuffer.data[addr(SPEC_N_LIGHT, xy)];
-    return relaxUnpackEndpointMoments(uvec2(
-            floatBitsToUint(v.z), floatBitsToUint(v.w)));
+    return uvec2(floatBitsToUint(v.z), floatBitsToUint(v.w));
+}
+
+RelaxEndpointMoments readReflEndpointMoments(uvec2 xy) {
+    return relaxUnpackEndpointMoments(readReflEndpointMomentsRaw(xy));
 }
 
 void writeRefrLight(uvec2 xy, vec3 color, float vprojDist, float accumWeight) {
