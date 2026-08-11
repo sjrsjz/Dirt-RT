@@ -110,7 +110,7 @@ struct RGBAliceEncoding { vec4 aliceR; vec4 aliceG; vec4 aliceB; };
 // W is the reciprocal-proposal normalization, and M is the represented sample
 // count. Current-frame probes are unit reservoirs (W=1, M=1).
 struct RadianceCache { RGBAliceEncoding alice; float W; float M; };
-struct PackedRadianceCache { vec4 word0; vec4 word1; };
+struct PackedRadianceCache { uvec4 word0; uvec4 word1; };
 struct RadianceCacheAddress { uint token; uint slot; uint localIndex; };
 
 RadianceCacheAddress invalidRadianceCacheAddress() {
@@ -169,21 +169,21 @@ RadianceCache emptyCache() {
 }
 PackedRadianceCache packRadianceCache(RadianceCache rc) {
     PackedRadianceCache p;
-    p.word0 = uintBitsToFloat(uvec4(
+    p.word0 = uvec4(
         packHalf2x16(rc.alice.aliceR.xy), packHalf2x16(rc.alice.aliceR.zw),
-        packHalf2x16(rc.alice.aliceG.xy), packHalf2x16(rc.alice.aliceG.zw)));
-    p.word1 = vec4(uintBitsToFloat(packHalf2x16(rc.alice.aliceB.xy)),
-        uintBitsToFloat(packHalf2x16(rc.alice.aliceB.zw)), rc.W, rc.M);
+        packHalf2x16(rc.alice.aliceG.xy), packHalf2x16(rc.alice.aliceG.zw));
+    p.word1 = uvec4(packHalf2x16(rc.alice.aliceB.xy),
+        packHalf2x16(rc.alice.aliceB.zw),
+        floatBitsToUint(rc.W), floatBitsToUint(rc.M));
     return p;
 }
-RadianceCache unpackRadianceCache(vec4 word0, vec4 word1) {
-    uvec4 p = floatBitsToUint(word0);
+RadianceCache unpackRadianceCache(uvec4 word0, uvec4 word1) {
     RadianceCache rc;
-    rc.alice.aliceR = vec4(unpackHalf2x16(p.x), unpackHalf2x16(p.y));
-    rc.alice.aliceG = vec4(unpackHalf2x16(p.z), unpackHalf2x16(p.w));
-    rc.alice.aliceB = vec4(unpackHalf2x16(floatBitsToUint(word1.x)), unpackHalf2x16(floatBitsToUint(word1.y)));
-    rc.W = word1.z;
-    rc.M = word1.w;
+    rc.alice.aliceR = vec4(unpackHalf2x16(word0.x), unpackHalf2x16(word0.y));
+    rc.alice.aliceG = vec4(unpackHalf2x16(word0.z), unpackHalf2x16(word0.w));
+    rc.alice.aliceB = vec4(unpackHalf2x16(word1.x), unpackHalf2x16(word1.y));
+    rc.W = uintBitsToFloat(word1.z);
+    rc.M = uintBitsToFloat(word1.w);
     return rc;
 }
 
@@ -589,14 +589,14 @@ bool radianceCacheResolvedPoolAddressHasHistory(
 RadianceCache loadRadianceCachePlanes(RadianceCacheAddress a, uint plane0, uint plane1) {
     if (!radianceCacheStorageAvailable() || !validateRadianceCacheAddress(a)) return emptyCache();
     return unpackRadianceCache(
-        uintBitsToFloat(rcLoadVec4(rcPayloadAddress(a.slot, plane0, a.localIndex))),
-        uintBitsToFloat(rcLoadVec4(rcPayloadAddress(a.slot, plane1, a.localIndex))));
+        rcLoadVec4(rcPayloadAddress(a.slot, plane0, a.localIndex)),
+        rcLoadVec4(rcPayloadAddress(a.slot, plane1, a.localIndex)));
 }
 void storeRadianceCachePlanes(RadianceCacheAddress a, uint plane0, uint plane1, RadianceCache rc) {
     if (!radianceCacheStorageAvailable() || !validateRadianceCacheAddress(a)) return;
     PackedRadianceCache p = packRadianceCache(rc);
-    rcStoreVec4(rcPayloadAddress(a.slot, plane0, a.localIndex), floatBitsToUint(p.word0));
-    rcStoreVec4(rcPayloadAddress(a.slot, plane1, a.localIndex), floatBitsToUint(p.word1));
+    rcStoreVec4(rcPayloadAddress(a.slot, plane0, a.localIndex), p.word0);
+    rcStoreVec4(rcPayloadAddress(a.slot, plane1, a.localIndex), p.word1);
 }
 RadianceCacheAddress radianceCacheAddressForVoxel(uvec3 voxelCoord, vec3 cameraPosition) {
     if (any(greaterThanEqual(voxelCoord, uvec3(RADIANCE_CACHE_W, RADIANCE_CACHE_H, RADIANCE_CACHE_D))))

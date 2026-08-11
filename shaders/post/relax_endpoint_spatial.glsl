@@ -42,13 +42,23 @@ void main() {
         ivec2 q = clamp(tileOrigin + ivec2(tx, ty), ivec2(0), size - ivec2(1));
 
         uvec2 packedMoments = readReflEndpointMomentsRaw(uvec2(q));
+        // Empty endpoint moments are overwhelmingly common for sky and
+        // delta-miss pixels. Reject them before touching three G-buffer words
+        // and before decoding the octahedral normal.
+        if ((packedMoments.y >> 16u) == 0u) {
+            sm_moments_packed[i] = uvec2(0u);
+            sm_pos_rough[i] = vec4(0.0, 0.0, 0.0, 1.0);
+            sm_normal_packed[i] = 0u;
+            continue;
+        }
+
         vec3 position;
         float primaryDistance;
         readGeo0(GEO_N_GEO, uvec2(q), position, primaryDistance);
 
-        vec4 surfaceData = geomBuffer.data[addr(GEO_N_NORMALS, uvec2(q))];
-        vec3 normal = decodeNormal(surfaceData.x);
-        float alpha = surfaceData.y;
+        uvec4 surfaceData = geomBuffer.data[addr(GEO_N_NORMALS, uvec2(q))];
+        vec3 normal = decodeNormalU(surfaceData.x);
+        float alpha = uintBitsToFloat(surfaceData.y);
 
         bool finiteGeometry = isFiniteVec3(position) && isFiniteFloat(primaryDistance) &&
                 isFiniteVec3(normal) && isFiniteFloat(alpha);
@@ -64,7 +74,7 @@ void main() {
         sm_moments_packed[i] = packedMoments;
         sm_pos_rough[i] = vec4(position, perceptualRoughness);
         sm_normal_packed[i] = finiteGeometry
-            ? floatBitsToUint(surfaceData.x) : 0u;
+            ? surfaceData.x : 0u;
     }
 
     barrier();
@@ -85,8 +95,7 @@ void main() {
     vec4 centerPosRough = sm_pos_rough[centerIndex];
     vec3 centerPosition = centerPosRough.xyz;
     float centerRoughness = centerPosRough.w;
-    vec3 centerNormal = decodeNormal(
-        uintBitsToFloat(sm_normal_packed[centerIndex]));
+    vec3 centerNormal = decodeNormalU(sm_normal_packed[centerIndex]);
 
     float spatialSigma = 0.12 + 2.88 * centerRoughness;
     float invTwoSpatialSigma2 = 0.5 / max(spatialSigma * spatialSigma, 1e-8);
@@ -133,8 +142,7 @@ void main() {
             vec4 samplePosRough = sm_pos_rough[sampleIndex];
             vec3 samplePosition = samplePosRough.xyz;
             float sampleRoughness = samplePosRough.w;
-            vec3 sampleNormal = decodeNormal(
-                uintBitsToFloat(sm_normal_packed[sampleIndex]));
+            vec3 sampleNormal = decodeNormalU(sm_normal_packed[sampleIndex]);
 
             vec3 originDelta = (samplePosition - centerPosition) * invEndpointScale;
             vec3 rebasedMean = sampleMean + originDelta;

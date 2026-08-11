@@ -95,7 +95,37 @@ void markRadianceCacheGeometryHit(uvec2 pixel, vec3 hitPosition, vec3 geometryNo
 #endif
 
 #if !defined(RADIANCE_CACHE_TRACE)
+
+#if !defined(PRIMARY_GBUFFER_PASS)
+// Continuation passes only need the primary-distance word to reject sky.
+// Keep this before camera-ray reconstruction, RNG setup, setSkyVars(), and
+// material decoding: all of those are dead work when ray0 reported a miss.
+bool clearSkyContinuation(uvec2 pixel) {
+    float primaryDistance = uintBitsToFloat(
+        geomBuffer.data[addr(GEO_N_GEO, pixel)].w);
+    if (primaryDistance >= -0.5) return false;
+
+#if defined(FIRST_LOBE_DIFFUSE)
+    diffuseBuffer.data[addr(DIF_N_LIGHT, pixel)] = uvec4(0u);
+    diffuseBuffer.data[addr(DIF_N_GEO, pixel)] = uvec4(0u);
+#elif defined(FIRST_LOBE_REFLECTION)
+    reflectBuffer.data[addr(SPEC_N_GEO, pixel)] = uvec4(0u);
+    reflectBuffer.data[addr(SPEC_N_LIGHT, pixel)] = uvec4(0u);
+#else
+    refractBuffer.data[addr(SPEC_N_GEO, pixel)] = uvec4(0u);
+    refractBuffer.data[addr(SPEC_N_LIGHT, pixel)] = uvec4(0u);
+    geomBuffer.data[addr(GEO_N_NORMALS, pixel)].w = 0u;
+#endif
+    return true;
+}
+#endif
+
 void main() {
+    uvec2 pixel = uvec2(gl_LaunchIDEXT.xy);
+#if !defined(PRIMARY_GBUFFER_PASS)
+    if (clearSkyContinuation(pixel)) return;
+#endif
+
     vec2 px = vec2(gl_LaunchIDEXT.xy);
     vec2 p = px / vec2(gl_LaunchSizeEXT.xy);
 
@@ -119,9 +149,9 @@ void main() {
 
     setSkyVars();
     #if defined(PRIMARY_GBUFFER_PASS)
-    TracePrimaryGBuffer(uvec2(gl_LaunchIDEXT.xy), origin, direction);
+    TracePrimaryGBuffer(pixel, origin, direction);
     #else
-    Trace(uvec2(gl_LaunchIDEXT.xy), origin, direction, -lightDir_global);
+    Trace(pixel, origin, direction, -lightDir_global);
     #endif
 
     // Per-frame-once global state: only primary pass pixel (0,0). Updating the

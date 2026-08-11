@@ -326,7 +326,10 @@ void main() {
     if (!inBounds) return;
     if (ctrPositionValidity.w <= 0.5) {
         imageStore(colorimg3, ivec2(gid), vec4(0.0));
-        imageStore(colorimg4, ivec2(gid), uvec4(0u));
+        // Preserve the diffuse-light invalid convention through the packed
+        // path: the raw FP32 variance word is negative for sky/no surface.
+        imageStore(colorimg4, ivec2(gid), uvec4(0u, 0u, 0u,
+            floatBitsToUint(-1.0)));
         return;
     }
 

@@ -113,19 +113,21 @@ void main() {
     ivec2 pix = ivec2(gl_FragCoord.xy);
     ivec2 texSize = textureSize(colortex3, 0);
 
-    vec4 centerGeom = texelFetch(colortex3, pix, 0);
     uvec4 centerLight = texelFetch(colortex4, pix, 0);
+
+    // Variance is the low half of word z. Sky can pass through without the
+    // geometry fetch or decoding the other packed fields.
+    if (unpackHalf2x16(centerLight.z).x < 0.0) {
+        color = centerLight;
+        return;
+    }
+
+    vec4 centerGeom = texelFetch(colortex3, pix, 0);
 
     vec3 cPos, cRad, cH;
     float cRough, cVar, cVproj;
     unpackSpecularFilterSample(centerGeom, centerLight,
         cPos, cRad, cRough, cVar, cVproj, cH);
-
-    // 天空 (variance<0): 透传
-    if (cVar < 0.0) {
-        color = centerLight;
-        return;
-    }
 
     // ---- NRD-style 权重参数计算 ----
 

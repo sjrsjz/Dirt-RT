@@ -13,18 +13,29 @@ void main() {
     ivec2 size = ivec2(resolution_global);
     if (any(greaterThanEqual(pixel, resolution_global))) return;
 
+    vec3 centerPos;
+    float centerDepth;
+    readGeo0(GEO_N_GEO, pixel, centerPos, centerDepth);
+
+    // All upstream reflection signals are explicitly empty for sky.  Avoid
+    // unpacking two signals and decoding the unused normal/material record.
+    if (centerDepth < -0.5) {
+        imageStore(colorimg3, ivec2(pixel), vec4(0.0));
+        return;
+    }
+
     RelaxSlowSignal packedCenter = relaxUnpackSlow(
         texelFetch(colortex4, ivec2(pixel), 0));
     vec4 centerSignal = vec4(packedCenter.radiance, packedCenter.secondMoment);
-    RelaxFastSignal centerFast = relaxUnpackFast(texelFetch(colortex5, ivec2(pixel), 0));
-    vec3 centerPos, centerNormal;
-    float centerDepth, centerAlpha, centerPath;
+    RelaxFastSignal centerFast = relaxUnpackFast(
+        texelFetch(colortex5, ivec2(pixel), 0));
+    vec3 centerNormal;
+    float centerAlpha, centerPath;
     int centerMaterial;
-    readGeo0(GEO_N_GEO, pixel, centerPos, centerDepth);
     readGeo1(GEO_N_NORMALS, pixel, centerNormal, centerAlpha,
         centerMaterial, centerPath);
 
-    if (centerDepth < -0.5 || centerFast.historyLength > RELAX_HISTORY_FIX_FRAMES ||
+    if (centerFast.historyLength > RELAX_HISTORY_FIX_FRAMES ||
         RELAX_HISTORY_FIX_FRAMES <= 1.0) {
         imageStore(colorimg3, ivec2(pixel), centerSignal);
         return;

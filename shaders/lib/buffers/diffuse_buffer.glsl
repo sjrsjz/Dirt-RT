@@ -66,15 +66,13 @@ void writeDiffuseLightRTSky(uvec2 xy) {
 
 void writeDiffuseGeo(uvec2 xy, vec3 pos, float surfaceMask) {
     diffuseBuffer.data[addr(DIF_N_GEO, xy)] = uvec4(
-        floatBitsToUint(pos.x),
-        floatBitsToUint(pos.y),
-        floatBitsToUint(pos.z),
+        floatBitsToUint(pos),
         floatBitsToUint(surfaceMask)
     );
 }
 void readDiffuseGeo(uvec2 xy, out vec3 pos, out float surfaceMask) {
     uvec4 v = diffuseBuffer.data[addr(DIF_N_GEO, xy)];
-    pos = vec3(uintBitsToFloat(v.x), uintBitsToFloat(v.y), uintBitsToFloat(v.z));
+    pos = uintBitsToFloat(v.xyz);
     surfaceMask = uintBitsToFloat(v.w);
 }
 
@@ -113,15 +111,15 @@ void readDiffuseHist(uvec2 xy, out AliceEncoding alice, out float weight, out fl
 // N=3 — History Geometry
 // ===========================================================================
 
-float encodeDiffuseHistoryNormal(vec3 n) {
+uint encodeDiffuseHistoryNormalU(vec3 n) {
     n = normalize(n);
     vec2 p = n.xy / (abs(n.x) + abs(n.y) + abs(n.z));
     if (n.z < 0.0) p = (1.0 - abs(p.yx)) * vec2(p.x >= 0.0 ? 1.0 : -1.0, p.y >= 0.0 ? 1.0 : -1.0);
-    return uintBitsToFloat(packSnorm2x16(clamp(p, vec2(-1.0), vec2(1.0))));
+    return packSnorm2x16(clamp(p, vec2(-1.0), vec2(1.0)));
 }
 
-vec3 decodeDiffuseHistoryNormal(float f) {
-    vec2 p = unpackSnorm2x16(floatBitsToUint(f));
+vec3 decodeDiffuseHistoryNormalU(uint packed_) {
+    vec2 p = unpackSnorm2x16(packed_);
     vec3 n = vec3(p, 1.0 - abs(p.x) - abs(p.y));
     if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
     return normalize(n);
@@ -129,16 +127,14 @@ vec3 decodeDiffuseHistoryNormal(float f) {
 
 void writeDiffuseHistGeo(uvec2 xy, vec3 pos, vec3 geometryNormal) {
     diffuseBuffer.data[addr(DIF_N_HISTGEO, xy)] = uvec4(
-        floatBitsToUint(pos.x),
-        floatBitsToUint(pos.y),
-        floatBitsToUint(pos.z),
-        floatBitsToUint(encodeDiffuseHistoryNormal(geometryNormal))
+        floatBitsToUint(pos),
+        encodeDiffuseHistoryNormalU(geometryNormal)
     );
 }
 void readDiffuseHistGeo(uvec2 xy, out vec3 pos, out vec3 geometryNormal) {
     uvec4 v = diffuseBuffer.data[addr(DIF_N_HISTGEO, xy)];
-    pos = vec3(uintBitsToFloat(v.x), uintBitsToFloat(v.y), uintBitsToFloat(v.z));
-    geometryNormal = decodeDiffuseHistoryNormal(uintBitsToFloat(v.w));
+    pos = uintBitsToFloat(v.xyz);
+    geometryNormal = decodeDiffuseHistoryNormalU(v.w);
 }
 
 // ===========================================================================

@@ -30,7 +30,7 @@ const float hw[3] = float[](1.0, 0.66667, 0.44444);
 // Refraction geometry is already 16-byte packed, while light is four FP16
 // values and the G-buffer normal is oct-encoded. Preserve those source
 // encodings in LDS and unpack only the fields consumed by a tap.
-shared vec4 sm_refr_geo[TILE_AREA];
+shared uvec4 sm_refr_geo[TILE_AREA];
 shared float sm_luma[TILE_AREA];
 shared uvec2 sm_surface_packed[TILE_AREA]; // oct(H), fbits(path roughness)
 
@@ -39,21 +39,20 @@ float luma(vec3 c) {
 }
 
 uvec2 loadTileSample(uint index, uvec2 xy) {
-    float primaryDistance =
-        geomBuffer.data[addr(GEO_N_GEO, xy)].w;
+    float primaryDistance = uintBitsToFloat(
+        geomBuffer.data[addr(GEO_N_GEO, xy)].w);
 
-    sm_refr_geo[index] = vec4(0.0);
+    sm_refr_geo[index] = uvec4(0u);
     sm_luma[index] = 0.0;
     sm_surface_packed[index] = uvec2(0u,
         floatBitsToUint(-1.0));
 
     uvec2 packedLight = uvec2(0u);
     if (primaryDistance > -0.5) {
-        vec4 surface = geomBuffer.data[addr(GEO_N_NORMALS, xy)];
-        vec4 refrGeo = refractBuffer.data[addr(SPEC_N_GEO, xy)];
-        vec4 refrLight = refractBuffer.data[addr(SPEC_N_LIGHT, xy)];
-        packedLight = uvec2(floatBitsToUint(refrLight.x),
-            floatBitsToUint(refrLight.y));
+        uvec4 surface = geomBuffer.data[addr(GEO_N_NORMALS, xy)];
+        uvec4 refrGeo = refractBuffer.data[addr(SPEC_N_GEO, xy)];
+        uvec4 refrLight = refractBuffer.data[addr(SPEC_N_LIGHT, xy)];
+        packedLight = refrLight.xy;
         vec2 rg = unpackHalf2x16(packedLight.x);
         vec2 bv = unpackHalf2x16(packedLight.y);
         vec3 color = vec3(rg, bv.x);
@@ -65,8 +64,8 @@ uvec2 loadTileSample(uint index, uvec2 xy) {
 
         sm_refr_geo[index] = refrGeo;
         sm_luma[index] = luma(color);
-        sm_surface_packed[index] = uvec2(floatBitsToUint(surface.x),
-            floatBitsToUint(max(surface.w, 0.0)));
+        sm_surface_packed[index] = uvec2(surface.x,
+            floatBitsToUint(max(uintBitsToFloat(surface.w), 0.0)));
     }
     return packedLight;
 }
@@ -110,12 +109,12 @@ void main() {
         return;
     }
 
-    vec4 cGeo = sm_refr_geo[centerIndex];
+    uvec4 cGeo = sm_refr_geo[centerIndex];
     vec2 cRG = unpackHalf2x16(centerLightPacked.x);
     vec2 cBV = unpackHalf2x16(centerLightPacked.y);
-    vec3 cPos = cGeo.xyz;
-    vec3 cR = decodeNormal(cGeo.w);
-    vec3 cH = decodeNormal(uintBitsToFloat(cSurface.x));
+    vec3 cPos = uintBitsToFloat(cGeo.xyz);
+    vec3 cR = decodeNormalU(cGeo.w);
+    vec3 cH = decodeNormalU(cSurface.x);
     vec3 cColor = vec3(cRG, cBV.x);
     float cVproj = cBV.y;
 
@@ -134,12 +133,11 @@ void main() {
                 (cy + uint(ky)) * TILE + (cx + uint(kx));
             uvec2 sampleSurface = sm_surface_packed[sampleIndex];
             if (uintBitsToFloat(sampleSurface.y) < 0.0) continue;
-            vec4 sampleGeo = sm_refr_geo[sampleIndex];
-            vec3 sampleH = decodeNormal(
-                uintBitsToFloat(sampleSurface.x));
+            uvec4 sampleGeo = sm_refr_geo[sampleIndex];
+            vec3 sampleH = decodeNormalU(sampleSurface.x);
 
             float normalDot = clamp(dot(cH, sampleH), 0.0, 1.0);
-            float planeDistance = abs(dot(sampleGeo.xyz, cH) -
+            float planeDistance = abs(dot(uintBitsToFloat(sampleGeo.xyz), cH) -
                 centerPlaneDistance);
             float geometryWeight = pow(normalDot, VAR_FILTER_NORMAL_POWER) *
                 exp2(-planeDistance * invDepthScale * LOG2_E);

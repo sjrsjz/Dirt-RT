@@ -27,14 +27,13 @@ void main() {
     ivec2 texSize = textureSize(colortex4, 0);
     if (pix.x >= texSize.x || pix.y >= texSize.y) return;
 
-    vec4 geom = texelFetch(colortex3, pix, 0);
     uvec4 light = texelFetch(colortex4, pix, 0);
 
-    vec2 rg = unpackHalf2x16(light.x);
-    vec2 br = unpackHalf2x16(light.y);
     vec2 vv = unpackHalf2x16(light.z);
     float virtualProjDist = vv.y;
     if (vv.x < 0.0) return; // 天空
+
+    vec4 geom = texelFetch(colortex3, pix, 0);
 
     // 从 SSBO 读 102 写入的累积颜色 + 权重 (pre-denoise history 源)
     uvec2 xy = uvec2(pix);

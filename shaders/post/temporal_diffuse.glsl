@@ -56,8 +56,8 @@ void unpackAABBLight(uvec4 packedLight, out vec4 aliceY, out vec2 CoCg) {
 }
 
 void loadAABBTileSample(uint index, uvec2 xy) {
-    uvec4 packedLight = readDiffuseLightRTRaw(xy);
     if (readDiffuseSurfaceMask(xy) > 0.5) {
+        uvec4 packedLight = readDiffuseLightRTRaw(xy);
         // Low half was written as zero by writeDiffuseLightRT.
         packedLight.w = (packedLight.w & 0xffff0000u) | 1u;
         sm_aabbPacked[index] = packedLight;
@@ -460,6 +460,15 @@ void main() {
     {
         readGeo0(GEO_N_GEO, pix, current_data.pos, info_distance);
     }
+
+    if (info_distance < -0.5) {
+        // All AABB entries for a sky center are invalid. Clear only the two
+        // outputs consumed downstream and skip center light/normal decoding.
+        diffuseBuffer.data[addr(DIF_N_SWAP, pix)] = uvec4(0u);
+        imageStore(colorimg6, ivec2(pix), uvec4(0u));
+        return;
+    }
+
     {
         // 从 DiffuseBuffer N=0 读 ALICE + meanY2，surfaceMask 从 N=1 读
         #if TEMPORAL_AABB_ENABLE
@@ -492,13 +501,6 @@ void main() {
     out_data.surfaceMask = current_data.surfaceMask;
     out_data.pos = current_data.pos;
     output_weight = 1.0;
-
-    if (info_distance < -0.5) {
-        out_data.weight = 0.0;
-        writeDiffuse(out_data, ivec2(pix));
-        imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), uvec4(0u));
-        return;
-    }
 
     cameraDelta = camPos - prevRaytracingCamPos;
 

@@ -133,17 +133,17 @@ vec4 payload_unpackAtlasBox(uint d[16]) {
 }
 
 void payload_packGeomNormal(inout uint d[16], vec3 n) {
-    d[13] = floatBitsToUint(encodeNormal(n));
+    d[13] = encodeNormalU(n);
 }
 vec3 payload_unpackGeomNormal(uint d[16]) {
-    return decodeNormal(uintBitsToFloat(d[13]));
+    return decodeNormalU(d[13]);
 }
 
 void payload_packTangent(inout uint d[16], vec3 t) {
-    d[14] = floatBitsToUint(encodeNormal(t));
+    d[14] = encodeNormalU(t);
 }
 vec3 payload_unpackTangent(uint d[16]) {
-    return decodeNormal(uintBitsToFloat(d[14]));
+    return decodeNormalU(d[14]);
 }
 
 void payload_packQuadExtras(inout uint d[16], vec3 tint, float sky) {

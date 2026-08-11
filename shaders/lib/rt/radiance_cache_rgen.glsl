@@ -195,6 +195,11 @@ void main() {
         linearIndex, currentCameraPosition, worldVoxel);
     if (poolAddress.token >= RC_LOCKED_TOKEN) return;
     uint frameStamp = cam.frameId;
+    // The allocator pins every resident/new brick requested by ray0/ray1 in
+    // this frame. Retain off-screen cache data, but do not spend rays updating
+    // stale slots until visible geometry requests them again.
+    if (rcLoad(rcMetaAddress(poolAddress.slot, RC_META_PIN_FRAME)) !=
+            rcFrameTag(frameStamp)) return;
     bool hasHistory = radianceCacheResolvedPoolAddressHasHistory(
         poolAddress, frameStamp);
     if (hasHistory && !radianceCacheShouldUpdate(worldVoxel, frameStamp)) return;

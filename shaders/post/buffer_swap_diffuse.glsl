@@ -14,12 +14,11 @@ uniform usampler2D colortex4;
 uniform usampler2D colortex5;
 uniform usampler2D colortex6;
 
-void unpackLightSample(ivec2 coord, out vec3 pos, out float surfaceMask, out AliceEncoding encoded, out AliceEncoding blurred_alice) {
-    vec4 d0 = texelFetch(colortex3, coord, 0);
-    uvec4 d1 = texelFetch(colortex4, coord, 0);
+void unpackLightSample(ivec2 coord, vec4 d0, uvec4 d1, out vec3 pos,
+        out AliceEncoding encoded,
+        out AliceEncoding blurred_alice) {
     uvec4 d2 = texelFetch(colortex5, coord, 0);
     pos = d0.xyz;
-    surfaceMask = d0.w;
     encoded.aliceY       = vec4(unpackHalf2x16(d1.x), unpackHalf2x16(d1.y));
     encoded.CoCg         =       unpackHalf2x16(d1.z);
     blurred_alice.aliceY = vec4(unpackHalf2x16(d2.x), unpackHalf2x16(d2.y));
@@ -32,6 +31,18 @@ void main() {
     ivec2 pix = ivec2(gid);
     uvec2 gxy = uvec2(pix);
 
+    uvec4 packedLight = texelFetch(colortex4, pix, 0);
+    if (uintBitsToFloat(packedLight.w) < 0.0) {
+        // No surface: invalidate every temporal consumer with four raw stores
+        // instead of decoding two light textures and previous histories.
+        diffuseBuffer.data[addr(DIF_N_HIST, gxy)] = uvec4(0u);
+        diffuseBuffer.data[addr(DIF_N_HISTGEO, gxy)] = uvec4(0u);
+        diffuseBuffer.data[addr(DIF_N_SWAP, gxy)] = uvec4(0u);
+        diffuseBuffer.data[addr(DIF_N_PATHGUIDE, gxy)] = uvec4(0u);
+        return;
+    }
+    vec4 packedGeometry = texelFetch(colortex3, pix, 0);
+
     // Phase 1: swap3
     diffuseIlluminationData tmp = fetchDiffuse(pix);
     if (any(isnan(tmp.data_swap.aliceY))) tmp.data_swap.aliceY = vec4(0.0);
@@ -42,10 +53,9 @@ void main() {
 
     AliceEncoding blurred_alice, encoded;
     vec3 pos;
-    float mask;
-    unpackLightSample(pix, pos, mask, encoded, blurred_alice);
+    unpackLightSample(pix, packedGeometry, packedLight, pos, encoded,
+        blurred_alice);
     tmp.pos = pos;
-    tmp.surfaceMask = mask;
     float roughness_unused, pathRoughness_unused;
     int illumType_unused;
     readGeo1(GEO_N_NORMALS, gxy, tmp.histNormal, roughness_unused, illumType_unused, pathRoughness_unused);

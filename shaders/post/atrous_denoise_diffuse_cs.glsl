@@ -108,14 +108,20 @@ void main() {
 
             if (gc == cc) {
                 uvec4 light = texelFetch(colortex4, cc, 0);
-                vec4 aliceY = vec4(unpackHalf2x16(light.x),
-                    unpackHalf2x16(light.y));
-                vec2 stddev = makeBuresStddev(aliceY, abs(aliceY.w));
-
-                sm_geometry[i] = texelFetch(colortex3, cc, 0);
                 sm_light_packed[i] = light;
-                sm_stddev_packed[i] = packHalf2x16(clamp(stddev,
-                    vec2(0.0), vec2(65504.0)));
+                if (uintBitsToFloat(light.w) < 0.0) {
+                    // Sky carries a negative variance sentinel. Do not unpack
+                    // Alice or evaluate Bures eigenvalues for dead samples.
+                    sm_geometry[i] = vec4(0.0);
+                    sm_stddev_packed[i] = 0u;
+                } else {
+                    vec4 aliceY = vec4(unpackHalf2x16(light.x),
+                        unpackHalf2x16(light.y));
+                    vec2 stddev = makeBuresStddev(aliceY, abs(aliceY.w));
+                    sm_geometry[i] = texelFetch(colortex3, cc, 0);
+                    sm_stddev_packed[i] = packHalf2x16(clamp(stddev,
+                        vec2(0.0), vec2(65504.0)));
+                }
             } else {
                 sm_geometry[i] = vec4(0.0);
                 sm_light_packed[i] = uvec4(0u, 0u, 0u,

@@ -72,13 +72,13 @@ void main() {
     float centerPrimaryDistance;
     readGeo0(GEO_N_GEO, uvec2(centerClamped), centerPosition,
         centerPrimaryDistance);
-    clampFastTile[centerIndex] = centerInBounds
+    bool centerValid = centerInBounds && centerPrimaryDistance > -0.5;
+    clampFastTile[centerIndex] = centerValid
         ? texelFetch(colortex5, centerClamped, 0) : uvec4(0u);
-    uvec4 centerNoisyPacked = centerInBounds
+    uvec4 centerNoisyPacked = centerValid
         ? texelFetch(colortex6, centerClamped, 0) : uvec4(0u);
     clampNoisyTile[centerIndex] = centerNoisyPacked.xy;
-    clampValidTile[centerIndex] = centerInBounds &&
-        centerPrimaryDistance > -0.5 ? 1u : 0u;
+    clampValidTile[centerIndex] = centerValid ? 1u : 0u;
 
     for (uint i = gl_LocalInvocationIndex; i < CLAMP_TILE_AREA; i += 64u) {
         uint tx = i % CLAMP_TILE_SIZE;
@@ -91,20 +91,34 @@ void main() {
         bool inBounds = relaxInBounds(q, size);
         ivec2 qc = clamp(q, ivec2(0), size - 1);
 
-        clampFastTile[i] = inBounds
-            ? texelFetch(colortex5, qc, 0) : uvec4(0u);
-        uvec4 noisyPacked = inBounds
-            ? texelFetch(colortex6, qc, 0) : uvec4(0u);
-        clampNoisyTile[i] = noisyPacked.xy;
-
         vec3 positionUnused;
         float primaryDistance;
         readGeo0(GEO_N_GEO, uvec2(qc), positionUnused, primaryDistance);
-        clampValidTile[i] = inBounds && primaryDistance > -0.5 ? 1u : 0u;
+        bool valid = inBounds && primaryDistance > -0.5;
+        clampFastTile[i] = valid
+            ? texelFetch(colortex5, qc, 0) : uvec4(0u);
+        uvec4 noisyPacked = valid
+            ? texelFetch(colortex6, qc, 0) : uvec4(0u);
+        clampNoisyTile[i] = noisyPacked.xy;
+        clampValidTile[i] = valid ? 1u : 0u;
     }
     barrier();
 
     if (any(greaterThanEqual(pixel, resolution_global))) return;
+
+    if (!centerValid) {
+        // A sky pixel owns no reflection history.  Clear all history targets
+        // directly and skip slow/fast/noisy unpack plus Geo1 decoding.
+        reflectBuffer.data[addr(SPEC_N_HISTGEO, pixel)] = uvec4(0u);
+        reflectBuffer.data[addr(SPEC_N_HISTLIGHT, pixel)] = uvec4(0u);
+        reflectBuffer.data[addr(SPEC_N_HISTMETA, pixel)] = uvec4(0u);
+        imageStore(colorimg9, ivec2(pixel), vec4(0.0));
+        imageStore(colorimg4, ivec2(pixel), uvec4(0u));
+#if DEBUG_VIEW == 23
+        writeReflLight(pixel, vec3(0.0), 0.0, 0.0);
+#endif
+        return;
+    }
 
     uvec4 centerFastPacked = clampFastTile[centerIndex];
 
@@ -118,18 +132,6 @@ void main() {
     int materialID;
     readGeo1(GEO_N_NORMALS, pixel, geometryNormal, ggxAlpha,
         materialID, pathRoughnessUnused);
-
-    if (centerPrimaryDistance < -0.5) {
-        relaxStoreClampedHistory(pixel, slow, fast, centerPosition,
-            centerPrimaryDistance, geometryNormal, ggxAlpha, materialID);
-        imageStore(colorimg9, ivec2(pixel), slow);
-        imageStore(colorimg4, ivec2(pixel), relaxPackFast(fast));
-#if DEBUG_VIEW == 23
-        writeReflLight(pixel, relaxFiniteColor(slow.rgb), fast.endpointDistance,
-            fast.historyLength);
-#endif
-        return;
-    }
 
     vec3 fastM1 = vec3(0.0), fastM2 = vec3(0.0);
     vec3 noisyM1 = vec3(0.0);

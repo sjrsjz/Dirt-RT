@@ -46,15 +46,23 @@ const vec4 POISSON_8[8] = {
 // 辅助函数
 // ---------------------------------------------------------------------------
 
-void unpackLightSample(ivec2 coord, out vec3 pos, out float oct_normal,
+bool unpackLightSample(ivec2 coord, out vec3 pos, out float oct_normal,
     out AliceEncoding encoded, out float variance) {
-    vec4 sample_data0 = texelFetch(colortex3, coord, 0);
     uvec4 light = texelFetch(colortex4, coord, 0);
+    variance = uintBitsToFloat(light.w);
+    if (variance < 0.0) {
+        pos = vec3(0.0);
+        oct_normal = 0.0;
+        encoded.aliceY = vec4(0.0);
+        encoded.CoCg = vec2(0.0);
+        return false;
+    }
+    vec4 sample_data0 = texelFetch(colortex3, coord, 0);
     pos = sample_data0.xyz;
     oct_normal = sample_data0.w;
     encoded.aliceY = vec4(unpackHalf2x16(light.x), unpackHalf2x16(light.y));
     encoded.CoCg = unpackHalf2x16(light.z);
-    variance = uintBitsToFloat(light.w);
+    return true;
 }
 
 // xy = eigen stddev, z = variance anisotropy, w = |v|^2.
@@ -112,11 +120,19 @@ void main() {
     float center_oct_n;
     AliceEncoding center_alice;
     float center_var_est;
-    unpackLightSample(pix, center_pos, center_oct_n, center_alice, center_var_est);
+    if (!unpackLightSample(pix, center_pos, center_oct_n, center_alice,
+            center_var_est)) {
+        // Fragment passes ping-pong colortex4. Explicitly propagate the
+        // sentinel instead of leaving the destination attachment undefined.
+        out_light_sample = uvec4(0u, 0u, 0u,
+            floatBitsToUint(-1.0));
+#ifdef FINAL_DENOISE_PASS
+        out_light_sample_blurred = uvec4(0u);
+#endif
+        return;
+    }
 
-    // 天空像素跳过 (colortex3.xyz = 0 for sky)
     float center_pos_sq = dot(center_pos, center_pos);
-    if (center_pos_sq < 1e-6) return;
 
     const float power = max(1.0, 2.0
                 - ATROUS_GAMMA * ATROUS_POWER_COEFFICIENT);
@@ -164,10 +180,8 @@ void main() {
         float sample_oct_n;
         AliceEncoding sample_alice;
         float sample_var_est;
-        unpackLightSample(sample_coord, sample_world_pos, sample_oct_n,
-            sample_alice, sample_var_est);
-
-        if (dot(sample_world_pos, sample_world_pos) < 1e-6) continue; // 天空
+        if (!unpackLightSample(sample_coord, sample_world_pos, sample_oct_n,
+                sample_alice, sample_var_est)) continue;
         float w_geometry = abs(dot(sample_world_pos, center_normal)
                     - center_plane_distance) * inv_pixel_footprint;
 

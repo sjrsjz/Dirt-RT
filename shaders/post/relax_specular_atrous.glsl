@@ -80,9 +80,10 @@ shared uint relaxSharedVarianceEndpoint[RELAX_ATROUS_TILE_AREA];
 uvec2 relaxLoadSharedTileSample(uint index, ivec2 q, ivec2 size) {
     uvec4 packedSignal = uvec4(0u);
     if (relaxInBounds(q, size)) {
-        relaxSharedGeometry[index] = texelFetch(colortex9, q, 0);
         packedSignal = relaxFetchAtrousPacked(q);
         float historyLength = unpackHalf2x16(packedSignal.w).x;
+        relaxSharedGeometry[index] = historyLength > 0.0
+            ? texelFetch(colortex9, q, 0) : vec4(0.0);
         relaxSharedRadianceRough[index] = packedSignal.xy;
         relaxSharedVarianceEndpoint[index] = historyLength > 0.0
             ? packedSignal.z : relaxPackHalf2(-1.0, 0.0);
@@ -175,8 +176,8 @@ void main() {
     center = relaxUnpackSpatial(uvec4(centerRadianceRough,
         centerVarianceMetadata));
 #else
-    centerGeometry = texelFetch(colortex9, pixel, 0);
     center = relaxLoadAtrous(pixel);
+    centerGeometry = vec4(0.0);
 #endif
 
     if (center.historyLength <= 0.0) {
@@ -185,6 +186,10 @@ void main() {
         relaxStoreAtrousDebug(pixel, center);
         return;
     }
+
+#if !defined(RELAX_ATROUS_SHARED)
+    centerGeometry = texelFetch(colortex9, pixel, 0);
+#endif
 
     vec3 centerNormal;
     uint centerMaterial;

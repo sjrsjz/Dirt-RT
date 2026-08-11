@@ -117,7 +117,7 @@ void unpackSpecularSampleSM(uint tile_idx, out vec3 pos, out vec3 radiance,
     roughness = br.y;
     variance = vv.x;
     virtualProjDist = vv.y;
-    H = decodeNormal(uintBitsToFloat(light.w));
+    H = decodeNormalU(light.w);
 }
 
 void main() {
@@ -136,11 +136,18 @@ void main() {
         ivec2 gc = tile_origin + ivec2(tx, ty);
         ivec2 cc = clamp(gc, ivec2(0), texSize - 1);
         if (gc == cc) {
-            vec3 position = texelFetch(colortex3, cc, 0).xyz;
-            sm_position_x[i] = position.x;
-            sm_position_y[i] = position.y;
-            sm_position_z[i] = position.z;
-            sm_light[i] = texelFetch(colortex4, cc, 0);
+            uvec4 light = texelFetch(colortex4, cc, 0);
+            sm_light[i] = light;
+            if (unpackHalf2x16(light.z).x < 0.0) {
+                sm_position_x[i] = 0.0;
+                sm_position_y[i] = 0.0;
+                sm_position_z[i] = 0.0;
+            } else {
+                vec3 position = texelFetch(colortex3, cc, 0).xyz;
+                sm_position_x[i] = position.x;
+                sm_position_y[i] = position.y;
+                sm_position_z[i] = position.z;
+            }
         } else {
             // 越界: 天空 mask (variance<0)
             sm_position_x[i] = 0.0;
@@ -158,12 +165,11 @@ void main() {
     uint cy = lid.y + uint(HALO);
     uint center_idx = cy * uint(TILE_SIZE) + cx;
 
+    if (unpackHalf2x16(sm_light[center_idx].z).x < 0.0) return;
+
     vec3 cPos, cRad, cH;
     float cRough, cVar, cVproj;
     unpackSpecularSampleSM(center_idx, cPos, cRad, cRough, cVar, cVproj, cH);
-
-    // 天空: 早退, 保留 swap4 写入的 mask
-    if (cVar < 0.0) return;
 
     // ---- NRD-style 权重参数计算 ----
 

@@ -21,6 +21,14 @@ void main() {
     float primaryDistance;
     readGeo0(GEO_N_GEO, pixel, centerPos, primaryDistance);
 
+    // The reflection continuation is empty for primary sky pixels.  Keep this
+    // check ahead of the reflection/endpoint reads: sky is the common case in
+    // the pathological trace and the packed empty prepass value is all zero.
+    if (primaryDistance < -0.5) {
+        imageStore(colorimg6, ivec2(pixel), uvec4(0u));
+        return;
+    }
+
     vec3 raw;
     float unusedDistance, unusedWeight;
     readReflLight(pixel, raw, unusedDistance, unusedWeight);
@@ -28,15 +36,8 @@ void main() {
 
     RelaxPrepassSignal outputSignal;
     outputSignal.radiance = raw;
-    outputSignal.endpoint = primaryDistance > -0.5
-        ? relaxUnpackEndpointMoments(
-            texelFetch(colortex6, ivec2(pixel), 0).xy)
-        : emptyRelaxEndpointMoments();
-
-    if (primaryDistance < -0.5) {
-        imageStore(colorimg6, ivec2(pixel), relaxPackPrepass(outputSignal));
-        return;
-    }
+    outputSignal.endpoint = relaxUnpackEndpointMoments(
+        texelFetch(colortex6, ivec2(pixel), 0).xy);
 
     vec3 centerNormal;
     float centerAlpha, centerPathRoughness;

@@ -35,7 +35,7 @@ PackedLightSample packSpecularSample(vec3 pos, vec3 R, vec3 radiance,
         packHalf2x16(vec2(clamp(radiance.r, -65504.0, 65504.0), clamp(radiance.g, -65504.0, 65504.0))),
         packHalf2x16(vec2(clamp(radiance.b, -65504.0, 65504.0), clamp(roughness, -65504.0, 65504.0))),
         packHalf2x16(vec2(clamp(variance, -65504.0, 65504.0), clamp(virtualProjDist, -65504.0, 65504.0))),
-        floatBitsToUint(encodeNormal(H))
+        encodeNormalU(H)
     );
     return s;
 }
@@ -52,7 +52,7 @@ void unpackSpecularSample(PackedLightSample s,
     roughness = br.y;
     variance  = vv.x;
     virtualProjDist = vv.y;
-    H = decodeNormal(uintBitsToFloat(s.data1.w));
+    H = decodeNormalU(s.data1.w);
 }
 
 // A-trous only filters radiance/variance. Avoid decoding the stored ray
@@ -68,7 +68,7 @@ void unpackSpecularFilterSample(vec4 geometry, uvec4 light,
     roughness = br.y;
     variance = vv.x;
     virtualProjDist = vv.y;
-    H = decodeNormal(uintBitsToFloat(light.w));
+    H = decodeNormalU(light.w);
 }
 
 uvec4 packSpecularFilterLight(vec3 radiance, float roughness,
@@ -77,7 +77,7 @@ uvec4 packSpecularFilterLight(vec3 radiance, float roughness,
         packHalf2x16(clamp(radiance.rg, -65504.0, 65504.0)),
         packHalf2x16(clamp(vec2(radiance.b, roughness), -65504.0, 65504.0)),
         packHalf2x16(clamp(vec2(variance, virtualProjDist), -65504.0, 65504.0)),
-        floatBitsToUint(encodeNormal(H)));
+        encodeNormalU(H));
 }
 
 // ===========================================================================

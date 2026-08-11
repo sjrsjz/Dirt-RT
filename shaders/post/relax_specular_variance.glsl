@@ -14,12 +14,35 @@ void main() {
     ivec2 size = ivec2(resolution_global);
     if (any(greaterThanEqual(pixel, resolution_global))) return;
 
-    vec4 slowRaw = texelFetch(colortex3, ivec2(pixel), 0);
-    RelaxFastSignal fast = relaxUnpackFast(texelFetch(colortex4, ivec2(pixel), 0));
-    vec3 centerPos, centerNormal;
-    float centerDepth, centerAlpha, centerPath;
-    int centerMaterialInt;
+    vec3 centerPos;
+    float centerDepth;
     readGeo0(GEO_N_GEO, pixel, centerPos, centerDepth);
+
+    // No temporal reflection survives a primary sky pixel.  The geometry
+    // payload is never consumed when historyLength is zero, so both outputs
+    // can be prepared without reading slow/fast history or Geo1.
+    if (centerDepth < -0.5) {
+        imageStore(colorimg9, ivec2(pixel), vec4(0.0));
+        RelaxSpatialSignal sky;
+        sky.radiance = vec3(0.0);
+        sky.roughness = 1.0;
+        sky.variance = 0.0;
+        sky.endpointDistance = 0.0;
+        sky.historyLength = 0.0;
+        sky.confidence = 0.0;
+        imageStore(colorimg6, ivec2(pixel), relaxPackSpatial(sky));
+#if DEBUG_VIEW == 25
+        writeReflLight(pixel, vec3(0.0), 0.0, 0.0);
+#endif
+        return;
+    }
+
+    vec4 slowRaw = texelFetch(colortex3, ivec2(pixel), 0);
+    RelaxFastSignal fast = relaxUnpackFast(
+        texelFetch(colortex4, ivec2(pixel), 0));
+    vec3 centerNormal;
+    float centerAlpha, centerPath;
+    int centerMaterialInt;
     readGeo1(GEO_N_NORMALS, pixel, centerNormal, centerAlpha,
         centerMaterialInt, centerPath);
     uint centerMaterial = uint(max(centerMaterialInt, 0));
@@ -28,22 +51,6 @@ void main() {
     uint geometryPack = relaxPackNormalMaterial(centerNormal, centerMaterial);
     imageStore(colorimg9, ivec2(pixel), vec4(centerPos,
         uintBitsToFloat(geometryPack)));
-
-    if (centerDepth < -0.5) {
-        RelaxSpatialSignal sky;
-        sky.radiance = relaxFiniteColor(slowRaw.rgb);
-        sky.roughness = 1.0;
-        sky.variance = 0.0;
-        sky.endpointDistance = 0.0;
-        sky.historyLength = 0.0;
-        sky.confidence = 0.0;
-        imageStore(colorimg6, ivec2(pixel), relaxPackSpatial(sky));
-#if DEBUG_VIEW == 25
-        writeReflLight(pixel, sky.radiance, sky.endpointDistance,
-            sky.historyLength);
-#endif
-        return;
-    }
 
     vec4 filteredMoments = slowRaw;
     if (fast.historyLength < RELAX_HISTORY_THRESHOLD) {

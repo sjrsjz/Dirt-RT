@@ -15,9 +15,13 @@ void unpack2Half(float packed_, out float a, out float b) {
     b = v.y;
 }
 
+uint pack2HalfClampedU(float a, float b) {
+    return packHalf2x16(
+        vec2(clamp(a, -65504.0, 65504.0), clamp(b, -65504.0, 65504.0)));
+}
+
 float pack2HalfClamped(float a, float b) {
-    return uintBitsToFloat(packHalf2x16(
-        vec2(clamp(a, -65504.0, 65504.0), clamp(b, -65504.0, 65504.0))));
+    return uintBitsToFloat(pack2HalfClampedU(a, b));
 }
 
 // A luminance second moment grows quadratically and otherwise overflows FP16
