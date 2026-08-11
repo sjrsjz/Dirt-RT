@@ -141,11 +141,7 @@ vec3 evaluateRadianceCacheHit(vec3 rayOrigin, vec3 rayDirection, vec3 hitPos, fl
 
     Material evaluated = evaluateMaterial(tmp_Payload, rayDirection, 1u);
     vec3 geometryNormal = faceforward(payloadNormal, payloadNormal, rayDirection);
-    vec3 macroNormal = normalize(faceforward(
-                evaluated.macroNormal,
-                evaluated.macroNormal,
-                rayDirection
-            ));
+    vec3 macroNormal = evaluated.macroNormal;
     material surf = materialFromEvaluated(evaluated, blockID);
 
     // 入射辐射率定义在几何表面的空气侧。沿几何法线偏移 epsilon，

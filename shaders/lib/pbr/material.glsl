@@ -30,6 +30,38 @@ struct Material {
     //vec2 block_texture;
 };
 
+// Keep a tangent-space normal usable by the geometric surface and by the
+// current incident ray.  A normal map can remain in the geometric hemisphere
+// yet point behind the viewer at grazing angles.  That makes NoV non-positive,
+// zeroes the BSDF, and can turn isolated texels completely black.
+//
+// Alpha-Piscium applies a 0.5 * geometric NoV floor to the Fresnel cosine.  We
+// enforce the same floor on the normal itself so every RT consumer (sampling,
+// Fresnel, G-buffer reconstruction and the denoisers) sees one convention.
+vec3 constrainMappedNormal(vec3 mappedNormal, vec3 geometryNormal,
+    vec3 viewDirection) {
+    vec3 N = mappedNormal;
+    N *= dot(N, geometryNormal) < 0.0 ? -1.0 : 1.0;
+
+    float NoV = dot(N, viewDirection);
+    float minNoV = max(1e-4, 0.5 * max(dot(geometryNormal,
+        viewDirection), 0.0));
+    if (NoV < minNoV) {
+        vec3 viewTangent = N - viewDirection * NoV;
+        float tangentLength2 = dot(viewTangent, viewTangent);
+        if (tangentLength2 > 1e-8) {
+            float tangentScale = sqrt(max(1.0 - minNoV * minNoV, 0.0))
+                * inversesqrt(tangentLength2);
+            N = viewTangent * tangentScale + viewDirection * minNoV;
+        } else {
+            N = geometryNormal;
+        }
+    }
+    // All inputs are unit length; the correction above rebuilds N from two
+    // orthogonal unit components, so another unconditional normalize is dead.
+    return N;
+}
+
 float adhesion(vec3 n, vec3 w, vec3 g, float a) {
     float tanA = sqrt(max(pow(abs(dot(n, w)), -2) - 1, 0));
     float tanB = sqrt(max(pow(abs(dot(n, g)), -2) - 1, 0));

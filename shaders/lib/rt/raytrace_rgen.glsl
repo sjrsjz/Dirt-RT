@@ -275,6 +275,11 @@ Material evaluateMaterial(Payload pld, vec3 rd_i, uint bounce) {
     payload_unpackQuadIDs(pld.data, instanceIdx, entityTextureId, primitiveId);
 
     // --- TBN ---
+    // Interpolated/compressed tangents are not guaranteed to remain
+    // perpendicular to the geometric normal.  Gram-Schmidt here prevents the
+    // tangent-space XY terms from pushing a normal map below the surface.
+    tangent = normalize(tangent - geomN * dot(geomN, tangent));
+    // tangent and geomN are now orthonormal, hence their cross is unit length.
     vec3 bitangent = cross(tangent, geomN) * bitangentSign;
     mat3 tbn = mat3(tangent, bitangent, geomN);
 
@@ -339,8 +344,12 @@ Material evaluateMaterial(Payload pld, vec3 rd_i, uint bounce) {
 
     albedoTex.rgb = pow(albedoTex.rgb * tint, vec3(2.2));
 
-    return getMaterial(albedoTex, normalTex, specularTex, tbn,
+    Material evaluated = getMaterial(albedoTex, normalTex, specularTex, tbn,
         wetStrength_global, wetness_global, skylight, geomN);
+    vec3 geometryNormal = faceforward(geomN, geomN, rd_i);
+    evaluated.macroNormal = constrainMappedNormal(evaluated.macroNormal,
+        geometryNormal, -rd_i);
+    return evaluated;
 }
 
 // Check if a block is a transmissive/refractive surface (water, glass).
@@ -938,9 +947,12 @@ void handleFirstBounce_Reflection(
 
     if (sampledDelta) {
         next_rd = reflect(rd_i, macroNormal);
-        bsdf_weight = dot(next_rd, geometryNormal) > 0.0
-            ? evaluateSurfaceFresnel(wo, macroNormal, surf.Cs, surf.S.x,
-                surf.S.y, etaRatio) : vec3(0.0);
+        // Match Alpha-Piscium's geometric-hemisphere repair.  Strong mapped
+        // normals must not send a visible reflection through the surface.
+        if (dot(next_rd, geometryNormal) < 0.0)
+            next_rd = reflect(next_rd, geometryNormal);
+        bsdf_weight = evaluateSurfaceFresnel(wo, macroNormal, surf.Cs,
+            surf.S.x, surf.S.y, etaRatio);
         return;
     }
 
@@ -949,6 +961,8 @@ void handleFirstBounce_Reflection(
     // here would make qB-mm^T a covariance of a different distribution,
     // especially on rough surfaces where the old guide probability was high.
     next_rd = reflect(rd_i, microNormal);
+    if (dot(next_rd, geometryNormal) < 0.0)
+        next_rd = reflect(next_rd, geometryNormal);
 
     vec3 wi = next_rd;
     vec3 fSpecTimesNoL_val;
@@ -1061,6 +1075,8 @@ void handleSecondaryBounce(
         neeCompatible = true;
         next_rd = reflect(rd_i,
                 sampledDeltaLobe ? macroNormal : microNormal);
+        if (dot(next_rd, geometryNormal) < 0.0)
+            next_rd = reflect(next_rd, geometryNormal);
         if (dot(next_rd, macroNormal) > 0.0) {
             vec3 wo = -rd_i;
             vec3 wi = next_rd;
@@ -1459,8 +1475,7 @@ void TracePrimaryGBuffer(uvec2 xy, vec3 ro, vec3 rd) {
         Material surfaceMat = evaluateMaterial(tmp_Payload, rd, 0u);
         vec3 geomN = payload_unpackGeomNormal(tmp_Payload.data);
         vec3 geometryNormal = faceforward(geomN, geomN, rd);
-        vec3 macroNormal = normalize(faceforward(surfaceMat.macroNormal,
-                    surfaceMat.macroNormal, -geometryNormal));
+        vec3 macroNormal = surfaceMat.macroNormal;
         int blockID;
         payload_unpackShadow(tmp_Payload.data, blockID);
         surf = materialFromEvaluated(surfaceMat, blockID);
@@ -1645,7 +1660,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         #if defined(FIRST_LOBE_DIFFUSE)
         markRadianceCacheGeometryHit(xy, ro_o, geometryNormal);
         #endif
-        vec3 macroNormal = normalize(faceforward(surfaceMat.macroNormal, surfaceMat.macroNormal, -geometryNormal));
+        vec3 macroNormal = surfaceMat.macroNormal;
         int blockID;
         payload_unpackShadow(tmp_Payload.data, blockID);
         material surf = materialFromEvaluated(surfaceMat, blockID);
@@ -1828,7 +1843,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             #if defined(FIRST_LOBE_DIFFUSE)
             markRadianceCacheGeometryHit(xy, ro_o, geometryNormal);
             #endif
-            vec3 macroNormal = normalize(faceforward(surfaceMat.macroNormal, surfaceMat.macroNormal, rd_i));
+            vec3 macroNormal = surfaceMat.macroNormal;
             int blockID;
             payload_unpackShadow(tmp_Payload.data, blockID);
             material surf = materialFromEvaluated(surfaceMat, blockID);
