@@ -1,0 +1,8 @@
+The adjacent PNG packs LDR_RG01_0.png through LDR_RG01_7.png as a 4x2 atlas.
+
+Source: https://momentsingraphics.de/BlueNoise.html
+Author: Christoph Peters
+License: CC0 1.0 Universal / public domain dedication
+
+Each source image is an independent, tileable, two-channel 64x64 blue-noise
+texture. The atlas packing preserves the RGBA8 texels exactly.

@@ -99,13 +99,20 @@ float buresDistanceSq(vec3 center_v, vec4 center_data, float center_trace,
 
 // à-trous 分数阶方差传播指数
 // 注意，fs 采样使用的是泊松核，结论可能不完全适用，但仍然可以作为一个近似值
-#if R0 == 8
+#if STEP == 1
+#define ATROUS_POWER_COEFFICIENT 0.3339015144
+#elif STEP == 2
+#define ATROUS_POWER_COEFFICIENT 0.4375201036
+#elif STEP == 3
+#define ATROUS_POWER_COEFFICIENT 0.4592464660
+#elif STEP == 4
 #define ATROUS_POWER_COEFFICIENT 0.4644479501
-#elif R0 == 16
+#elif STEP == 5
 #define ATROUS_POWER_COEFFICIENT 0.4657344365
-#elif R0 == 32
+#elif STEP == 6
 #define ATROUS_POWER_COEFFICIENT 0.4660551979
 #endif
+
 
 // ---------------------------------------------------------------------------
 // 主函数
@@ -138,7 +145,7 @@ void main() {
                 - ATROUS_GAMMA * ATROUS_POWER_COEFFICIENT);
     const float variance_mix = 2.0 - exp2(2.0 - power);
 
-    center_var_est = max(center_var_est, 1e-12);
+    center_var_est = max(center_var_est, 1e-16);
 
     // ---- 从 colortex3.w 解码中心法线（方差滤波写入，零额外读取）-------
     vec3 center_normal = decodeNormal(center_oct_n);
@@ -189,7 +196,7 @@ void main() {
         vec4 s_bures = makeBuresData(s_enc);
         float d_bures_sq = buresDistanceSq(c_enc.xyz, c_bures, c_trace,
                 s_enc.xyz, s_bures);
-        float w_luma = ATROUS_PHI_L * d_bures_sq / max(center_var_est + sample_var_est, 1e-12);
+        float w_luma = ATROUS_PHI_L * d_bures_sq / (center_var_est + sample_var_est);
 
         const float w_kernel = ps.w;
         float w0 = w_kernel * exp(-w_geometry - w_luma);

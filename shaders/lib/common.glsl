@@ -155,7 +155,7 @@ float GGX_G2_standard(float NoV, float NoL, float a) {
     return 1.0 / (1.0 + lambdaV + lambdaL);
 }
 
-vec3 GGXNormal(vec3 macroNormal, float roughness, vec3 pos) {
+vec3 GGXNormal(vec3 macroNormal, float roughness, vec2 xi) {
     vec3 randN0;
     randN0.y = -length(macroNormal.xz);
     if (macroNormal.y > 0.99 || macroNormal.y < -0.99)
@@ -163,11 +163,14 @@ vec3 GGXNormal(vec3 macroNormal, float roughness, vec3 pos) {
     else
         randN0.xz = macroNormal.xz * macroNormal.y * inversesqrt(1 - macroNormal.y * macroNormal.y);
     vec3 randN1 = cross(macroNormal, randN0);
-    vec2 xi = rand2(pos);
     float alpha = xi.x * 2 * PI;
     float cosbeta = min(sqrt(max(0., (1. - xi.y) / (1. + xi.y * (roughness * roughness - 1.)))), 1.);
 
     return cosbeta * macroNormal + sqrt(1 - cosbeta * cosbeta) * (cos(alpha) * randN0 + sin(alpha) * randN1);
+}
+
+vec3 GGXNormal(vec3 macroNormal, float roughness, vec3 pos) {
+    return GGXNormal(macroNormal, roughness, rand2(pos));
 }
 
 vec3 DiffuseNormal(vec3 macroNormal, vec3 pos) {
@@ -183,8 +186,7 @@ vec3 DiffuseNormal(vec3 macroNormal, vec3 pos) {
     return sqrt(1 - xi.y) * macroNormal + sqrt(xi.y) * (cos(alpha) * randN0 + sin(alpha) * randN1);
 }
 
-vec3 SampleUniformHemisphere(vec3 geometryNormal, vec3 pos) {
-    vec2 xi = rand2(pos);
+vec3 SampleUniformHemisphere(vec3 geometryNormal, vec2 xi) {
     float phi = xi.x * 2.0 * PI;
     float cosTheta = xi.y; // cosTheta 在 [0, 1] 均匀分布
     float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
@@ -197,6 +199,10 @@ vec3 SampleUniformHemisphere(vec3 geometryNormal, vec3 pos) {
     vec3 bitangent = cross(geometryNormal, tangent);
     
     return tangent * localDir.x + bitangent * localDir.y + geometryNormal * localDir.z;
+}
+
+vec3 SampleUniformHemisphere(vec3 geometryNormal, vec3 pos) {
+    return SampleUniformHemisphere(geometryNormal, rand2(pos));
 }
 
 float GGX_D(float costheta, float a) {

@@ -76,12 +76,18 @@ float buresDistanceSqSM(vec3 center_v, vec2 center_stddev,
 }
 
 // à-trous 分数阶方差传播指数
-#if R0 == 1
+#if STEP == 1
 #define ATROUS_POWER_COEFFICIENT 0.3339015144
-#elif R0 == 2
+#elif STEP == 2
 #define ATROUS_POWER_COEFFICIENT 0.4375201036
-#elif R0 == 4
+#elif STEP == 3
 #define ATROUS_POWER_COEFFICIENT 0.4592464660
+#elif STEP == 4
+#define ATROUS_POWER_COEFFICIENT 0.4644479501
+#elif STEP == 5
+#define ATROUS_POWER_COEFFICIENT 0.4657344365
+#elif STEP == 6
+#define ATROUS_POWER_COEFFICIENT 0.4660551979
 #endif
 
 // ---------------------------------------------------------------------------
@@ -152,7 +158,7 @@ void main() {
     vec3 center_pos = sm_geometry[center_idx].xyz;
     float center_var_raw;
     unpackDiffuseTileLight(center_idx, center_alice, center_var_raw);
-    float center_var_est = max(center_var_raw, 1e-12);
+    float center_var_est = max(center_var_raw, 1e-16);
 
     // ---- 从共享内存解码中心法线（colortex3.w = oct(centerNormal)）-------
     vec3 center_normal = decodeNormal(sm_geometry[center_idx].w);
@@ -214,7 +220,7 @@ void main() {
                 c_inv_len_v_sq, c_trace, c_anisotropy, s_v,
                 unpackHalf2x16(sm_stddev_packed[sample_idx]),
                 s_inv_len_v_sq);
-        float w_luma = ATROUS_PHI_L * d_bures_sq / max(center_var_est + sample_var_est, 1e-12);
+        float w_luma = ATROUS_PHI_L * d_bures_sq / (center_var_est + sample_var_est);
 
         const float w_kernel = GRID_3x3[k].z;
         float w0 = w_kernel * exp(-w_geometry - w_luma);
