@@ -1,177 +1,31 @@
 #version 430 core
 
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 8, local_size_y = 8) in;
 
 #define REFLECT_BUFFER
 #include "/lib/denoise/relax_specular_common.glsl"
 
 layout(rgba32ui) uniform writeonly uimage2D colorimg6;
 
-void storeSpatialEndpoint(ivec2 pixel, RelaxEndpointMoments endpoint) {
-    uvec2 packedEndpoint = relaxPackEndpointMoments(endpoint);
-    imageStore(colorimg6, pixel, uvec4(packedEndpoint, 0u, 0u));
-}
-
-#define ENDPOINT_GROUP_SIZE 16
-#define ENDPOINT_FILTER_RADIUS 3
-#define ENDPOINT_TILE_SIZE (ENDPOINT_GROUP_SIZE + 2 * ENDPOINT_FILTER_RADIUS) // 22
-#define ENDPOINT_TILE_AREA (ENDPOINT_TILE_SIZE * ENDPOINT_TILE_SIZE)           // 484
-
-// Endpoint moments and normals already have lossless-for-source packed forms.
-// Keep those encodings in LDS and decode only after rejecting empty taps.
-shared uvec2 sm_moments_packed[ENDPOINT_TILE_AREA];
-shared vec4 sm_pos_rough[ENDPOINT_TILE_AREA];
-shared uint sm_normal_packed[ENDPOINT_TILE_AREA];
-
-bool isFiniteVec3(vec3 v) {
-    return all(lessThan(abs(v), vec3(1e30)));
-}
-bool isFiniteFloat(float f) {
-    return abs(f) < 1e30;
-}
-
+// Kept in composite59 so the public pass schedule does not change. The old
+// 7x7 endpoint-moment fit is gone; this is now only the raw MaxEnt+hit upload.
 void main() {
-    ivec2 size = ivec2(resolution_global);
-    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 tileOrigin = ivec2(gl_WorkGroupID.xy) * ENDPOINT_GROUP_SIZE - ivec2(ENDPOINT_FILTER_RADIUS);
+    uvec2 pixel = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(pixel, resolution_global))) return;
 
-    for (uint i = gl_LocalInvocationIndex; i < uint(ENDPOINT_TILE_AREA);
-            i += uint(ENDPOINT_GROUP_SIZE * ENDPOINT_GROUP_SIZE)) {
-        uint tx = i % uint(ENDPOINT_TILE_SIZE);
-        uint ty = i / uint(ENDPOINT_TILE_SIZE);
-        ivec2 q = clamp(tileOrigin + ivec2(tx, ty), ivec2(0), size - ivec2(1));
-
-        uvec2 packedMoments = readReflEndpointMomentsRaw(uvec2(q));
-        // Empty endpoint moments are overwhelmingly common for sky and
-        // delta-miss pixels. Reject them before touching three G-buffer words
-        // and before decoding the octahedral normal.
-        if ((packedMoments.y >> 16u) == 0u) {
-            sm_moments_packed[i] = uvec2(0u);
-            sm_pos_rough[i] = vec4(0.0, 0.0, 0.0, 1.0);
-            sm_normal_packed[i] = 0u;
-            continue;
-        }
-
-        vec3 position;
-        float primaryDistance;
-        readGeo0(GEO_N_GEO, uvec2(q), position, primaryDistance);
-
-        uvec4 surfaceData = geomBuffer.data[addr(GEO_N_NORMALS, uvec2(q))];
-        vec3 normal = decodeNormalU(surfaceData.x);
-        float alpha = uintBitsToFloat(surfaceData.y);
-
-        bool finiteGeometry = isFiniteVec3(position) && isFiniteFloat(primaryDistance) &&
-                isFiniteVec3(normal) && isFiniteFloat(alpha);
-
-        if (!finiteGeometry) {
-            packedMoments = uvec2(0u);
-            position = vec3(0.0);
-            alpha = 1.0;
-        }
-
-        float perceptualRoughness = relaxPerceptualRoughness(alpha);
-
-        sm_moments_packed[i] = packedMoments;
-        sm_pos_rough[i] = vec4(position, perceptualRoughness);
-        sm_normal_packed[i] = finiteGeometry
-            ? surfaceData.x : 0u;
-    }
-
-    barrier();
-
-    if (!relaxInBounds(pixel, size)) return;
-
-    ivec2 centerTile = ivec2(gl_LocalInvocationID.xy) + ivec2(ENDPOINT_FILTER_RADIUS);
-    int centerIndex = centerTile.y * ENDPOINT_TILE_SIZE + centerTile.x;
-
-    RelaxEndpointMoments center =
-        relaxUnpackEndpointMoments(sm_moments_packed[centerIndex]);
-
-    if (!relaxEndpointMomentsValid(center)) {
-        storeSpatialEndpoint(pixel, emptyRelaxEndpointMoments());
+    vec3 position;
+    float primaryDistance;
+    readGeo0(GEO_N_GEO, pixel, position, primaryDistance);
+    if (primaryDistance < -0.5) {
+        imageStore(colorimg6, ivec2(pixel), uvec4(0u));
         return;
     }
 
-    vec4 centerPosRough = sm_pos_rough[centerIndex];
-    vec3 centerPosition = centerPosRough.xyz;
-    float centerRoughness = centerPosRough.w;
-    vec3 centerNormal = decodeNormalU(sm_normal_packed[centerIndex]);
-
-    float spatialSigma = 0.12 + 2.88 * centerRoughness;
-    float invTwoSpatialSigma2 = 0.5 / max(spatialSigma * spatialSigma, 1e-8);
-
-    float planeSigma = max(RELAX_DEPTH_THRESHOLD * max(length(centerPosition), 1.0), 1e-5);
-    float invPlaneSigma = 1.0 / planeSigma;
-
-    float normalSigma = 0.02 + 0.35 * centerRoughness;
-    float invNormalSigma = 1.0 / normalSigma;
-
-    float roughnessSigma = 0.03 + 0.25 * centerRoughness;
-    float invTwoRoughnessSigma2 = 0.5 / max(roughnessSigma * roughnessSigma, 1e-8);
-
-    float invEndpointScale = 1.0 / relaxEndpointDistanceScale();
-    float centerPlaneDistance = dot(centerPosition, centerNormal);
-
-    // Ignore taps whose spatial-only Gaussian contribution is below 1e-3.
-    // Smooth surfaces use the support their narrow kernel actually needs;
-    // rough surfaces retain the complete 7x7 footprint.
-    int filterRadius = clamp(int(ceil(3.7169221888 * spatialSigma)),
-        1, ENDPOINT_FILTER_RADIUS);
-
-    vec3 sumMean = vec3(0.0);
-    float sumSecondMoment = 0.0;
-    float sumWeight = 0.0;
-
-    for (int oy = -filterRadius; oy <= filterRadius; ++oy) {
-        for (int ox = -filterRadius; ox <= filterRadius; ++ox) {
-            int sampleIndex = centerIndex + (oy * ENDPOINT_TILE_SIZE + ox);
-
-            uvec2 sampleMomentsPacked =
-                sm_moments_packed[sampleIndex];
-            // The high half is sqrt(secondMoment), so reject empty taps before
-            // paying for the full endpoint decode and geometry fetches.
-            if ((sampleMomentsPacked.y >> 16u) == 0u) continue;
-            RelaxEndpointMoments sampleMoments =
-                relaxUnpackEndpointMoments(sampleMomentsPacked);
-            vec3 sampleMean = sampleMoments.mean;
-            float sampleSecondMoment = sampleMoments.secondMoment;
-
-            float endpointPresence = step(1e-20, sampleSecondMoment);
-            if (endpointPresence <= 0.0) continue; // 快速跳过无效/空样本
-
-            vec4 samplePosRough = sm_pos_rough[sampleIndex];
-            vec3 samplePosition = samplePosRough.xyz;
-            float sampleRoughness = samplePosRough.w;
-            vec3 sampleNormal = decodeNormalU(sm_normal_packed[sampleIndex]);
-
-            vec3 originDelta = (samplePosition - centerPosition) * invEndpointScale;
-            vec3 rebasedMean = sampleMean + originDelta;
-            float rebasedSecondMoment = sampleSecondMoment + dot(originDelta, sampleMean + rebasedMean);
-
-            float radiusSquared = float(ox * ox + oy * oy);
-            float planeDistance = abs(dot(samplePosition, centerNormal) -
-                centerPlaneDistance);
-            float normalDifference = 1.0 - clamp(dot(centerNormal, sampleNormal), -1.0, 1.0);
-            float roughnessDifference = sampleRoughness - centerRoughness;
-
-            float exponent = radiusSquared * invTwoSpatialSigma2 +
-                    planeDistance * invPlaneSigma +
-                    normalDifference * invNormalSigma +
-                    (roughnessDifference * roughnessDifference) * invTwoRoughnessSigma2;
-
-            float weight = exp(-exponent);
-
-            sumMean += rebasedMean * weight;
-            sumSecondMoment += rebasedSecondMoment * weight;
-            sumWeight += weight;
-        }
-    }
-
-    RelaxEndpointMoments filtered;
-    float inverseWeight = 1.0 / max(sumWeight, 1e-20);
-    filtered.mean = sumMean * inverseWeight;
-    filtered.secondMoment = sumSecondMoment * inverseWeight;
-    filtered = sanitizeRelaxEndpointMoments(filtered);
-
-    storeSpatialEndpoint(pixel, filtered);
+    SpecularMaxEnt signal;
+    float hitDistance, unusedWeight;
+    readReflMaxEnt(pixel, signal, hitDistance, unusedWeight);
+    RelaxPrepassSignal outSignal;
+    outSignal.signal = signal;
+    outSignal.hitDistance = hitDistance;
+    imageStore(colorimg6, ivec2(pixel), relaxPackPrepass(outSignal));
 }

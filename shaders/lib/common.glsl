@@ -155,6 +155,10 @@ float GGX_G2_standard(float NoV, float NoL, float a) {
     return 1.0 / (1.0 + lambdaV + lambdaL);
 }
 
+// Shared by the VNDF path sampler and the MaxEnt reconstruction. The finite
+// branch is continuous at this boundary because its modulation tends to F.
+const float SPECULAR_DELTA_ALPHA = 1e-5;
+
 vec3 GGXNormal(vec3 macroNormal, float roughness, vec2 xi) {
     vec3 randN0;
     randN0.y = -length(macroNormal.xz);

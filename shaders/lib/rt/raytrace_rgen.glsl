@@ -162,6 +162,7 @@ void main() {
     if (gl_LaunchIDEXT.xy == vec2(0)) {
         world_type_global = int(cam.world_type);
         frame_id = int(cam.frameId);
+        eye_medium_global = cam.flags & 3u;
         camPos = origin;
         camY_global = (cam.viewInverse * vec4(normalize(cam.corners[0] - cam.corners[2]), 0)).xyz;
         camX_global = (cam.viewInverse * vec4(normalize(cam.corners[0] - cam.corners[1]), 0)).xyz;
@@ -383,7 +384,7 @@ material materialFromEvaluated(Material mat, int blockID) {
 
     return newMaterial(clamp(mat.F0, 0.0, 1.0), albedo,
         vec2(specSelector, 1.0 - opaqueFraction),
-        vec4(roughness > 0.01 ? max(roughness, 0.0125) : 0.0, opaqueFraction,
+        vec4(roughness, opaqueFraction,
             isWater, mat.subsurface_scattering),
         emission);
 }
@@ -526,8 +527,6 @@ struct LobeProbs {
     float F;
 };
 
-const float PT_DELTA_ROUGHNESS = 1e-5;
-
 float powerHeuristic(float pdfA, float pdfB) {
     float a2 = pdfA * pdfA;
     float b2 = pdfB * pdfB;
@@ -545,7 +544,7 @@ float sunDirectionPdf(vec3 wi, vec3 lightDir) {
 }
 
 bool isDeltaSpecular(float roughness) {
-    return roughness <= PT_DELTA_ROUGHNESS;
+    return roughness <= SPECULAR_DELTA_ALPHA;
 }
 
 struct MediumResult {
@@ -572,7 +571,6 @@ struct FirstBounceData {
     vec3 emission_val, light_surf, absorption;
     float t, roughness, n_i, n_o, t2_ior_adjusted, pathRoughness;
     float reflectionHitDistance;
-    vec3 reflectionEndpointOffset;
     vec3 surfaceMotion;
     float motionValid;
     int type, materialID;
@@ -1303,7 +1301,6 @@ FirstBounceData initFirstBounceData(vec3 ro, vec3 rd) {
     fb.t2_ior_adjusted = 0.0;
     fb.pathRoughness = 0.0;
     fb.reflectionHitDistance = 0.0;
-    fb.reflectionEndpointOffset = vec3(0.0);
     fb.surfaceMotion = vec3(0.0);
     fb.motionValid = 0.0;
     fb.type = -1;
@@ -1410,38 +1407,42 @@ void writeDiffuseOutput(uvec2 xy, FirstBounceData fb, vec3 L_indirect,
     writeDiffuseGeo(xy, pos_rel, mask);
 }
 
-void writeReflectionOutput(uvec2 xy, FirstBounceData fb, vec3 totalIllumination, vec3 ro) {
+vec3 recoverFirstBounceIncident(vec3 pathContribution,
+        vec3 firstBsdfWeight) {
+    vec3 incident = vec3(0.0);
+    if (abs(firstBsdfWeight.x) > 1e-8)
+        incident.x = pathContribution.x / firstBsdfWeight.x;
+    if (abs(firstBsdfWeight.y) > 1e-8)
+        incident.y = pathContribution.y / firstBsdfWeight.y;
+    if (abs(firstBsdfWeight.z) > 1e-8)
+        incident.z = pathContribution.z / firstBsdfWeight.z;
+    // firstBsdfWeight is f / q for a finite VNDF lobe and F for a delta
+    // mirror. Dividing the traced contribution by that weight recovers Li in
+    // both cases. Do not divide by q again.
+    if (any(isnan(incident)) || any(isinf(incident))) return vec3(0.0);
+    return clamp(incident, vec3(0.0), vec3(400.0 * div_avgExposure));
+}
+
+void writeReflectionOutput(uvec2 xy, FirstBounceData fb,
+        vec3 indirectContribution, vec3 directIncident,
+        vec3 directIncidentDirection, vec3 firstBsdfWeight, vec3 ro) {
     vec3 pos_rel = fb.p - ro;
     vec3 refl_R = fb.rd_o;
     float refl_vprojdist = fb.reflectionHitDistance;
-    vec3 refl_color = vec3(0.0);
+    SpecularMaxEnt signal = emptySpecularMaxEnt();
     if (fb.t > -0.5) {
-        vec3 demodulated = totalIllumination / max(fb.specularAlbedo,
-                    vec3(RELAX_NRD_MATERIAL_FACTOR_MIN_SCALE));
-        if (!any(isnan(demodulated)) && !any(isinf(demodulated))) {
-            refl_color = clamp(demodulated, 0.0,
-                    200.0 * div_avgExposure);
-        }
+        vec3 incident = recoverFirstBounceIncident(indirectContribution,
+            firstBsdfWeight);
+        signal = specularMaxEntFromRgbDirection(incident, refl_R);
+        SpecularMaxEnt directSignal = specularMaxEntFromRgbDirection(
+            clamp(directIncident, vec3(0.0),
+                vec3(400.0 * div_avgExposure)), directIncidentDirection);
+        signal.aliceY += directSignal.aliceY;
+        signal.CoCg += directSignal.CoCg;
+        signal = sanitizeSpecularMaxEnt(signal);
     }
     writeReflGeo(xy, pos_rel, refl_R);
-    writeReflLight(xy, refl_color, refl_vprojdist, 0.0);
-    RelaxEndpointMoments endpoint = emptyRelaxEndpointMoments();
-    float endpointScale = clamp(VPROJDIST_SKY, 1.0, 65504.0);
-    if (fb.reflectionHitDistance > 0.0 &&
-            fb.reflectionHitDistance < 0.5 * endpointScale &&
-            !any(isnan(fb.reflectionEndpointOffset)) &&
-            !any(isinf(fb.reflectionEndpointOffset))) {
-        // A reflected feature moves as the virtual image behind the local
-        // macro plane, not as the real secondary hit in front of it. Mirror
-        // the hit displacement at the primary reflector before storing its
-        // moments. This orthogonal transform preserves E[|X|^2] and makes the
-        // delta-specular endpoint an exact virtual reprojection point.
-        vec3 virtualEndpointOffset = reflect(
-                fb.reflectionEndpointOffset, fb.macro_n);
-        endpoint.mean = virtualEndpointOffset / endpointScale;
-        endpoint.secondMoment = dot(endpoint.mean, endpoint.mean);
-    }
-    writeReflEndpointMoments(xy, endpoint);
+    writeReflMaxEnt(xy, signal, refl_vprojdist, 0.0);
 }
 
 void writeRefractionOutput(uvec2 xy, FirstBounceData fb, vec3 totalIllumination, vec3 ro) {
@@ -1521,6 +1522,8 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     vec3 L_indirect = vec3(0.0);
     vec3 L_direct_0 = vec3(0.0);
     vec3 L_direct_0_dir = -lightDir;
+    vec3 L_direct_0_incident = vec3(0.0);
+    vec3 reflectionFirstBsdfWeight = vec3(1.0);
     float cascadedRoughness2 = 0.0;
     // Sampling metadata for MIS if the current continuation ray reaches the
     // solar disc. Delta/refraction events have no competing sun-NEE strategy.
@@ -1576,6 +1579,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             next_rd, lastBsdfStrategyPdf, firstDelta);
         lastBsdfDelta = firstDelta;
         lastNeeCompatible = true;
+        reflectionFirstBsdfWeight = bsdf_weight;
         #elif defined(FIRST_LOBE_REFRACTION)
         current_type = REFRACTION;
         bool wasInside = inside;
@@ -1631,6 +1635,14 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                             fSpecTimesNoL, pdfNDF)) {
                         L_direct_0 = misLightContribution(
                                 fSpecTimesNoL, sunLi, lightPdf, pdfNDF);
+                        float misWeight = powerHeuristic(lightPdf, pdfNDF);
+                        // The MaxEnt buffer represents q_vndf(wi) * Li(wi),
+                        // not bare incident radiance.  A light-proposal sample
+                        // therefore needs q_vndf / p_light before it can share
+                        // moments with the VNDF-proposal path sample.
+                        L_direct_0_incident = max(vec3(0.0), sunLi *
+                            (pdfNDF * misWeight
+                                / max(lightPdf, 1e-20)));
                     }
                 }
             }
@@ -1715,6 +1727,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                 lastBsdfStrategyPdf, firstDelta);
             lastBsdfDelta = firstDelta;
             lastNeeCompatible = true;
+            reflectionFirstBsdfWeight = bsdf_weight;
         }
         #elif defined(FIRST_LOBE_REFRACTION)
         {
@@ -1779,6 +1792,12 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                             fSpecTimesNoL, pdfNDF)) {
                         L_direct_0 = misLightContribution(
                                 fSpecTimesNoL, sunLi, lightPdf, pdfNDF);
+                        float misWeight = powerHeuristic(lightPdf, pdfNDF);
+                        // Convert the light-proposal estimator to the same
+                        // q_vndf(wi) * Li(wi) measure as the path sample.
+                        L_direct_0_incident = max(vec3(0.0), sunLi *
+                            (pdfNDF * misWeight
+                                / max(lightPdf, 1e-20)));
                     }
                 }
             }
@@ -1822,8 +1841,6 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             // unrelated extra ray previously traced along a fitted direction.
             if (depth == 1) {
                 fb.reflectionHitDistance = (t2 > -0.5) ? t2 : VPROJDIST_SKY;
-                fb.reflectionEndpointOffset = t2 > -0.5
-                    ? (ro_o - fb.p) : vec3(0.0);
             }
 
             // --- Miss -> sky ---
@@ -2030,7 +2047,9 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     writeDiffuseOutput(
         xy, fb, L_indirect, L_direct_0, L_direct_0_dir, ro);
     #elif defined(FIRST_LOBE_REFLECTION)
-    writeReflectionOutput(xy, fb, totalIllumination, ro);
+    writeReflectionOutput(xy, fb, L_indirect,
+        L_direct_0_incident, L_direct_0_dir,
+        reflectionFirstBsdfWeight, ro);
     #else
     writeRefractionOutput(xy, fb, totalIllumination, ro);
     #endif

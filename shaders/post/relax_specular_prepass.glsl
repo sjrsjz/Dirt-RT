@@ -20,24 +20,17 @@ void main() {
     vec3 centerPos;
     float primaryDistance;
     readGeo0(GEO_N_GEO, pixel, centerPos, primaryDistance);
-
-    // The reflection continuation is empty for primary sky pixels.  Keep this
-    // check ahead of the reflection/endpoint reads: sky is the common case in
-    // the pathological trace and the packed empty prepass value is all zero.
     if (primaryDistance < -0.5) {
         imageStore(colorimg6, ivec2(pixel), uvec4(0u));
         return;
     }
 
-    vec3 raw;
-    float unusedDistance, unusedWeight;
-    readReflLight(pixel, raw, unusedDistance, unusedWeight);
-    raw = relaxFiniteColor(raw);
-
-    RelaxPrepassSignal outputSignal;
-    outputSignal.radiance = raw;
-    outputSignal.endpoint = relaxUnpackEndpointMoments(
-        texelFetch(colortex6, ivec2(pixel), 0).xy);
+    RelaxPrepassSignal center = relaxUnpackPrepass(
+        texelFetch(colortex6, ivec2(pixel), 0));
+    if (RELAX_PREPASS_RADIUS <= 0.0) {
+        imageStore(colorimg6, ivec2(pixel), relaxPackPrepass(center));
+        return;
+    }
 
     vec3 centerNormal;
     float centerAlpha, centerPathRoughness;
@@ -45,55 +38,47 @@ void main() {
     readGeo1(GEO_N_NORMALS, pixel, centerNormal, centerAlpha,
         centerMaterial, centerPathRoughness);
     float centerRoughness = relaxPerceptualRoughness(centerAlpha);
-    if (RELAX_PREPASS_RADIUS <= 0.0) {
-        imageStore(colorimg6, ivec2(pixel), relaxPackPrepass(outputSignal));
-        return;
-    }
-    vec3 sumRadiance = raw;
-    float sumWeight = 1.0;
     vec2 roughnessParams = relaxRoughnessWeightParams(
         centerRoughness, RELAX_ROUGHNESS_FRACTION);
-    float normalParam = 1.0 / max(
-        atan(relaxSpecLobeTanHalfAngle(centerRoughness,
-            0.5 * RELAX_LOBE_ANGLE_FRACTION)), 1.5 / 255.0);
-
+    float depthThreshold = RELAX_DEPTH_THRESHOLD * max(length(centerPos), 1.0);
     int stride = max(1, int(floor(RELAX_PREPASS_RADIUS *
         mix(0.25, 1.0, centerRoughness) + 0.5)));
-    float depthThreshold = RELAX_DEPTH_THRESHOLD * max(length(centerPos), 1.0);
+
+    vec4 sumY = center.signal.aliceY;
+    vec2 sumCoCg = center.signal.CoCg;
+    float sumHit = center.hitDistance;
+    float sumWeight = 1.0;
 
     for (int i = 0; i < 8; ++i) {
         ivec2 q = ivec2(pixel) + RELAX_PREPASS_OFFSETS[i] * stride;
         if (!relaxInBounds(q, size)) continue;
+        vec3 qPos, qNormal;
+        float qDepth, qAlpha, qPath;
+        int qMaterial;
+        readGeo0(GEO_N_GEO, uvec2(q), qPos, qDepth);
+        readGeo1(GEO_N_NORMALS, uvec2(q), qNormal, qAlpha,
+            qMaterial, qPath);
+        if (qDepth < -0.5 || qMaterial != centerMaterial) continue;
 
-        vec3 samplePos;
-        float samplePrimaryDistance;
-        readGeo0(GEO_N_GEO, uvec2(q), samplePos, samplePrimaryDistance);
-        if (samplePrimaryDistance < -0.5) continue;
-
-        vec3 sampleNormal;
-        float sampleAlpha, samplePathRoughness;
-        int sampleMaterial;
-        readGeo1(GEO_N_NORMALS, uvec2(q), sampleNormal, sampleAlpha,
-            sampleMaterial, samplePathRoughness);
-        if (sampleMaterial != centerMaterial) continue;
-
-        float sampleRoughness = relaxPerceptualRoughness(sampleAlpha);
-        float w = relaxPlaneWeight(centerPos, centerNormal, samplePos,
+        float qRoughness = relaxPerceptualRoughness(qAlpha);
+        float w = relaxPlaneWeight(centerPos, centerNormal, qPos,
             depthThreshold);
-        float angle = acos(clamp(dot(centerNormal, sampleNormal), -1.0, 1.0));
-        w *= clamp(1.0 - angle * normalParam, 0.0, 1.0);
-        w *= relaxExponentialWeight(sampleRoughness, roughnessParams);
+        w *= relaxExponentialWeight(qRoughness, roughnessParams);
         if (w <= 1e-4) continue;
 
-        vec3 sampleRadiance;
-        float sampleUnusedDistance, sampleWeight;
-        readReflLight(uvec2(q), sampleRadiance, sampleUnusedDistance, sampleWeight);
-        sampleRadiance = relaxFiniteColor(sampleRadiance);
-
-        sumRadiance += sampleRadiance * w;
+        RelaxPrepassSignal sampleSignal = relaxUnpackPrepass(
+            texelFetch(colortex6, q, 0));
+        sumY += sampleSignal.signal.aliceY * w;
+        sumCoCg += sampleSignal.signal.CoCg * w;
+        sumHit += sampleSignal.hitDistance * w;
         sumWeight += w;
     }
 
-    outputSignal.radiance = relaxFiniteColor(sumRadiance / max(sumWeight, 1e-6));
+    float invWeight = 1.0 / max(sumWeight, 1e-6);
+    RelaxPrepassSignal outputSignal;
+    outputSignal.signal.aliceY = sumY * invWeight;
+    outputSignal.signal.CoCg = sumCoCg * invWeight;
+    outputSignal.signal = sanitizeSpecularMaxEnt(outputSignal.signal);
+    outputSignal.hitDistance = sumHit * invWeight;
     imageStore(colorimg6, ivec2(pixel), relaxPackPrepass(outputSignal));
 }

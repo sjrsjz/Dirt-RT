@@ -21,16 +21,28 @@ layout(rgba32ui) uniform writeonly uimage2D colorimg5;
 layout(rgba32ui) uniform writeonly uimage2D colorimg6;
 #endif
 
-uvec4 relaxFetchAtrousPacked(ivec2 p) {
+const ivec2 RELAX_GRID_8[8] = ivec2[](
+    ivec2(-1, -1), ivec2(0, -1), ivec2(1, -1), ivec2(-1, 0),
+    ivec2(1, 0), ivec2(-1, 1), ivec2(0, 1), ivec2(1, 1));
+const float RELAX_GRID_WEIGHT[8] = float[](
+    0.07785, 0.12331, 0.07785, 0.12331,
+    0.12331, 0.07785, 0.12331, 0.07785);
+const vec4 RELAX_POISSON_8[8] = vec4[](
+    vec4(-0.4706069, -0.4427112, 0.6461146, 0.81170),
+    vec4(-0.9057375,  0.3003471, 0.9542373, 0.63422),
+    vec4(-0.3487388,  0.4037880, 0.5335386, 0.86734),
+    vec4( 0.1023042,  0.6439373, 0.6520134, 0.80847),
+    vec4( 0.5699277,  0.3513750, 0.6695386, 0.79925),
+    vec4( 0.2939128, -0.1131226, 0.3149309, 0.95161),
+    vec4( 0.7836658, -0.4208784, 0.8895339, 0.67328),
+    vec4( 0.1564120, -0.8198990, 0.8346850, 0.70589));
+
+uvec4 relaxFetchAtrousWords(ivec2 p) {
 #if RELAX_ATROUS_INPUT == 5
     return texelFetch(colortex5, p, 0);
 #else
     return texelFetch(colortex6, p, 0);
 #endif
-}
-
-RelaxSpatialSignal relaxLoadAtrous(ivec2 p) {
-    return relaxUnpackSpatial(relaxFetchAtrousPacked(p));
 }
 
 void relaxStoreAtrous(ivec2 p, RelaxSpatialSignal s) {
@@ -41,286 +53,129 @@ void relaxStoreAtrous(ivec2 p, RelaxSpatialSignal s) {
 #endif
 }
 
-void relaxStoreAtrousDebug(ivec2 p, RelaxSpatialSignal s) {
+void relaxFinishAtrous(ivec2 p, RelaxSpatialSignal s) {
+    relaxStoreAtrous(p, s);
 #if DEBUG_VIEW == RELAX_ATROUS_DEBUG_VIEW
-    writeReflLight(uvec2(p), relaxFiniteColor(s.radiance),
-        s.endpointDistance, s.historyLength);
+    writeReflLight(uvec2(p), specularMaxEntTotalRgb(s.signal),
+        s.hitDistance, 1.0);
 #endif
-}
-
-void relaxResolveAtrous(ivec2 p, RelaxSpatialSignal s) {
 #if defined(RELAX_ATROUS_RESOLVE)
 #if DEBUG_VIEW == 9 || DEBUG_VIEW == 12 || DEBUG_VIEW == 14 || \
-        (DEBUG_VIEW >= 23 && DEBUG_VIEW <= 30) || \
-        (DEBUG_VIEW >= 38 && DEBUG_VIEW <= 40)
-    // Preserve a diagnostic result written by its owning pass.
+        (DEBUG_VIEW >= 23 && DEBUG_VIEW <= 30)
+    // Preserve the diagnostic value written by its owning pass.
 #else
-    writeReflLight(uvec2(p), relaxFiniteColor(s.radiance),
-        s.endpointDistance, s.historyLength);
+    writeReflMaxEnt(uvec2(p), s.signal, s.hitDistance, 1.0);
 #endif
 #endif
 }
 
-#if defined(RELAX_ATROUS_SHARED)
-
-#define RELAX_ATROUS_GROUP_SIZE 16
-#define RELAX_ATROUS_HALO RELAX_ATROUS_STEP
-#define RELAX_ATROUS_TILE_SIZE \
-    (RELAX_ATROUS_GROUP_SIZE + 2 * RELAX_ATROUS_HALO)
-#define RELAX_ATROUS_TILE_AREA \
-    (RELAX_ATROUS_TILE_SIZE * RELAX_ATROUS_TILE_SIZE)
-
-shared vec4 relaxSharedGeometry[RELAX_ATROUS_TILE_AREA];
-// Neighbor taps consume radiance, roughness, variance and endpoint distance;
-// history is only a validity test and confidence is center-only. Keep the
-// first three packed words and encode invalid history as negative variance.
-shared uvec2 relaxSharedRadianceRough[RELAX_ATROUS_TILE_AREA];
-shared uint relaxSharedVarianceEndpoint[RELAX_ATROUS_TILE_AREA];
-
-uvec2 relaxLoadSharedTileSample(uint index, ivec2 q, ivec2 size) {
-    uvec4 packedSignal = uvec4(0u);
-    if (relaxInBounds(q, size)) {
-        packedSignal = relaxFetchAtrousPacked(q);
-        float historyLength = unpackHalf2x16(packedSignal.w).x;
-        relaxSharedGeometry[index] = historyLength > 0.0
-            ? texelFetch(colortex9, q, 0) : vec4(0.0);
-        relaxSharedRadianceRough[index] = packedSignal.xy;
-        relaxSharedVarianceEndpoint[index] = historyLength > 0.0
-            ? packedSignal.z : relaxPackHalf2(-1.0, 0.0);
-    } else {
-        relaxSharedGeometry[index] = vec4(0.0);
-        relaxSharedRadianceRough[index] = uvec2(0u);
-        relaxSharedVarianceEndpoint[index] =
-            relaxPackHalf2(-1.0, 0.0);
-    }
-    // Only the center needs the unabridged variance/endpoint + metadata.
-    return packedSignal.zw;
+bool relaxGeometryValid(vec4 g) {
+    return any(notEqual(g.xyz, vec3(0.0))) || floatBitsToUint(g.w) != 0u;
 }
-
-RelaxSpatialSignal relaxUnpackSharedNeighbor(uint index) {
-    uvec2 radianceRough = relaxSharedRadianceRough[index];
-    vec2 rg = unpackHalf2x16(radianceRough.x);
-    vec2 br = unpackHalf2x16(radianceRough.y);
-    vec2 varianceEndpoint =
-        unpackHalf2x16(relaxSharedVarianceEndpoint[index]);
-    RelaxSpatialSignal signal;
-    signal.radiance = vec3(rg, br.x);
-    signal.roughness = clamp(br.y, 0.0, 1.0);
-    signal.variance = max(varianceEndpoint.x, 0.0);
-    signal.endpointDistance = max(varianceEndpoint.y, 0.0);
-    signal.historyLength = varianceEndpoint.x < 0.0 ? 0.0 : 1.0;
-    signal.confidence = 0.0;
-    return signal;
-}
-
-#else
-
-// Same eight-point Poisson disk used by the diffuse large-radius stages.
-// xy: normalized offset, z: radius, w: exp(-radius^2 / 2).
-const vec4 RELAX_POISSON_8[8] = vec4[](
-    vec4(-0.4706069, -0.4427112, 0.6461146, 0.81170),
-    vec4(-0.9057375,  0.3003471, 0.9542373, 0.63422),
-    vec4(-0.3487388,  0.4037880, 0.5335386, 0.86734),
-    vec4( 0.1023042,  0.6439373, 0.6520134, 0.80847),
-    vec4( 0.5699277,  0.3513750, 0.6695386, 0.79925),
-    vec4( 0.2939128, -0.1131226, 0.3149309, 0.95161),
-    vec4( 0.7836658, -0.4208784, 0.8895339, 0.67328),
-    vec4( 0.1564120, -0.8198990, 0.8346850, 0.70589)
-);
-
-#endif
 
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     ivec2 size = ivec2(resolution_global);
-
-#if defined(RELAX_ATROUS_SHARED)
-    uint localIndex = gl_LocalInvocationIndex;
-    ivec2 tileOrigin =
-        ivec2(gl_WorkGroupID.xy) * RELAX_ATROUS_GROUP_SIZE -
-        ivec2(RELAX_ATROUS_HALO);
-
-    ivec2 centerTile = ivec2(gl_LocalInvocationID.xy) +
-        ivec2(RELAX_ATROUS_HALO);
-    uint centerIndex = uint(centerTile.y * RELAX_ATROUS_TILE_SIZE +
-        centerTile.x);
-    uvec2 centerVarianceMetadata =
-        relaxLoadSharedTileSample(centerIndex, pixel, size);
-
-    // Every invocation reaches the barrier, including workgroups partially
-    // outside the image. Invalid halo entries carry zero history and are never
-    // consumed as valid samples.
-    for (uint i = localIndex; i < uint(RELAX_ATROUS_TILE_AREA); i += 256u) {
-        int tx = int(i % uint(RELAX_ATROUS_TILE_SIZE));
-        int ty = int(i / uint(RELAX_ATROUS_TILE_SIZE));
-        bool interior = tx >= RELAX_ATROUS_HALO &&
-            tx < RELAX_ATROUS_HALO + RELAX_ATROUS_GROUP_SIZE &&
-            ty >= RELAX_ATROUS_HALO &&
-            ty < RELAX_ATROUS_HALO + RELAX_ATROUS_GROUP_SIZE;
-        if (interior) continue;
-        ivec2 q = tileOrigin + ivec2(tx, ty);
-        relaxLoadSharedTileSample(i, q, size);
-    }
-    memoryBarrierShared();
-    barrier();
-#endif
-
     if (!relaxInBounds(pixel, size)) return;
 
-    vec4 centerGeometry;
-    RelaxSpatialSignal center;
-#if defined(RELAX_ATROUS_SHARED)
-    centerGeometry = relaxSharedGeometry[centerIndex];
-    uvec2 centerRadianceRough =
-        relaxSharedRadianceRough[centerIndex];
-    center = relaxUnpackSpatial(uvec4(centerRadianceRough,
-        centerVarianceMetadata));
-#else
-    center = relaxLoadAtrous(pixel);
-    centerGeometry = vec4(0.0);
-#endif
-
-    if (center.historyLength <= 0.0) {
+    vec4 centerGeometry = texelFetch(colortex9, pixel, 0);
+    RelaxSpatialSignal center = relaxUnpackSpatial(
+        relaxFetchAtrousWords(pixel));
+    if (!relaxGeometryValid(centerGeometry)) {
         relaxStoreAtrous(pixel, center);
-        relaxResolveAtrous(pixel, center);
-        relaxStoreAtrousDebug(pixel, center);
+#if defined(RELAX_ATROUS_RESOLVE)
+        writeReflMaxEnt(uvec2(pixel), emptySpecularMaxEnt(), 0.0, 0.0);
+#endif
         return;
     }
-
-#if !defined(RELAX_ATROUS_SHARED)
-    centerGeometry = texelFetch(colortex9, pixel, 0);
-#endif
 
     vec3 centerNormal;
     uint centerMaterial;
     relaxUnpackNormalMaterial(floatBitsToUint(centerGeometry.w),
         centerNormal, centerMaterial);
     vec3 centerPos = centerGeometry.xyz;
-    vec3 centerV = -relaxSafeNormalize(centerPos,
-        vec3(0.0, 0.0, 1.0));
-    float centerLuminance = relaxLuma(center.radiance);
+    float centerAlpha, centerPath;
+    int centerMaterialGBuffer;
+    vec3 centerNormalGBuffer;
+    readGeo1(GEO_N_NORMALS, uvec2(pixel), centerNormalGBuffer,
+        centerAlpha, centerMaterialGBuffer, centerPath);
+    float centerRoughness = relaxPerceptualRoughness(centerAlpha);
     float phiInv = 1.0 / max(RELAX_SPEC_PHI_LUMINANCE *
         sqrt(center.variance), 1e-4);
-#if defined(RELAX_ATROUS_SHARED)
-    float luminanceRelaxation = mix(
-        1.0, center.confidence, RELAX_LUMINANCE_RELAXATION);
-#else
-    float luminanceRelaxation = 1.0;
-#endif
-    vec2 roughnessParams = relaxRoughnessWeightParams(
-        center.roughness, RELAX_ROUGHNESS_FRACTION);
-    vec2 normalParams = relaxNormalWeightParams(
-        center.roughness, center.historyLength, center.confidence);
     float depthThreshold = RELAX_DEPTH_THRESHOLD *
         max(length(centerPos), 1.0);
 
-#if defined(RELAX_ATROUS_SHARED)
-    const ivec2 gridOffset[8] = ivec2[](
-        ivec2(-1, -1), ivec2(0, -1), ivec2(1, -1),
-        ivec2(-1,  0),                 ivec2(1,  0),
-        ivec2(-1,  1), ivec2(0,  1), ivec2(1,  1)
-    );
-    const float gridWeight[8] = float[](
-        0.07785, 0.12331, 0.07785,
-        0.12331,          0.12331,
-        0.07785, 0.12331, 0.07785
-    );
-    const float centerWeight = 0.44198 * 0.44198;
-#else
-    // A pass-specific but frame-stable rotation prevents the two Poisson
-    // stages from sharing a visible sampling pattern without temporal shimmer.
-    vec2 rotationSeed = relaxHash2(uvec2(pixel),
-        uint(RELAX_ATROUS_STEP));
-    float theta = 2.0 * PI * rotationSeed.x;
+#if defined(RELAX_ATROUS_POISSON)
+    vec2 seed = relaxHash2(uvec2(pixel), uint(RELAX_ATROUS_STEP));
+    float theta = 2.0 * PI * seed.x;
     float cs = cos(theta);
     float sn = sin(theta);
     mat2 rotation = mat2(cs, -sn, sn, cs) *
         (float(RELAX_ATROUS_STEP) * 1.75);
-    const float centerWeight = 1.0;
+    float centerWeight = 1.0;
+#else
+    float centerWeight = 0.44198 * 0.44198;
 #endif
 
-    vec3 sumRadiance = center.radiance * centerWeight;
+    vec4 sumY = center.signal.aliceY * centerWeight;
+    vec2 sumCoCg = center.signal.CoCg * centerWeight;
     float sumVariance = center.variance * centerWeight * centerWeight;
     float sumWeight = centerWeight;
 
     for (int i = 0; i < 8; ++i) {
         ivec2 q;
         float kernelWeight;
-        vec4 sampleGeometry;
-        RelaxSpatialSignal sampleSignal;
-
-#if defined(RELAX_ATROUS_SHARED)
-        ivec2 tileOffset = gridOffset[i] * RELAX_ATROUS_STEP;
-        ivec2 sampleTile = centerTile + tileOffset;
-        uint sampleIndex = uint(
-            sampleTile.y * RELAX_ATROUS_TILE_SIZE + sampleTile.x);
-        q = pixel + tileOffset;
-        kernelWeight = gridWeight[i];
-        sampleGeometry = relaxSharedGeometry[sampleIndex];
-        sampleSignal = relaxUnpackSharedNeighbor(sampleIndex);
+#if defined(RELAX_ATROUS_POISSON)
+        q = pixel + ivec2(round(rotation * RELAX_POISSON_8[i].xy));
+        kernelWeight = RELAX_POISSON_8[i].w;
 #else
-        vec4 poisson = RELAX_POISSON_8[i];
-        q = pixel + ivec2(round(rotation * poisson.xy));
-        if (!relaxInBounds(q, size)) continue;
-        kernelWeight = poisson.w;
-        sampleGeometry = texelFetch(colortex9, q, 0);
-        sampleSignal = relaxLoadAtrous(q);
+        q = pixel + RELAX_GRID_8[i] * RELAX_ATROUS_STEP;
+        kernelWeight = RELAX_GRID_WEIGHT[i];
 #endif
+        if (!relaxInBounds(q, size)) continue;
+        vec4 qGeometry = texelFetch(colortex9, q, 0);
+        if (!relaxGeometryValid(qGeometry)) continue;
+        vec3 qNormal;
+        uint qMaterial;
+        relaxUnpackNormalMaterial(floatBitsToUint(qGeometry.w),
+            qNormal, qMaterial);
+        if (qMaterial != centerMaterial) continue;
 
-        if (sampleSignal.historyLength <= 0.0) continue;
-
-        vec3 sampleNormal;
-        uint sampleMaterial;
-        relaxUnpackNormalMaterial(floatBitsToUint(sampleGeometry.w),
-            sampleNormal, sampleMaterial);
-        if (sampleMaterial != centerMaterial) continue;
-
-        vec3 samplePos = sampleGeometry.xyz;
-        vec3 sampleV = -relaxSafeNormalize(samplePos +
-            RELAX_ROUGHNESS_EDGE_RELAXATION * centerPos, -centerV);
+        RelaxSpatialSignal qSignal = relaxUnpackSpatial(
+            relaxFetchAtrousWords(q));
         float w = kernelWeight;
         w *= relaxPlaneWeight(centerPos, centerNormal,
-            samplePos, depthThreshold);
-        w *= relaxSpecularNormalWeight(normalParams,
-            centerNormal, sampleNormal, centerV, sampleV);
-        w *= relaxExponentialWeight(
-            sampleSignal.roughness, roughnessParams);
+            qGeometry.xyz, depthThreshold);
 
-        // length(E[X]) from the temporally filtered four-moment endpoint
-        // state replaces ReLAX's separately accumulated hit distance.
-        float hitScale = max(max(center.endpointDistance,
-            sampleSignal.endpointDistance), 1.0);
-        float hitWeight = exp(-abs(sampleSignal.endpointDistance -
-            center.endpointDistance) / (hitScale * mix(0.02, 0.5,
-                center.roughness) + 1e-5));
+        float hitScale = max(max(center.hitDistance,
+            qSignal.hitDistance), 1.0);
+        float hitSigma = hitScale * mix(0.02, 0.5,
+            centerRoughness) + 1e-5;
+        float hitWeight = exp(-abs(qSignal.hitDistance -
+            center.hitDistance) / hitSigma);
         w *= mix(RELAX_MIN_HIT_DISTANCE_WEIGHT, 1.0, hitWeight);
 
-#if defined(RELAX_ATROUS_SHARED)
-        float luminanceDifference = min(
-            RELAX_MAX_LUMINANCE_DIFFERENCE,
-            abs(centerLuminance - relaxLuma(sampleSignal.radiance)) *
-                phiInv);
-#else
-        // A capped luminance rejection leaves exp(-2) ≈ 13.5% of every
-        // high-contrast sample alive.  That is tolerable for the dense small
-        // kernels, but is a visible leak for the sparse 8/16-pixel passes.
-        float luminanceDifference = abs(centerLuminance -
-            relaxLuma(sampleSignal.radiance)) * phiInv;
+        float luminanceDifference = abs(center.signal.aliceY.w -
+            qSignal.signal.aliceY.w) * phiInv;
+#if !defined(RELAX_ATROUS_POISSON)
+        luminanceDifference = min(RELAX_MAX_LUMINANCE_DIFFERENCE,
+            luminanceDifference);
 #endif
-        w *= exp(-luminanceDifference * luminanceRelaxation);
+        w *= exp(-luminanceDifference);
         if (w <= 1e-5) continue;
 
-        sumRadiance += sampleSignal.radiance * w;
-        sumVariance += sampleSignal.variance * w * w;
+        sumY += qSignal.signal.aliceY * w;
+        sumCoCg += qSignal.signal.CoCg * w;
+        sumVariance += qSignal.variance * w * w;
         sumWeight += w;
     }
 
+    float invWeight = 1.0 / max(sumWeight, 1e-6);
     RelaxSpatialSignal outputSignal = center;
-    outputSignal.radiance = relaxFiniteColor(
-        sumRadiance / max(sumWeight, 1e-6));
+    outputSignal.signal.aliceY = sumY * invWeight;
+    outputSignal.signal.CoCg = sumCoCg * invWeight;
+    outputSignal.signal = sanitizeSpecularMaxEnt(outputSignal.signal);
     outputSignal.variance = sumVariance /
         max(sumWeight * sumWeight, 1e-8);
-    relaxStoreAtrous(pixel, outputSignal);
-    relaxResolveAtrous(pixel, outputSignal);
-    relaxStoreAtrousDebug(pixel, outputSignal);
+    relaxFinishAtrous(pixel, outputSignal);
 }

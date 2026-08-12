@@ -5,13 +5,8 @@
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/buffer_io.glsl"
 
-// RELAX consumes perceptual roughness. Dirt RT stores GGX alpha in the G-buffer.
 float relaxPerceptualRoughness(float ggxAlpha) {
     return sqrt(clamp(ggxAlpha, 0.0, 1.0));
-}
-
-float relaxLuma(vec3 c) {
-    return dot(c, vec3(0.2126, 0.7152, 0.0722));
 }
 
 vec3 relaxSafeNormalize(vec3 v, vec3 fallback) {
@@ -20,10 +15,7 @@ vec3 relaxSafeNormalize(vec3 v, vec3 fallback) {
 }
 
 vec3 relaxFiniteColor(vec3 c) {
-    bvec3 bad = bvec3(isnan(c.x) || isinf(c.x),
-                      isnan(c.y) || isinf(c.y),
-                      isnan(c.z) || isinf(c.z));
-    if (any(bad)) return vec3(0.0);
+    if (any(isnan(c)) || any(isinf(c))) return vec3(0.0);
     return clamp(c, vec3(0.0), vec3(65504.0));
 }
 
@@ -40,160 +32,168 @@ vec2 relaxHash2(uvec2 pixel, uint frame) {
     return vec2(v & 0x00ffffffu) * (1.0 / 16777216.0);
 }
 
-vec2 relaxCurrentUv(uvec2 pixel) {
-    // Vulkanite primary rays are generated at integer pixel coordinates.
-    return vec2(pixel) / vec2(resolution_global);
-}
-
 vec2 relaxProjectPrevious(vec3 currentRelativePosition, vec3 cameraDelta) {
-    vec3 previousRelativePosition = currentRelativePosition + cameraDelta;
-    vec4 clip = rtPrevViewProjection * vec4(previousRelativePosition, 1.0);
-    if (abs(clip.w) < 1e-8) return vec2(-2.0);
-    return clip.xy / clip.w * 0.5 + 0.5;
-}
-
-vec2 relaxProjectPreviousRelative(vec3 previousRelativePosition) {
-    vec4 clip = rtPrevViewProjection * vec4(previousRelativePosition, 1.0);
-    if (abs(clip.w) < 1e-8) return vec2(-2.0);
+    vec4 clip = rtPrevViewProjection *
+        vec4(currentRelativePosition + cameraDelta, 1.0);
+    if (clip.w <= 1e-8 || any(isnan(clip)) || any(isinf(clip)))
+        return vec2(-2.0);
     return clip.xy / clip.w * 0.5 + 0.5;
 }
 
 uint relaxPackHalf2(float a, float b) {
-    vec2 v = clamp(vec2(a, b), vec2(-65504.0), vec2(65504.0));
-    return packHalf2x16(v);
+    return packHalf2x16(clamp(vec2(a, b), vec2(-65504.0), vec2(65504.0)));
 }
 
-// Prepass transient: 8 FP16 values in the existing rgba32ui image. Endpoint
-// moments are virtual-image offsets in world axes and use the common
-// VPROJDIST_SKY scale. The RMS encoding is only a storage transform; all
-// filtering uses decoded E[|X|^2].
+SpecularMaxEnt relaxMixMaxEnt(SpecularMaxEnt a, SpecularMaxEnt b, float t) {
+    SpecularMaxEnt s;
+    s.aliceY = mix(a.aliceY, b.aliceY, t);
+    s.CoCg = mix(a.CoCg, b.CoCg, t);
+    return sanitizeSpecularMaxEnt(s);
+}
+
+SpecularMaxEnt relaxWeightedMaxEnt(SpecularMaxEnt a, float wa,
+        SpecularMaxEnt b, float wb) {
+    SpecularMaxEnt s;
+    s.aliceY = a.aliceY * wa + b.aliceY * wb;
+    s.CoCg = a.CoCg * wa + b.CoCg * wb;
+    return s;
+}
+
+SpecularMaxEnt relaxScaleMaxEnt(SpecularMaxEnt s, float scale) {
+    s.aliceY *= scale;
+    s.CoCg *= scale;
+    return sanitizeSpecularMaxEnt(s);
+}
+
+vec3 relaxMaxEntYCoCg(SpecularMaxEnt s) {
+    s = sanitizeSpecularMaxEnt(s);
+    return vec3(s.aliceY.w, s.CoCg);
+}
+
+SpecularMaxEnt relaxSetMaxEntYCoCg(SpecularMaxEnt s, vec3 ycocg) {
+    ycocg.x = max(ycocg.x, 0.0);
+    float scale = ycocg.x / max(s.aliceY.w, 1e-8);
+    s.aliceY.xyz *= scale;
+    s.aliceY.w = ycocg.x;
+    s.CoCg = ycocg.yz;
+    return sanitizeSpecularMaxEnt(s);
+}
+
+// Raw/prepass and A-trous payload: MaxEnt6 plus two scalar slots.
 struct RelaxPrepassSignal {
-    vec3 radiance;
-    RelaxEndpointMoments endpoint;
+    SpecularMaxEnt signal;
+    float hitDistance;
 };
 
-float relaxEndpointDistanceScale() {
-    // Endpoint offsets are normalized before FP16 storage. Keep the common
-    // linear scale representable even if the Iris option exceeds FP16 range.
-    return clamp(VPROJDIST_SKY, 1.0, 65504.0);
-}
-
-float relaxEndpointMeanDistance(RelaxEndpointMoments endpoint) {
-    endpoint = sanitizeRelaxEndpointMoments(endpoint);
-    return relaxEndpointMomentsValid(endpoint)
-        ? length(endpoint.mean) * relaxEndpointDistanceScale() : 0.0;
-}
-
 uvec4 relaxPackPrepass(RelaxPrepassSignal s) {
-    s.endpoint = sanitizeRelaxEndpointMoments(s.endpoint);
-    uvec2 packedEndpoint = relaxPackEndpointMoments(s.endpoint);
-    return uvec4(
-        relaxPackHalf2(s.radiance.r, s.radiance.g),
-        relaxPackHalf2(s.radiance.b, 0.0),
-        packedEndpoint);
+    uvec3 p = packSpecularMaxEnt(s.signal);
+    return uvec4(p, relaxPackHalf2(s.hitDistance, 0.0));
 }
 
 RelaxPrepassSignal relaxUnpackPrepass(uvec4 p) {
     RelaxPrepassSignal s;
-    vec2 rg = unpackHalf2x16(p.x);
-    vec2 bh = unpackHalf2x16(p.y);
-    s.radiance = relaxFiniteColor(vec3(rg, bh.x));
-    s.endpoint = relaxUnpackEndpointMoments(p.zw);
+    s.signal = unpackSpecularMaxEnt(p.xyz);
+    s.hitDistance = max(unpackHalf2x16(p.w).x, 0.0);
     return s;
 }
 
 struct RelaxSlowSignal {
-    vec3 radiance;
+    SpecularMaxEnt signal;
     float secondMoment;
-    float historyLength;
-    float confidence;
 };
 
+uvec4 relaxPackSlow(RelaxSlowSignal s) {
+    uvec3 p = packSpecularMaxEnt(s.signal);
+    return uvec4(p, relaxPackHalf2(
+        encodeSqrtMomentFP16(s.secondMoment), 0.0));
+}
+
+RelaxSlowSignal relaxUnpackSlow(uvec4 p) {
+    RelaxSlowSignal s;
+    s.signal = unpackSpecularMaxEnt(p.xyz);
+    s.secondMoment = decodeSqrtMomentFP16(unpackHalf2x16(p.w).x);
+    return s;
+}
+
+// Responsive history intentionally carries only total YCoCg. The angular
+// state remains in the slow MaxEnt record, where it is stable enough to use.
 struct RelaxFastSignal {
-    vec3 radiance;
-    // Derived every frame from the temporally filtered four endpoint moments.
-    // This is transient spatial-filter metadata, not an independent history.
-    float endpointDistance;
+    vec3 YCoCg;
+    float hitDistance;
     float historyLength;
     float confidence;
     uint materialID;
 };
 
-uvec4 relaxPackSlow(RelaxSlowSignal s) {
-    return uvec4(
-        relaxPackHalf2(s.radiance.r, s.radiance.g),
-        relaxPackHalf2(s.radiance.b,
-            encodeSqrtMomentFP16(s.secondMoment)),
-        relaxPackHalf2(s.historyLength, s.confidence),
-        0u);
-}
-
-RelaxSlowSignal relaxUnpackSlow(uvec4 p) {
-    RelaxSlowSignal s;
-    vec2 rg = unpackHalf2x16(p.x);
-    vec2 bm = unpackHalf2x16(p.y);
-    vec2 hc = unpackHalf2x16(p.z);
-    s.radiance = vec3(rg, bm.x);
-    s.secondMoment = decodeSqrtMomentFP16(bm.y);
-    s.historyLength = max(hc.x, 0.0);
-    s.confidence = clamp(hc.y, 0.0, 1.0);
-    return s;
-}
-
 uvec4 relaxPackFast(RelaxFastSignal s) {
-    return uvec4(
-        relaxPackHalf2(s.radiance.r, s.radiance.g),
-        relaxPackHalf2(s.radiance.b, s.endpointDistance),
+    return uvec4(relaxPackHalf2(s.YCoCg.x, s.YCoCg.y),
+        relaxPackHalf2(s.YCoCg.z, s.hitDistance),
         relaxPackHalf2(s.historyLength, s.confidence), s.materialID);
 }
 
 RelaxFastSignal relaxUnpackFast(uvec4 p) {
     RelaxFastSignal s;
-    vec2 rg = unpackHalf2x16(p.x);
-    vec2 bh = unpackHalf2x16(p.y);
-    vec2 hc = unpackHalf2x16(p.z);
-    s.radiance = vec3(rg, bh.x);
-    s.endpointDistance = max(bh.y, 0.0);
-    s.historyLength = max(hc.x, 0.0);
-    s.confidence = clamp(hc.y, 0.0, 1.0);
+    vec2 yc = unpackHalf2x16(p.x);
+    vec2 ch = unpackHalf2x16(p.y);
+    vec2 nc = unpackHalf2x16(p.z);
+    s.YCoCg = vec3(yc, ch.x);
+    s.hitDistance = max(ch.y, 0.0);
+    s.historyLength = max(nc.x, 0.0);
+    s.confidence = clamp(nc.y, 0.0, 1.0);
+    s.materialID = p.w;
+    return s;
+}
+
+// After temporal clamping AliceY lives in RGBA32F; this record carries its
+// six remaining scalars in the existing RGBA32UI attachment.
+struct RelaxPostSignal {
+    vec2 CoCg;
+    float secondMoment;
+    float hitDistance;
+    float historyLength;
+    float confidence;
+    uint materialID;
+};
+
+uvec4 relaxPackPost(RelaxPostSignal s) {
+    return uvec4(relaxPackHalf2(s.CoCg.x, s.CoCg.y),
+        relaxPackHalf2(encodeSqrtMomentFP16(s.secondMoment), s.hitDistance),
+        relaxPackHalf2(s.historyLength, s.confidence), s.materialID);
+}
+
+RelaxPostSignal relaxUnpackPost(uvec4 p) {
+    RelaxPostSignal s;
+    s.CoCg = unpackHalf2x16(p.x);
+    vec2 mh = unpackHalf2x16(p.y);
+    vec2 nc = unpackHalf2x16(p.z);
+    s.secondMoment = decodeSqrtMomentFP16(mh.x);
+    s.hitDistance = max(mh.y, 0.0);
+    s.historyLength = max(nc.x, 0.0);
+    s.confidence = clamp(nc.y, 0.0, 1.0);
     s.materialID = p.w;
     return s;
 }
 
 struct RelaxSpatialSignal {
-    vec3 radiance;
-    float roughness;
+    SpecularMaxEnt signal;
     float variance;
-    float endpointDistance;
-    float historyLength;
-    float confidence;
+    float hitDistance;
 };
 
 uvec4 relaxPackSpatial(RelaxSpatialSignal s) {
-    return uvec4(
-        relaxPackHalf2(s.radiance.r, s.radiance.g),
-        relaxPackHalf2(s.radiance.b, s.roughness),
-        relaxPackHalf2(s.variance, s.endpointDistance),
-        relaxPackHalf2(s.historyLength, s.confidence));
+    uvec3 p = packSpecularMaxEnt(s.signal);
+    return uvec4(p, relaxPackHalf2(s.variance, s.hitDistance));
 }
 
 RelaxSpatialSignal relaxUnpackSpatial(uvec4 p) {
     RelaxSpatialSignal s;
-    vec2 rg = unpackHalf2x16(p.x);
-    vec2 br = unpackHalf2x16(p.y);
-    vec2 vh = unpackHalf2x16(p.z);
-    vec2 hc = unpackHalf2x16(p.w);
-    s.radiance = vec3(rg, br.x);
-    s.roughness = clamp(br.y, 0.0, 1.0);
+    s.signal = unpackSpecularMaxEnt(p.xyz);
+    vec2 vh = unpackHalf2x16(p.w);
     s.variance = max(vh.x, 0.0);
-    s.endpointDistance = max(vh.y, 0.0);
-    s.historyLength = max(hc.x, 0.0);
-    s.confidence = clamp(hc.y, 0.0, 1.0);
+    s.hitDistance = max(vh.y, 0.0);
     return s;
 }
 
-// 8-bit octahedral normal plus a 16-bit material identifier. NRD explicitly
-// supports 8/10-bit normals; this keeps the transient geometry texture compact.
 uint relaxPackNormalMaterial(vec3 n, uint materialID) {
     n = relaxSafeNormalize(n, vec3(0.0, 1.0, 0.0));
     vec2 p = n.xy / max(abs(n.x) + abs(n.y) + abs(n.z), 1e-8);
@@ -210,21 +210,6 @@ void relaxUnpackNormalMaterial(uint p, out vec3 n, out uint materialID) {
     materialID = p >> 16u;
 }
 
-vec3 relaxRgbToYCoCg(vec3 c) {
-    float Y = dot(c, vec3(0.25, 0.5, 0.25));
-    return vec3(Y, c.r - c.b, c.g - 0.5 * (c.r + c.b));
-}
-
-vec3 relaxYCoCgToRgb(vec3 c) {
-    float t = c.x - 0.5 * c.z;
-    return vec3(t + 0.5 * c.y, c.x + 0.5 * c.z, t - 0.5 * c.y);
-}
-
-float relaxSpecMagicCurve(float roughness) {
-    float f = 1.0 - exp2(-200.0 * roughness * roughness);
-    return f * pow(clamp(roughness, 0.0, 1.0), 0.25);
-}
-
 float relaxSpecLobeTanHalfAngle(float roughness, float volumeFraction) {
     roughness = clamp(roughness, 0.0, 1.0);
     volumeFraction = clamp(volumeFraction, 0.0, 1.0);
@@ -232,34 +217,20 @@ float relaxSpecLobeTanHalfAngle(float roughness, float volumeFraction) {
         max(1.0 - volumeFraction, 1e-6);
 }
 
-float relaxPlaneWeight(vec3 centerPos, vec3 centerNormal, vec3 samplePos, float threshold) {
+float relaxPlaneWeight(vec3 centerPos, vec3 centerNormal,
+        vec3 samplePos, float threshold) {
     return float(abs(dot(samplePos - centerPos, centerNormal)) <= threshold);
 }
 
 vec2 relaxRoughnessWeightParams(float roughness, float fraction) {
     const float sensitivity = 0.03;
-    float a = 1.0 / mix(sensitivity, 1.0, clamp(roughness * fraction, 0.0, 1.0));
+    float a = 1.0 / mix(sensitivity, 1.0,
+        clamp(roughness * fraction, 0.0, 1.0));
     return vec2(a, -roughness * a);
 }
 
 float relaxExponentialWeight(float x, vec2 p) {
     return exp(-3.0 * abs(x * p.x + p.y));
-}
-
-vec2 relaxNormalWeightParams(float roughness, float historyLength, float confidence) {
-    float relaxation = clamp(historyLength / 5.0, 0.0, 1.0);
-    relaxation *= mix(1.0, confidence, RELAX_NORMAL_RELAXATION);
-    float angle = atan(relaxSpecLobeTanHalfAngle(roughness, RELAX_LOBE_ANGLE_FRACTION));
-    angle *= 10.0 - 9.0 * relaxation;
-    angle = min(0.5 * PI, angle + RELAX_LOBE_ANGLE_SLACK);
-    return vec2(max(angle, 1.5 / 255.0), 0.9 + 0.1 * relaxation);
-}
-
-float relaxSpecularNormalWeight(vec2 params, vec3 n0, vec3 n, vec3 v0, vec3 v) {
-    float angle = acos(clamp(min(dot(n0, n), dot(v0, v)), -1.0, 1.0));
-    float t = clamp(angle / params.x, 0.0, 1.0);
-    t = t * t * (3.0 - 2.0 * t);
-    return clamp(1.0 - t * params.y, 0.0, 1.0);
 }
 
 #endif

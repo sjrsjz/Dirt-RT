@@ -24,6 +24,10 @@ layout(std430, set = 3, binding = 1) buffer FrameData {
     uvec2 resolution_global;
     int world_type_global;
     int frame_id;
+    // Camera-side refractive medium used by the primary reflection lobe.
+    // Keeping this in FrameData lets the deferred MaxEnt decoder evaluate the
+    // exact same dielectric Fresnel branch as the ray-generation pass.
+    uint eye_medium_global;
     float wetStrength_global;
     float wetness_global;
     // One atomic increment per participating bloom workgroup. composite79

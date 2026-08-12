@@ -25,8 +25,10 @@
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/buffer_io.glsl"
 #include "/lib/buffers/radiance_cache.glsl"
+#include "/lib/common.glsl"
 #include "/lib/sky.glsl"
 #include "/lib/lighting/alice.glsl"
+#include "/lib/lighting/specular_maxent.glsl"
 
 in vec2 texCoord;
 
@@ -107,10 +109,24 @@ void main() {
         diffAlbedo, microN);
     readMisc(GEO_N_MISC, xy, transAlbedo, emisVal, rdVal);
     readLightAbs(GEO_N_LIGHTABS, xy, lightVal, absorptionVal);
+    vec3 primaryCs, primaryCd;
+    vec2 primaryS;
+    readPrimaryMaterial(xy, primaryCs, primaryCd, primaryS);
 
     diffuseIlluminationData tmp = fetchDiffuse(pix);
     vec3IlluminationData tmp2 = fetchReflect(pix);
     vec3IlluminationData tmp3 = fetchRefract(pix);
+    SpecularMaxEnt reflectionMaxEnt;
+    float reflectionHitDistance, reflectionDebugWeight;
+    readReflMaxEnt(xy, reflectionMaxEnt, reflectionHitDistance,
+        reflectionDebugWeight);
+
+
+    float primaryEtaRatio = eye_medium_global != 0u
+        ? REFRACTIVE_INDEX : (1.0 / REFRACTIVE_INDEX);
+    vec3 specularLighting = projectSpecularMaxEnt(reflectionMaxEnt,
+        rdVal, microN, geometryNormal, rough,
+        primaryCs, primaryS, primaryEtaRatio);
 
     // ALICE 辐照度投影使用微法线 (microN, N=5) — 恢复法线贴图细节
 
@@ -119,7 +135,7 @@ void main() {
             * (project_alice_irradiance(tmp.data_swap, microN)
                 * diffAlbedo
                 + tmp3.data_swap * transAlbedo
-                + tmp2.data_swap * specAlbedo
+                + specularLighting
                 + lightVal)
             + emisVal;
 
@@ -133,7 +149,7 @@ void main() {
 
     #elif DEBUG_VIEW == 3
     // Reflect only
-    fragColor.xyz = tmp2.data_swap * specAlbedo;
+    fragColor.xyz = specularLighting;
 
     #elif DEBUG_VIEW == 4
     // White model: diffuse irradiance only, no albedo
@@ -160,15 +176,9 @@ void main() {
     }
 
     #elif DEBUG_VIEW == 9
-    // Representative RT endpoint after the 7x7 moment-space filter:
-    // length(E[X]). The fourth moment is deliberately not visualized here.
+    // Classic reflection hitDistance used by virtual reprojection.
     {
-        RelaxEndpointMoments endpoint =
-            readReflEndpointMoments(xy);
-        float d = relaxEndpointMomentsValid(endpoint)
-            ? length(endpoint.mean) *
-                clamp(VPROJDIST_SKY, 1.0, 65504.0)
-            : 0.0;
+        float d = reflectionHitDistance;
         fragColor.xyz = (d >= VPROJDIST_SKY * 0.99) ? vec3(1.0) : jetColormap(logDistNorm(d));
     }
 
@@ -192,18 +202,6 @@ void main() {
     #elif DEBUG_VIEW == 14
     // Actual temporal history contribution to the reflection radiance.
     fragColor.xyz = jetColormap(clamp(tmp2.data_swap.r, 0.0, 1.0));
-
-    #elif DEBUG_VIEW == 38
-    // Current reflection input before temporal accumulation.
-    fragColor.xyz = tmp2.data_swap;
-
-    #elif DEBUG_VIEW == 39
-    // Previous reflection fetched at the surface-reprojected address.
-    fragColor.xyz = tmp2.data_swap;
-
-    #elif DEBUG_VIEW == 40
-    // Previous reflection fetched at the virtual-motion address.
-    fragColor.xyz = tmp2.data_swap;
 
     #elif DEBUG_VIEW == 15
     // Refract temporal accumulation weight (heatmap)
