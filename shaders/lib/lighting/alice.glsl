@@ -67,7 +67,7 @@ vec4 alice_encode_sample(vec3 direction, float radiance) {
 // direction: 射线入射方向 (归一化)
 // 返回 (v, ω) = (dir * Y, Y) 其中 Y = luminance(incident)
 vec4 alice_encode_probe_rgb(vec3 incident, vec3 direction) {
-    float Y = dot(incident, vec3(0.2126, 0.7152, 0.0722));
+    float Y = dot(incident, vec3(0.25, 0.5, 0.25));
     return vec4(normalize(direction) * Y, Y);
 }
 

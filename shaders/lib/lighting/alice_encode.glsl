@@ -23,7 +23,7 @@ struct AliceEncoding {
 AliceEncoding radiance_to_alice(vec3 color, vec3 dir)
 {
     AliceEncoding result;
-    float Y = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    float Y = dot(color, vec3(0.25, 0.5, 0.25));
     float Co = 0.5 * color.r - 0.5 * color.b;
     float Cg = -0.25 * color.r + 0.5 * color.g - 0.25 * color.b;
     result.CoCg = vec2(Co, Cg);

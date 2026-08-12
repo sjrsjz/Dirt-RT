@@ -70,6 +70,13 @@ vec3 relaxMaxEntYCoCg(SpecularMaxEnt s) {
     return vec3(s.aliceY.w, s.CoCg);
 }
 
+// Feature z = (Y * direction, Y), so E[|z|^2] = 2 E[Y^2].
+// This is the covariance trace in the same four-dimensional units as the
+// MaxEnt Bures distance used by the spatial light-field weight.
+float relaxMaxEntLightFieldVariance(vec4 meanAliceY, float meanY2) {
+    return max(2.0 * meanY2 - dot(meanAliceY, meanAliceY), 0.0);
+}
+
 SpecularMaxEnt relaxSetMaxEntYCoCg(SpecularMaxEnt s, vec3 ycocg) {
     ycocg.x = max(ycocg.x, 0.0);
     float scale = ycocg.x / max(s.aliceY.w, 1e-8);
@@ -217,9 +224,21 @@ float relaxSpecLobeTanHalfAngle(float roughness, float volumeFraction) {
         max(1.0 - volumeFraction, 1e-6);
 }
 
-float relaxPlaneWeight(vec3 centerPos, vec3 centerNormal,
-        vec3 samplePos, float threshold) {
-    return float(abs(dot(samplePos - centerPos, centerNormal)) <= threshold);
+float relaxSpatialPlaneExponent(vec3 centerPos, vec3 centerNormal,
+        vec3 samplePos) {
+    float resolutionY = max(float(resolution_global.y), 1.0);
+    float centerDistance = max(length(centerPos), 0.001);
+    float footprintDistance = max(centerDistance, resolutionY * 1e-5);
+    float invPixelFootprint = resolutionY / max(
+        ATROUS_POSITION_PARAM * footprintDistance, resolutionY * 1e-6);
+    return abs(dot(samplePos, centerNormal)
+        - dot(centerPos, centerNormal)) * invPixelFootprint;
+}
+
+float relaxSpatialPlaneWeight(vec3 centerPos, vec3 centerNormal,
+        vec3 samplePos) {
+    return exp(-relaxSpatialPlaneExponent(centerPos,
+        centerNormal, samplePos));
 }
 
 vec2 relaxRoughnessWeightParams(float roughness, float fraction) {
@@ -231,6 +250,16 @@ vec2 relaxRoughnessWeightParams(float roughness, float fraction) {
 
 float relaxExponentialWeight(float x, vec2 p) {
     return exp(-3.0 * abs(x * p.x + p.y));
+}
+
+float relaxHitDistanceWeight(float centerHitDistance,
+        float sampleHitDistance, float centerRoughness) {
+    float hitScale = max(max(centerHitDistance, sampleHitDistance), 1.0);
+    float hitSigma = hitScale * mix(0.02, 0.5,
+        clamp(centerRoughness, 0.0, 1.0)) + 1e-5;
+    float similarity = exp(-abs(sampleHitDistance - centerHitDistance)
+        / hitSigma);
+    return mix(RELAX_MIN_HIT_DISTANCE_WEIGHT, 1.0, similarity);
 }
 
 #endif

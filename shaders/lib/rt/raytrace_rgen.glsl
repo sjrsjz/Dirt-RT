@@ -78,6 +78,8 @@ void TracePrimaryGBuffer(uvec2 coord, vec3 ro, vec3 rd);
 #endif
 
 bool isDarkened = false;
+float rtCurrentConeWidth = 0.0;
+float rtCurrentConeSpread = 0.0;
 
 #if defined(PRIMARY_GBUFFER_PASS) || defined(FIRST_LOBE_DIFFUSE)
 void markRadianceCacheGeometryHit(uvec2 pixel, vec3 hitPosition, vec3 geometryNormal) {
@@ -134,6 +136,11 @@ void main() {
     vec3 origin = cam.viewInverse[3].xyz;
     vec3 target = mix(mix(cam.corners[0], cam.corners[2], p.y), mix(cam.corners[1], cam.corners[3], p.y), p.x);
     vec3 direction = normalize((cam.viewInverse * vec4(target.xyz, 0.0)).xyz);
+    vec2 coneResolution = max(vec2(resolution_global),
+        vec2(gl_LaunchSizeEXT.xy));
+    rtCurrentConeWidth = 0.0;
+    rtCurrentConeSpread = rtPixelConeSpread(cam.corners[0],
+        cam.corners[1], cam.corners[2], coneResolution);
 
     setFrame(cam.frameId);
     #if END_SKYBOX == 1
@@ -198,13 +205,18 @@ Payload tmp_Payload;
 float raycastMin(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o,
     bool inverse_0, bool isNEE, float tMin) {
     bool inside = !inverse_0;
+    payload_packRayCone(payload.data, rtCurrentConeWidth,
+        rtCurrentConeSpread);
     payload_packFlags(payload.data, 0.0, inside, false, isNEE);
     payload_packShadow(payload.data, vec3(1.0), 0);
     float tMax = 2048.0;
     traceRayEXT(acc, gl_RayFlagsNoneEXT, 0xFF, 0, 0, 0, ro, tMin, rd, tMax, 6);
     Payload hitPayload = payload;
-    float t;
-    ro_o = payload_unpackHitPos(hitPayload.data, t);
+    float t = payload_unpackHitDistance(hitPayload.data);
+    if (t >= 0.0 && !isNEE)
+        rtCurrentConeWidth = fma(t, rtCurrentConeSpread,
+            rtCurrentConeWidth);
+    ro_o = t >= 0.0 ? ro + rd * t : vec3(0.0);
     rd_o = rd;
     tmp_Payload = hitPayload;
     return t;
@@ -258,7 +270,8 @@ material newMaterial(vec3 Cs, vec3 Cd, vec2 S, vec4 R, vec3 light) {
     return a;
 }
 
-Material evaluateMaterial(Payload pld, vec3 rd_i, uint bounce) {
+Material evaluateMaterial(Payload pld, vec3 rayOrigin, vec3 rd_i,
+        uint bounce) {
     // --- Unpack quad data from payload (packed by rchit, no geometryBuffers needed) ---
     vec2 uv = payload_unpackQuadUV(pld.data);
     vec4 atlas = payload_unpackAtlasBox(pld.data);
@@ -284,8 +297,13 @@ Material evaluateMaterial(Payload pld, vec3 rd_i, uint bounce) {
     vec3 bitangent = cross(tangent, geomN) * bitangentSign;
     mat3 tbn = mat3(tangent, bitangent, geomN);
 
-    float hitDistance;
-    payload_unpackHitPos(pld.data, hitDistance);
+    float hitDistance = payload_unpackHitDistance(pld.data);
+    vec3 hitPosition = rayOrigin + rd_i * hitDistance;
+    vec3 gradientU, gradientV;
+    payload_unpackTextureGradients(pld.data, gradientU, gradientV);
+    vec3 texturePlaneNormal = cross(gradientU, gradientV);
+    texturePlaneNormal = dot(texturePlaneNormal, texturePlaneNormal) > 1e-20
+        ? normalize(texturePlaneNormal) : geomN;
     vec2 mipResolution = max(vec2(resolution_global),
             vec2(gl_LaunchSizeEXT.xy));
     float pixelConeSpread = rtPixelConeSpread(cam.corners[0],
@@ -295,16 +313,29 @@ Material evaluateMaterial(Payload pld, vec3 rd_i, uint bounce) {
     vec4 albedoTex;
     vec4 specularTex;
     vec4 normalTex;
+    RtTextureFootprint footprint;
 
     if (entityTextureId != 0u) {
         uint textureIndex = entityTextureId - 1u;
         ivec2 textureResolution = textureSize(
                 entityTextures[nonuniformEXT(textureIndex)], 0);
-        float mipLevel = rtTextureLod(textureResolution,
-                vec4(0.0, 0.0, 1.0, 1.0), hitDistance, rd_i, geomN,
-                bounce, pixelConeSpread);
-        albedoTex = textureLod(
-                entityTextures[nonuniformEXT(textureIndex)], uv, mipLevel);
+        vec4 entityAtlas = vec4(0.0, 0.0, 1.0, 1.0);
+        if (bounce == 0u) {
+            footprint = rtPrimaryTextureFootprint(textureResolution,
+                entityAtlas, hitPosition, texturePlaneNormal,
+                gradientU, gradientV,
+                vec2(gl_LaunchIDEXT.xy), vec2(gl_LaunchSizeEXT.xy),
+                cam.corners[0], cam.corners[1], cam.corners[2],
+                cam.corners[3], cam.viewInverse);
+        } else {
+            footprint = rtSecondaryTextureFootprint(textureResolution,
+                entityAtlas, rtCurrentConeWidth, rd_i,
+                texturePlaneNormal, tangent,
+                gradientU, gradientV);
+        }
+        albedoTex = rtSampleAnisotropic(
+            entityTextures[nonuniformEXT(textureIndex)], uv, entityAtlas,
+            textureResolution, footprint, false);
         specularTex = vec4(0.0, 0.04, 0.0, 1.0);
         normalTex = vec4(0.5, 0.5, 1.0, 1.0);
     } else {
@@ -312,13 +343,23 @@ Material evaluateMaterial(Payload pld, vec3 rd_i, uint bounce) {
 
         // --- POM — first hit only ---
         ivec2 textureResolution = textureSize(blockTex, 0);
-        float mipLevel = rtTextureLod(textureResolution, atlas,
-                hitDistance, rd_i, geomN, bounce, pixelConeSpread);
+        if (bounce == 0u) {
+            footprint = rtPrimaryTextureFootprint(textureResolution,
+                atlas, hitPosition, texturePlaneNormal, gradientU, gradientV,
+                vec2(gl_LaunchIDEXT.xy), vec2(gl_LaunchSizeEXT.xy),
+                cam.corners[0], cam.corners[1], cam.corners[2],
+                cam.corners[3], cam.viewInverse);
+        } else {
+            footprint = rtSecondaryTextureFootprint(textureResolution,
+                atlas, rtCurrentConeWidth, rd_i,
+                texturePlaneNormal, tangent,
+                gradientU, gradientV);
+        }
 
         #if POM_ENABLED == 1
         if (bounce == 0u) {
             sampleUV = computeParallaxUV(blockTexNormal, localCoord, atlas,
-                    rd_i, tbn, mipLevel);
+                    rd_i, tbn, footprint.lod);
         } else {
             sampleUV = uv;
         }
@@ -326,21 +367,12 @@ Material evaluateMaterial(Payload pld, vec3 rd_i, uint bounce) {
         sampleUV = uv;
         #endif
 
-        // Explicit LOD is mandatory in RT: implicit texture() derivatives are not
-        // available in ray stages and otherwise collapse to mip 0.
-        albedoTex = textureLod(blockTex, sampleUV, mipLevel);
-        specularTex = textureLod(blockTexSpecular, sampleUV, mipLevel);
-
-        #if POM_ENABLED == 1
-        if (bounce == 0u && mipLevel < 0.5) {
-            normalTex = textureBicubic(blockTexNormal, sampleUV, atlas,
-                    vec2(textureResolution));
-        } else {
-            normalTex = textureLod(blockTexNormal, sampleUV, mipLevel);
-        }
-        #else
-        normalTex = textureLod(blockTexNormal, sampleUV, mipLevel);
-        #endif
+        albedoTex = rtSampleAnisotropic(blockTex, sampleUV, atlas,
+            textureResolution, footprint, true);
+        specularTex = rtSampleAnisotropic(blockTexSpecular, sampleUV, atlas,
+            textureResolution, footprint, true);
+        normalTex = rtSampleAnisotropic(blockTexNormal, sampleUV, atlas,
+            textureResolution, footprint, true);
     }
 
     albedoTex.rgb = pow(albedoTex.rgb * tint, vec3(2.2));
@@ -896,7 +928,8 @@ PSRResult tracePSRChain(vec3 ro, vec3 rd, vec3 geometryNormal, float firstRoughn
             break;
         }
 
-        Material hitMat = evaluateMaterial(tmp_Payload, rd_chain, uint(baseDepth + 1 + i));
+        Material hitMat = evaluateMaterial(tmp_Payload, ro_chain, rd_chain,
+            uint(baseDepth + 1 + i));
         int hitBlockID;
         payload_unpackShadow(tmp_Payload.data, hitBlockID);
         material hitSurf = materialFromEvaluated(hitMat, hitBlockID);
@@ -996,7 +1029,9 @@ void handleFirstBounce_Refraction(
         bool psrEnabled = surf.R.x < PSR_ROUGHNESS_THRESHOLD;
         if (psrEnabled) {
             vec3 chain_rd = dot(psr_refract_dir, psr_refract_dir) > 0.0 ? psr_refract_dir : refract_dir;
+            float savedConeWidth = rtCurrentConeWidth;
             psr = tracePSRChain(ro_o, chain_rd, geometryNormal, surf.R.x, was_inverse_0, baseDepth);
+            rtCurrentConeWidth = savedConeWidth;
         } else {
             psr.virtualDist = 0.0;
             psr.pathRoughness = surf.R.x;
@@ -1482,7 +1517,7 @@ void TracePrimaryGBuffer(uvec2 xy, vec3 ro, vec3 rd) {
         fb.surfaceMotion = primaryMotion.xyz;
         fb.motionValid = primaryMotion.w;
 
-        Material surfaceMat = evaluateMaterial(tmp_Payload, rd, 0u);
+        Material surfaceMat = evaluateMaterial(tmp_Payload, ro, rd, 0u);
         vec3 geomN = payload_unpackGeomNormal(tmp_Payload.data);
         vec3 geometryNormal = faceforward(geomN, geomN, rd);
         vec3 macroNormal = surfaceMat.macroNormal;
@@ -1542,6 +1577,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     #if defined(FIRST_LOBE_DIFFUSE) || defined(FIRST_LOBE_REFLECTION) || defined(FIRST_LOBE_REFRACTION)
     material surf;
     loadPrimarySurfaceGBuffer(xy, ro, fb, surf);
+    rtCurrentConeWidth = max(fb.t, 0.0) * rtCurrentConeSpread;
     vec3 ro_o = fb.p;
     vec3 rd_o = fb.rd_i;
 
@@ -1677,7 +1713,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         fb.surfaceMotion = primaryMotion.xyz;
         fb.motionValid = primaryMotion.w;
         // --- Material evaluation ---
-        Material surfaceMat = evaluateMaterial(tmp_Payload, rd_i, 0u);
+        Material surfaceMat = evaluateMaterial(tmp_Payload, ro_i, rd_i, 0u);
         vec3 geomN = payload_unpackGeomNormal(tmp_Payload.data);
         vec3 geometryNormal = faceforward(geomN, geomN, rd_i);
         #if defined(FIRST_LOBE_DIFFUSE)
@@ -1867,7 +1903,8 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             }
 
             // --- Material ---
-            Material surfaceMat = evaluateMaterial(tmp_Payload, rd_i, uint(depth));
+            Material surfaceMat = evaluateMaterial(tmp_Payload, ro_i, rd_i,
+                uint(depth));
             vec3 geomN = payload_unpackGeomNormal(tmp_Payload.data);
             vec3 geometryNormal = faceforward(geomN, geomN, rd_i);
             #if defined(FIRST_LOBE_DIFFUSE)

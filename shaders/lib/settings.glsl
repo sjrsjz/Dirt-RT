@@ -66,7 +66,6 @@
 #define RELAX_ROUGHNESS_FRACTION 0.15 // Roughness edge tolerance. [0.05 0.1 0.15 0.2 0.25 0.35 0.5]
 #define RELAX_LOBE_ANGLE_FRACTION 0.5 // Accepted GGX lobe fraction. [0.25 0.35 0.5 0.65 0.75 0.9]
 #define RELAX_LOBE_ANGLE_SLACK 0.02 // Additional lobe tolerance in radians. [0.0 0.005 0.01 0.02 0.04 0.08]
-#define RELAX_DEPTH_THRESHOLD 0.003 // World-space plane-distance scale. [0.001 0.002 0.003 0.005 0.01 0.02]
 #define RELAX_MIN_HIT_DISTANCE_WEIGHT 0.1 // Minimum pre-pass hit-distance weight. [0.0 0.05 0.1 0.2 0.35 0.5]
 #define RELAX_ANTIFIREFLY_ENABLE 1 // Rank-conditioned anti-firefly pass. [0 1]
 #define RELAX_HISTORY_FIX_FRAMES 3.0 // Frames repaired after disocclusion. [1.0 2.0 3.0 4.0 5.0 8.0]
@@ -81,7 +80,7 @@
 #define RELAX_ROUGHNESS_EDGE_RELAXATION 0.3 // View-vector edge relaxation. [0.0 0.1 0.2 0.3 0.5 0.75 1.0]
 #define RELAX_NORMAL_RELAXATION 0.5 // Low-confidence normal relaxation. [0.0 0.25 0.5 0.75 1.0]
 #define RELAX_LUMINANCE_RELAXATION 0.5 // Low-confidence luminance relaxation. [0.0 0.25 0.5 0.75 1.0]
-#define RELAX_SPEC_PHI_LUMINANCE 3.0 // Variance-normalized luminance sensitivity. [0.25 0.5 0.75 1.0 1.5 2.0 3.0 4.0 5.0 6.0 8.0 10.0]
+#define RELAX_SPEC_PHI_LUMINANCE 10.0 // Variance-normalized MaxEnt light-field tolerance. Higher values denoise more. [0.25 0.5 0.75 1.0 1.5 2.0 3.0 4.0 5.0 6.0 8.0 10.0]
 #define RELAX_MAX_LUMINANCE_DIFFERENCE 2.0 // Relative luminance rejection clamp. [0.5 1.0 1.5 2.0 3.0 4.0 8.0]
 
 // -- Variance prefilter (before A-Trous denoiser) --

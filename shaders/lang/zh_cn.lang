@@ -182,8 +182,6 @@ option.RELAX_LOBE_ANGLE_FRACTION.comment = 法线边缘停止允许的 GGX 波�
 option.RELAX_LOBE_ANGLE_SLACK = 波瓣角余量
 option.RELAX_LOBE_ANGLE_SLACK.comment = 给 GGX 波瓣测试增加少量角度容差。仅在法线量化导致闪点或历史断裂时提高。
 
-option.RELAX_DEPTH_THRESHOLD = 空间平面阈值
-option.RELAX_DEPTH_THRESHOLD.comment = 历史修复与 À-Trous 使用的世界空间平面容差。提高会更积极地跨深度变化平滑。
 
 option.RELAX_MIN_HIT_DISTANCE_WEIGHT = 最小命中距离权重
 option.RELAX_MIN_HIT_DISTANCE_WEIGHT.comment = 预滤波中反射命中距离相似度的权重下限。提高可增强平滑，降低可保留分离的反射深度。
@@ -229,8 +227,8 @@ option.RELAX_NORMAL_RELAXATION.comment = 重投影置信度较低时放宽法线
 option.RELAX_LUMINANCE_RELAXATION = 低置信度亮度放宽
 option.RELAX_LUMINANCE_RELAXATION.comment = 重投影置信度较低时放宽亮度边缘停止。提高可更快隐藏噪点，但可能模糊高光。
 
-option.RELAX_SPEC_PHI_LUMINANCE = 镜面亮度灵敏度
-option.RELAX_SPEC_PHI_LUMINANCE.comment = 缩放 À-Trous 中按方差归一化的亮度拒绝。提高会允许跨越更大亮度差进行平滑。
+option.RELAX_SPEC_PHI_LUMINANCE = 镜面光场容差
+option.RELAX_SPEC_PHI_LUMINANCE.comment = 缩放 À-Trous 中按方差归一化的 MaxEnt 光场容差。提高会允许跨越更大的光照差异进行平滑。
 
 option.RELAX_MAX_LUMINANCE_DIFFERENCE = 最大亮度拒绝
 option.RELAX_MAX_LUMINANCE_DIFFERENCE.comment = 限制亮度惩罚，避免极端 1 spp 差异让像素完全无法参与空间滤波。
@@ -339,6 +337,3 @@ value.DEBUG_VIEW.34 = 缓存最终时域值
 value.DEBUG_VIEW.35 = 运动匹配状态
 value.DEBUG_VIEW.36 = 实体世界运动
 value.DEBUG_VIEW.37 = 屏幕运动
-value.DEBUG_VIEW.38 = 反射当前帧输入
-value.DEBUG_VIEW.39 = 反射表面重投影历史
-value.DEBUG_VIEW.40 = 反射几何重建历史

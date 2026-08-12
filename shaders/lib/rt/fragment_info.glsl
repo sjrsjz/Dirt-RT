@@ -71,6 +71,36 @@ vec2 getRelativeUV(vec2 uv, vec4 atlas) {
     return (uv - atlas.xy) / atlas.zw;
 }
 
+// Vulkanite stores chunk and entity positions differently in the common
+// Vertex layout. Chunk positions are unsigned fixed point in [-8, 24), while
+// entity positions are IEEE fp16 bit patterns. Decode both before constructing
+// a world-space UV Jacobian for ray differentials.
+vec3 decodeVertexObjectPosition(Vertex vertex, bool entityGeometry) {
+    if (entityGeometry) {
+        uint xyBits = uint(vertex.position.x)
+            | (uint(vertex.position.y) << 16u);
+        uint zBits = uint(vertex.position.z);
+        return vec3(unpackHalf2x16(xyBits), unpackHalf2x16(zBits).x);
+    }
+    return vec3(vertex.position.xyz) * (1.0 / 2048.0) - 8.0;
+}
+
+void computeTriangleTextureGradients(vec3 position0, vec3 position1,
+        vec3 position2, vec2 uv0, vec2 uv1, vec2 uv2,
+        out vec3 gradientU, out vec3 gradientV) {
+    vec3 edge1 = position1 - position0;
+    vec3 edge2 = position2 - position0;
+    vec3 twiceAreaNormal = cross(edge1, edge2);
+    float inverseAreaSquared = 1.0
+        / max(dot(twiceAreaNormal, twiceAreaNormal), 1e-20);
+    vec3 reciprocal1 = cross(edge2, twiceAreaNormal) * inverseAreaSquared;
+    vec3 reciprocal2 = cross(twiceAreaNormal, edge1) * inverseAreaSquared;
+    vec2 deltaUv1 = uv1 - uv0;
+    vec2 deltaUv2 = uv2 - uv0;
+    gradientU = reciprocal1 * deltaUv1.x + reciprocal2 * deltaUv2.x;
+    gradientV = reciprocal1 * deltaUv1.y + reciprocal2 * deltaUv2.y;
+}
+
 // ===========================================================================
 // Barycentric vertex interpolation — replaces vertex[0]-only normal/tangent.
 // Quad triangulation: each quad = 2 triangles

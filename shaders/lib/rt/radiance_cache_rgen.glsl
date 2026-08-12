@@ -139,7 +139,8 @@ vec3 evaluateRadianceCacheHit(vec3 rayOrigin, vec3 rayDirection, vec3 hitPos, fl
         return vec3(0.0);
     }
 
-    Material evaluated = evaluateMaterial(tmp_Payload, rayDirection, 1u);
+    Material evaluated = evaluateMaterial(tmp_Payload, rayOrigin,
+        rayDirection, 1u);
     vec3 geometryNormal = faceforward(payloadNormal, payloadNormal, rayDirection);
     vec3 macroNormal = evaluated.macroNormal;
     material surf = materialFromEvaluated(evaluated, blockID);
@@ -225,6 +226,11 @@ void main() {
     RadianceCacheGuideInfo guide = computeRadianceCacheGuide(probeCenter);
     float estimatorWeight;
     vec3 rayDirection = sampleRadianceCacheDirection(guide, estimatorWeight);
+    // A radiance-cache voxel represents a finite spatial cell rather than a
+    // camera pixel. Start its trace with that support and keep zero angular
+    // spread; reusing the camera cone here would make cache LOD view-dependent.
+    rtCurrentConeWidth = VOXEL_SIZE;
+    rtCurrentConeSpread = 0.0;
 
     vec3 hitPos, hitDirection;
     float hitDistance = raycastMin(

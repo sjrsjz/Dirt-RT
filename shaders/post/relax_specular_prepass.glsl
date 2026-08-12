@@ -40,7 +40,6 @@ void main() {
     float centerRoughness = relaxPerceptualRoughness(centerAlpha);
     vec2 roughnessParams = relaxRoughnessWeightParams(
         centerRoughness, RELAX_ROUGHNESS_FRACTION);
-    float depthThreshold = RELAX_DEPTH_THRESHOLD * max(length(centerPos), 1.0);
     int stride = max(1, int(floor(RELAX_PREPASS_RADIUS *
         mix(0.25, 1.0, centerRoughness) + 0.5)));
 
@@ -61,13 +60,14 @@ void main() {
         if (qDepth < -0.5 || qMaterial != centerMaterial) continue;
 
         float qRoughness = relaxPerceptualRoughness(qAlpha);
-        float w = relaxPlaneWeight(centerPos, centerNormal, qPos,
-            depthThreshold);
+        float w = relaxSpatialPlaneWeight(centerPos, centerNormal, qPos);
         w *= relaxExponentialWeight(qRoughness, roughnessParams);
-        if (w <= 1e-4) continue;
-
         RelaxPrepassSignal sampleSignal = relaxUnpackPrepass(
             texelFetch(colortex6, q, 0));
+        w *= relaxHitDistanceWeight(center.hitDistance,
+            sampleSignal.hitDistance, centerRoughness);
+        if (w <= 1e-4) continue;
+
         sumY += sampleSignal.signal.aliceY * w;
         sumCoCg += sampleSignal.signal.CoCg * w;
         sumHit += sampleSignal.hitDistance * w;

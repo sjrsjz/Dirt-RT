@@ -182,8 +182,6 @@ option.RELAX_LOBE_ANGLE_FRACTION.comment = Portion of the GGX lobe accepted by n
 option.RELAX_LOBE_ANGLE_SLACK = Lobe Angle Slack
 option.RELAX_LOBE_ANGLE_SLACK.comment = Small angular tolerance added to the GGX lobe test. Raise only if quantized normals cause speckling or broken history.
 
-option.RELAX_DEPTH_THRESHOLD = Spatial Plane Threshold
-option.RELAX_DEPTH_THRESHOLD.comment = World-space plane tolerance used by history repair and A-Trous filtering. Higher values blur more aggressively across depth changes.
 
 option.RELAX_MIN_HIT_DISTANCE_WEIGHT = Minimum Hit-distance Weight
 option.RELAX_MIN_HIT_DISTANCE_WEIGHT.comment = Lower bound for reflection hit-distance similarity in the pre-pass. Raise it for more smoothing; lower it to preserve separated reflection depths.
@@ -229,8 +227,8 @@ option.RELAX_NORMAL_RELAXATION.comment = Relaxes normal edge stopping when repro
 option.RELAX_LUMINANCE_RELAXATION = Low-confidence Luma Relaxation
 option.RELAX_LUMINANCE_RELAXATION.comment = Relaxes luminance edge stopping when reprojection confidence is low. Higher values hide noise faster but can blur highlights.
 
-option.RELAX_SPEC_PHI_LUMINANCE = Specular Luma Sensitivity
-option.RELAX_SPEC_PHI_LUMINANCE.comment = Scales variance-normalized luminance rejection in A-Trous passes. Higher values permit more smoothing across brightness differences.
+option.RELAX_SPEC_PHI_LUMINANCE = Specular Light-Field Tolerance
+option.RELAX_SPEC_PHI_LUMINANCE.comment = Scales variance-normalized MaxEnt light-field tolerance in A-Trous passes. Higher values permit more smoothing across lighting differences.
 
 option.RELAX_MAX_LUMINANCE_DIFFERENCE = Maximum Luma Rejection
 option.RELAX_MAX_LUMINANCE_DIFFERENCE.comment = Caps the luminance penalty so extreme 1 spp differences cannot completely isolate a pixel from spatial filtering.
@@ -339,6 +337,3 @@ value.DEBUG_VIEW.34 = Cache Final Temporal
 value.DEBUG_VIEW.35 = Motion Match Status
 value.DEBUG_VIEW.36 = Entity World Motion
 value.DEBUG_VIEW.37 = Screen Motion
-value.DEBUG_VIEW.38 = Reflect Current Input
-value.DEBUG_VIEW.39 = Reflect Surface History
-value.DEBUG_VIEW.40 = Reflect Reconstructed History

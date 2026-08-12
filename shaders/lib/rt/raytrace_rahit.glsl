@@ -50,27 +50,50 @@ void main() {
         ? vec4(0.0, 0.0, 1.0, 1.0)
         : getTextureAtlasBox(quad, !sideB);
     vec3 geomN = interpolateVertexNormal(quad, baryCoord, sideB);
-    vec2 mipResolution = max(vec2(resolution_global),
-        vec2(gl_LaunchSizeEXT.xy));
-    float pixelConeSpread = rtPixelConeSpread(cam.corners[0],
-        cam.corners[1], cam.corners[2], mipResolution);
+    vec3 tangent = interpolateVertexTangent(quad, baryCoord, sideB);
+    float coneWidth, coneSpread;
+    payload_unpackRayCone(payload.data, coneWidth, coneSpread);
+    coneWidth += gl_HitTEXT * coneSpread;
+
+    bool entityGeometry = entityTextureIndex >= 0;
+    uint vertex1 = !sideB ? 1u : 2u;
+    uint vertex2 = !sideB ? 2u : 3u;
+    vec3 position0 = gl_ObjectToWorldEXT * vec4(
+        decodeVertexObjectPosition(quad.vertices[0], entityGeometry), 1.0);
+    vec3 position1 = gl_ObjectToWorldEXT * vec4(
+        decodeVertexObjectPosition(quad.vertices[vertex1], entityGeometry), 1.0);
+    vec3 position2 = gl_ObjectToWorldEXT * vec4(
+        decodeVertexObjectPosition(quad.vertices[vertex2], entityGeometry), 1.0);
+    vec2 uv0 = vec2(quad.vertices[0].block_texture)
+        * 0.0000152587890625;
+    vec2 uv1 = vec2(quad.vertices[vertex1].block_texture)
+        * 0.0000152587890625;
+    vec2 uv2 = vec2(quad.vertices[vertex2].block_texture)
+        * 0.0000152587890625;
+    vec3 gradientU, gradientV;
+    computeTriangleTextureGradients(position0, position1, position2,
+        uv0, uv1, uv2, gradientU, gradientV);
+    vec3 texturePlaneNormal = normalize(cross(gradientU, gradientV));
 
     vec4 texColor;
     if (entityTextureIndex >= 0) {
         ivec2 textureResolution = textureSize(
             entityTextures[nonuniformEXT(entityTextureIndex)], 0);
-        float mipLevel = rtTextureLod(textureResolution, atlas,
-            gl_HitTEXT, gl_WorldRayDirectionEXT, geomN, 0u,
-            pixelConeSpread);
-        texColor = textureLod(
-            entityTextures[nonuniformEXT(entityTextureIndex)], uv,
-            mipLevel);
+        RtTextureFootprint footprint = rtSecondaryTextureFootprint(
+            textureResolution, atlas, coneWidth,
+            gl_WorldRayDirectionEXT, texturePlaneNormal, tangent,
+            gradientU, gradientV);
+        texColor = rtSampleAnisotropic(
+            entityTextures[nonuniformEXT(entityTextureIndex)], uv, atlas,
+            textureResolution, footprint, false);
     } else {
         ivec2 textureResolution = textureSize(blockTex, 0);
-        float mipLevel = rtTextureLod(textureResolution, atlas,
-            gl_HitTEXT, gl_WorldRayDirectionEXT, geomN, 0u,
-            pixelConeSpread);
-        texColor = textureLod(blockTex, uv, mipLevel);
+        RtTextureFootprint footprint = rtSecondaryTextureFootprint(
+            textureResolution, atlas, coneWidth,
+            gl_WorldRayDirectionEXT, texturePlaneNormal, tangent,
+            gradientU, gradientV);
+        texColor = rtSampleAnisotropic(blockTex, uv, atlas,
+            textureResolution, footprint, true);
     }
 
     bool inside, handedness, isNEE;

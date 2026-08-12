@@ -12,12 +12,12 @@
 #endif
 
 // ===========================================================================
-// Payload pack/unpack — 9/16 slots used, 7 free.
+// Payload pack/unpack — all 16 slots used.
 //
 // Slot map:
-//  [0] f32 pos.x                                — hit position (floatBitsToUint)
-//  [1] f32 pos.y
-//  [2] f32 pos.z
+//  [0] oct32 normalized world-space gradient of atlas U
+//  [1] oct32 normalized world-space gradient of atlas V
+//  [2] f16(|grad U|) | f16(|grad V|)
 //  [3] f32 hitT                                 — hit distance
 //  [4] instanceCustomIndex (u32)                — geometryBuffers[] index
 //  [5] geometryIndex (u16 low) | primitiveID (u16 high)
@@ -31,17 +31,46 @@
 #define PAYLOAD_SLOTS 16
 
 // ---------------------------------------------------------------------------
-// Hit position + distance [0-3]
+// Hit distance [3]
 // ---------------------------------------------------------------------------
-void payload_packHitPos(inout uint d[PAYLOAD_SLOTS], vec3 pos, float t) {
-    d[0] = floatBitsToUint(pos.x);
-    d[1] = floatBitsToUint(pos.y);
-    d[2] = floatBitsToUint(pos.z);
+void payload_packHitDistance(inout uint d[PAYLOAD_SLOTS], float t) {
     d[3] = floatBitsToUint(t);
 }
-vec3 payload_unpackHitPos(uint d[PAYLOAD_SLOTS], out float t) {
-    t = uintBitsToFloat(d[3]);
-    return vec3(uintBitsToFloat(d[0]), uintBitsToFloat(d[1]), uintBitsToFloat(d[2]));
+float payload_unpackHitDistance(uint d[PAYLOAD_SLOTS]) {
+    return uintBitsToFloat(d[3]);
+}
+
+// Before tracing, [0] and [1] temporarily carry the ray-cone width and spread.
+// closest-hit overwrites them with the UV Jacobian after any-hit has finished.
+void payload_packRayCone(inout uint d[PAYLOAD_SLOTS],
+        float width, float spread) {
+    d[0] = floatBitsToUint(max(width, 0.0));
+    d[1] = floatBitsToUint(max(spread, 0.0));
+}
+void payload_unpackRayCone(uint d[PAYLOAD_SLOTS],
+        out float width, out float spread) {
+    width = uintBitsToFloat(d[0]);
+    spread = uintBitsToFloat(d[1]);
+}
+
+// ---------------------------------------------------------------------------
+// World-space gradients of normalized atlas UV [0-2]
+// ---------------------------------------------------------------------------
+void payload_packTextureGradients(inout uint d[PAYLOAD_SLOTS],
+        vec3 gradientU, vec3 gradientV) {
+    float lengthU = length(gradientU);
+    float lengthV = length(gradientV);
+    d[0] = encodeNormalU(lengthU > 1e-20
+        ? gradientU / lengthU : vec3(1.0, 0.0, 0.0));
+    d[1] = encodeNormalU(lengthV > 1e-20
+        ? gradientV / lengthV : vec3(0.0, 1.0, 0.0));
+    d[2] = packHalf2x16(vec2(lengthU, lengthV));
+}
+void payload_unpackTextureGradients(uint d[PAYLOAD_SLOTS],
+        out vec3 gradientU, out vec3 gradientV) {
+    vec2 gradientLengths = unpackHalf2x16(d[2]);
+    gradientU = decodeNormalU(d[0]) * gradientLengths.x;
+    gradientV = decodeNormalU(d[1]) * gradientLengths.y;
 }
 
 // ---------------------------------------------------------------------------

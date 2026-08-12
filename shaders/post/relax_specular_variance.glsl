@@ -43,8 +43,6 @@ void main() {
         float sumM2 = 0.0;
         float sumHit = 0.0;
         float sumWeight = 0.0;
-        float depthThreshold = RELAX_DEPTH_THRESHOLD *
-            max(length(centerPos), 1.0);
         for (int y = -2; y <= 2; ++y) {
             for (int x = -2; x <= 2; ++x) {
                 ivec2 q = ivec2(pixel) + ivec2(x, y);
@@ -56,8 +54,10 @@ void main() {
                 RelaxPostSignal qMeta = relaxUnpackPost(
                     texelFetch(colortex4, q, 0));
                 if (qMeta.materialID != centerMaterial) continue;
-                float w = relaxPlaneWeight(centerPos, centerNormal, qPos,
-                    depthThreshold);
+                float w = relaxSpatialPlaneWeight(
+                    centerPos, centerNormal, qPos);
+                w *= relaxHitDistanceWeight(centerMeta.hitDistance,
+                    qMeta.hitDistance, relaxPerceptualRoughness(centerAlpha));
                 w *= exp(-0.125 * float(x * x + y * y));
                 if (w <= 1e-5) continue;
                 sumY += texelFetch(colortex3, q, 0) * w;
@@ -77,8 +77,8 @@ void main() {
     }
     filtered = sanitizeSpecularMaxEnt(filtered);
 
-    float variance = max(filteredM2 -
-        filtered.aliceY.w * filtered.aliceY.w, 0.0);
+    float variance = relaxMaxEntLightFieldVariance(
+        filtered.aliceY, filteredM2);
     if (centerMeta.historyLength < RELAX_HISTORY_THRESHOLD)
         variance *= max(1.0, RELAX_HISTORY_THRESHOLD /
             max(centerMeta.historyLength, 1.0));
