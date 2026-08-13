@@ -13,7 +13,7 @@ layout(rgba32ui) uniform writeonly uimage2D colorimg6;
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/buffer_io.glsl"
-#include "/lib/lighting/alice.glsl"
+#include "/lib/lighting/maxent.glsl"
 
 uniform vec2 resolution;
 
@@ -49,8 +49,8 @@ bool aabbPackedValid(uvec4 packedLight) {
     return (packedLight.w & 0xffffu) != 0u;
 }
 
-void unpackAABBLight(uvec4 packedLight, out vec4 aliceY, out vec2 CoCg) {
-    aliceY = vec4(unpackHalf2x16(packedLight.x),
+void unpackAABBLight(uvec4 packedLight, out vec4 maxEntY, out vec2 CoCg) {
+    maxEntY = vec4(unpackHalf2x16(packedLight.x),
         unpackHalf2x16(packedLight.y));
     CoCg = unpackHalf2x16(packedLight.z);
 }
@@ -175,7 +175,7 @@ bool strictHistoryGeometryTest(vec3 histPos, TemporalFootprint fp) {
         return false;
     }
 
-    // ALICE 编码的方向信息已隐含法线一致性 — 移除显式半球检查
+    // MaxEnt 编码的方向信息已隐含法线一致性 — 移除显式半球检查
     return true;
 }
 
@@ -234,7 +234,7 @@ void computeAABB_CS(out vec4 minAY, out vec4 maxAY, out vec2 minCC, out vec2 max
     int cx = int(gl_LocalInvocationID.x + AABB_HALO);
     int cy = int(gl_LocalInvocationID.y + AABB_HALO);
 
-    vec4 cenAY = current_data.data_swap.aliceY;
+    vec4 cenAY = current_data.data_swap.maxEntY;
     vec2 cenCC = current_data.data_swap.CoCg;
 
     minAY = maxAY = cenAY;
@@ -251,17 +251,17 @@ void computeAABB_CS(out vec4 minAY, out vec4 maxAY, out vec2 minCC, out vec2 max
             uint sampleIndex = uint(cy + dy) * AABB_SM_W + uint(cx + dx);
             uvec4 samplePacked = sm_aabbPacked[sampleIndex];
             if (!aabbPackedValid(samplePacked)) continue;
-            vec4 sampleAliceY;
+            vec4 sampleMaxEntY;
             vec2 sampleCoCg;
-            unpackAABBLight(samplePacked, sampleAliceY, sampleCoCg);
+            unpackAABBLight(samplePacked, sampleMaxEntY, sampleCoCg);
 
-            minAY = min(minAY, sampleAliceY);
-            maxAY = max(maxAY, sampleAliceY);
+            minAY = min(minAY, sampleMaxEntY);
+            maxAY = max(maxAY, sampleMaxEntY);
             minCC = min(minCC, sampleCoCg);
             maxCC = max(maxCC, sampleCoCg);
 
-            sumAY += sampleAliceY;
-            sumSqAY += sampleAliceY * sampleAliceY;
+            sumAY += sampleMaxEntY;
+            sumSqAY += sampleMaxEntY * sampleMaxEntY;
             validCnt++;
         }
     }
@@ -269,7 +269,7 @@ void computeAABB_CS(out vec4 minAY, out vec4 maxAY, out vec2 minCC, out vec2 max
     vec4 extAY = maxAY - minAY;
     vec2 extCC = maxCC - minCC;
 
-    float sigmaA = sqrt(max(0.0, alice_variance(cenAY)));
+    float sigmaA = sqrt(max(0.0, maxent_variance(cenAY)));
     float invN = 1.0 / float(validCnt);
     vec4 meanAY = sumAY * invN;
     vec4 nbVar = max(vec4(0.0), sumSqAY * invN - meanAY * meanAY);
@@ -294,17 +294,17 @@ float updateAABBScale(float scale, float val, float lo, float hi) {
     return scale;
 }
 
-void clampHistoryToAABB(inout AliceEncoding hist, vec4 minAY, vec4 maxAY, vec2 minCC, vec2 maxCC) {
+void clampHistoryToAABB(inout MaxEntEncoding hist, vec4 minAY, vec4 maxAY, vec2 minCC, vec2 maxCC) {
     float s = 1.0;
-    s = updateAABBScale(s, hist.aliceY.x, minAY.x, maxAY.x);
-    s = updateAABBScale(s, hist.aliceY.y, minAY.y, maxAY.y);
-    s = updateAABBScale(s, hist.aliceY.z, minAY.z, maxAY.z);
-    s = updateAABBScale(s, hist.aliceY.w, minAY.w, maxAY.w);
+    s = updateAABBScale(s, hist.maxEntY.x, minAY.x, maxAY.x);
+    s = updateAABBScale(s, hist.maxEntY.y, minAY.y, maxAY.y);
+    s = updateAABBScale(s, hist.maxEntY.z, minAY.z, maxAY.z);
+    s = updateAABBScale(s, hist.maxEntY.w, minAY.w, maxAY.w);
     s = updateAABBScale(s, hist.CoCg.x, minCC.x, maxCC.x);
     s = updateAABBScale(s, hist.CoCg.y, minCC.y, maxCC.y);
     s = clamp(s, 0.0, 1.0);
 
-    hist.aliceY *= s;
+    hist.maxEntY *= s;
     hist.CoCg *= s;
 }
 
@@ -335,7 +335,7 @@ void MixDiffuse() {
     ivec2 prevBase = ivec2(floor(prevCoord));
     vec2 prevFrac = fract(prevCoord);
 
-    AliceEncoding accumAlice = init_alice();
+    MaxEntEncoding accumMaxEnt = init_maxent();
     float accumMeanY2 = 0.0;
     float validKernelWeight = 0.0;
     float accumHistWeight = 0.0;
@@ -356,7 +356,7 @@ void MixDiffuse() {
 
         diffuseIlluminationData tap = fetchDiffuse(sampleTexel);
         if (tap.prev_weight < TEMPORAL_HISTORY_MIN_WEIGHT) continue;
-        // 几何一致性测试（纯位置，ALICE 方向编码隐式保证法线一致性）
+        // 几何一致性测试（纯位置，MaxEnt 方向编码隐式保证法线一致性）
         if (!strictHistoryGeometryTestFast(tap.pos, fp,
                 uvec2(gl_GlobalInvocationID.xy), cameraDelta)) continue;
 
@@ -372,7 +372,7 @@ void MixDiffuse() {
         float correctedTapW = min(tap.prev_weight * scale, float(TEMPORAL_MAX_HISTORY));
 
         float tapWeight = w[i] * normalWeight;
-        accumulate_alice(accumAlice, tap.data, tapWeight);
+        accumulate_maxent(accumMaxEnt, tap.data, tapWeight);
         accumMeanY2 += tapWeight * tap.prev_meanY2;
         validKernelWeight += tapWeight;
         accumHistWeight += tapWeight * correctedTapW;
@@ -384,7 +384,7 @@ void MixDiffuse() {
         return;
     }
 
-    AliceEncoding histAlice = scale_alice(accumAlice, 1.0 / validKernelWeight);
+    MaxEntEncoding histMaxEnt = scale_maxent(accumMaxEnt, 1.0 / validKernelWeight);
     float histWeight = accumHistWeight / validKernelWeight;
 
     float histMeanY2 = accumMeanY2 / validKernelWeight;
@@ -403,7 +403,7 @@ void MixDiffuse() {
 
     computeAABB_CS(minAY, maxAY, minCC, maxCC, validCnt);
     if (validCnt >= TEMPORAL_AABB_MIN_VALID_NEIGHBORS) {
-        clampHistoryToAABB(histAlice, minAY, maxAY, minCC, maxCC);
+        clampHistoryToAABB(histMaxEnt, minAY, maxAY, minCC, maxCC);
     }
     #endif
 
@@ -414,7 +414,7 @@ void MixDiffuse() {
     // Blend second moment: M₂,n = (1-α)·M₂,h + α·Y²_c
     float newMeanY2 = mix(histMeanY2, current_data.meanY2, curAlpha);
 
-    out_data.data_swap = curAlpha >= 0.9999 ? current_data.data_swap : mix_alice(histAlice, current_data.data_swap, curAlpha);
+    out_data.data_swap = curAlpha >= 0.9999 ? current_data.data_swap : mix_maxent(histMaxEnt, current_data.data_swap, curAlpha);
     out_data.meanY2 = newMeanY2;
     imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), uvec4(floatBitsToUint(validKernelWeight), 0u, 0u, 0u));
 }
@@ -470,21 +470,21 @@ void main() {
     }
 
     {
-        // 从 DiffuseBuffer N=0 读 ALICE + meanY2，surfaceMask 从 N=1 读
+        // 从 DiffuseBuffer N=0 读 MaxEnt + meanY2，surfaceMask 从 N=1 读
         #if TEMPORAL_AABB_ENABLE
         uint outputCenterCol = gl_LocalInvocationID.x + AABB_HALO;
         uint outputCenterRow = gl_LocalInvocationID.y + AABB_HALO;
         uint outputCenterIndex = outputCenterRow * AABB_SM_W + outputCenterCol;
         uvec4 centerPacked = sm_aabbPacked[outputCenterIndex];
-        unpackAABBLight(centerPacked, current_data.data_swap.aliceY,
+        unpackAABBLight(centerPacked, current_data.data_swap.maxEntY,
             current_data.data_swap.CoCg);
         float centerSqrtM2 = unpackHalf2x16(centerPacked.w).y;
         current_data.meanY2 = centerSqrtM2 * centerSqrtM2;
         current_data.surfaceMask = aabbPackedValid(centerPacked) ? 1.0 : 0.0;
         #else
-        AliceEncoding centerAlice;
-        readDiffuseLightRT(pix, centerAlice, current_data.meanY2);
-        current_data.data_swap = centerAlice;
+        MaxEntEncoding centerMaxEnt;
+        readDiffuseLightRT(pix, centerMaxEnt, current_data.meanY2);
+        current_data.data_swap = centerMaxEnt;
         current_data.surfaceMask = readDiffuseSurfaceMask(pix);
         #endif
         current_data.weight = 1.0;
@@ -497,7 +497,7 @@ void main() {
 
     out_data.data_swap = current_data.data_swap;
     out_data.meanY2 = current_data.meanY2;
-    out_data.data = init_alice();
+    out_data.data = init_maxent();
     out_data.surfaceMask = current_data.surfaceMask;
     out_data.pos = current_data.pos;
     output_weight = 1.0;

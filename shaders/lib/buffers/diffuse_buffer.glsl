@@ -3,17 +3,17 @@
 
 #include "/lib/buffers/addr.glsl"
 #include "/lib/common/pack_half.glsl"
-#include "/lib/lighting/alice_encode.glsl"
+#include "/lib/lighting/maxent_encode.glsl"
 
 // ===========================================================================
 // Binding 2 — DiffuseBuffer pack/unpack (uvec4 raw-integer storage)
 // ===========================================================================
-// N=0: Current Light  — uvec4(pHalf2(aliceY.xy), pHalf2(aliceY.zw), pHalf2(CoCg), pHalf2(0, sqrt(meanY2)))
+// N=0: Current Light  — uvec4(pHalf2(maxEntY.xy), pHalf2(maxEntY.zw), pHalf2(CoCg), pHalf2(0, sqrt(meanY2)))
 // N=1: Current Geo    — uvec4(fbits(pos.xyz), fbits(surfaceMask))
-// N=2: History Light  — uvec4(pHalf2(hist_aliceY.xy), pHalf2(hist_aliceY.zw), pHalf2(hist_CoCg), pHalf2(weight, sqrt(meanY2)))
+// N=2: History Light  — uvec4(pHalf2(hist_maxEntY.xy), pHalf2(hist_maxEntY.zw), pHalf2(hist_CoCg), pHalf2(weight, sqrt(meanY2)))
 // N=3: History Geo    — uvec4(fbits(hist_pos.xyz), oct(hist_geometryNormal))
-// N=4: Swap Light     — uvec4(pHalf2(swap_aliceY.xy), pHalf2(swap_aliceY.zw), pHalf2(swap_CoCg), pHalf2(weight, sqrt(meanY2)))
-// N=5: Path Guide     — uvec4(pHalf2(aliceY.xy), pHalf2(aliceY.zw), fbits(W), fbits(M))
+// N=4: Swap Light     — uvec4(pHalf2(swap_maxEntY.xy), pHalf2(swap_maxEntY.zw), pHalf2(swap_CoCg), pHalf2(weight, sqrt(meanY2)))
+// N=5: Path Guide     — uvec4(pHalf2(maxEntY.xy), pHalf2(maxEntY.zw), fbits(W), fbits(M))
 //
 // .w lane uses packHalf2x16: weight:f16 + sqrt(meanY2):f16.
 // sqrt compression keeps HDR second moments within f16 range (e.g. Y=1000 →
@@ -32,25 +32,25 @@
 // ===========================================================================
 // .w = packHalf2x16(0.0, sqrt(meanY2))  —  single-sample second moment Y²
 
-void writeDiffuseLightRT(uvec2 xy, AliceEncoding alice, float meanY2) {
+void writeDiffuseLightRT(uvec2 xy, MaxEntEncoding maxent, float meanY2) {
     float sqrtM2 = sqrt(max(meanY2, 0.0));
     diffuseBuffer.data[addr(DIF_N_LIGHT, xy)] = uvec4(
-        packHalf2x16(clamp(alice.aliceY.xy, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(clamp(alice.aliceY.zw, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(clamp(alice.CoCg,        vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(maxent.maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(maxent.maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(maxent.CoCg,        vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(vec2(0.0, sqrtM2))
     );
 }
 uvec4 readDiffuseLightRTRaw(uvec2 xy) {
     return diffuseBuffer.data[addr(DIF_N_LIGHT, xy)];
 }
-void readDiffuseLightRT(uvec2 xy, out AliceEncoding alice, out float meanY2) {
+void readDiffuseLightRT(uvec2 xy, out MaxEntEncoding maxent, out float meanY2) {
     uvec4 v = readDiffuseLightRTRaw(xy);
     vec2 ay_xy = unpackHalf2x16(v.x);
     vec2 ay_zw = unpackHalf2x16(v.y);
     vec2 cocg  = unpackHalf2x16(v.z);
-    alice.aliceY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
-    alice.CoCg = cocg;
+    maxent.maxEntY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
+    maxent.CoCg = cocg;
     vec2 wm = unpackHalf2x16(v.w);
     meanY2 = wm.y * wm.y;  // undo sqrt compression
 }
@@ -86,22 +86,22 @@ float readDiffuseSurfaceMask(uvec2 xy) {
 // ===========================================================================
 // .w = packHalf2x16(weight, sqrt(meanY2))  →  weight:f16 + sqrt(meanY2):f16
 
-void writeDiffuseHist(uvec2 xy, AliceEncoding alice, float weight, float meanY2) {
+void writeDiffuseHist(uvec2 xy, MaxEntEncoding maxent, float weight, float meanY2) {
     float sqrtM2 = sqrt(max(meanY2, 0.0));
     diffuseBuffer.data[addr(DIF_N_HIST, xy)] = uvec4(
-        packHalf2x16(clamp(alice.aliceY.xy, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(clamp(alice.aliceY.zw, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(clamp(alice.CoCg,        vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(maxent.maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(maxent.maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(maxent.CoCg,        vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(vec2(weight, sqrtM2))
     );
 }
-void readDiffuseHist(uvec2 xy, out AliceEncoding alice, out float weight, out float meanY2) {
+void readDiffuseHist(uvec2 xy, out MaxEntEncoding maxent, out float weight, out float meanY2) {
     uvec4 v = diffuseBuffer.data[addr(DIF_N_HIST, xy)];
     vec2 ay_xy = unpackHalf2x16(v.x);
     vec2 ay_zw = unpackHalf2x16(v.y);
     vec2 cocg  = unpackHalf2x16(v.z);
-    alice.aliceY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
-    alice.CoCg = cocg;
+    maxent.maxEntY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
+    maxent.CoCg = cocg;
     vec2 wm = unpackHalf2x16(v.w);
     weight = wm.x;
     meanY2 = wm.y * wm.y;
@@ -142,25 +142,25 @@ void readDiffuseHistGeo(uvec2 xy, out vec3 pos, out vec3 geometryNormal) {
 // ===========================================================================
 // .w = packHalf2x16(weight, sqrt(meanY2))  →  weight:f16 + sqrt(meanY2):f16
 
-void writeDiffuseSwap(uvec2 xy, AliceEncoding alice, float weight, float meanY2) {
+void writeDiffuseSwap(uvec2 xy, MaxEntEncoding maxent, float weight, float meanY2) {
     float sqrtM2 = sqrt(max(meanY2, 0.0));
     diffuseBuffer.data[addr(DIF_N_SWAP, xy)] = uvec4(
-        packHalf2x16(clamp(alice.aliceY.xy, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(clamp(alice.aliceY.zw, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(clamp(alice.CoCg,        vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(maxent.maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(maxent.maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(maxent.CoCg,        vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(vec2(weight, sqrtM2))
     );
 }
 uvec4 readDiffuseSwapRaw(uvec2 xy) {
     return diffuseBuffer.data[addr(DIF_N_SWAP, xy)];
 }
-void readDiffuseSwap(uvec2 xy, out AliceEncoding alice, out float weight, out float meanY2) {
+void readDiffuseSwap(uvec2 xy, out MaxEntEncoding maxent, out float weight, out float meanY2) {
     uvec4 v = readDiffuseSwapRaw(xy);
     vec2 ay_xy = unpackHalf2x16(v.x);
     vec2 ay_zw = unpackHalf2x16(v.y);
     vec2 cocg  = unpackHalf2x16(v.z);
-    alice.aliceY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
-    alice.CoCg = clamp(cocg, vec2(-65504.0), vec2(65504.0));
+    maxent.maxEntY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
+    maxent.CoCg = clamp(cocg, vec2(-65504.0), vec2(65504.0));
     vec2 wm = unpackHalf2x16(v.w);
     weight = wm.x;
     meanY2 = wm.y * wm.y;
@@ -170,31 +170,31 @@ void readDiffuseSwap(uvec2 xy, out AliceEncoding alice, out float weight, out fl
 // N=5 — ReSTIR temporal reservoir (Path Guide Reservoir)
 // ===========================================================================
 // Layout: uvec4(
-//   packHalf2x16(aliceY.xy),   // sample direction × luminance
-//   packHalf2x16(aliceY.zw),   // total energy
+//   packHalf2x16(maxEntY.xy),   // sample direction × luminance
+//   packHalf2x16(maxEntY.zw),   // total energy
 //   floatBitsToUint(W),        // reservoir reciprocal-proposal normalization
 //   floatBitsToUint(M))        // effective sample count
 
-void writePathGuide(uvec2 xy, vec4 aliceY, float W, float M) {
+void writePathGuide(uvec2 xy, vec4 maxEntY, float W, float M) {
     diffuseBuffer.data[addr(DIF_N_PATHGUIDE, xy)] = uvec4(
-        packHalf2x16(clamp(aliceY.xy, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(clamp(aliceY.zw, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
         floatBitsToUint(W),
         floatBitsToUint(M));
 }
-void readPathGuide(uvec2 xy, out vec4 aliceY, out float W, out float M) {
+void readPathGuide(uvec2 xy, out vec4 maxEntY, out float W, out float M) {
     uvec4 v = diffuseBuffer.data[addr(DIF_N_PATHGUIDE, xy)];
     vec2 ay_xy = unpackHalf2x16(v.x);
     vec2 ay_zw = unpackHalf2x16(v.y);
-    aliceY = vec4(ay_xy, ay_zw);
+    maxEntY = vec4(ay_xy, ay_zw);
     W = uintBitsToFloat(v.z);
     M = uintBitsToFloat(v.w);
 }
 
-bool pathGuideReservoirValid(vec4 aliceY, float W, float M) {
+bool pathGuideReservoirValid(vec4 maxEntY, float W, float M) {
     return W > 0.0 && M > 0.0
         && !isnan(W) && !isinf(W) && !isnan(M) && !isinf(M)
-        && !any(isnan(aliceY)) && !any(isinf(aliceY));
+        && !any(isnan(maxEntY)) && !any(isinf(maxEntY));
 }
 
 // 2×2 bilinear path guide sampling with validity mask

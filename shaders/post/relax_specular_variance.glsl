@@ -32,7 +32,7 @@ void main() {
     RelaxPostSignal centerMeta = relaxUnpackPost(
         texelFetch(colortex4, ivec2(pixel), 0));
     SpecularMaxEnt filtered;
-    filtered.aliceY = texelFetch(colortex3, ivec2(pixel), 0);
+    filtered.maxEntY = texelFetch(colortex3, ivec2(pixel), 0);
     filtered.CoCg = centerMeta.CoCg;
     float filteredM2 = centerMeta.secondMoment;
     float filteredHit = centerMeta.hitDistance;
@@ -69,7 +69,7 @@ void main() {
         }
         if (sumWeight > 1e-5) {
             float invWeight = 1.0 / sumWeight;
-            filtered.aliceY = sumY * invWeight;
+            filtered.maxEntY = sumY * invWeight;
             filtered.CoCg = sumCoCg * invWeight;
             filteredM2 = sumM2 * invWeight;
             filteredHit = sumHit * invWeight;
@@ -78,7 +78,7 @@ void main() {
     filtered = sanitizeSpecularMaxEnt(filtered);
 
     float variance = relaxMaxEntLightFieldVariance(
-        filtered.aliceY, filteredM2);
+        filtered.maxEntY, filteredM2);
     if (centerMeta.historyLength < RELAX_HISTORY_THRESHOLD)
         variance *= max(1.0, RELAX_HISTORY_THRESHOLD /
             max(centerMeta.historyLength, 1.0));

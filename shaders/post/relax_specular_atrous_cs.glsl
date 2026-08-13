@@ -27,8 +27,8 @@ RelaxAtrousBuresData relaxTileMakeBuresData(
     vec2 variance = data.stddev * data.stddev;
     data.trace = 2.0 * variance.x + variance.y;
     data.anisotropy = variance.y - variance.x;
-    float meanLength2 = dot(inputSignal.signal.aliceY.xyz,
-        inputSignal.signal.aliceY.xyz);
+    float meanLength2 = dot(inputSignal.signal.maxEntY.xyz,
+        inputSignal.signal.maxEntY.xyz);
     data.invMeanLength2 = meanLength2 > 1e-16
         ? 1.0 / meanLength2 : 0.0;
     return data;
@@ -56,7 +56,7 @@ void main() {
 
                 RelaxSpatialSignal tileSignal = relaxUnpackSpatial(signalWords);
                 RelaxAtrousBuresData bures = relaxMakeAtrousBuresData(
-                    tileSignal.signal.aliceY);
+                    tileSignal.signal.maxEntY);
                 relaxTileBuresStddev[tileIndex] = packHalf2x16(clamp(
                     bures.stddev, vec2(0.0), vec2(65504.0)));
 
@@ -101,7 +101,7 @@ void main() {
 
     const float centerWeight = 1.0;
     float sumWeight = centerWeight;
-    vec4 sumAliceY = center.signal.aliceY * centerWeight;
+    vec4 sumMaxEntY = center.signal.maxEntY * centerWeight;
     vec2 sumCoCg = center.signal.CoCg * centerWeight;
     vec2 varianceEnergy = vec2(center.variance * centerWeight,
         center.variance * centerWeight * centerWeight);
@@ -133,7 +133,7 @@ void main() {
             RELAX_GRID_WEIGHT[i]);
         if (weight <= 1e-6) continue;
 
-        sumAliceY += sampleSignal.signal.aliceY * weight;
+        sumMaxEntY += sampleSignal.signal.maxEntY * weight;
         sumCoCg += sampleSignal.signal.CoCg * weight;
         float weightedVariance = weight * sampleSignal.variance;
         varianceEnergy += vec2(weightedVariance,
@@ -143,7 +143,7 @@ void main() {
 
     float invWeight = 1.0 / max(sumWeight, 1e-6);
     RelaxSpatialSignal outputSignal = center;
-    outputSignal.signal.aliceY = sumAliceY * invWeight;
+    outputSignal.signal.maxEntY = sumMaxEntY * invWeight;
     outputSignal.signal.CoCg = sumCoCg * invWeight;
     outputSignal.signal = sanitizeSpecularMaxEnt(outputSignal.signal);
     outputSignal.variance = relaxAtrousFilteredVariance(

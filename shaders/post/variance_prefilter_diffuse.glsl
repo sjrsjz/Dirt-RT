@@ -4,7 +4,7 @@
 // Pass swap2_c: Diffuse Variance Filter → Colortex Push (Compute)
 // ===========================================================================
 // 16×16 workgroups + 3px halo → 22×22 shared tile (7×7 kernel).
-// Output: colorimg3 = vec4(pos, oct(normal)), colorimg4 = vec4(packAlice, variance)
+// Output: colorimg3 = vec4(pos, oct(normal)), colorimg4 = vec4(packMaxEnt, variance)
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
@@ -13,7 +13,7 @@ layout(local_size_x = 16, local_size_y = 16) in;
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/buffer_io.glsl"
-#include "/lib/lighting/alice.glsl"
+#include "/lib/lighting/maxent.glsl"
 
 uniform vec2 resolution;
 
@@ -50,7 +50,7 @@ const uint HALO = 3u;
 
 struct TileSample {
     vec3 p;
-    vec4 aliceY; // mean state: xyz = E[Y·u], w = E[Y]
+    vec4 maxEntY; // mean state: xyz = E[Y·u], w = E[Y]
     float meanY2; // raw second moment E[Y²]
     float weight; // temporal sample count
     float estVar; // post-blend estimator variance (Phase 5 → 3×3 blur input)
@@ -58,11 +58,11 @@ struct TileSample {
 };
 
 const uint SM_AREA = SM_W * SM_H;
-// Geometry stays FP32, while Alice and moment state keep the source buffer's
+// Geometry stays FP32, while MaxEnt and moment state keep the source buffer's
 // FP16 encoding in LDS. Decode happens only when a tap is consumed. Validity
 // is stored in position.w; variance scratch covers only the 16x16 interior.
 shared vec4 sm_position_validity[SM_AREA];
-shared uvec2 sm_alice_y_packed[SM_AREA];
+shared uvec2 sm_maxent_y_packed[SM_AREA];
 shared uint sm_moments_packed[SM_AREA];
 shared float sm_est_var[16u * 16u];
 // Shared allocation is 14576 bytes, down from 20384 bytes.
@@ -71,8 +71,8 @@ shared float sm_est_var[16u * 16u];
 // Sanitization & canonicalisation
 // ---------------------------------------------------------------------------
 
-AliceEncoding sanitizeAlice(AliceEncoding a) {
-    if (any(isnan(a.aliceY)) || any(isinf(a.aliceY))) a.aliceY = vec4(0.0);
+MaxEntEncoding sanitizeMaxEnt(MaxEntEncoding a) {
+    if (any(isnan(a.maxEntY)) || any(isinf(a.maxEntY))) a.maxEntY = vec4(0.0);
     if (any(isnan(a.CoCg)) || any(isinf(a.CoCg))) a.CoCg = vec2(0.0);
     return a;
 }
@@ -83,7 +83,7 @@ float sanitizeNonnegative(float x) {
 }
 
 // Project stored f16 state onto the realizable cone |v| ≤ ω.
-vec4 canonicalAliceY(vec4 s) {
+vec4 canonicalMaxEntY(vec4 s) {
     if (any(isnan(s)) || any(isinf(s))) return vec4(0.0);
     vec3 v = s.xyz;
     float omega = abs(s.w);
@@ -134,32 +134,32 @@ const float VAR_BLUR_1D[2] = { 1.0, 0.6065306597 };
 // Swap-buffer load
 // ---------------------------------------------------------------------------
 
-AliceEncoding decodeSwapAlice(uvec4 packedLight) {
-    AliceEncoding alice;
-    alice.aliceY = vec4(unpackHalf2x16(packedLight.x),
+MaxEntEncoding decodeSwapMaxEnt(uvec4 packedLight) {
+    MaxEntEncoding maxent;
+    maxent.maxEntY = vec4(unpackHalf2x16(packedLight.x),
         unpackHalf2x16(packedLight.y));
-    alice.CoCg = unpackHalf2x16(packedLight.z);
-    return sanitizeAlice(alice);
+    maxent.CoCg = unpackHalf2x16(packedLight.z);
+    return sanitizeMaxEnt(maxent);
 }
 
-void encodeTileLight(uvec4 packedLight, out uvec2 packedAliceY,
+void encodeTileLight(uvec4 packedLight, out uvec2 packedMaxEntY,
     out uint packedMoments) {
-    AliceEncoding alice = decodeSwapAlice(packedLight);
+    MaxEntEncoding maxent = decodeSwapMaxEnt(packedLight);
     vec2 sourceMoments = unpackHalf2x16(packedLight.w);
     float w = clamp(sanitizeNonnegative(sourceMoments.x), 1.0,
         float(TEMPORAL_MAX_HISTORY));
     float m2 = sourceMoments.y * sourceMoments.y;
-    vec4 aliceY = canonicalAliceY(alice.aliceY);
-    m2 = canonicalMeanY2(aliceY, m2);
-    packedAliceY = uvec2(packHalf2x16(aliceY.xy),
-        packHalf2x16(aliceY.zw));
+    vec4 maxEntY = canonicalMaxEntY(maxent.maxEntY);
+    m2 = canonicalMeanY2(maxEntY, m2);
+    packedMaxEntY = uvec2(packHalf2x16(maxEntY.xy),
+        packHalf2x16(maxEntY.zw));
     packedMoments = packHalf2x16(vec2(w,
         min(sqrt(max(m2, 0.0)), 65504.0)));
 }
 
-vec4 decodeTileAliceY(uvec2 packedAliceY) {
-    return vec4(unpackHalf2x16(packedAliceY.x),
-        unpackHalf2x16(packedAliceY.y));
+vec4 decodeTileMaxEntY(uvec2 packedMaxEntY) {
+    return vec4(unpackHalf2x16(packedMaxEntY.x),
+        unpackHalf2x16(packedMaxEntY.y));
 }
 
 vec2 decodeTileMoments(uint packedMoments) {
@@ -175,11 +175,11 @@ void loadTileSample(uint index, ivec2 gc, ivec2 texMax) {
 
     bool valid = mask > 0.5 && all(equal(gc, clamped));
     sm_position_validity[index] = vec4(pos, valid ? 1.0 : 0.0);
-    sm_alice_y_packed[index] = uvec2(0u);
+    sm_maxent_y_packed[index] = uvec2(0u);
     sm_moments_packed[index] = 0u;
     if (valid) {
         encodeTileLight(readDiffuseSwapRaw(uvec2(gc)),
-            sm_alice_y_packed[index], sm_moments_packed[index]);
+            sm_maxent_y_packed[index], sm_moments_packed[index]);
     }
 }
 
@@ -207,16 +207,16 @@ void main() {
         all(equal(centerCoord, centerClamped));
     sm_position_validity[centerIndex] =
         vec4(centerPos, centerValid ? 1.0 : 0.0);
-    sm_alice_y_packed[centerIndex] = uvec2(0u);
+    sm_maxent_y_packed[centerIndex] = uvec2(0u);
     sm_moments_packed[centerIndex] = 0u;
 
-    AliceEncoding outAlice;
-    outAlice.aliceY = vec4(0.0);
-    outAlice.CoCg = vec2(0.0);
+    MaxEntEncoding outMaxEnt;
+    outMaxEnt.maxEntY = vec4(0.0);
+    outMaxEnt.CoCg = vec2(0.0);
     if (centerValid) {
         uvec4 centerLight = readDiffuseSwapRaw(gid);
-        outAlice = decodeSwapAlice(centerLight);
-        encodeTileLight(centerLight, sm_alice_y_packed[centerIndex],
+        outMaxEnt = decodeSwapMaxEnt(centerLight);
+        encodeTileLight(centerLight, sm_maxent_y_packed[centerIndex],
             sm_moments_packed[centerIndex]);
     }
 
@@ -233,7 +233,7 @@ void main() {
 
     // ---- Phase 2: bounds & sky ----
     vec4 ctrPositionValidity = sm_position_validity[centerIndex];
-    vec4 ctrAliceY = decodeTileAliceY(sm_alice_y_packed[centerIndex]);
+    vec4 ctrMaxEntY = decodeTileMaxEntY(sm_maxent_y_packed[centerIndex]);
     vec2 ctrMoments = decodeTileMoments(sm_moments_packed[centerIndex]);
     bool inBounds = all(lessThan(gid, uvec2(resolution)));
     bool isActive = inBounds && ctrPositionValidity.w > 0.5;
@@ -246,7 +246,7 @@ void main() {
         int _it;
         readGeo1(GEO_N_NORMALS, gid, centerN, _r, _it, _pr);
 
-        vec4 cState = ctrAliceY;
+        vec4 cState = ctrMaxEntY;
         float cN = ctrMoments.y;
         float temporalVar = temporalEstVar(cState, ctrMoments.x, cN);
 
@@ -286,7 +286,7 @@ void main() {
                 sumMass += mass;
                 sumSqW += mass * wS; // Σ N_i·w_i² (not (N_i·w_i)²)
                 sumState += mass *
-                    decodeTileAliceY(sm_alice_y_packed[sampleIndex]);
+                    decodeTileMaxEntY(sm_maxent_y_packed[sampleIndex]);
                 sumM2 += mass * sampleMoments.x;
             }
         }
@@ -360,8 +360,8 @@ void main() {
     imageStore(colorimg3, ivec2(gid),
         vec4(ctrPositionValidity.xyz, encodeNormal(centerN)));
     imageStore(colorimg4, ivec2(gid), uvec4(
-            packHalf2x16(clamp(outAlice.aliceY.xy, vec2(-65504.0), vec2(65504.0))),
-            packHalf2x16(clamp(outAlice.aliceY.zw, vec2(-65504.0), vec2(65504.0))),
-            packHalf2x16(clamp(outAlice.CoCg, vec2(-65504.0), vec2(65504.0))),
+            packHalf2x16(clamp(outMaxEnt.maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
+            packHalf2x16(clamp(outMaxEnt.maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
+            packHalf2x16(clamp(outMaxEnt.CoCg, vec2(-65504.0), vec2(65504.0))),
             floatBitsToUint(estVar)));
 }

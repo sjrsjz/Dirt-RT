@@ -4,7 +4,7 @@
 #include "/lib/common.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/buffer_io.glsl"
-#include "/lib/lighting/alice.glsl"
+#include "/lib/lighting/maxent.glsl"
 
 // ===========================================================================
 // Pass 300 CS: 前 3 级 à‑trous (3×3 扩张网格, R0=1,2,4)
@@ -25,7 +25,7 @@ layout(rgba32ui) uniform uimage2D colorimg4;
 #define TILE_AREA (TILE_SIZE * TILE_SIZE)
 
 shared vec4 sm_geometry[TILE_AREA];
-// Alice/CoCg retain their source FP16 representation; variance remains the
+// MaxEnt/CoCg retain their source FP16 representation; variance remains the
 // original FP32 word. Bures standard deviations are sufficient at FP16
 // precision, while inverse vector length is cheaper to reconstruct per tap
 // than to reserve another four LDS bytes for every tile sample.
@@ -40,16 +40,16 @@ shared uint sm_stddev_packed[TILE_AREA];
 
 vec2 makeBuresStddev(vec4 encoded, float omega) {
     float len_v_sq = dot(encoded.xyz, encoded.xyz);
-    float kappa = alice_kappa(sqrt(len_v_sq), omega);
-    return alice_eigen_std(omega, kappa);
+    float kappa = maxent_kappa(sqrt(len_v_sq), omega);
+    return maxent_eigen_std(omega, kappa);
 }
 
-void unpackDiffuseTileLight(uint tileIndex, out AliceEncoding alice,
+void unpackDiffuseTileLight(uint tileIndex, out MaxEntEncoding maxent,
     out float variance) {
     uvec4 light = sm_light_packed[tileIndex];
-    alice.aliceY = vec4(unpackHalf2x16(light.x),
+    maxent.maxEntY = vec4(unpackHalf2x16(light.x),
         unpackHalf2x16(light.y));
-    alice.CoCg = unpackHalf2x16(light.z);
+    maxent.CoCg = unpackHalf2x16(light.z);
     variance = uintBitsToFloat(light.w);
 }
 
@@ -117,13 +117,13 @@ void main() {
                 sm_light_packed[i] = light;
                 if (uintBitsToFloat(light.w) < 0.0) {
                     // Sky carries a negative variance sentinel. Do not unpack
-                    // Alice or evaluate Bures eigenvalues for dead samples.
+                    // MaxEnt or evaluate Bures eigenvalues for dead samples.
                     sm_geometry[i] = vec4(0.0);
                     sm_stddev_packed[i] = 0u;
                 } else {
-                    vec4 aliceY = vec4(unpackHalf2x16(light.x),
+                    vec4 maxEntY = vec4(unpackHalf2x16(light.x),
                         unpackHalf2x16(light.y));
-                    vec2 stddev = makeBuresStddev(aliceY, abs(aliceY.w));
+                    vec2 stddev = makeBuresStddev(maxEntY, abs(maxEntY.w));
                     sm_geometry[i] = texelFetch(colortex3, cc, 0);
                     sm_stddev_packed[i] = packHalf2x16(clamp(stddev,
                         vec2(0.0), vec2(65504.0)));
@@ -154,17 +154,17 @@ void main() {
                 - ATROUS_GAMMA * ATROUS_POWER_COEFFICIENT);
     const float variance_mix = 2.0 - exp2(2.0 - power);
 
-    AliceEncoding center_alice;
+    MaxEntEncoding center_maxent;
     vec3 center_pos = sm_geometry[center_idx].xyz;
     float center_var_raw;
-    unpackDiffuseTileLight(center_idx, center_alice, center_var_raw);
+    unpackDiffuseTileLight(center_idx, center_maxent, center_var_raw);
     float center_var_est = max(center_var_raw, 1e-16);
 
     // ---- 从共享内存解码中心法线（colortex3.w = oct(centerNormal)）-------
     vec3 center_normal = decodeNormal(sm_geometry[center_idx].w);
 
     // ---- 预计算中心像素的统计特征 -----------------------------------------
-    vec4 c_enc = center_alice.aliceY;
+    vec4 c_enc = center_maxent.maxEntY;
     vec2 c_stddev = unpackHalf2x16(sm_stddev_packed[center_idx]);
     vec2 c_stddev_sq = c_stddev * c_stddev;
     float c_trace = 2.0 * c_stddev_sq.x + c_stddev_sq.y;
@@ -183,7 +183,7 @@ void main() {
     float sumWeight = 1.0;
     vec2 sumVarEnergy = vec2(center_var_est);
 
-    AliceEncoding accumAlice = center_alice;
+    MaxEntEncoding accumMaxEnt = center_maxent;
 
     // 3×3 网格采样核 (小核 R0=1,2,4, 权重预计算)
     const vec3 GRID_3x3[8] = {
@@ -203,16 +203,16 @@ void main() {
         uint sy = cy + uint(dy * R0);
         uint sample_idx = sy * uint(TILE_SIZE) + sx;
 
-        AliceEncoding sample_alice;
+        MaxEntEncoding sample_maxent;
         vec3 sample_world_pos = sm_geometry[sample_idx].xyz;
         float sample_var_est;
-        unpackDiffuseTileLight(sample_idx, sample_alice,
+        unpackDiffuseTileLight(sample_idx, sample_maxent,
             sample_var_est);
         if (sample_var_est < 0.0) continue;
         float w_geometry = abs(dot(sample_world_pos, center_normal)
                     - center_plane_distance) * inv_pixel_footprint;
 
-        vec3 s_v = sample_alice.aliceY.xyz;
+        vec3 s_v = sample_maxent.maxEntY.xyz;
         float s_len_v_sq = dot(s_v, s_v);
         float s_inv_len_v_sq = s_len_v_sq > 1e-16
             ? 1.0 / s_len_v_sq : 0.0;
@@ -225,20 +225,20 @@ void main() {
         const float w_kernel = GRID_3x3[k].z;
         float w0 = w_kernel * exp(-w_geometry - w_luma);
 
-        accumulate_alice(accumAlice, sample_alice, w0);
+        accumulate_maxent(accumMaxEnt, sample_maxent, w0);
         sumWeight += w0;
         float weighted_var = w0 * sample_var_est;
         sumVarEnergy += vec2(weighted_var, w0 * weighted_var);
     }
 
     float inv_sumWeight = 1.0 / sumWeight;
-    accumAlice = scale_alice(accumAlice, inv_sumWeight);
+    accumMaxEnt = scale_maxent(accumMaxEnt, inv_sumWeight);
 
     float varEnergyOut = mix(sumVarEnergy.x, sumVarEnergy.y, variance_mix)
             * pow(inv_sumWeight, power);
     imageStore(colorimg4, pix, uvec4(
-            packHalf2x16(clamp(accumAlice.aliceY.xy, vec2(-65504.0), vec2(65504.0))),
-            packHalf2x16(clamp(accumAlice.aliceY.zw, vec2(-65504.0), vec2(65504.0))),
-            packHalf2x16(clamp(accumAlice.CoCg, vec2(-65504.0), vec2(65504.0))),
+            packHalf2x16(clamp(accumMaxEnt.maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
+            packHalf2x16(clamp(accumMaxEnt.maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
+            packHalf2x16(clamp(accumMaxEnt.CoCg, vec2(-65504.0), vec2(65504.0))),
             floatBitsToUint(varEnergyOut)));
 }

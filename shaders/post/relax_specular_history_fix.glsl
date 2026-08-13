@@ -17,5 +17,5 @@ void main() {
 
     RelaxSlowSignal slow = relaxUnpackSlow(
         texelFetch(colortex4, ivec2(pixel), 0));
-    imageStore(colorimg3, ivec2(pixel), slow.signal.aliceY);
+    imageStore(colorimg3, ivec2(pixel), slow.signal.maxEntY);
 }

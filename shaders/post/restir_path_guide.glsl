@@ -12,9 +12,9 @@ layout(local_size_x = 16, local_size_y = 16) in;
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/buffer_io.glsl"
 #include "/lib/common.glsl"
-#include "/lib/lighting/alice.glsl"
+#include "/lib/lighting/maxent.glsl"
 
-uniform usampler2D colortex4; // atrous 降噪 ALICE (packAlice 格式, RGBA32UI)
+uniform usampler2D colortex4; // atrous 降噪 MaxEnt (packMaxEnt 格式, RGBA32UI)
 uniform usampler2D colortex6; // temporal_diffuse validKernelWeight
 
 layout(rgba32ui) uniform writeonly uimage2D colorimg6;
@@ -121,15 +121,15 @@ bool isSky(vec4 y) {
     return y.w <= 1e-8 || any(isnan(y)) || any(isinf(y));
 }
 
-uvec2 packAliceHalf(vec4 y) {
+uvec2 packMaxEntHalf(vec4 y) {
     return uvec2(packHalf2x16(y.xy), packHalf2x16(y.zw));
 }
-vec4 unpackAliceHalf(uvec2 p) {
+vec4 unpackMaxEntHalf(uvec2 p) {
     return vec4(unpackHalf2x16(p.x), unpackHalf2x16(p.y));
 }
 
 float guideTarget(vec4 y, vec3 N) {
-    return alice_irradiance(y, N);
+    return maxent_irradiance(y, N);
 }
 
 // ---------------------------------------------------------------------------
@@ -157,10 +157,10 @@ Reservoir spatialReservoir(uvec2 gid, vec3 centerNormal, vec3 centerPos, inout u
         if (any(lessThan(sc, ivec2(0))) || any(greaterThanEqual(sc, texSize))) continue;
 
         uvec2 xy = uvec2(sc);
-        AliceEncoding alice;
+        MaxEntEncoding maxent;
         float meanY2_unused;
-        readDiffuseLightRT(xy, alice, meanY2_unused);
-        vec4 y = alice.aliceY;
+        readDiffuseLightRT(xy, maxent, meanY2_unused);
+        vec4 y = maxent.maxEntY;
         if (isSky(y) || readDiffuseSurfaceMask(xy) < 0.5) continue;
 
         // 深度不连续拒绝
@@ -186,10 +186,10 @@ Reservoir spatialReservoir(uvec2 gid, vec3 centerNormal, vec3 centerPos, inout u
 // ---------------------------------------------------------------------------
 void addDenoisedPrior(inout Reservoir r, ivec2 pix, vec3 centerNormal, inout uint seed) {
     uvec4 raw = texelFetch(colortex4, pix, 0);
-    AliceEncoding a;
-    a.aliceY = vec4(unpackHalf2x16(raw.x), unpackHalf2x16(raw.y));
+    MaxEntEncoding a;
+    a.maxEntY = vec4(unpackHalf2x16(raw.x), unpackHalf2x16(raw.y));
     a.CoCg   = unpackHalf2x16(raw.z);
-    vec4 y = a.aliceY;
+    vec4 y = a.maxEntY;
     if (isSky(y)) return;
     float target = max(guideTarget(y, centerNormal), 0.0);
     reservoirUpdate(r, y, target, target, 1.0, seed);
@@ -303,6 +303,6 @@ void main() {
     reservoirClampM(r, PATHGUIDE_MAX_TEMPORAL_M);
     float W = reservoirW(r);
 
-    uvec2 halfY = packAliceHalf(r.y);
+    uvec2 halfY = packMaxEntHalf(r.y);
     imageStore(colorimg6, pix, uvec4(halfY.x, halfY.y, floatBitsToUint(W), floatBitsToUint(r.M)));
 }

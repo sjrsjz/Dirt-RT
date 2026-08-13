@@ -46,7 +46,7 @@ uint relaxPackHalf2(float a, float b) {
 
 SpecularMaxEnt relaxMixMaxEnt(SpecularMaxEnt a, SpecularMaxEnt b, float t) {
     SpecularMaxEnt s;
-    s.aliceY = mix(a.aliceY, b.aliceY, t);
+    s.maxEntY = mix(a.maxEntY, b.maxEntY, t);
     s.CoCg = mix(a.CoCg, b.CoCg, t);
     return sanitizeSpecularMaxEnt(s);
 }
@@ -54,34 +54,34 @@ SpecularMaxEnt relaxMixMaxEnt(SpecularMaxEnt a, SpecularMaxEnt b, float t) {
 SpecularMaxEnt relaxWeightedMaxEnt(SpecularMaxEnt a, float wa,
         SpecularMaxEnt b, float wb) {
     SpecularMaxEnt s;
-    s.aliceY = a.aliceY * wa + b.aliceY * wb;
+    s.maxEntY = a.maxEntY * wa + b.maxEntY * wb;
     s.CoCg = a.CoCg * wa + b.CoCg * wb;
     return s;
 }
 
 SpecularMaxEnt relaxScaleMaxEnt(SpecularMaxEnt s, float scale) {
-    s.aliceY *= scale;
+    s.maxEntY *= scale;
     s.CoCg *= scale;
     return sanitizeSpecularMaxEnt(s);
 }
 
 vec3 relaxMaxEntYCoCg(SpecularMaxEnt s) {
     s = sanitizeSpecularMaxEnt(s);
-    return vec3(s.aliceY.w, s.CoCg);
+    return vec3(s.maxEntY.w, s.CoCg);
 }
 
 // Feature z = (Y * direction, Y), so E[|z|^2] = 2 E[Y^2].
 // This is the covariance trace in the same four-dimensional units as the
 // MaxEnt Bures distance used by the spatial light-field weight.
-float relaxMaxEntLightFieldVariance(vec4 meanAliceY, float meanY2) {
-    return max(2.0 * meanY2 - dot(meanAliceY, meanAliceY), 0.0);
+float relaxMaxEntLightFieldVariance(vec4 meanMaxEntY, float meanY2) {
+    return max(2.0 * meanY2 - dot(meanMaxEntY, meanMaxEntY), 0.0);
 }
 
 SpecularMaxEnt relaxSetMaxEntYCoCg(SpecularMaxEnt s, vec3 ycocg) {
     ycocg.x = max(ycocg.x, 0.0);
-    float scale = ycocg.x / max(s.aliceY.w, 1e-8);
-    s.aliceY.xyz *= scale;
-    s.aliceY.w = ycocg.x;
+    float scale = ycocg.x / max(s.maxEntY.w, 1e-8);
+    s.maxEntY.xyz *= scale;
+    s.maxEntY.w = ycocg.x;
     s.CoCg = ycocg.yz;
     return sanitizeSpecularMaxEnt(s);
 }
@@ -145,7 +145,7 @@ RelaxFastSignal relaxUnpackFast(uvec4 p) {
     return s;
 }
 
-// After temporal clamping AliceY lives in RGBA32F; this record carries its
+// After temporal clamping MaxEntY lives in RGBA32F; this record carries its
 // six remaining scalars in the existing RGBA32UI attachment.
 struct RelaxPostSignal {
     vec2 CoCg;

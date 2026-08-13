@@ -3,7 +3,7 @@
 
 #include "/lib/settings.glsl"
 #include "/lib/buffers/addr.glsl"
-#include "/lib/lighting/alice_encode.glsl"
+#include "/lib/lighting/maxent_encode.glsl"
 
 #define RADIANCE_CACHE_W 256
 #define RADIANCE_CACHE_H 128
@@ -105,11 +105,11 @@
 #define RC_PLANE_FILTERED_0 4u
 #define RC_PLANE_FILTERED_1 5u
 
-struct RGBAliceEncoding { vec4 aliceR; vec4 aliceG; vec4 aliceB; };
-// History stores a temporal RIS reservoir: alice is the raw selected sample,
+struct RGBMaxEntEncoding { vec4 maxentR; vec4 maxentG; vec4 maxentB; };
+// History stores a temporal RIS reservoir: maxent is the raw selected sample,
 // W is the reciprocal-proposal normalization, and M is the represented sample
 // count. Current-frame probes are unit reservoirs (W=1, M=1).
-struct RadianceCache { RGBAliceEncoding alice; float W; float M; };
+struct RadianceCache { RGBMaxEntEncoding maxent; float W; float M; };
 struct PackedRadianceCache { uvec4 word0; uvec4 word1; };
 struct RadianceCacheAddress { uint token; uint slot; uint localIndex; };
 
@@ -133,36 +133,36 @@ void rcStoreVec4(uint a, uvec4 v) {
     rcStore(a, v.x); rcStore(a + 1u, v.y); rcStore(a + 2u, v.z); rcStore(a + 3u, v.w);
 }
 
-RGBAliceEncoding radiance_to_rgb_alice(vec3 radiance, vec3 direction) {
-    RGBAliceEncoding e;
-    e.aliceR = vec4(direction * radiance.r, radiance.r);
-    e.aliceG = vec4(direction * radiance.g, radiance.g);
-    e.aliceB = vec4(direction * radiance.b, radiance.b);
+RGBMaxEntEncoding radiance_to_rgb_maxent(vec3 radiance, vec3 direction) {
+    RGBMaxEntEncoding e;
+    e.maxentR = vec4(direction * radiance.r, radiance.r);
+    e.maxentG = vec4(direction * radiance.g, radiance.g);
+    e.maxentB = vec4(direction * radiance.b, radiance.b);
     return e;
 }
-vec3 project_rgb_alice_irradiance(RGBAliceEncoding e, vec3 n) {
-    return vec3(alice_irradiance(e.aliceR, n), alice_irradiance(e.aliceG, n), alice_irradiance(e.aliceB, n));
+vec3 project_rgb_maxent_irradiance(RGBMaxEntEncoding e, vec3 n) {
+    return vec3(maxent_irradiance(e.maxentR, n), maxent_irradiance(e.maxentG, n), maxent_irradiance(e.maxentB, n));
 }
 vec3 radianceCacheDiffuseIncident(RadianceCache cache, vec3 n) {
     // Cache rays estimate a uniform-sphere average. Multiplying the cosine
     // projection by four converts it to E/pi, ready for a diffuse albedo. The
     // reservoir stores its selected sample unscaled, so apply W exactly once.
-    return (4.0 * cache.W) * project_rgb_alice_irradiance(cache.alice, n);
+    return (4.0 * cache.W) * project_rgb_maxent_irradiance(cache.maxent, n);
 }
 bool radianceCacheValueValid(RadianceCache cache) {
     return cache.W > 0.0 && cache.M > 0.0
         && !isnan(cache.W) && !isinf(cache.W)
         && !isnan(cache.M) && !isinf(cache.M)
-        && !any(isnan(cache.alice.aliceR)) && !any(isinf(cache.alice.aliceR))
-        && !any(isnan(cache.alice.aliceG)) && !any(isinf(cache.alice.aliceG))
-        && !any(isnan(cache.alice.aliceB)) && !any(isinf(cache.alice.aliceB));
+        && !any(isnan(cache.maxent.maxentR)) && !any(isinf(cache.maxent.maxentR))
+        && !any(isnan(cache.maxent.maxentG)) && !any(isinf(cache.maxent.maxentG))
+        && !any(isnan(cache.maxent.maxentB)) && !any(isinf(cache.maxent.maxentB));
 }
-vec4 rgb_alice_luminance(RGBAliceEncoding e) {
-    return e.aliceR * 0.2126 + e.aliceG * 0.7152 + e.aliceB * 0.0722;
+vec4 rgb_maxent_luminance(RGBMaxEntEncoding e) {
+    return e.maxentR * 0.2126 + e.maxentG * 0.7152 + e.maxentB * 0.0722;
 }
 RadianceCache emptyCache() {
     RadianceCache rc;
-    rc.alice.aliceR = vec4(0.0); rc.alice.aliceG = vec4(0.0); rc.alice.aliceB = vec4(0.0);
+    rc.maxent.maxentR = vec4(0.0); rc.maxent.maxentG = vec4(0.0); rc.maxent.maxentB = vec4(0.0);
     rc.W = 0.0;
     rc.M = 0.0;
     return rc;
@@ -170,18 +170,18 @@ RadianceCache emptyCache() {
 PackedRadianceCache packRadianceCache(RadianceCache rc) {
     PackedRadianceCache p;
     p.word0 = uvec4(
-        packHalf2x16(rc.alice.aliceR.xy), packHalf2x16(rc.alice.aliceR.zw),
-        packHalf2x16(rc.alice.aliceG.xy), packHalf2x16(rc.alice.aliceG.zw));
-    p.word1 = uvec4(packHalf2x16(rc.alice.aliceB.xy),
-        packHalf2x16(rc.alice.aliceB.zw),
+        packHalf2x16(rc.maxent.maxentR.xy), packHalf2x16(rc.maxent.maxentR.zw),
+        packHalf2x16(rc.maxent.maxentG.xy), packHalf2x16(rc.maxent.maxentG.zw));
+    p.word1 = uvec4(packHalf2x16(rc.maxent.maxentB.xy),
+        packHalf2x16(rc.maxent.maxentB.zw),
         floatBitsToUint(rc.W), floatBitsToUint(rc.M));
     return p;
 }
 RadianceCache unpackRadianceCache(uvec4 word0, uvec4 word1) {
     RadianceCache rc;
-    rc.alice.aliceR = vec4(unpackHalf2x16(word0.x), unpackHalf2x16(word0.y));
-    rc.alice.aliceG = vec4(unpackHalf2x16(word0.z), unpackHalf2x16(word0.w));
-    rc.alice.aliceB = vec4(unpackHalf2x16(word1.x), unpackHalf2x16(word1.y));
+    rc.maxent.maxentR = vec4(unpackHalf2x16(word0.x), unpackHalf2x16(word0.y));
+    rc.maxent.maxentG = vec4(unpackHalf2x16(word0.z), unpackHalf2x16(word0.w));
+    rc.maxent.maxentB = vec4(unpackHalf2x16(word1.x), unpackHalf2x16(word1.y));
     rc.W = uintBitsToFloat(word1.z);
     rc.M = uintBitsToFloat(word1.w);
     return rc;

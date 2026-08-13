@@ -2,15 +2,15 @@
 #define RT_DIFFUSE_IO_GLSL
 
 #include "/lib/buffers/diffuse_buffer.glsl"
-#include "/lib/lighting/alice_encode.glsl"
+#include "/lib/lighting/maxent_encode.glsl"
 
 // ===========================================================================
 // Diffuse data structs — in-memory unpacked representation (storage-agnostic)
 // ===========================================================================
 
 struct diffuseIlluminationData {
-    AliceEncoding data;
-    AliceEncoding data_swap;
+    MaxEntEncoding data;
+    MaxEntEncoding data_swap;
     vec3 pos;
     float surfaceMask;
     vec3 histNormal;
@@ -21,7 +21,7 @@ struct diffuseIlluminationData {
 };
 
 struct DiffuseIlluminationWriteData {
-    AliceEncoding data_swap;
+    MaxEntEncoding data_swap;
     vec3 pos;
     float surfaceMask;
     float weight;
@@ -36,10 +36,10 @@ struct DiffuseIlluminationWriteData {
 DiffuseIlluminationWriteData loadDiffuseInput(ivec2 p) {
     uvec2 xy = uvec2(p);
     DiffuseIlluminationWriteData t;
-    AliceEncoding alice;
+    MaxEntEncoding maxent;
     float meanY2;
-    readDiffuseLightRT(xy, alice, meanY2);
-    t.data_swap = alice;
+    readDiffuseLightRT(xy, maxent, meanY2);
+    t.data_swap = maxent;
     t.meanY2 = meanY2;
     float mask;
     readDiffuseGeo(xy, t.pos, mask);
@@ -54,17 +54,17 @@ diffuseIlluminationData fetchDiffuse(ivec2 p) {
     diffuseIlluminationData tmp;
 
     // swap = current frame accumulated (N=4)
-    AliceEncoding alice;
+    MaxEntEncoding maxent;
     float weight, meanY2;
-    readDiffuseSwap(xy, alice, weight, meanY2);
-    tmp.data_swap = alice;
+    readDiffuseSwap(xy, maxent, weight, meanY2);
+    tmp.data_swap = maxent;
     tmp.weight = weight;
     tmp.meanY2 = meanY2;
 
 #ifndef DIFFUSE_BUFFER_MIN2
     // hist = previous frame history (N=2)
-    readDiffuseHist(xy, alice, weight, meanY2);
-    tmp.data = alice;
+    readDiffuseHist(xy, maxent, weight, meanY2);
+    tmp.data = maxent;
     tmp.prev_weight = weight;
     tmp.prev_meanY2 = meanY2;
 
@@ -76,11 +76,11 @@ diffuseIlluminationData fetchDiffuse(ivec2 p) {
 
 diffuseIlluminationData blendDiffuse(diffuseIlluminationData A, diffuseIlluminationData B, float x) {
     diffuseIlluminationData t;
-    t.data_swap = mix_alice(A.data_swap, B.data_swap, x);
+    t.data_swap = mix_maxent(A.data_swap, B.data_swap, x);
     t.weight = (B.weight - A.weight) * x + A.weight;
     t.meanY2 = (B.meanY2 - A.meanY2) * x + A.meanY2;
 #ifndef DIFFUSE_BUFFER_MIN2
-    t.data = mix_alice(A.data, B.data, x);
+    t.data = mix_maxent(A.data, B.data, x);
     t.pos = mix(A.pos, B.pos, x);
     vec3 blendedNormal = mix(A.histNormal, B.histNormal, x);
     float blendedNormalLen2 = dot(blendedNormal, blendedNormal);
@@ -134,10 +134,10 @@ DiffuseIlluminationWriteData fetchPrevDiffuse(ivec2 p) {
     DiffuseIlluminationWriteData t;
 
     // swap = previous frame final denoised result (used by ray1.rgen for guiding)
-    AliceEncoding alice;
+    MaxEntEncoding maxent;
     float weight, meanY2;
-    readDiffuseSwap(xy, alice, weight, meanY2);
-    t.data_swap = alice;
+    readDiffuseSwap(xy, maxent, weight, meanY2);
+    t.data_swap = maxent;
     t.weight = weight;
     t.meanY2 = meanY2;
 

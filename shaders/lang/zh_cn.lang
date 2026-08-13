@@ -27,7 +27,7 @@ option.RAY_BOUNCES = 光线弹射次数
 option.RAY_BOUNCES.comment = 每条相机路径最多访问的表面数。增加跳数可保留更深层的间接光与透射，但会直接增加 GPU 开销。
 
 option.PATH_GUIDING_STRENGTH = 路径引导强度
-option.PATH_GUIDING_STRENGTH.comment = 漫反射路径的 ALICE 引导强度，同时控制辐射率缓存探针的 ALICE+RIS 总引导概率；缓存探针始终保留至少 10% 均匀球面采样。提高可加快稳定场景收敛，过高则可能在光照变化后增加延迟或方差。
+option.PATH_GUIDING_STRENGTH.comment = 漫反射路径的 MaxEnt 引导强度，同时控制辐射率缓存探针的 MaxEnt+RIS 总引导概率；缓存探针始终保留至少 10% 均匀球面采样。提高可加快稳定场景收敛，过高则可能在光照变化后增加延迟或方差。
 
 option.SUN_PATH_ROTATION = 日照路径旋转
 option.SUN_PATH_ROTATION.comment = 类似纬度地绕世界 X 轴倾斜太阳和月亮的视运动路径，只改变光照方向，不改变昼夜长度。30° 对应当前大气模型的北纬 30° 春季晴空标定基准。
@@ -41,7 +41,7 @@ option.FIREFLY_SUPPRESSION_MULTIPLIER = 萤火虫抑制
 option.FIREFLY_SUPPRESSION_MULTIPLIER.comment = 每样本亮度上限倍率（× 平均曝光）。减小此值可更激进地钳制异常亮像素，减少萤火虫现象，但可能使高光变暗。
 
 option.GI_CLAMP_MAX = GI 硬截断
-option.GI_CLAMP_MAX.comment = 间接光照在 ALICE 编码前的硬上限（逐通道）。防止单条路径的离群值破坏光场历史的稳定性。提高可给高亮间接光更多余量，降低可更激进地抑制极端萤火虫。
+option.GI_CLAMP_MAX.comment = 间接光照在 MaxEnt 编码前的硬上限（逐通道）。防止单条路径的离群值破坏光场历史的稳定性。提高可给高亮间接光更多余量，降低可更激进地抑制极端萤火虫。
 
 option.PATHGUIDE_SPATIAL_RADIUS = 路径引导空间半径
 option.PATHGUIDE_SPATIAL_RADIUS.comment = 路径引导 ReSTIR 蓄水池的 Poisson 盘空间采样半径（像素）。提高可探测更远的邻居以获取更多样化的候选，但会增加非连续内存访问。
@@ -52,6 +52,11 @@ option.PATHGUIDE_MAX_TEMPORAL_M.comment = 路径引导 ReSTIR 时域蓄水池的
 # ===========================================================================
 # 材质
 # ===========================================================================
+option.EON_ENABLED = EON 粗糙漫反射
+option.EON_ENABLED.comment = 使用能量守恒的 Oren--Nayar 漫反射模型并通过 MaxEnt 积分重建。粗糙表面的角度响应和白炉能量守恒更准确，但会增加着色器开销。
+value.EON_ENABLED.1 = 启用
+value.EON_ENABLED.0 = 关闭（旧模型）
+
 option.REFRACTIVE_INDEX = 水折射率
 option.REFRACTIVE_INDEX.comment = 水和当前介质透射模型使用的折射率。数值越高，折射弯曲越强，掠射角反射也越明显。
 
@@ -103,13 +108,13 @@ option.RADIANCE_CACHE_MAX_HIST = 缓存 RIS 最大 M
 option.RADIANCE_CACHE_MAX_HIST.comment = 每个缓存体素的时域 RIS Reservoir 最多保留的有效候选数。数值越高越容易长期复用重要亮样本；数值越低，对光照或几何变化的响应越快。
 
 option.RADIANCE_CACHE_FILTER_MAX_HIST = 缓存平滑帧数
-option.RADIANCE_CACHE_FILTER_MAX_HIST.comment = 用于直接累计缓存方向性 ALICE 矩的时域样本数。数值越高，方向与能量的方差越低；数值越低，对光照或几何变化的响应越快、拖影越少。实际光照、递归反馈和缓存路径引导均读取该结果。
+option.RADIANCE_CACHE_FILTER_MAX_HIST.comment = 用于直接累计缓存方向性 MaxEnt 矩的时域样本数。数值越高，方向与能量的方差越低；数值越低，对光照或几何变化的响应越快、拖影越少。实际光照、递归反馈和缓存路径引导均读取该结果。
 
 option.RADIANCE_CACHE_UPDATE_PERIOD = 缓存更新周期
 option.RADIANCE_CACHE_UPDATE_PERIOD.comment = 已驻留缓存体素每隔多少帧追踪一次更新光线。新分配体素块仍会在首帧完整初始化。数值 4 可将稳态缓存光线和 Resolve 工作量降低约 75%；更高数值性能更好，但动态光照响应和样本收敛更慢。
 
 option.RADIANCE_CACHE_RIS_GUIDING_STRENGTH = 缓存 RIS 引导占比
-option.RADIANCE_CACHE_RIS_GUIDING_STRENGTH.comment = 从缓存探针的总引导概率中分配给时域 RIS 方向提议的最大比例。只有 Reservoir 与稳定 ALICE 光场的方向和能量一致且历史充足时才会达到该比例；0 表示关闭 RIS 引导。
+option.RADIANCE_CACHE_RIS_GUIDING_STRENGTH.comment = 从缓存探针的总引导概率中分配给时域 RIS 方向提议的最大比例。只有 Reservoir 与稳定 MaxEnt 光场的方向和能量一致且历史充足时才会达到该比例；0 表示关闭 RIS 引导。
 
 option.RADIANCE_CACHE_RIS_GUIDING_KAPPA = 缓存 RIS 引导锐度
 option.RADIANCE_CACHE_RIS_GUIDING_KAPPA.comment = RIS 选中方向周围连续采样波瓣的集中度。数值越高越聚焦，可能更快命中紧凑光源，但对过期或不精确方向更敏感；数值越低越稳健。
@@ -130,7 +135,7 @@ option.TEMPORAL_HISTORY_MIN_WEIGHT = 最小历史权重
 option.TEMPORAL_HISTORY_MIN_WEIGHT.comment = 低于此置信度的历史会被丢弃。提高可更早重置弱历史，降低则会更久保留稀疏历史。
 
 option.TEMPORAL_AABB_ENABLE = AABB 钳制
-option.TEMPORAL_AABB_ENABLE.comment = 将重投影的漫反射 ALICE 历史限制在当前邻域范围内，以减少拖影和陈旧光照。关闭后使用不钳制的时域混合。
+option.TEMPORAL_AABB_ENABLE.comment = 将重投影的漫反射 MaxEnt 历史限制在当前邻域范围内，以减少拖影和陈旧光照。关闭后使用不钳制的时域混合。
 value.TEMPORAL_AABB_ENABLE.1 = 开启
 value.TEMPORAL_AABB_ENABLE.0 = 关闭
 

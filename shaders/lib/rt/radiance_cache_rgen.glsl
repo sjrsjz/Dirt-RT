@@ -10,7 +10,7 @@ const float RC_PROBE_JITTER_SCALE = 0.95;
 const float RC_MAX_GUIDED_PROBABILITY = 0.9;
 
 struct RadianceCacheGuideInfo {
-    GuideInfo alice;
+    GuideInfo maxent;
     vec3 risAxis;
     float risKappa;
     float risProb;
@@ -27,10 +27,10 @@ RadianceCache samplePreviousRadianceCache(vec3 worldPos) {
 
 RadianceCacheGuideInfo computeRadianceCacheGuide(vec3 worldPos) {
     RadianceCacheGuideInfo guide;
-    guide.alice.axis = vec3(0.0, 1.0, 0.0);
-    guide.alice.kappa = 0.0;
-    guide.alice.prob = 0.0;
-    guide.alice.valid = false;
+    guide.maxent.axis = vec3(0.0, 1.0, 0.0);
+    guide.maxent.kappa = 0.0;
+    guide.maxent.prob = 0.0;
+    guide.maxent.valid = false;
     guide.risAxis = vec3(0.0, 1.0, 0.0);
     guide.risKappa = 0.0;
     guide.risProb = 0.0;
@@ -44,37 +44,37 @@ RadianceCacheGuideInfo computeRadianceCacheGuide(vec3 worldPos) {
     RadianceCache previous = loadRadianceCachePlanes(
         address, RC_PLANE_FILTERED_0, RC_PLANE_FILTERED_1);
     if (!radianceCacheValueValid(previous)) return guide;
-    vec4 luminanceAlice = rgb_alice_luminance(previous.alice) * previous.W;
-    vec3 directionalEnergy = luminanceAlice.xyz;
+    vec4 luminanceMaxEnt = rgb_maxent_luminance(previous.maxent) * previous.W;
+    vec3 directionalEnergy = luminanceMaxEnt.xyz;
     float directionalLength = length(directionalEnergy);
-    float totalEnergy = max(luminanceAlice.w, directionalLength);
+    float totalEnergy = max(luminanceMaxEnt.w, directionalLength);
 
     if (directionalLength <= 1e-8 || totalEnergy <= 1e-8) {
         return guide;
     }
 
-    guide.alice.axis = directionalEnergy / directionalLength;
+    guide.maxent.axis = directionalEnergy / directionalLength;
     float rho = clamp(directionalLength / totalEnergy, 0.0, 1.0);
-    guide.alice.kappa = alice_kappa(directionalLength, totalEnergy);
-    guide.alice.prob = min(PATH_GUIDING_STRENGTH * rho,
+    guide.maxent.kappa = maxent_kappa(directionalLength, totalEnergy);
+    guide.maxent.prob = min(PATH_GUIDING_STRENGTH * rho,
         RC_MAX_GUIDED_PROBABILITY);
-    guide.alice.valid = guide.alice.prob > 1e-6;
+    guide.maxent.valid = guide.maxent.prob > 1e-6;
     if (RADIANCE_CACHE_RIS_GUIDING_STRENGTH <= 0.0) return guide;
 
     // A temporal RIS reservoir is a proposal, never the light-field estimate.
     // Reinforce it only when its selected incoming direction and normalized
-    // energy agree with the stable multi-frame ALICE moments.
+    // energy agree with the stable multi-frame MaxEnt moments.
     RadianceCache reservoir = loadRadianceCachePlanes(
         address, RC_PLANE_HISTORY_0, RC_PLANE_HISTORY_1);
     if (!radianceCacheValueValid(reservoir)) return guide;
-    vec4 risAlice = rgb_alice_luminance(reservoir.alice);
-    float risDirectionalLength = length(risAlice.xyz);
-    float risMeanEnergy = max(risAlice.w, risDirectionalLength) * reservoir.W;
+    vec4 risMaxEnt = rgb_maxent_luminance(reservoir.maxent);
+    float risDirectionalLength = length(risMaxEnt.xyz);
+    float risMeanEnergy = max(risMaxEnt.w, risDirectionalLength) * reservoir.W;
     if (!(risDirectionalLength > 1e-8) || !(risMeanEnergy > 1e-8)) return guide;
 
-    vec3 risAxis = risAlice.xyz / risDirectionalLength;
+    vec3 risAxis = risMaxEnt.xyz / risDirectionalLength;
     float directionalAgreement = smoothstep(0.25, 0.9,
-        max(dot(guide.alice.axis, risAxis), 0.0));
+        max(dot(guide.maxent.axis, risAxis), 0.0));
     float energyAgreement = min(totalEnergy, risMeanEnergy)
         / max(max(totalEnergy, risMeanEnergy), 1e-8);
     energyAgreement = smoothstep(0.05, 0.5, energyAgreement);
@@ -85,8 +85,8 @@ RadianceCacheGuideInfo computeRadianceCacheGuide(vec3 worldPos) {
     float risShare = clamp(RADIANCE_CACHE_RIS_GUIDING_STRENGTH, 0.0, 1.0)
         * directionalAgreement * energyAgreement * historyConfidence;
 
-    guide.risProb = guide.alice.prob * risShare;
-    guide.alice.prob -= guide.risProb;
+    guide.risProb = guide.maxent.prob * risShare;
+    guide.maxent.prob -= guide.risProb;
     guide.risAxis = risAxis;
     guide.risKappa = clamp(RADIANCE_CACHE_RIS_GUIDING_KAPPA, 0.0, 0.98);
     guide.risValid = guide.risProb > 1e-6 && guide.risKappa > 1e-4;
@@ -106,24 +106,24 @@ vec3 sampleRadianceCacheDirection(RadianceCacheGuideInfo guide,
         out float estimatorWeight) {
     float mixtureSelector = getRandom();
     vec2 xi = vec2(getRandom(), getRandom());
-    float aliceProb = guide.alice.valid ? max(guide.alice.prob, 0.0) : 0.0;
+    float maxentProb = guide.maxent.valid ? max(guide.maxent.prob, 0.0) : 0.0;
     float risProb = guide.risValid ? max(guide.risProb, 0.0) : 0.0;
-    float uniformProb = max(1.0 - aliceProb - risProb, 0.0);
+    float uniformProb = max(1.0 - maxentProb - risProb, 0.0);
 
     bool useRis = mixtureSelector < risProb;
-    bool useAlice = !useRis && mixtureSelector < risProb + aliceProb;
+    bool useMaxEnt = !useRis && mixtureSelector < risProb + maxentProb;
     vec3 sampleAxis = useRis ? guide.risAxis
-        : (useAlice ? guide.alice.axis : vec3(0.0, 1.0, 0.0));
+        : (useMaxEnt ? guide.maxent.axis : vec3(0.0, 1.0, 0.0));
     float sampleKappa = useRis ? guide.risKappa
-        : (useAlice ? guide.alice.kappa : 0.0);
-    vec3 direction = sample_alice_guiding(sampleAxis, sampleKappa, xi);
+        : (useMaxEnt ? guide.maxent.kappa : 0.0);
+    vec3 direction = sample_maxent_guiding(sampleAxis, sampleKappa, xi);
 
-    float alicePdf = guide.alice.valid
-        ? alice_guiding_pdf(direction, guide.alice.axis, guide.alice.kappa) : 0.0;
+    float maxentPdf = guide.maxent.valid
+        ? maxent_guiding_pdf(direction, guide.maxent.axis, guide.maxent.kappa) : 0.0;
     float risPdf = guide.risValid
-        ? alice_guiding_pdf(direction, guide.risAxis, guide.risKappa) : 0.0;
+        ? maxent_guiding_pdf(direction, guide.risAxis, guide.risKappa) : 0.0;
     float mixturePdf = uniformProb * RC_UNIFORM_SPHERE_PDF
-        + aliceProb * alicePdf + risProb * risPdf;
+        + maxentProb * maxentPdf + risProb * risPdf;
     estimatorWeight = RC_UNIFORM_SPHERE_PDF / max(mixturePdf, 1e-20);
     return normalize(direction);
 }
@@ -251,7 +251,7 @@ void main() {
     radiance = clamp(radiance, vec3(0.0), vec3(32000.0));
 
     RadianceCache result;
-    result.alice = radiance_to_rgb_alice(radiance, rayDirection);
+    result.maxent = radiance_to_rgb_maxent(radiance, rayDirection);
     result.W = 1.0;
     result.M = 1.0;
     storeRadianceCachePlanes(

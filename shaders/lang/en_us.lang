@@ -27,7 +27,7 @@ option.RAY_BOUNCES = Ray Bounces
 option.RAY_BOUNCES.comment = Maximum surfaces visited by each camera path. More bounces preserve deep indirect light and transmission at a direct GPU cost.
 
 option.PATH_GUIDING_STRENGTH = Path Guiding Strength
-option.PATH_GUIDING_STRENGTH.comment = ALICE guiding strength for diffuse paths and the total ALICE+RIS guided probability for radiance-cache probes. Cache probes always retain at least 10% uniform-sphere sampling. Higher values can converge faster in stable scenes; excessive values can increase lag or variance after lighting changes.
+option.PATH_GUIDING_STRENGTH.comment = MaxEnt guiding strength for diffuse paths and the total MaxEnt+RIS guided probability for radiance-cache probes. Cache probes always retain at least 10% uniform-sphere sampling. Higher values can converge faster in stable scenes; excessive values can increase lag or variance after lighting changes.
 
 option.SUN_PATH_ROTATION = Sun Path Rotation
 option.SUN_PATH_ROTATION.comment = Tilts the apparent sun and moon path around the world X axis like latitude. This changes lighting direction, not day length. 30° is the spring clear-sky calibration reference for the atmosphere.
@@ -41,7 +41,7 @@ option.FIREFLY_SUPPRESSION_MULTIPLIER = Firefly Suppression
 option.FIREFLY_SUPPRESSION_MULTIPLIER.comment = Per-sample brightness cap multiplier (× average exposure). Lower values clamp bright outlier samples more aggressively, reducing fireflies but potentially darkening specular highlights.
 
 option.GI_CLAMP_MAX = GI Hard Clamp
-option.GI_CLAMP_MAX.comment = Hard ceiling on indirect lighting (per-channel) before ALICE encoding. Prevents individual path outliers from destabilising the light-field history. Higher values give more headroom for bright indirect light; lower values suppress extreme fireflies more aggressively.
+option.GI_CLAMP_MAX.comment = Hard ceiling on indirect lighting (per-channel) before MaxEnt encoding. Prevents individual path outliers from destabilising the light-field history. Higher values give more headroom for bright indirect light; lower values suppress extreme fireflies more aggressively.
 
 option.PATHGUIDE_SPATIAL_RADIUS = Path Guide Spatial Radius
 option.PATHGUIDE_SPATIAL_RADIUS.comment = Poisson disk sampling radius (pixels) for the path-guide ReSTIR reservoir. Higher values probe farther neighbours for more diverse candidates but increase incoherent memory access.
@@ -52,6 +52,11 @@ option.PATHGUIDE_MAX_TEMPORAL_M.comment = Maximum effective sample count carried
 # ===========================================================================
 # Material
 # ===========================================================================
+option.EON_ENABLED = EON Rough Diffuse
+option.EON_ENABLED.comment = Uses the energy-preserving Oren--Nayar diffuse model with MaxEnt integration. This improves rough-surface response and white-furnace energy conservation at a higher shader cost.
+value.EON_ENABLED.1 = Enabled
+value.EON_ENABLED.0 = Disabled (Legacy)
+
 option.REFRACTIVE_INDEX = Water IOR
 option.REFRACTIVE_INDEX.comment = Index of refraction used by water and the current dielectric transmission model. Higher values bend transmitted rays more strongly and increase grazing reflection.
 
@@ -103,13 +108,13 @@ option.RADIANCE_CACHE_MAX_HIST = Cache RIS Max M
 option.RADIANCE_CACHE_MAX_HIST.comment = Maximum effective candidate count retained by each voxel's temporal RIS reservoir. Higher values reuse important bright samples longer; lower values react faster when lighting or geometry changes.
 
 option.RADIANCE_CACHE_FILTER_MAX_HIST = Cache Smoothing Frames
-option.RADIANCE_CACHE_FILTER_MAX_HIST.comment = Temporal sample count used to accumulate the cache's directional ALICE moments directly. Higher values reduce directional and energy variance; lower values react faster and reduce lighting trails. Lighting, recursive feedback and cache path guiding all use this result.
+option.RADIANCE_CACHE_FILTER_MAX_HIST.comment = Temporal sample count used to accumulate the cache's directional MaxEnt moments directly. Higher values reduce directional and energy variance; lower values react faster and reduce lighting trails. Lighting, recursive feedback and cache path guiding all use this result.
 
 option.RADIANCE_CACHE_UPDATE_PERIOD = Cache Update Period
 option.RADIANCE_CACHE_UPDATE_PERIOD.comment = Number of frames between update rays for resident cache voxels. Newly allocated bricks are still fully initialized on their birth frame. A value of 4 reduces steady-state cache rays and Resolve work by about 75%; higher values are faster but respond and converge more slowly.
 
 option.RADIANCE_CACHE_RIS_GUIDING_STRENGTH = Cache RIS Guide Share
-option.RADIANCE_CACHE_RIS_GUIDING_STRENGTH.comment = Maximum fraction of a cache probe's total guided probability assigned to the temporal RIS direction proposal. It reaches this share only when the reservoir agrees with the stable ALICE field in direction and energy and has sufficient history. 0 disables RIS guiding.
+option.RADIANCE_CACHE_RIS_GUIDING_STRENGTH.comment = Maximum fraction of a cache probe's total guided probability assigned to the temporal RIS direction proposal. It reaches this share only when the reservoir agrees with the stable MaxEnt field in direction and energy and has sufficient history. 0 disables RIS guiding.
 
 option.RADIANCE_CACHE_RIS_GUIDING_KAPPA = Cache RIS Guide Sharpness
 option.RADIANCE_CACHE_RIS_GUIDING_KAPPA.comment = Concentration of the continuous sampling lobe around the RIS-selected direction. Higher values can find compact lights faster but are more sensitive to stale or imprecise directions; lower values are more robust.
@@ -130,7 +135,7 @@ option.TEMPORAL_HISTORY_MIN_WEIGHT = Min History Weight
 option.TEMPORAL_HISTORY_MIN_WEIGHT.comment = History below this confidence is discarded. Raise it to reset weak history sooner; lower it to preserve sparse history longer.
 
 option.TEMPORAL_AABB_ENABLE = AABB Clamp
-option.TEMPORAL_AABB_ENABLE.comment = Clamps reprojected diffuse ALICE history to the current neighborhood, reducing trails and stale lighting. Disabling it uses an unclamped temporal blend.
+option.TEMPORAL_AABB_ENABLE.comment = Clamps reprojected diffuse MaxEnt history to the current neighborhood, reducing trails and stale lighting. Disabling it uses an unclamped temporal blend.
 value.TEMPORAL_AABB_ENABLE.1 = On
 value.TEMPORAL_AABB_ENABLE.0 = Off
 

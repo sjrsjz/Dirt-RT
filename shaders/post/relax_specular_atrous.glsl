@@ -44,7 +44,7 @@ void main() {
         unusedMaterial, unusedPathRoughness);
     float centerRoughness = relaxPerceptualRoughness(centerAlpha);
     RelaxAtrousBuresData centerBures = relaxMakeAtrousBuresData(
-        center.signal.aliceY);
+        center.signal.maxEntY);
 
     // Keep the large-kernel rotation identical to the diffuse denoiser.
     float rotationAngle = 2.0 * PI * fract(rand(vec2(pixel))
@@ -55,7 +55,7 @@ void main() {
         * (float(RELAX_ATROUS_STEP) * 1.75);
 
     float sumWeight = 1.0;
-    vec4 sumAliceY = center.signal.aliceY;
+    vec4 sumMaxEntY = center.signal.maxEntY;
     vec2 sumCoCg = center.signal.CoCg;
     vec2 varianceEnergy = vec2(max(center.variance, 0.0));
 
@@ -79,14 +79,14 @@ void main() {
             sampleAlpha, unusedMaterial, unusedPathRoughness);
         float sampleRoughness = relaxPerceptualRoughness(sampleAlpha);
         RelaxAtrousBuresData sampleBures = relaxMakeAtrousBuresData(
-            sampleSignal.signal.aliceY);
+            sampleSignal.signal.maxEntY);
         float weight = relaxAtrousSpecularWeight(center, centerBures,
             centerGeometry.xyz, centerNormal, centerRoughness,
             sampleSignal, sampleBures, sampleGeometry.xyz, sampleRoughness,
             RELAX_POISSON_8[i].w);
         if (weight <= 1e-6) continue;
 
-        sumAliceY += sampleSignal.signal.aliceY * weight;
+        sumMaxEntY += sampleSignal.signal.maxEntY * weight;
         sumCoCg += sampleSignal.signal.CoCg * weight;
         float weightedVariance = weight * sampleSignal.variance;
         varianceEnergy += vec2(weightedVariance,
@@ -96,7 +96,7 @@ void main() {
 
     float invWeight = 1.0 / max(sumWeight, 1e-6);
     RelaxSpatialSignal outputSignal = center;
-    outputSignal.signal.aliceY = sumAliceY * invWeight;
+    outputSignal.signal.maxEntY = sumMaxEntY * invWeight;
     outputSignal.signal.CoCg = sumCoCg * invWeight;
     outputSignal.signal = sanitizeSpecularMaxEnt(outputSignal.signal);
     outputSignal.variance = relaxAtrousFilteredVariance(

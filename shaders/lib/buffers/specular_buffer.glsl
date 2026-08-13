@@ -14,7 +14,7 @@
 // MaxEnt-4 stores the energy weighted first directional moment in xyz and
 // total luminance energy in w. CoCg is deliberately scalar/angularly shared.
 struct SpecularMaxEnt {
-    vec4 aliceY;
+    vec4 maxEntY;
     vec2 CoCg;
 };
 
@@ -54,20 +54,20 @@ void unpackRelaxHistoryNormalMaterial(uint word, out vec3 n,
 
 SpecularMaxEnt emptySpecularMaxEnt() {
     SpecularMaxEnt s;
-    s.aliceY = vec4(0.0);
+    s.maxEntY = vec4(0.0);
     s.CoCg = vec2(0.0);
     return s;
 }
 
 SpecularMaxEnt sanitizeSpecularMaxEnt(SpecularMaxEnt s) {
-    if (any(isnan(s.aliceY)) || any(isinf(s.aliceY)) ||
+    if (any(isnan(s.maxEntY)) || any(isinf(s.maxEntY)) ||
             any(isnan(s.CoCg)) || any(isinf(s.CoCg)) ||
-            s.aliceY.w <= 0.0)
+            s.maxEntY.w <= 0.0)
         return emptySpecularMaxEnt();
-    s.aliceY.w = clamp(s.aliceY.w, 0.0, 65504.0);
-    float momentLength = length(s.aliceY.xyz);
-    if (momentLength > s.aliceY.w)
-        s.aliceY.xyz *= s.aliceY.w / max(momentLength, 1e-20);
+    s.maxEntY.w = clamp(s.maxEntY.w, 0.0, 65504.0);
+    float momentLength = length(s.maxEntY.xyz);
+    if (momentLength > s.maxEntY.w)
+        s.maxEntY.xyz *= s.maxEntY.w / max(momentLength, 1e-20);
     s.CoCg = clamp(s.CoCg, vec2(-65504.0), vec2(65504.0));
     return s;
 }
@@ -78,7 +78,7 @@ SpecularMaxEnt specularMaxEntFromRgbDirection(vec3 color, vec3 direction) {
     float Y = dot(color, vec3(0.2126, 0.7152, 0.0722));
     float l2 = dot(direction, direction);
     vec3 d = l2 > 1e-20 ? direction * inversesqrt(l2) : vec3(0.0);
-    s.aliceY = vec4(d * Y, Y);
+    s.maxEntY = vec4(d * Y, Y);
     s.CoCg = vec2(0.5 * color.r - 0.5 * color.b,
         -0.25 * color.r + 0.5 * color.g - 0.25 * color.b);
     return sanitizeSpecularMaxEnt(s);
@@ -98,21 +98,21 @@ vec3 specularRec709YCoCgToRgb(float Y, vec2 CoCg) {
 
 vec3 specularMaxEntTotalRgb(SpecularMaxEnt s) {
     s = sanitizeSpecularMaxEnt(s);
-    return max(specularRec709YCoCgToRgb(s.aliceY.w, s.CoCg),
+    return max(specularRec709YCoCgToRgb(s.maxEntY.w, s.CoCg),
         vec3(0.0));
 }
 
 uvec3 packSpecularMaxEnt(SpecularMaxEnt s) {
     s = sanitizeSpecularMaxEnt(s);
-    return uvec3(packHalf2x16(s.aliceY.xy),
-        packHalf2x16(s.aliceY.zw), packHalf2x16(s.CoCg));
+    return uvec3(packHalf2x16(s.maxEntY.xy),
+        packHalf2x16(s.maxEntY.zw), packHalf2x16(s.CoCg));
 }
 
 SpecularMaxEnt unpackSpecularMaxEnt(uvec3 p) {
     SpecularMaxEnt s;
     vec2 xy = unpackHalf2x16(p.x);
     vec2 zw = unpackHalf2x16(p.y);
-    s.aliceY = vec4(xy, zw);
+    s.maxEntY = vec4(xy, zw);
     s.CoCg = unpackHalf2x16(p.z);
     return sanitizeSpecularMaxEnt(s);
 }

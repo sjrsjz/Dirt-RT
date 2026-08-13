@@ -43,7 +43,7 @@ void main() {
     int stride = max(1, int(floor(RELAX_PREPASS_RADIUS *
         mix(0.25, 1.0, centerRoughness) + 0.5)));
 
-    vec4 sumY = center.signal.aliceY;
+    vec4 sumY = center.signal.maxEntY;
     vec2 sumCoCg = center.signal.CoCg;
     float sumHit = center.hitDistance;
     float sumWeight = 1.0;
@@ -68,7 +68,7 @@ void main() {
             sampleSignal.hitDistance, centerRoughness);
         if (w <= 1e-4) continue;
 
-        sumY += sampleSignal.signal.aliceY * w;
+        sumY += sampleSignal.signal.maxEntY * w;
         sumCoCg += sampleSignal.signal.CoCg * w;
         sumHit += sampleSignal.hitDistance * w;
         sumWeight += w;
@@ -76,7 +76,7 @@ void main() {
 
     float invWeight = 1.0 / max(sumWeight, 1e-6);
     RelaxPrepassSignal outputSignal;
-    outputSignal.signal.aliceY = sumY * invWeight;
+    outputSignal.signal.maxEntY = sumY * invWeight;
     outputSignal.signal.CoCg = sumCoCg * invWeight;
     outputSignal.signal = sanitizeSpecularMaxEnt(outputSignal.signal);
     outputSignal.hitDistance = sumHit * invWeight;

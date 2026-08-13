@@ -99,7 +99,7 @@ vec3 projectSpecularMaxEnt(SpecularMaxEnt signal,
         vec3 primaryRay, vec3 macroNormal, vec3 geometryNormal,
         float ggxAlpha, vec3 Cs, vec2 S, float etaRatio) {
     signal = sanitizeSpecularMaxEnt(signal);
-    float totalY = signal.aliceY.w;
+    float totalY = signal.maxEntY.w;
     if (totalY <= 1e-8)
         return vec3(0.0);
 
@@ -113,10 +113,10 @@ vec3 projectSpecularMaxEnt(SpecularMaxEnt signal,
         return totalRgb * specularSurfaceFresnel(
             wo, macroNormal, Cs, S, etaRatio);
 
-    float momentLength = length(signal.aliceY.xyz);
+    float momentLength = length(signal.maxEntY.xyz);
     // rho=0 is the valid isotropic MaxEnt distribution, not an empty signal.
     vec3 axis = momentLength > 1e-10
-        ? signal.aliceY.xyz / momentLength : macroNormal;
+        ? signal.maxEntY.xyz / momentLength : macroNormal;
     float rho = clamp(momentLength / totalY, 0.0, 1.0);
 
     // A single directional sample ceases to have exactly rho=1 after FP16

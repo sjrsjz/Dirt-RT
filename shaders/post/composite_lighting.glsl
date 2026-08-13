@@ -6,7 +6,7 @@
 // 这是管线末端的合成 pass，负责将各光照分量合成为最终像素颜色。
 //
 // 输入分量:
-//   - diffuse  AliceEncoding 入射辐射率场 → project_alice_irradiance() 投影为辐照度 × albedo2
+//   - diffuse  MaxEntEncoding 入射辐射率场 → Lambert 或 EON 投影 × 漫反射率
 //   - refract  折射颜色 → 直接加到漫反射上
 //   - reflect  反射颜色 → × albedo (金属/镜面度)
 //   - light    直接光照 → 直接加入
@@ -27,8 +27,11 @@
 #include "/lib/buffers/radiance_cache.glsl"
 #include "/lib/common.glsl"
 #include "/lib/sky.glsl"
-#include "/lib/lighting/alice.glsl"
+#include "/lib/lighting/maxent.glsl"
 #include "/lib/lighting/specular_maxent.glsl"
+#if EON_ENABLED
+#include "/lib/lighting/eon.glsl"
+#endif
 
 in vec2 texCoord;
 
@@ -48,6 +51,20 @@ vec3 jetColormap(float t) {
 // Log-scale normalize for ray-segment distance (0.01m..~160m → [0,1])
 float logDistNorm(float d) {
     return clamp(log2(max(d, 0.01) * 100.0 + 1.0) / 14.0, 0.0, 1.0);
+}
+
+vec3 projectDiffuseLighting(MaxEntEncoding encoded, vec3 normal,
+        vec3 primaryRay, float ggxAlpha, vec3 diffuseAlbedo) {
+    #if EON_ENABLED
+    // EON owns the nonlinear albedo response, so diffuseAlbedo must be passed
+    // into the BRDF rather than multiplied after projection. Dirt RT stores
+    // GGX alpha; EON's roughness parameter is its square root.
+    return eon_project_maxent(encoded.maxEntY, encoded.CoCg,
+        normal, -normalize(primaryRay),
+        sqrt(clamp(ggxAlpha, 0.0, 1.0)), diffuseAlbedo);
+    #else
+    return project_maxent_irradiance(encoded, normal) * diffuseAlbedo;
+    #endif
 }
 
 void main() {
@@ -127,13 +144,14 @@ void main() {
     vec3 specularLighting = projectSpecularMaxEnt(reflectionMaxEnt,
         rdVal, microN, geometryNormal, rough,
         primaryCs, primaryS, primaryEtaRatio);
+    vec3 diffuseLighting = projectDiffuseLighting(
+        tmp.data_swap, microN, rdVal, rough, diffAlbedo);
 
-    // ALICE 辐照度投影使用微法线 (microN, N=5) — 恢复法线贴图细节
+    // MaxEnt 漫反射投影使用微法线；EON 开启时同时恢复粗糙漫反射响应。
 
     #if DEBUG_VIEW == 0
     fragColor.xyz = absorptionVal
-            * (project_alice_irradiance(tmp.data_swap, microN)
-                * diffAlbedo
+            * (diffuseLighting
                 + tmp3.data_swap * transAlbedo
                 + specularLighting
                 + lightVal)
@@ -141,7 +159,7 @@ void main() {
 
     #elif DEBUG_VIEW == 1
     // Diffuse transport only. First-hit NEE is already part of this signal.
-    fragColor.xyz = project_alice_irradiance(tmp.data_swap, microN) * diffAlbedo;
+    fragColor.xyz = diffuseLighting;
 
     #elif DEBUG_VIEW == 2
     // Refract only
@@ -153,11 +171,12 @@ void main() {
 
     #elif DEBUG_VIEW == 4
     // White model: diffuse irradiance only, no albedo
-    fragColor.xyz = project_alice_irradiance(tmp.data_swap, microN);
+    fragColor.xyz = projectDiffuseLighting(
+        tmp.data_swap, microN, rdVal, rough, vec3(1.0));
 
     #elif DEBUG_VIEW == 5
-    // Light field: ALICE normalized dominant direction × energy
-    fragColor.xyz = 2.0 * abs(tmp.data_swap.aliceY.xyz / max(max(tmp.data_swap.aliceY.w, length(tmp.data_swap.aliceY.xyz)), 1e-6));
+    // Light field: MaxEnt normalized dominant direction × energy
+    fragColor.xyz = 2.0 * abs(tmp.data_swap.maxEntY.xyz / max(max(tmp.data_swap.maxEntY.w, length(tmp.data_swap.maxEntY.xyz)), 1e-6));
 
     #elif DEBUG_VIEW == 6
     // Normals: world-space geometryNormal as RGB
@@ -229,7 +248,7 @@ void main() {
     }
 
     #elif DEBUG_VIEW == 20
-    // Path guide ALICE direction as RGB (蓄水池+降噪投票结果, N=5)
+    // Path guide MaxEnt direction as RGB (蓄水池+降噪投票结果, N=5)
     {
         vec4 guideY;
         float guideW;
@@ -244,12 +263,13 @@ void main() {
     }
 
     #elif DEBUG_VIEW == 21
-    // 原始时域累积白模 (N=2 hist ALICE × geometryNormal, 降噪前)
+    // 原始时域累积白模 (N=2 hist MaxEnt × geometryNormal, 降噪前)
     {
-        AliceEncoding raw;
+        MaxEntEncoding raw;
         float w, meanY2_unused;
         readDiffuseHist(xy, raw, w, meanY2_unused);
-        fragColor.xyz = project_alice_irradiance(raw, geometryNormal);
+        fragColor.xyz = projectDiffuseLighting(
+            raw, geometryNormal, rdVal, rough, vec3(1.0));
     }
 
     #elif DEBUG_VIEW == 22

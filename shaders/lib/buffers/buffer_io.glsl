@@ -11,7 +11,7 @@
 //   lib/buffers/gbuffer.glsl         — GeometryMaterialBuffer read/write
 //   lib/buffers/diffuse_buffer.glsl  — DiffuseBuffer read/write + samplePathGuide
 //   lib/buffers/specular_buffer.glsl — Reflect/Refract buffer read/write
-//   lib/lighting/alice_encode.glsl   — AliceEncoding + encode/decode/project
+//   lib/lighting/maxent_encode.glsl   — MaxEntEncoding + encode/decode/project
 //   lib/buffers/diffuse_io.glsl      — Diffuse data structs + load/fetch/write
 //   lib/buffers/specular_io.glsl     — Specular data structs + fetch/write
 // ===========================================================================
@@ -21,6 +21,6 @@
 #include "/lib/buffers/gbuffer.glsl"
 #include "/lib/buffers/diffuse_buffer.glsl"
 #include "/lib/buffers/specular_buffer.glsl"
-#include "/lib/lighting/alice_encode.glsl"
+#include "/lib/lighting/maxent_encode.glsl"
 #include "/lib/buffers/diffuse_io.glsl"
 #include "/lib/buffers/specular_io.glsl"

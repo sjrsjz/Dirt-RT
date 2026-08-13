@@ -30,6 +30,9 @@
 #include "/lib/buffers/radiance_cache.glsl"
 #include "/lib/pbr/material.glsl"
 #include "/lib/common.glsl"
+#if EON_ENABLED
+#include "/lib/lighting/eon.glsl"
+#endif
 
 // ray0 builds the primary-surface cache. Continuation entries define exactly
 // one of FIRST_LOBE_DIFFUSE / FIRST_LOBE_REFLECTION / FIRST_LOBE_REFRACTION.
@@ -713,6 +716,38 @@ bool evaluateDisneyDiffuseBRDF(
     return Fd > 0.0;
 }
 
+// Unified diffuse evaluator for secondary vertices. The first vertex is
+// handled separately because its BRDF is deferred to the MaxEnt projection in
+// composite_lighting.glsl.
+bool evaluateSurfaceDiffuseBRDF(
+    vec3 wo, vec3 wi, vec3 macroNormal, vec3 geometryNormal,
+    vec3 diffuseColor, float roughness,
+    out vec3 fDiffuseTimesNoL, out float pdfDiffuse
+) {
+    #if EON_ENABLED
+    float NoL = dot(macroNormal, wi);
+    float NoV = dot(macroNormal, wo);
+    if (NoL <= 1e-6 || NoV <= 1e-6
+            || dot(geometryNormal, wi) <= 0.0) {
+        fDiffuseTimesNoL = vec3(0.0);
+        pdfDiffuse = 0.0;
+        return false;
+    }
+
+    // Dirt RT stores GGX alpha; EON consumes linear/perceptual roughness.
+    float eonRoughness = sqrt(clamp(roughness, 0.0, 1.0));
+    fDiffuseTimesNoL = eon_brdf(
+            wi, wo, macroNormal, eonRoughness, diffuseColor) * NoL;
+    pdfDiffuse = eon_direction_pdf(
+        wo, wi, macroNormal, eonRoughness);
+    return any(greaterThan(fDiffuseTimesNoL, vec3(0.0)));
+    #else
+    return evaluateDisneyDiffuseBRDF(
+        wo, wi, macroNormal, geometryNormal, diffuseColor, roughness,
+        fDiffuseTimesNoL, pdfDiffuse);
+    #endif
+}
+
 // Walter/PBRT rough-dielectric BTDF evaluated for a VNDF-sampled microfacet.
 // etaRatio is eta_i / eta_t, matching GLSL refract().  The returned value is
 // f_t * abs(NoL), and pdfNDF is the corresponding solid-angle PDF of wi.
@@ -838,10 +873,10 @@ MediumResult evalMedium(float t, vec3 rd_i, float ro_i_y, bool inside,
 }
 
 // ===========================================================================
-// ALICE Path Guiding
+// MaxEnt Path Guiding
 // ===========================================================================
 
-GuideInfo computeAliceGuide(vec3 ro_o, float strengthMultiplier) {
+GuideInfo computeMaxEntGuide(vec3 ro_o, float strengthMultiplier) {
     GuideInfo g;
     g.axis = vec3(0.0, 1.0, 0.0);
     g.kappa = 0.0;
@@ -860,14 +895,14 @@ GuideInfo computeAliceGuide(vec3 ro_o, float strengthMultiplier) {
     omega = max(omega, length_x);
     g.axis = x / length_x;
     float rho = clamp(length_x / omega, 0.0, 1.0);
-    g.kappa = alice_kappa(length_x, omega);
+    g.kappa = maxent_kappa(length_x, omega);
     g.valid = length_x > 1e-8;
     g.prob = float(g.valid) * strengthMultiplier * rho;
     return g;
 }
 
 // ===========================================================================
-// Diffuse Direction Sampling with ALICE MIS
+// Diffuse Direction Sampling with MaxEnt MIS
 // ===========================================================================
 
 vec3 sampleDiffuseWithGuide(vec3 geometryNormal, vec3 shadingNormal,
@@ -876,7 +911,7 @@ vec3 sampleDiffuseWithGuide(vec3 geometryNormal, vec3 shadingNormal,
     sampledPdf = 0.0;
     bool useGuide = getRandom() < guide.prob;
     if (useGuide) {
-        next_rd = sample_alice_guiding(guide.axis, guide.kappa, xi);
+        next_rd = sample_maxent_guiding(guide.axis, guide.kappa, xi);
     } else {
         next_rd = SampleUniformHemisphere(shadingNormal, xi);
     }
@@ -890,8 +925,8 @@ vec3 sampleDiffuseWithGuide(vec3 geometryNormal, vec3 shadingNormal,
     }
 
     float pdfUniform = 1.0 / (2.0 * PI);
-    float pdfAlice = guide.prob > 0.0 ? alice_guiding_pdf(next_rd, guide.axis, guide.kappa) : 0.0;
-    float pdfMix = (1.0 - guide.prob) * pdfUniform + guide.prob * pdfAlice;
+    float pdfMaxEnt = guide.prob > 0.0 ? maxent_guiding_pdf(next_rd, guide.axis, guide.kappa) : 0.0;
+    float pdfMix = (1.0 - guide.prob) * pdfUniform + guide.prob * pdfMaxEnt;
     sampledPdf = pdfMix;
     guideWeight = (pdfMix > 1e-20) ? (pdfUniform / pdfMix) : 0.0;
     return vec3(guideWeight);
@@ -1069,17 +1104,23 @@ void handleFirstBounce_Diffuse(
     material surf, LobeProbs lobes, vec2 xi,
     out vec3 bsdf_weight, out vec3 next_rd, out float sampledStrategyPdf
 ) {
-    GuideInfo guide = computeAliceGuide(ro_o, PATH_GUIDING_STRENGTH);
+    GuideInfo guide = computeMaxEntGuide(ro_o, PATH_GUIDING_STRENGTH);
     float guideWeight;
     sampleDiffuseWithGuide(
         geometryNormal, macroNormal, ro_o, guide, xi, next_rd, guideWeight,
         sampledStrategyPdf);
-    // Uniform-hemisphere sampling estimates (1 / 2pi) * integral L dOmega.
-    // ALICE supplies the cosine in composite, so 2 converts it to 1/pi. The
-    // Disney factor supplies the non-Lambertian angular response.
+    #if EON_ENABLED
+    // Store a pure incident-radiance estimator in MaxEnt. The complete EON
+    // BRDF, NoL and material albedo are applied after denoising in composite.
+    // guideWeight=(1/2pi)/q, hence 2pi*guideWeight=1/q.
+    bsdf_weight = vec3(2.0 * PI * guideWeight);
+    #else
+    // Legacy path: MaxEnt supplies NoL and albedo in composite, while the
+    // Disney Fd/pi factor remains baked into the transported sample.
     float Fd = evaluateDisneyDiffuseFactor(
             -rd_i, next_rd, macroNormal, surf.R.x);
     bsdf_weight = vec3(2.0 * guideWeight * Fd);
+    #endif
 }
 
 // ===========================================================================
@@ -1178,16 +1219,36 @@ void handleSecondaryBounce(
         // Diffuse
         lobeType = DIFFUSION;
         neeCompatible = true;
-        next_rd = DiffuseNormal(macroNormal, ro_o);
         vec3 fDiffuseTimesNoL;
-        float pdfCosine;
+        float pdfDiffuse;
         vec3 diffuseColor = surf.Cd
                 * (1.0 - clamp(surf.S.y, 0.0, 1.0));
-        bool validDiffuse = evaluateDisneyDiffuseBRDF(
+        bool validDiffuse;
+        #if EON_ENABLED
+        // First-bounce diffuse uses the MaxEnt proposal. Only continuation
+        // vertices use EON's view-conditioned CLTC importance sampler.
+        float eonRoughness = sqrt(clamp(surf.R.x, 0.0, 1.0));
+        vec4 eonSample = eon_sample_direction(
+            -rd_i, macroNormal, eonRoughness,
+            vec2(getRandom(), getRandom()));
+        next_rd = eonSample.xyz;
+        float NoL = dot(macroNormal, next_rd);
+        validDiffuse = NoL > 1e-6
+            && dot(geometryNormal, next_rd) > 0.0
+            && eonSample.w > 1e-8;
+        fDiffuseTimesNoL = validDiffuse
+            ? eon_brdf(next_rd, -rd_i, macroNormal,
+                eonRoughness, diffuseColor) * NoL
+            : vec3(0.0);
+        pdfDiffuse = validDiffuse ? eonSample.w : 0.0;
+        #else
+        next_rd = DiffuseNormal(macroNormal, ro_o);
+        validDiffuse = evaluateSurfaceDiffuseBRDF(
                 -rd_i, next_rd, macroNormal, geometryNormal,
                 diffuseColor, surf.R.x,
-                fDiffuseTimesNoL, pdfCosine);
-        sampledStrategyPdf = lobes.P_diff * pdfCosine;
+                fDiffuseTimesNoL, pdfDiffuse);
+        #endif
+        sampledStrategyPdf = lobes.P_diff * pdfDiffuse;
         bsdf_weight = validDiffuse && sampledStrategyPdf > 1e-8
             ? fDiffuseTimesNoL / sampledStrategyPdf : vec3(0.0);
     }
@@ -1424,21 +1485,21 @@ void writeDiffuseOutput(uvec2 xy, FirstBounceData fb, vec3 L_indirect,
     vec3 L_direct_0, vec3 L_direct_0_dir, vec3 ro) {
     vec3 pos_rel = fb.p - ro;
 
-    AliceEncoding combinedAlice = init_alice();
+    MaxEntEncoding combinedMaxEnt = init_maxent();
     float mask = 0.0;
     if (fb.t > -0.5) {
         L_indirect = clamp(L_indirect, 0.0, GI_CLAMP_MAX);
         L_direct_0 = clamp(L_direct_0, 0.0, 32000.0);
-        AliceEncoding indAlice = radiance_to_alice(L_indirect, fb.rd_o);
-        AliceEncoding dirAlice = radiance_to_alice(
+        MaxEntEncoding indMaxEnt = radiance_to_maxent(L_indirect, fb.rd_o);
+        MaxEntEncoding dirMaxEnt = radiance_to_maxent(
                 L_direct_0, L_direct_0_dir);
-        indAlice.CoCg += dirAlice.CoCg;
-        indAlice.aliceY += dirAlice.aliceY;
-        combinedAlice = indAlice;
+        indMaxEnt.CoCg += dirMaxEnt.CoCg;
+        indMaxEnt.maxEntY += dirMaxEnt.maxEntY;
+        combinedMaxEnt = indMaxEnt;
         mask = 1.0;
     }
-    float currentMeanY2 = combinedAlice.aliceY.w * combinedAlice.aliceY.w; // Y² for 1-spp
-    writeDiffuseLightRT(xy, combinedAlice, currentMeanY2);
+    float currentMeanY2 = combinedMaxEnt.maxEntY.w * combinedMaxEnt.maxEntY.w; // Y² for 1-spp
+    writeDiffuseLightRT(xy, combinedMaxEnt, currentMeanY2);
     writeDiffuseGeo(xy, pos_rel, mask);
 }
 
@@ -1472,7 +1533,7 @@ void writeReflectionOutput(uvec2 xy, FirstBounceData fb,
         SpecularMaxEnt directSignal = specularMaxEntFromRgbDirection(
             clamp(directIncident, vec3(0.0),
                 vec3(400.0 * div_avgExposure)), directIncidentDirection);
-        signal.aliceY += directSignal.aliceY;
+        signal.maxEntY += directSignal.maxEntY;
         signal.CoCg += directSignal.CoCg;
         signal = sanitizeSpecularMaxEnt(signal);
     }
@@ -1650,17 +1711,23 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                 if (current_type == DIFFUSION
                         && dot(sunWi, geometryNormal) > 0.0
                         && dot(sunWi, macroNormal) > 0.0) {
-                    GuideInfo directGuide = computeAliceGuide(
+                    GuideInfo directGuide = computeMaxEntGuide(
                             ro_o, PATH_GUIDING_STRENGTH);
                     float proposalPdf = (1.0 - directGuide.prob)
                             * (1.0 / (2.0 * PI));
-                    proposalPdf += directGuide.prob * alice_guiding_pdf(
+                    proposalPdf += directGuide.prob * maxent_guiding_pdf(
                                 sunWi, directGuide.axis, directGuide.kappa);
+                    float misWeight = powerHeuristic(lightPdf, proposalPdf);
+                    #if EON_ENABLED
+                    // The deferred EON projection supplies f_r * NoL * rho.
+                    L_direct_0 = max(vec3(0.0), sunLi
+                                * (misWeight / max(lightPdf, 1e-20)));
+                    #else
                     float Fd = evaluateDisneyDiffuseFactor(
                             -fb.rd_i, sunWi, macroNormal, surf.R.x);
-                    float misWeight = powerHeuristic(lightPdf, proposalPdf);
                     L_direct_0 = max(vec3(0.0), sunLi
                                 * (Fd * misWeight / max(PI * lightPdf, 1e-20)));
+                    #endif
                 } else if (current_type == REFLECTION
                         && !isDeltaSpecular(surf.R.x)
                         && dot(sunWi, geometryNormal) > 0.0) {
@@ -1805,18 +1872,24 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                 if (current_type == DIFFUSION
                         && dot(sunWi, geometryNormal) > 0.0
                         && dot(sunWi, macroNormal) > 0.0) {
-                    GuideInfo directGuide = computeAliceGuide(
+                    GuideInfo directGuide = computeMaxEntGuide(
                             ro_o, PATH_GUIDING_STRENGTH);
                     float proposalPdf = (1.0 - directGuide.prob)
                             * (1.0 / (2.0 * PI));
-                    proposalPdf += directGuide.prob * alice_guiding_pdf(
+                    proposalPdf += directGuide.prob * maxent_guiding_pdf(
                                 sunWi, directGuide.axis, directGuide.kappa);
+                    float misWeight = powerHeuristic(lightPdf, proposalPdf);
+                    #if EON_ENABLED
+                    // The deferred EON projection supplies f_r * NoL * rho.
+                    L_direct_0 = max(vec3(0.0), sunLi
+                                * (misWeight / max(lightPdf, 1e-20)));
+                    #else
                     float Fd = evaluateDisneyDiffuseFactor(
                             -rd_i, sunWi, macroNormal, surf.R.x);
-                    float misWeight = powerHeuristic(lightPdf, proposalPdf);
-                    // ALICE/composition supplies NoL and diffuse base color.
+                    // Legacy MaxEnt composition supplies NoL and base color.
                     L_direct_0 = max(vec3(0.0), sunLi
                                 * (Fd * misWeight / max(PI * lightPdf, 1e-20)));
+                    #endif
                 } else if (current_type == REFLECTION
                         && !isDeltaSpecular(surf.R.x)
                         && dot(sunWi, geometryNormal) > 0.0) {
@@ -1973,14 +2046,14 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                         vec3 diffuseColor = surf.Cd
                                 * (1.0 - clamp(surf.S.y, 0.0, 1.0));
                         vec3 fDiffuseTimesNoL;
-                        float pdfCosine;
-                        if (evaluateDisneyDiffuseBRDF(
+                        float pdfDiffuse;
+                        if (evaluateSurfaceDiffuseBRDF(
                                 -rd_i, sunWi, macroNormal, geometryNormal,
                                 diffuseColor, surf.R.x,
-                                fDiffuseTimesNoL, pdfCosine)) {
+                                fDiffuseTimesNoL, pdfDiffuse)) {
                             sunL += misLightContribution(
                                     fDiffuseTimesNoL, sunLi, lightPdf,
-                                    lobes.P_diff * pdfCosine);
+                                    lobes.P_diff * pdfDiffuse);
                         }
                     }
 

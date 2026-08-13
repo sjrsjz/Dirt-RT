@@ -10,9 +10,9 @@ layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 const ivec3 workGroups = ivec3(16, 16, 16);
 
 bool isFiniteRadianceCacheSample(RadianceCache c) {
-    return !any(isnan(c.alice.aliceR)) && !any(isinf(c.alice.aliceR))
-        && !any(isnan(c.alice.aliceG)) && !any(isinf(c.alice.aliceG))
-        && !any(isnan(c.alice.aliceB)) && !any(isinf(c.alice.aliceB))
+    return !any(isnan(c.maxent.maxentR)) && !any(isinf(c.maxent.maxentR))
+        && !any(isnan(c.maxent.maxentG)) && !any(isinf(c.maxent.maxentG))
+        && !any(isnan(c.maxent.maxentB)) && !any(isinf(c.maxent.maxentB))
         && !isnan(c.W) && !isinf(c.W)
         && !isnan(c.M) && !isinf(c.M);
 }
@@ -37,7 +37,7 @@ float radianceCacheRisRandom(ivec3 worldVoxel, uint frameStamp) {
 float radianceCacheRisTarget(RadianceCache candidate) {
     // The cached sample already contains p_uniform / p_mixture. Luminance of
     // that vector contribution is therefore a valid scalar RIS target.
-    float target = rgb_alice_luminance(candidate.alice).w;
+    float target = rgb_maxent_luminance(candidate.maxent).w;
     return (!isnan(target) && !isinf(target)) ? max(target, 0.0) : 0.0;
 }
 
@@ -123,9 +123,9 @@ RadianceCache radianceCacheRisEstimate(RadianceCache reservoir,
         bool currentSampleAvailable) {
     RadianceCache estimate = emptyCache();
     if (isValidRadianceCacheReservoir(reservoir)) {
-        estimate.alice.aliceR = reservoir.alice.aliceR * reservoir.W;
-        estimate.alice.aliceG = reservoir.alice.aliceG * reservoir.W;
-        estimate.alice.aliceB = reservoir.alice.aliceB * reservoir.W;
+        estimate.maxent.maxentR = reservoir.maxent.maxentR * reservoir.W;
+        estimate.maxent.maxentG = reservoir.maxent.maxentG * reservoir.W;
+        estimate.maxent.maxentB = reservoir.maxent.maxentB * reservoir.W;
     } else if (!currentSampleAvailable) {
         return estimate;
     }
@@ -140,13 +140,13 @@ RadianceCache radianceCacheRisEstimate(RadianceCache reservoir,
 RadianceCache radianceCacheCurrentEstimate(RadianceCache current) {
     if (!isValidRadianceCacheReservoir(current)) return emptyCache();
 
-    // CURRENT is a one-sample unbiased estimate of all four ALICE moments. Its
-    // importance correction is normally already baked into alice by ray5, but
+    // CURRENT is a one-sample unbiased estimate of all four MaxEnt moments. Its
+    // importance correction is normally already baked into maxent by ray5, but
     // canonicalizing W here keeps the filtered planes well-defined if the
     // producer representation changes later.
-    current.alice.aliceR *= current.W;
-    current.alice.aliceG *= current.W;
-    current.alice.aliceB *= current.W;
+    current.maxent.maxentR *= current.W;
+    current.maxent.maxentG *= current.W;
+    current.maxent.maxentB *= current.W;
     current.W = 1.0;
     current.M = 1.0;
     return current;
@@ -167,12 +167,12 @@ RadianceCache smoothTemporalRadiance(RadianceCache currentEstimate,
     // Filtered planes are stored with W=1, but applying W here also makes a
     // stale or migrated valid value canonical before it is written back.
     RadianceCache result;
-    result.alice.aliceR = mix(previousFiltered.alice.aliceR * previousFiltered.W,
-        currentEstimate.alice.aliceR * currentEstimate.W, alpha);
-    result.alice.aliceG = mix(previousFiltered.alice.aliceG * previousFiltered.W,
-        currentEstimate.alice.aliceG * currentEstimate.W, alpha);
-    result.alice.aliceB = mix(previousFiltered.alice.aliceB * previousFiltered.W,
-        currentEstimate.alice.aliceB * currentEstimate.W, alpha);
+    result.maxent.maxentR = mix(previousFiltered.maxent.maxentR * previousFiltered.W,
+        currentEstimate.maxent.maxentR * currentEstimate.W, alpha);
+    result.maxent.maxentG = mix(previousFiltered.maxent.maxentG * previousFiltered.W,
+        currentEstimate.maxent.maxentG * currentEstimate.W, alpha);
+    result.maxent.maxentB = mix(previousFiltered.maxent.maxentB * previousFiltered.W,
+        currentEstimate.maxent.maxentB * currentEstimate.W, alpha);
     result.W = 1.0;
     result.M = combinedM;
     return isFiniteRadianceCacheSample(result) ? result : currentEstimate;
@@ -201,12 +201,12 @@ void main() {
 
     RadianceCache reservoir = resampleTemporalRadiance(
         current, history, worldVoxel, frameStamp);
-    // Do not feed the selected RIS sample into the ALICE field accumulator.
+    // Do not feed the selected RIS sample into the MaxEnt field accumulator.
     // A temporal reservoir retains one direction for O(M) frames; averaging
     // that correlated selection makes |E[L*w]| / E[L] approach one and turns
     // a multi-directional field into an artificial sharp lobe. Accumulating
     // the raw per-frame moment estimate preserves every sampled direction and
-    // is the unbiased estimator required by ALICE's nonlinear reconstruction.
+    // is the unbiased estimator required by MaxEnt's nonlinear reconstruction.
     RadianceCache filtered = smoothTemporalRadiance(
         radianceCacheCurrentEstimate(current), previousFiltered);
 

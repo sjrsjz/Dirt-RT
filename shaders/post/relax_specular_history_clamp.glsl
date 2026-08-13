@@ -31,7 +31,7 @@ void main() {
 
     RelaxSlowSignal slow = relaxUnpackSlow(
         texelFetch(colortex4, ivec2(pixel), 0));
-    slow.signal.aliceY = texelFetch(colortex3, ivec2(pixel), 0);
+    slow.signal.maxEntY = texelFetch(colortex3, ivec2(pixel), 0);
     slow.signal = sanitizeSpecularMaxEnt(slow.signal);
     RelaxFastSignal fast = relaxUnpackFast(
         texelFetch(colortex5, ivec2(pixel), 0));
@@ -47,7 +47,7 @@ void main() {
     vec3 fastM1 = vec3(0.0);
     vec3 fastM2 = vec3(0.0);
     vec3 noisyM1 = vec3(0.0);
-    vec4 noisyAliceY = vec4(0.0);
+    vec4 noisyMaxEntY = vec4(0.0);
     vec2 noisyCoCg = vec2(0.0);
     float noisyY2 = 0.0;
     float sampleCount = 0.0;
@@ -70,7 +70,7 @@ void main() {
             fastM1 += qFastYCoCg;
             fastM2 += qFastYCoCg * qFastYCoCg;
             noisyM1 += qNoisyYCoCg;
-            noisyAliceY += qNoisy.signal.aliceY;
+            noisyMaxEntY += qNoisy.signal.maxEntY;
             noisyCoCg += qNoisy.signal.CoCg;
             noisyY2 += qNoisyYCoCg.x * qNoisyYCoCg.x;
             sampleCount += 1.0;
@@ -84,7 +84,7 @@ void main() {
         fastM1 *= invCount;
         fastM2 *= invCount;
         noisyM1 *= invCount;
-        noisyAliceY *= invCount;
+        noisyMaxEntY *= invCount;
         noisyCoCg *= invCount;
         noisyY2 *= invCount;
         vec3 sigma = sqrt(max(fastM2 - fastM1 * fastM1, vec3(0.0)));
@@ -113,7 +113,7 @@ void main() {
         slow.signal = relaxSetMaxEntYCoCg(slow.signal, clampedYCoCg);
 
         SpecularMaxEnt noisyMean;
-        noisyMean.aliceY = noisyAliceY;
+        noisyMean.maxEntY = noisyMaxEntY;
         noisyMean.CoCg = noisyCoCg;
         noisyMean = sanitizeSpecularMaxEnt(noisyMean);
         float historyDifference = abs(fastYCoCg.x - slowYCoCg.x);
@@ -127,13 +127,13 @@ void main() {
             acceleration = 0.0;
         // NRD adds the same responsive-to-noisy correction to both histories.
         // Apply that correction to every MaxEnt component, including direction.
-        vec4 accelerationAliceY =
-            (noisyMean.aliceY - fast.signal.aliceY) * acceleration;
+        vec4 accelerationMaxEntY =
+            (noisyMean.maxEntY - fast.signal.maxEntY) * acceleration;
         vec2 accelerationCoCg =
             (noisyMean.CoCg - fast.signal.CoCg) * acceleration;
-        slow.signal.aliceY += accelerationAliceY;
+        slow.signal.maxEntY += accelerationMaxEntY;
         slow.signal.CoCg += accelerationCoCg;
-        fast.signal.aliceY += accelerationAliceY;
+        fast.signal.maxEntY += accelerationMaxEntY;
         fast.signal.CoCg += accelerationCoCg;
         slow.signal = sanitizeSpecularMaxEnt(slow.signal);
         fast.signal = sanitizeSpecularMaxEnt(fast.signal);
@@ -175,7 +175,7 @@ void main() {
     postSignal.historyLength = fast.historyLength;
     postSignal.confidence = slow.confidence;
     postSignal.materialID = uint(max(materialID, 0));
-    imageStore(colorimg9, ivec2(pixel), slow.signal.aliceY);
+    imageStore(colorimg9, ivec2(pixel), slow.signal.maxEntY);
     imageStore(colorimg4, ivec2(pixel), relaxPackPost(postSignal));
 
 #if DEBUG_VIEW == 23

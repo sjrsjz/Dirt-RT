@@ -11,13 +11,14 @@
 // -- Ray Tracing --
 #define RAY_BOUNCES 5 // Max ray bounces before termination. Higher = better image quality, lower FPS. [2 3 4 5 6 7]
 #define ACCUMULATION_LENGTH 32 // Refraction history length. Higher = smoother refraction, more ghosting during motion. [1 2 4 8 16 32 64]
-#define PATH_GUIDING_STRENGTH 0.75 // Total guided mixture strength. Cache probes split this probability between stable ALICE and validated RIS proposals while retaining at least 10% uniform sampling. [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.925 0.95 0.975 0.99 0.999]
+#define PATH_GUIDING_STRENGTH 0.75 // Total guided mixture strength. Cache probes split this probability between stable MaxEnt and validated RIS proposals while retaining at least 10% uniform sampling. [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.925 0.95 0.975 0.99 0.999]
 #define SUN_PATH_ROTATION 30.0 // Latitude-like sun path tilt. 30 degrees is the clear-sky spring reference used by the atmosphere calibration. [0 15 30 45 60 75 90]
 #define END_SKYBOX 1 // End skybox rendering. 1 = custom rune-ring skybox with FBM nebula background (higher GPU cost). 0 = fall back to atmospheric scattering + NEE (faster). [0 1]
 #define PATHGUIDE_SPATIAL_RADIUS 16.0 // Path-guide ReSTIR Poisson disk spatial sampling radius (pixels). Higher values explore farther neighbours at the cost of more incoherent memory access. [4.0 8.0 12.0 16.0 24.0 32.0]
 #define PATHGUIDE_MAX_TEMPORAL_M 64.0 // ReSTIR reservoir temporal memory cap. Limits the effective sample count carried forward from history. Higher values retain more history but react slower. [8.0 16.0 32.0 48.0 64.0 96.0 128.0 256.0]
 
 // -- Material --
+#define EON_ENABLED 1 // Enable energy-preserving Oren--Nayar rough diffuse. 0 keeps the legacy Disney/Lambert reconstruction. [0 1]
 #define REFRACTIVE_INDEX 1.331 // Water Index of Refraction (IOR). Affects caustics, underwater distortion and specular. [1.30 1.31 1.32 1.33 1.34 1.35 1.36 1.37 1.38 1.39 1.40 1.41 1.42 1.43 1.44 1.45 1.46 1.47 1.48 1.49 1.50]
 #define MAX_WETNESS 0.4 // Maximum surface wetness from rain or water. Controls specular reflection on wet blocks. [0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
 #define POM_ENABLED 1 // Enable Parallax Occlusion Mapping (POM) for detailed surface displacement on the first ray hit. 0 = off (better FPS), 1 = on (better visuals). [0 1]
@@ -35,7 +36,7 @@
 #define RADIANCE_CACHE_DIFFUSE_MIN_BOUNCE 3 // First path bounce at which a diffuse surface may terminate into the cache. Higher values reduce cache artifacts but trace more rays. [2 3 4 5 6]
 #define VOXEL_SIZE 1.0 // Radiance-cache voxel size in world units. Lower values increase spatial precision at the cost of memory and fill rate. [0.5 0.75 1.0 1.5 2.0]
 #define RADIANCE_CACHE_MAX_HIST 32.0 // Maximum effective sample count M retained by each cache voxel's temporal RIS reservoir. Higher values reuse bright samples longer; lower values respond faster to lighting changes. [4.0 8.0 16.0 24.0 32.0 48.0 64.0 96.0 128.0]
-#define RADIANCE_CACHE_FILTER_MAX_HIST 16.0 // Temporal sample count used to accumulate the cache's directional ALICE moments. Higher values reduce variance; lower values react faster and ghost less. [1.0 2.0 3.0 4.0 6.0 8.0 12.0 16.0 24.0 32.0]
+#define RADIANCE_CACHE_FILTER_MAX_HIST 16.0 // Temporal sample count used to accumulate the cache's directional MaxEnt moments. Higher values reduce variance; lower values react faster and ghost less. [1.0 2.0 3.0 4.0 6.0 8.0 12.0 16.0 24.0 32.0]
 #define RADIANCE_CACHE_UPDATE_PERIOD 4 // Existing cache voxels update once per N frames; newly allocated bricks are fully initialized immediately. [1 2 4 8 16]
 #define RADIANCE_CACHE_RIS_GUIDING_STRENGTH 0.35 // Fraction of the cache probe's guided probability assigned to a directionally consistent temporal RIS proposal. [0.0 0.1 0.2 0.25 0.35 0.5 0.65 0.75 1.0]
 #define RADIANCE_CACHE_RIS_GUIDING_KAPPA 0.75 // Concentration of the finite-width RIS proposal lobe. Higher values focus more tightly around the selected direction. [0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.95]
@@ -46,7 +47,7 @@
 // -- Diffuse temporal accumulation (temporal_diffuse.glsl) --
 #define TEMPORAL_MAX_HISTORY 32 // Maximum effective sample count clamped per pixel. Higher = smoother but more ghosting. [1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384]
 #define TEMPORAL_HISTORY_MIN_WEIGHT 0.0001 // Weight threshold below which history is discarded and reset. [0.000001 0.00001 0.0001 0.001 0.01]
-#define TEMPORAL_AABB_ENABLE 1 // AABB clamp in ALICE augmented space to prevent ghosting. 0 = fall back to raw EMA blend. [0 1]
+#define TEMPORAL_AABB_ENABLE 1 // AABB clamp in MaxEnt augmented space to prevent ghosting. 0 = fall back to raw EMA blend. [0 1]
 #define TEMPORAL_AABB_NEIGHBOR_RADIUS 2 // AABB neighborhood radius. 1 = 3×3, 2 = 5×5. [1 2 3]
 #define TEMPORAL_AABB_EXPAND 2.0 // AABB extent expand factor. Compensates for min/max underestimation from sparse neighbor samples. [0.5 1.0 1.5 2.0 3.0 4.0]
 #define TEMPORAL_AABB_SIGMA_SCALE 3.0 // AABB sigma-guided expansion (× √Var_scalar). 3.0 ≈ 3-sigma. [0.5 1.0 1.5 2.0 3.0 4.0 5.0]
@@ -108,7 +109,7 @@
 
 // -- Misc --
 #define FIREFLY_SUPPRESSION_MULTIPLIER 50.0 // Per-sample brightness cap multiplier (× average exposure). Lower values clamp fireflies more aggressively. [1.0 5.0 10.0 25.0 50.0 100.0 250.0 500.0]
-#define GI_CLAMP_MAX 100.0 // Hard ceiling on indirect lighting before ALICE encoding. Prevents individual path outliers from destabilising the light field. Higher = more headroom, lower = stronger clamping. [50.0 75.0 100.0 150.0 250.0 500.0 1000.0 2500.0 5000.0 10000.0 20000.0 32000.0]
+#define GI_CLAMP_MAX 100.0 // Hard ceiling on indirect lighting before MaxEnt encoding. Prevents individual path outliers from destabilising the light field. Higher = more headroom, lower = stronger clamping. [50.0 75.0 100.0 150.0 250.0 500.0 1000.0 2500.0 5000.0 10000.0 20000.0 32000.0]
 #define VPROJDIST_SKY 60000.0 // Virtual projected distance assigned to sky hits (m). Used by specular/refraction denoiser to tag infinity. [5000.0 10000.0 25000.0 50000.0 60000.0 100000.0 250000.0]
 
 // -- Debug view --

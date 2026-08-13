@@ -20,10 +20,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-#ifndef ALICE_GLSL
-#define ALICE_GLSL
+#ifndef MAXENT_GLSL
+#define MAXENT_GLSL
 // ============================================================
-// ALICE (Asymmetric Laplace Isomorphic Conic Encoding) 光照库
+// Four-parameter Maximum Entropy (MaxEnt) 光照库
 // ============================================================
 //
 // 基于同构凸锥编码的光照表示、合成、降噪重建全套工具。
@@ -36,7 +36,7 @@
 //   - 最终辐照度重建基于最大熵分布闭型逼近，误差 < 0.4%
 //   - 所有算法严格无偏，仅在数值边界做最小保护
 //
-// 命名空间前缀: alice_
+// 命名空间前缀: maxent_
 // 性能策略: 无超前clamp, 多使用内联与代数化简, 尽量避免分支
 // ============================================================
 
@@ -46,27 +46,27 @@
 //
 // 约定变更 (better-denoiser-dev):
 //   漫反射第一跳不再携带 BRDF 权重 (bsdf_weight = guideWeight only),
-//   ALICE 编码接收的是纯入射辐射率 (incident radiance), 而非 BRDF 调制后的
+//   MaxEnt 编码接收的是纯入射辐射率 (incident radiance), 而非 BRDF 调制后的
 //   出射辐射率。BSDF 评估延迟至 composite (fog.glsl) 统一施加。
 //
-//   这保证了 ALICE 状态对任意材质 (包括纯金属, S.x=1) 都编码完整的入射光场,
+//   这保证了 MaxEnt 状态对任意材质 (包括纯金属, S.x=1) 都编码完整的入射光场,
 //   路径引导对全材质有效, 且消除了除以极小 Cd 的数值不稳定性。
 //
 //   对单样本 (1 spp):  v = dir * L,  ω = L  (锥边界, I=0)
 //   其中 L 为入射辐射率标量 (luminance), 不包含任何 BSDF 调制。
 
-// 编码单条射线探针的入射辐射率为 ALICE 嵌入表示 (锥边界态)
+// 编码单条射线探针的入射辐射率为 MaxEnt 嵌入表示 (锥边界态)
 // direction: 射线入射方向 (归一化)
 // radiance:  入射辐射率标量 (luminance of incident radiance)
-vec4 alice_encode_sample(vec3 direction, float radiance) {
+vec4 maxent_encode_sample(vec3 direction, float radiance) {
     return vec4(normalize(direction) * radiance, radiance);
 }
 
-// 编码单条射线探针的入射辐射率为 ALICE 嵌入表示 (RGB 输入版本)
+// 编码单条射线探针的入射辐射率为 MaxEnt 嵌入表示 (RGB 输入版本)
 // incident: 入射辐射率 RGB
 // direction: 射线入射方向 (归一化)
 // 返回 (v, ω) = (dir * Y, Y) 其中 Y = luminance(incident)
-vec4 alice_encode_probe_rgb(vec3 incident, vec3 direction) {
+vec4 maxent_encode_probe_rgb(vec3 incident, vec3 direction) {
     float Y = dot(incident, vec3(0.25, 0.5, 0.25));
     return vec4(normalize(direction) * Y, Y);
 }
@@ -78,12 +78,12 @@ vec4 alice_encode_probe_rgb(vec3 incident, vec3 direction) {
 // 下列函数仅提供方便的语义封装。
 
 // 两样本加权混合 (返回混合后的嵌入表示)
-vec4 alice_mix(vec4 a, float weight_a, vec4 b, float weight_b) {
+vec4 maxent_mix(vec4 a, float weight_a, vec4 b, float weight_b) {
     return a * weight_a + b * weight_b;
 }
 
 // 累加一个样本到现有均值 (常用于时域递归)
-vec4 alice_accumulate(vec4 accum, vec4 new_sample, float sample_weight) {
+vec4 maxent_accumulate(vec4 accum, vec4 new_sample, float sample_weight) {
     // 线性累加
     return accum + new_sample * sample_weight;
 }
@@ -96,7 +96,7 @@ vec4 alice_accumulate(vec4 accum, vec4 new_sample, float sample_weight) {
 // 计算组合方向参数 kappa ∈ [0, 1)
 // 输入: len_v = |v|, omega = ω
 // 对于 n=3 的闭式解
-float alice_kappa(float len_v, float omega) {
+float maxent_kappa(float len_v, float omega) {
     // 防止退化: omega 极小或 rho >= 1
     if (omega < 1e-8) return 0.0;
     float rho = min(len_v / omega, 0.98); // 留出微小非奇异空间
@@ -109,7 +109,7 @@ float alice_kappa(float len_v, float omega) {
 // ------------------------------------------------------------
 // 标量方差
 // ------------------------------------------------------------
-float alice_variance(vec4 encoded) {
+float maxent_variance(vec4 encoded) {
     float v2 = dot(encoded.xyz, encoded.xyz);
     float omega2 = encoded.w * encoded.w;
     float variance = (2.0 * omega2 + encoded.w * sqrt(max(4.0 * omega2 - 3.0 * v2, 0.0))) / 3.0 - 0.5 * v2;
@@ -119,8 +119,8 @@ float alice_variance(vec4 encoded) {
 // ------------------------------------------------------------
 // 径向能量不确定度方差
 // ------------------------------------------------------------
-float alice_radial_variance(vec4 encoded) {
-    float kappa = alice_kappa(length(encoded.xyz), encoded.w);
+float maxent_radial_variance(vec4 encoded) {
+    float kappa = maxent_kappa(length(encoded.xyz), encoded.w);
     float kappa_sq = kappa * kappa;
     float omega2 = encoded.w * encoded.w;
     float kappa2_3 = kappa_sq + 3.0;
@@ -130,13 +130,13 @@ float alice_radial_variance(vec4 encoded) {
 }
 
 // 估计方差 (用于时域累积)
-float alice_estimator_variance(vec4 encoded, float N) {
-    return alice_variance(encoded) / max(N, 1e-6);
+float maxent_estimator_variance(vec4 encoded, float N) {
+    return maxent_variance(encoded) / max(N, 1e-6);
 }
 
 // 径向估计方差 (用于时域累积)
-float alice_radial_estimator_variance(vec4 encoded, float N) {
-    return alice_radial_variance(encoded) / max(N, 1e-6);
+float maxent_radial_estimator_variance(vec4 encoded, float N) {
+    return maxent_radial_variance(encoded) / max(N, 1e-6);
 }
 
 // ------------------------------------------------------------
@@ -144,7 +144,7 @@ float alice_radial_estimator_variance(vec4 encoded, float N) {
 // σ_⊥ = 2ω√(1-κ²)/(3+κ²),  σ_∥ = 2ω√(1+κ²)/(3+κ²)
 // 返回 vec2(σ_⊥, σ_∥)
 // ------------------------------------------------------------
-vec2 alice_eigen_std(float omega, float kappa) {
+vec2 maxent_eigen_std(float omega, float kappa) {
     float k2 = kappa * kappa;
     float denom = 3.0 + k2;
     float two_omega = 2.0 * omega;
@@ -156,7 +156,7 @@ vec2 alice_eigen_std(float omega, float kappa) {
 // stored_var 为 swap2 预滤波后的 Var_scalar/N_eff
 // Var(|X|)/N_eff = stored_var × [3+6κ²-κ⁴] / [4(3-κ²)]
 // ------------------------------------------------------------
-float alice_radial_est_var_from_scalar(float stored_scalar_var, float kappa) {
+float maxent_radial_est_var_from_scalar(float stored_scalar_var, float kappa) {
     float k2 = kappa * kappa;
     float ratio = (3.0 + 6.0 * k2 - k2 * k2) / max(4.0 * (3.0 - k2), 1e-8);
     return stored_scalar_var * ratio;
@@ -174,10 +174,10 @@ float alice_radial_est_var_from_scalar(float stored_scalar_var, float kappa) {
 //
 // 性能：无复杂的特征值分解，完全由多项式和单次 sqrt 构成。
 // ------------------------------------------------------------
-float alice_bures_distance_sq(vec4 enc1, float kappa1, vec4 enc2, float kappa2) {
+float maxent_bures_distance_sq(vec4 enc1, float kappa1, vec4 enc2, float kappa2) {
     // 获取垂直与平行标准差 (x = σ_⊥, y = σ_∥)
-    vec2 std1 = alice_eigen_std(enc1.w, kappa1);
-    vec2 std2 = alice_eigen_std(enc2.w, kappa2);
+    vec2 std1 = maxent_eigen_std(enc1.w, kappa1);
+    vec2 std2 = maxent_eigen_std(enc2.w, kappa2);
 
     vec3 v1 = enc1.xyz;
     vec3 v2 = enc2.xyz;
@@ -225,12 +225,12 @@ float alice_bures_distance_sq(vec4 enc1, float kappa1, vec4 enc2, float kappa2) 
 // ------------------------------------------------------------
 // 特化 Bures-Wasserstein 距离平方 (预计算 eigen_std)
 //
-// 与 alice_bures_distance_sq 完全等价，但接收预计算的 eigen_std
-// (σ_⊥, σ_∥) = alice_eigen_std(omega, kappa)，跳过 4 次 sqrt。
+// 与 maxent_bures_distance_sq 完全等价，但接收预计算的 eigen_std
+// (σ_⊥, σ_∥) = maxent_eigen_std(omega, kappa)，跳过 4 次 sqrt。
 // 调用方在共享内存加载阶段批量预计算 eigen_std，采样循环中直接
 // 查表使用，大幅降低 atrous 内核的 ALU 调度压力。
 // ------------------------------------------------------------
-float alice_bures_distance_sq_precomputed(vec3 v1, vec2 std1, vec3 v2, vec2 std2) {
+float maxent_bures_distance_sq_precomputed(vec3 v1, vec2 std1, vec3 v2, vec2 std2) {
     vec3 delta_v = v1 - v2;
 
     // 分别计算两分布协方差矩阵的迹: Tr(Σ) = 2σ_⊥² + σ_∥²
@@ -271,12 +271,12 @@ float alice_bures_distance_sq_precomputed(vec3 v1, vec2 std1, vec3 v2, vec2 std2
 // 计算最大熵分布的自然参数 (θ, β) 用于散度计算
 // 返回 vec4(theta.xyz, beta), 其中 θ = ( (3+κ²)² / (4 ω² (1-κ²)) ) * v
 // 如果 ω 太小或 κ 趋近 1 会导致 β 发散, 调用方需注意上限
-vec4 alice_theta_beta(vec4 encoded) {
+vec4 maxent_theta_beta(vec4 encoded) {
     vec3 v = encoded.xyz;
     float omega = encoded.w;
     float len_v = length(v);
 
-    float kappa = alice_kappa(len_v, omega);
+    float kappa = maxent_kappa(len_v, omega);
     float kappa_sq = kappa * kappa;
     float one_minus_kappa_sq = max(0.0, 1.0 - kappa_sq);
     // 避免除零: one_minus_kappa_sq 很小则参数很大，但 kappa 被限制在 0.999999，分母仍安全
@@ -299,7 +299,7 @@ vec4 alice_theta_beta(vec4 encoded) {
 // 用于双边滤波似然度量，值越小表示两状态越相似
 // 需要传入两个样本的自然参数 (θ, β) 以避免重复计算
 // ------------------------------------------------------------
-float alice_weighted_jeffreys_fast(vec4 sample1, vec4 sample2, vec4 alice_theta_beta1, vec4 alice_theta_beta2) {
+float maxent_weighted_jeffreys_fast(vec4 sample1, vec4 sample2, vec4 maxent_theta_beta1, vec4 maxent_theta_beta2) {
     // 捕捉退化情况: 任一总能量为零
     if (sample1.w < 1e-20 || sample2.w < 1e-20) {
         // 若一方无能量，散度趋于无穷，返回极大值以拒绝
@@ -307,10 +307,10 @@ float alice_weighted_jeffreys_fast(vec4 sample1, vec4 sample2, vec4 alice_theta_
     }
 
     // 提取每个样本的自然参数 (θ, β)
-    vec3 theta1 = alice_theta_beta1.xyz;
-    float beta1 = alice_theta_beta1.w;
-    vec3 theta2 = alice_theta_beta2.xyz;
-    float beta2 = alice_theta_beta2.w;
+    vec3 theta1 = maxent_theta_beta1.xyz;
+    float beta1 = maxent_theta_beta1.w;
+    vec3 theta2 = maxent_theta_beta2.xyz;
+    float beta2 = maxent_theta_beta2.w;
 
     // 提取原始坐标 (v, ω)
     vec3 v1 = sample1.xyz;
@@ -333,8 +333,8 @@ float alice_weighted_jeffreys_fast(vec4 sample1, vec4 sample2, vec4 alice_theta_
 // 加权杰弗里斯散度 (Weighted Jeffreys Divergence)
 // 用于双边滤波似然度量，值越小表示两状态越相似
 // ------------------------------------------------------------
-float alice_weighted_jeffreys_divergence(vec4 sample1, vec4 sample2) {
-    return alice_weighted_jeffreys_fast(sample1, sample2, alice_theta_beta(sample1), alice_theta_beta(sample2));
+float maxent_weighted_jeffreys_divergence(vec4 sample1, vec4 sample2) {
+    return maxent_weighted_jeffreys_fast(sample1, sample2, maxent_theta_beta(sample1), maxent_theta_beta(sample2));
 }
 
 // ------------------------------------------------------------
@@ -348,18 +348,18 @@ float alice_weighted_jeffreys_divergence(vec4 sample1, vec4 sample2) {
 //   - 高 SPP 阶段 (N1, N2 均大): W_eff 大 → 散度被放大 → 严苛拒绝，防残影
 //   - 混合 SPP (一大一小):      W_eff ≈ min(N1,N2) → 信任高置信度侧
 // ------------------------------------------------------------
-float alice_weighted_jeffreys_with_N(vec4 sample1, vec4 sample2, vec4 dual1, vec4 dual2, float N1, float N2) {
-    float D_J = alice_weighted_jeffreys_fast(sample1, sample2, dual1, dual2);
+float maxent_weighted_jeffreys_with_N(vec4 sample1, vec4 sample2, vec4 dual1, vec4 dual2, float N1, float N2) {
+    float D_J = maxent_weighted_jeffreys_fast(sample1, sample2, dual1, dual2);
     float W_eff = (N1 * N2) / max(N1 + N2, 1e-20);
     return W_eff * D_J;
 }
 
 // ------------------------------------------------------------
-// ALICE 近似圆锥测地线距离 (Fast Riemannian Cone Geodesic)
+// MaxEnt 近似圆锥测地线距离 (Fast Riemannian Cone Geodesic)
 // 在同向对齐极限下，该测地距离严格塌缩为 |sample1.w - sample2.w| * sqrt(2 W_eff)
 // ------------------------------------------------------------
-float alice_distance_fast(vec4 sample1, vec4 sample2, vec4 dual1, vec4 dual2, float N1, float N2) {
-    float D_J = alice_weighted_jeffreys_fast(sample1, sample2, dual1, dual2);
+float maxent_distance_fast(vec4 sample1, vec4 sample2, vec4 dual1, vec4 dual2, float N1, float N2) {
+    float D_J = maxent_weighted_jeffreys_fast(sample1, sample2, dual1, dual2);
 
     // 调和有效样本数 (Wald Effective Sample Size)
     float W_eff = (N1 * N2) / max(N1 + N2, 1e-20);
@@ -368,14 +368,14 @@ float alice_distance_fast(vec4 sample1, vec4 sample2, vec4 dual1, vec4 dual2, fl
     return sqrt(W_eff * D_J * sample1.w * sample2.w * (2.0 / 3.0));
 }
 
-float alice_normalized_distance_fast(vec4 sample1, vec4 sample2, vec4 dual1, vec4 dual2, float N1, float N2) {
-    float D_J = alice_weighted_jeffreys_fast(sample1, sample2, dual1, dual2);
+float maxent_normalized_distance_fast(vec4 sample1, vec4 sample2, vec4 dual1, vec4 dual2, float N1, float N2) {
+    float D_J = maxent_weighted_jeffreys_fast(sample1, sample2, dual1, dual2);
 
     // 调和有效样本数 (Wald Effective Sample Size)
     float W_eff = (N1 * N2) / max(N1 + N2, 1e-20);
 
-    float v1 = alice_estimator_variance(sample1, N1);
-    float v2 = alice_estimator_variance(sample2, N2);
+    float v1 = maxent_estimator_variance(sample1, N1);
+    float v2 = maxent_estimator_variance(sample2, N2);
     return sqrt(W_eff * D_J * sample1.w * sample2.w * (2.0 / 3.0) / max(v1 + v2, 1e-6));
 }
 
@@ -383,7 +383,7 @@ float alice_normalized_distance_fast(vec4 sample1, vec4 sample2, vec4 dual1, vec
 // 漫反射辐照度重建 (核心)
 // 基于三维最大熵分布的半球余弦投影解析逼近
 // ------------------------------------------------------------
-float alice_irradiance(vec4 encoded, vec3 n)
+float maxent_irradiance(vec4 encoded, vec3 n)
 {
     float omega = encoded.w;
     vec3 v = encoded.xyz;
@@ -415,18 +415,18 @@ float alice_irradiance(vec4 encoded, vec3 n)
 // ------------------------------------------------------------
 // 辅助函数：仅从嵌入表示获取总能量和方向
 // ------------------------------------------------------------
-float alice_total_energy(vec4 encoded) {
+float maxent_total_energy(vec4 encoded) {
     return encoded.w;
 }
 
-vec3 alice_direction(vec4 encoded) {
+vec3 maxent_direction(vec4 encoded) {
     return encoded.xyz;
 }
 
 // ------------------------------------------------------------
-// ALICE 指导采样权重
+// MaxEnt 指导采样权重
 // ------------------------------------------------------------
-float alice_guiding_pdf(vec3 wi, vec3 axis, float kappa)
+float maxent_guiding_pdf(vec3 wi, vec3 axis, float kappa)
 {
     float k2 = kappa * kappa;
     float d = 1.0 - kappa * dot(axis, wi);
@@ -437,9 +437,9 @@ float alice_guiding_pdf(vec3 wi, vec3 axis, float kappa)
 }
 
 // ------------------------------------------------------------
-// ALICE 指导采样
+// MaxEnt 指导采样
 // ------------------------------------------------------------
-vec3 sample_alice_guiding(vec3 axis, float kappa, vec2 xi)
+vec3 sample_maxent_guiding(vec3 axis, float kappa, vec2 xi)
 {
     vec3 T = normalize(cross(abs(axis.y) < 0.99999 ? vec3(0, 1, 0) : vec3(1, 0, 0), axis));
     vec3 B = cross(axis, T);
@@ -459,4 +459,4 @@ vec3 sample_alice_guiding(vec3 axis, float kappa, vec2 xi)
     float s = sqrt(max(0.0, 1.0 - mu * mu));
     return mu * axis + s * (cos(phi) * T + sin(phi) * B);
 }
-#endif // ALICE_GLSL
+#endif // MAXENT_GLSL

@@ -2,7 +2,7 @@
 #define RELAX_SPECULAR_ATROUS_COMMON_GLSL
 
 #include "/lib/denoise/relax_specular_common.glsl"
-#include "/lib/lighting/alice.glsl"
+#include "/lib/lighting/maxent.glsl"
 
 uniform sampler2D colortex9;
 #if RELAX_ATROUS_INPUT == 5
@@ -61,14 +61,14 @@ bool relaxAtrousGeometryValid(vec4 geometry) {
         || floatBitsToUint(geometry.w) != 0u;
 }
 
-RelaxAtrousBuresData relaxMakeAtrousBuresData(vec4 aliceY) {
+RelaxAtrousBuresData relaxMakeAtrousBuresData(vec4 maxEntY) {
     RelaxAtrousBuresData data;
-    float meanLength2 = dot(aliceY.xyz, aliceY.xyz);
-    float rho = sqrt(meanLength2) / max(aliceY.w, 1e-8);
+    float meanLength2 = dot(maxEntY.xyz, maxEntY.xyz);
+    float rho = sqrt(meanLength2) / max(maxEntY.w, 1e-8);
     rho = clamp(rho, 0.0, 1.0 - 1e-6);
     float kappa = 3.0 * rho /
         (2.0 + sqrt(max(4.0 - 3.0 * rho * rho, 1e-12)));
-    data.stddev = alice_eigen_std(max(aliceY.w, 0.0), kappa);
+    data.stddev = maxent_eigen_std(max(maxEntY.w, 0.0), kappa);
     vec2 variance = data.stddev * data.stddev;
     data.trace = 2.0 * variance.x + variance.y;
     data.anisotropy = variance.y - variance.x;
@@ -77,13 +77,13 @@ RelaxAtrousBuresData relaxMakeAtrousBuresData(vec4 aliceY) {
     return data;
 }
 
-float relaxAtrousBuresDistanceSq(vec4 centerAliceY,
-        RelaxAtrousBuresData centerData, vec4 sampleAliceY,
+float relaxAtrousBuresDistanceSq(vec4 centerMaxEntY,
+        RelaxAtrousBuresData centerData, vec4 sampleMaxEntY,
         RelaxAtrousBuresData sampleData) {
     float directionCosine2 = 0.0;
     if (centerData.invMeanLength2 > 0.0
             && sampleData.invMeanLength2 > 0.0) {
-        float meanDot = dot(centerAliceY.xyz, sampleAliceY.xyz);
+        float meanDot = dot(centerMaxEntY.xyz, sampleMaxEntY.xyz);
         directionCosine2 = min(1.0, meanDot * meanDot
             * centerData.invMeanLength2 * sampleData.invMeanLength2);
     }
@@ -95,7 +95,7 @@ float relaxAtrousBuresDistanceSq(vec4 centerAliceY,
             * sampleData.anisotropy, 0.0));
     float crossTrace = centerData.stddev.x * sampleData.stddev.x
         + cross2d;
-    vec3 meanDelta = centerAliceY.xyz - sampleAliceY.xyz;
+    vec3 meanDelta = centerMaxEntY.xyz - sampleMaxEntY.xyz;
     return max(dot(meanDelta, meanDelta) + centerData.trace
         + sampleData.trace - 2.0 * crossTrace, 0.0);
 }
@@ -109,11 +109,11 @@ float relaxAtrousGeometryExponent(vec3 centerPosition, vec3 centerNormal,
 float relaxAtrousLightExponent(RelaxSpatialSignal center,
         RelaxAtrousBuresData centerData, RelaxSpatialSignal sampleSignal,
         RelaxAtrousBuresData sampleData) {
-    float distanceSq = relaxAtrousBuresDistanceSq(center.signal.aliceY,
-        centerData, sampleSignal.signal.aliceY, sampleData);
+    float distanceSq = relaxAtrousBuresDistanceSq(center.signal.maxEntY,
+        centerData, sampleSignal.signal.maxEntY, sampleData);
     float varianceScale = center.variance + sampleSignal.variance;
-    float energyScale = max(center.signal.aliceY.w * center.signal.aliceY.w,
-        sampleSignal.signal.aliceY.w * sampleSignal.signal.aliceY.w);
+    float energyScale = max(center.signal.maxEntY.w * center.signal.maxEntY.w,
+        sampleSignal.signal.maxEntY.w * sampleSignal.signal.maxEntY.w);
     varianceScale = max(varianceScale, energyScale * 1e-6 + 1e-12);
     // RELAX_SPEC_PHI_LUMINANCE is a tolerance, hence it divides the exponent.
     return distanceSq / max(RELAX_SPEC_PHI_LUMINANCE * varianceScale, 1e-12);

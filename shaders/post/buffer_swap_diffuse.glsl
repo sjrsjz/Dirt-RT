@@ -15,14 +15,14 @@ uniform usampler2D colortex5;
 uniform usampler2D colortex6;
 
 void unpackLightSample(ivec2 coord, vec4 d0, uvec4 d1, out vec3 pos,
-        out AliceEncoding encoded,
-        out AliceEncoding blurred_alice) {
+        out MaxEntEncoding encoded,
+        out MaxEntEncoding blurred_maxent) {
     uvec4 d2 = texelFetch(colortex5, coord, 0);
     pos = d0.xyz;
-    encoded.aliceY       = vec4(unpackHalf2x16(d1.x), unpackHalf2x16(d1.y));
+    encoded.maxEntY       = vec4(unpackHalf2x16(d1.x), unpackHalf2x16(d1.y));
     encoded.CoCg         =       unpackHalf2x16(d1.z);
-    blurred_alice.aliceY = vec4(unpackHalf2x16(d2.x), unpackHalf2x16(d2.y));
-    blurred_alice.CoCg   =       unpackHalf2x16(d2.z);
+    blurred_maxent.maxEntY = vec4(unpackHalf2x16(d2.x), unpackHalf2x16(d2.y));
+    blurred_maxent.CoCg   =       unpackHalf2x16(d2.z);
 }
 
 void main() {
@@ -45,22 +45,22 @@ void main() {
 
     // Phase 1: swap3
     diffuseIlluminationData tmp = fetchDiffuse(pix);
-    if (any(isnan(tmp.data_swap.aliceY))) tmp.data_swap.aliceY = vec4(0.0);
+    if (any(isnan(tmp.data_swap.maxEntY))) tmp.data_swap.maxEntY = vec4(0.0);
     if (any(isnan(tmp.data_swap.CoCg))) tmp.data_swap.CoCg = vec2(0.0);
     tmp.prev_weight = tmp.weight;
     tmp.prev_meanY2 = tmp.meanY2;
     tmp.data = tmp.data_swap;
 
-    AliceEncoding blurred_alice, encoded;
+    MaxEntEncoding blurred_maxent, encoded;
     vec3 pos;
     unpackLightSample(pix, packedGeometry, packedLight, pos, encoded,
-        blurred_alice);
+        blurred_maxent);
     tmp.pos = pos;
     float roughness_unused, pathRoughness_unused;
     int illumType_unused;
     readGeo1(GEO_N_NORMALS, gxy, tmp.histNormal, roughness_unused, illumType_unused, pathRoughness_unused);
     tmp.data_swap = encoded;
-    tmp.data = mix_alice(tmp.data, blurred_alice,
+    tmp.data = mix_maxent(tmp.data, blurred_maxent,
             clamp(NRD_BLEND_STRENGTH * exp(-NRD_BLEND_STRENGTH * clamp(tmp.weight, 0.0, 100.0)), 0.0, 1.0));
     writeDiffuse(tmp, pix);
 

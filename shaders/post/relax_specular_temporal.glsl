@@ -95,11 +95,11 @@ RelaxReprojectedHistory relaxLoadHistory(
         validBilinearWeight += w;
         ++validTapCount;
         if (w <= 0.0) continue;
-        outHistory.slowSignal.aliceY += h.slowSignal.aliceY * w;
+        outHistory.slowSignal.maxEntY += h.slowSignal.maxEntY * w;
         outHistory.slowSignal.CoCg += h.slowSignal.CoCg * w;
         outHistory.secondMoment += h.secondMoment * w;
-        outHistory.responsiveSignal.aliceY +=
-            h.responsiveSignal.aliceY * w;
+        outHistory.responsiveSignal.maxEntY +=
+            h.responsiveSignal.maxEntY * w;
         outHistory.responsiveSignal.CoCg +=
             h.responsiveSignal.CoCg * w;
         outHistory.hitDistance += h.hitDistance * w;
@@ -116,11 +116,11 @@ RelaxReprojectedHistory relaxLoadHistory(
     if (!accepted || sumWeight <= 1e-5) return relaxEmptyHistory();
 
     float invWeight = 1.0 / sumWeight;
-    outHistory.slowSignal.aliceY *= invWeight;
+    outHistory.slowSignal.maxEntY *= invWeight;
     outHistory.slowSignal.CoCg *= invWeight;
     outHistory.slowSignal = sanitizeSpecularMaxEnt(outHistory.slowSignal);
     outHistory.secondMoment *= invWeight;
-    outHistory.responsiveSignal.aliceY *= invWeight;
+    outHistory.responsiveSignal.maxEntY *= invWeight;
     outHistory.responsiveSignal.CoCg *= invWeight;
     outHistory.responsiveSignal = sanitizeSpecularMaxEnt(
         outHistory.responsiveSignal);
@@ -161,7 +161,7 @@ void main() {
 
     RelaxPrepassSignal noisy = relaxUnpackPrepass(
         texelFetch(colortex6, ivec2(pixel), 0));
-    float noisyY = noisy.signal.aliceY.w;
+    float noisyY = noisy.signal.maxEntY.w;
     float noisyM2 = noisyY * noisyY;
 
     vec3 currentPos;

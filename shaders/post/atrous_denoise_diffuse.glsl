@@ -4,10 +4,10 @@
 #include "/lib/common.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/buffer_io.glsl"
-#include "/lib/lighting/alice.glsl"
+#include "/lib/lighting/maxent.glsl"
 
 // ==========================================================================
-// Pass 300: 空间滤波器 — 漫反射 (ALICE) 降噪
+// Pass 300: 空间滤波器 — 漫反射 (MaxEnt) 降噪
 // 修改版: Bures 距离 + 能量感知权重
 //
 // 管线 (6 级迭代):
@@ -16,7 +16,7 @@
 // ==========================================================================
 
 uniform sampler2D colortex3; // 几何 (pos + normal)
-uniform usampler2D colortex4; // 光照 (ALICE + variance)
+uniform usampler2D colortex4; // 光照 (MaxEnt + variance)
 
 /* RENDERTARGETS: 4,5 */
 layout(location = 0) out uvec4 out_light_sample;
@@ -47,20 +47,20 @@ const vec4 POISSON_8[8] = {
 // ---------------------------------------------------------------------------
 
 bool unpackLightSample(ivec2 coord, out vec3 pos, out float oct_normal,
-    out AliceEncoding encoded, out float variance) {
+    out MaxEntEncoding encoded, out float variance) {
     uvec4 light = texelFetch(colortex4, coord, 0);
     variance = uintBitsToFloat(light.w);
     if (variance < 0.0) {
         pos = vec3(0.0);
         oct_normal = 0.0;
-        encoded.aliceY = vec4(0.0);
+        encoded.maxEntY = vec4(0.0);
         encoded.CoCg = vec2(0.0);
         return false;
     }
     vec4 sample_data0 = texelFetch(colortex3, coord, 0);
     pos = sample_data0.xyz;
     oct_normal = sample_data0.w;
-    encoded.aliceY = vec4(unpackHalf2x16(light.x), unpackHalf2x16(light.y));
+    encoded.maxEntY = vec4(unpackHalf2x16(light.x), unpackHalf2x16(light.y));
     encoded.CoCg = unpackHalf2x16(light.z);
     return true;
 }
@@ -69,8 +69,8 @@ bool unpackLightSample(ivec2 coord, out vec3 pos, out float oct_normal,
 // The trace is reconstructed as 3 * sigma_perp^2 + anisotropy.
 vec4 makeBuresData(vec4 encoded) {
     float len_v_sq = dot(encoded.xyz, encoded.xyz);
-    float kappa = alice_kappa(sqrt(len_v_sq), encoded.w);
-    vec2 stddev = alice_eigen_std(encoded.w, kappa);
+    float kappa = maxent_kappa(sqrt(len_v_sq), encoded.w);
+    vec2 stddev = maxent_eigen_std(encoded.w, kappa);
     vec2 stddev_sq = stddev * stddev;
     return vec4(stddev, stddev_sq.y - stddev_sq.x, len_v_sq);
 }
@@ -125,9 +125,9 @@ void main() {
     // ---- 中心像素基础数据 -------------------------------------------------
     vec3 center_pos;
     float center_oct_n;
-    AliceEncoding center_alice;
+    MaxEntEncoding center_maxent;
     float center_var_est;
-    if (!unpackLightSample(pix, center_pos, center_oct_n, center_alice,
+    if (!unpackLightSample(pix, center_pos, center_oct_n, center_maxent,
             center_var_est)) {
         // Fragment passes ping-pong colortex4. Explicitly propagate the
         // sentinel instead of leaving the destination attachment undefined.
@@ -151,8 +151,8 @@ void main() {
     vec3 center_normal = decodeNormal(center_oct_n);
 
     // ---- 预计算中心像素的统计特征 -----------------------------------------
-    // 中心 ALICE 编码: aliceY = vec4(v, ω)
-    vec4 c_enc = center_alice.aliceY;
+    // 中心 MaxEnt 编码: maxEntY = vec4(v, ω)
+    vec4 c_enc = center_maxent.maxEntY;
     vec4 c_bures = makeBuresData(c_enc);
     float c_len_v_sq = c_bures.w;
     c_bures.w = c_len_v_sq > 1e-16 ? 1.0 / c_len_v_sq : 0.0;
@@ -167,7 +167,7 @@ void main() {
     // ---- 初始化累积器 ----------------------------------------------------
     float sumWeight = 1.0;
     vec2 sumVarEnergy = vec2(center_var_est);
-    AliceEncoding accumAlice = center_alice;
+    MaxEntEncoding accumMaxEnt = center_maxent;
 
     // ---- Poisson 圆盘采样 (大核 R0=8,16,32) -----------------------------------
     // 旋转器 + 高斯核权重, 均匀圆盘覆盖替代 3×3 网格
@@ -185,14 +185,14 @@ void main() {
 
         vec3 sample_world_pos;
         float sample_oct_n;
-        AliceEncoding sample_alice;
+        MaxEntEncoding sample_maxent;
         float sample_var_est;
         if (!unpackLightSample(sample_coord, sample_world_pos, sample_oct_n,
-                sample_alice, sample_var_est)) continue;
+                sample_maxent, sample_var_est)) continue;
         float w_geometry = abs(dot(sample_world_pos, center_normal)
                     - center_plane_distance) * inv_pixel_footprint;
 
-        vec4 s_enc = sample_alice.aliceY;
+        vec4 s_enc = sample_maxent.maxEntY;
         vec4 s_bures = makeBuresData(s_enc);
         float d_bures_sq = buresDistanceSq(c_enc.xyz, c_bures, c_trace,
                 s_enc.xyz, s_bures);
@@ -202,7 +202,7 @@ void main() {
         float w0 = w_kernel * exp(-w_geometry - w_luma);
 
         // ---- 累积 ----------------------------------------------------
-        accumulate_alice(accumAlice, sample_alice, w0);
+        accumulate_maxent(accumMaxEnt, sample_maxent, w0);
         sumWeight += w0;
         float weighted_var = w0 * sample_var_est;
         sumVarEnergy += vec2(weighted_var, w0 * weighted_var);
@@ -211,17 +211,17 @@ void main() {
     float inv_sumWeight = 1.0 / sumWeight;
 
     // ---- 归一化并输出 ----------------------------------------------------
-    accumAlice = scale_alice(accumAlice, inv_sumWeight);
+    accumMaxEnt = scale_maxent(accumMaxEnt, inv_sumWeight);
 
     float varEnergyOut = mix(sumVarEnergy.x, sumVarEnergy.y, variance_mix)
             * pow(inv_sumWeight, power);
-    uvec3 packedAlice = uvec3(
-            packHalf2x16(clamp(accumAlice.aliceY.xy, vec2(-65504.0), vec2(65504.0))),
-            packHalf2x16(clamp(accumAlice.aliceY.zw, vec2(-65504.0), vec2(65504.0))),
-            packHalf2x16(clamp(accumAlice.CoCg, vec2(-65504.0), vec2(65504.0))));
-    out_light_sample = uvec4(packedAlice, floatBitsToUint(varEnergyOut));
+    uvec3 packedMaxEnt = uvec3(
+            packHalf2x16(clamp(accumMaxEnt.maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
+            packHalf2x16(clamp(accumMaxEnt.maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
+            packHalf2x16(clamp(accumMaxEnt.CoCg, vec2(-65504.0), vec2(65504.0))));
+    out_light_sample = uvec4(packedMaxEnt, floatBitsToUint(varEnergyOut));
 
     #ifdef FINAL_DENOISE_PASS
-    out_light_sample_blurred = uvec4(packedAlice, 0u);
+    out_light_sample_blurred = uvec4(packedMaxEnt, 0u);
     #endif
 }
