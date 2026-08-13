@@ -14,6 +14,9 @@
 // N=3: History Geo    — uvec4(fbits(hist_pos.xyz), oct(hist_geometryNormal))
 // N=4: Swap Light     — uvec4(pHalf2(swap_maxEntY.xy), pHalf2(swap_maxEntY.zw), pHalf2(swap_CoCg), pHalf2(weight, sqrt(meanY2)))
 // N=5: Path Guide     — uvec4(pHalf2(maxEntY.xy), pHalf2(maxEntY.zw), fbits(W), fbits(M))
+// N=6: ReSTIR GI prewarm first-hit direct-light MaxEnt atom.
+// N=7: ReSTIR GI prewarm fresh endpoint.xyz + signed first-direction PDF.
+// N=8: Current-frame biased ReSTIR GI path-guide prewarm MaxEnt atom.
 //
 // .w lane uses packHalf2x16: weight:f16 + sqrt(meanY2):f16.
 // sqrt compression keeps HDR second moments within f16 range (e.g. Y=1000 →
@@ -26,6 +29,9 @@
 #define DIF_N_HISTGEO  3u
 #define DIF_N_SWAP     4u
 #define DIF_N_PATHGUIDE 5u
+#define DIF_N_RESTIR_DIRECT   6u
+#define DIF_N_RESTIR_ENDPOINT 7u
+#define DIF_N_RESTIR_PREWARM  8u
 
 // ===========================================================================
 // N=0 — Current RT Light
@@ -224,6 +230,107 @@ vec4 samplePathGuide(vec2 prevCoord) {
     if (sumW < 1e-8) return vec4(0.0);
 
     return (y00 * w00 + y10 * w10 + y01 * w01 + y11 * w11) / sumW;
+}
+
+// ===========================================================================
+// N=6..8 -- low-history ReSTIR GI path-guiding prewarm scratch
+// ===========================================================================
+
+struct RestirGIFreshCandidate {
+    vec3 endpointRelative;
+    float firstPdf;
+    bool environment;
+};
+
+void writeRestirGIMaxEntPlane(uint plane, uvec2 xy,
+        MaxEntEncoding encoded, float meanY2) {
+    // Never allow a bad donor or color transform to poison the finalize and
+    // temporal passes. The biased prewarm itself performs no density division.
+    if (any(isnan(encoded.maxEntY)) || any(isinf(encoded.maxEntY))
+            || any(isnan(encoded.CoCg)) || any(isinf(encoded.CoCg)))
+        encoded = init_maxent();
+    if (isnan(meanY2) || isinf(meanY2) || meanY2 < 0.0)
+        meanY2 = 0.0;
+    diffuseBuffer.data[addr(plane, xy)] = uvec4(
+        packHalf2x16(clamp(encoded.maxEntY.xy,
+            vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(encoded.maxEntY.zw,
+            vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(encoded.CoCg,
+            vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(vec2(0.0,
+            clamp(sqrt(max(meanY2, 0.0)), 0.0, 65504.0))));
+}
+
+void readRestirGIMaxEntPlane(uint plane, uvec2 xy,
+        out MaxEntEncoding encoded, out float meanY2) {
+    uvec4 packedValue = diffuseBuffer.data[addr(plane, xy)];
+    vec2 xyValue = unpackHalf2x16(packedValue.x);
+    vec2 zwValue = unpackHalf2x16(packedValue.y);
+    encoded.maxEntY = vec4(xyValue, zwValue);
+    encoded.CoCg = unpackHalf2x16(packedValue.z);
+    float sqrtM2 = unpackHalf2x16(packedValue.w).y;
+    if (any(isnan(encoded.maxEntY)) || any(isinf(encoded.maxEntY))
+            || any(isnan(encoded.CoCg)) || any(isinf(encoded.CoCg)))
+        encoded = init_maxent();
+    if (isnan(sqrtM2) || isinf(sqrtM2) || sqrtM2 < 0.0)
+        sqrtM2 = 0.0;
+    meanY2 = sqrtM2 * sqrtM2;
+}
+
+void clearRestirGIScratch(uvec2 xy) {
+    diffuseBuffer.data[addr(DIF_N_RESTIR_DIRECT, xy)] = uvec4(0u);
+    diffuseBuffer.data[addr(DIF_N_RESTIR_ENDPOINT, xy)] = uvec4(0u);
+    diffuseBuffer.data[addr(DIF_N_RESTIR_PREWARM, xy)] = uvec4(0u);
+}
+
+void writeRestirGIDirect(uvec2 xy, MaxEntEncoding direct) {
+    writeRestirGIMaxEntPlane(DIF_N_RESTIR_DIRECT, xy, direct,
+        direct.maxEntY.w * direct.maxEntY.w);
+}
+
+void readRestirGIDirect(uvec2 xy, out MaxEntEncoding direct) {
+    float unusedMeanY2;
+    readRestirGIMaxEntPlane(DIF_N_RESTIR_DIRECT, xy,
+        direct, unusedMeanY2);
+}
+
+void writeRestirGIPrewarm(uvec2 xy, MaxEntEncoding indirect) {
+    writeRestirGIMaxEntPlane(DIF_N_RESTIR_PREWARM, xy, indirect,
+        indirect.maxEntY.w * indirect.maxEntY.w);
+}
+
+void readRestirGIPrewarm(uvec2 xy, out MaxEntEncoding indirect) {
+    float unusedMeanY2;
+    readRestirGIMaxEntPlane(DIF_N_RESTIR_PREWARM, xy,
+        indirect, unusedMeanY2);
+}
+
+void writeRestirGIFreshCandidate(uvec2 xy,
+        RestirGIFreshCandidate candidate) {
+    float signedPdf = candidate.environment
+        ? -abs(candidate.firstPdf) : abs(candidate.firstPdf);
+    diffuseBuffer.data[addr(DIF_N_RESTIR_ENDPOINT, xy)] = uvec4(
+        floatBitsToUint(candidate.endpointRelative),
+        floatBitsToUint(signedPdf));
+}
+
+RestirGIFreshCandidate readRestirGIFreshCandidate(uvec2 xy) {
+    uvec4 endpointData =
+        diffuseBuffer.data[addr(DIF_N_RESTIR_ENDPOINT, xy)];
+    float signedPdf = uintBitsToFloat(endpointData.w);
+    RestirGIFreshCandidate candidate;
+    candidate.endpointRelative = uintBitsToFloat(endpointData.xyz);
+    candidate.firstPdf = abs(signedPdf);
+    candidate.environment = signedPdf < 0.0;
+    return candidate;
+}
+
+bool restirGIFreshCandidateValid(RestirGIFreshCandidate candidate) {
+    return candidate.firstPdf > 1e-8
+        && !isnan(candidate.firstPdf) && !isinf(candidate.firstPdf)
+        && !any(isnan(candidate.endpointRelative))
+        && !any(isinf(candidate.endpointRelative));
 }
 
 #endif // BUFFERS_DIFFUSE_BUFFER_GLSL

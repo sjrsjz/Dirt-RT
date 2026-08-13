@@ -16,6 +16,14 @@
 #define END_SKYBOX 1 // End skybox rendering. 1 = custom rune-ring skybox with FBM nebula background (higher GPU cost). 0 = fall back to atmospheric scattering + NEE (faster). [0 1]
 #define PATHGUIDE_SPATIAL_RADIUS 16.0 // Path-guide ReSTIR Poisson disk spatial sampling radius (pixels). Higher values explore farther neighbours at the cost of more incoherent memory access. [4.0 8.0 12.0 16.0 24.0 32.0]
 #define PATHGUIDE_MAX_TEMPORAL_M 64.0 // ReSTIR reservoir temporal memory cap. Limits the effective sample count carried forward from history. Higher values retain more history but react slower. [8.0 16.0 32.0 48.0 64.0 96.0 128.0 256.0]
+#define RESTIR_GI_ENABLED 1 // Biased low-history ReSTIR GI path-guiding prewarm. Luminance-resamples a bounded directional prior, then retires to canonical paths as history matures; requires EON. [0 1]
+#define RESTIR_GI_SPATIAL_SAMPLES 8 // Current-frame neighbouring proposals considered at the target. Only the selected shifted donor receives one geometry visibility ray. [0 1 2 4 8]
+#define RESTIR_GI_SPATIAL_RADIUS 8.0 // Radius in current-frame pixels for first-bounce GI proposals. [2.0 4.0 6.0 8.0 12.0 16.0 24.0]
+#define RESTIR_GI_VISIBILITY_MAX_DISTANCE 128.0 // Maximum distance in blocks for ReSTIR spatial geometry-only support rays. [16.0 32.0 64.0 96.0 128.0 192.0 256.0 512.0 1024.0 2048.0]
+#define RESTIR_GI_HISTORY_FADE_START 1.0 // Keep full ReSTIR below this geometrically validated previous-frame diffuse history length. [0.0 1.0 2.0 3.0 4.0 6.0 8.0 12.0 16.0]
+#define RESTIR_GI_HISTORY_FADE_END 4.0 // Clear the biased prior and switch fully to the canonical MaxEnt path sample at this diffuse history length. [2.0 3.0 4.0 6.0 8.0 12.0 16.0 24.0 32.0]
+#define RESTIR_GI_NORMAL_COS 0.98 // Minimum primary geometry-normal cosine for joining a neighbour proposal set. [0.90 0.95 0.98 0.99 0.995]
+#define RESTIR_GI_PLANE_DISTANCE 0.05 // Maximum separation from the target primary tangent plane, in blocks. [0.01 0.02 0.03 0.05 0.08 0.12]
 
 // -- Material --
 #define EON_ENABLED 1 // Enable energy-preserving Oren--Nayar rough diffuse. 0 keeps the legacy Disney/Lambert reconstruction. [0 1]
@@ -91,7 +99,7 @@
 
 // -- À-trous spatial filter (atrous_denoise_diffuse.glsl) --
 #define ATROUS_NORMAL_POWER 32.0 // Normal edge-stopping sensitivity in à-trous wavelet filter. Higher = sharper normal edges preserved. [1 2 4 8 16 32 64 128]
-#define ATROUS_PHI_L 0.25 // Luma edge-stopping sensitivity. Higher = more aggressive denoising. [0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5]
+#define ATROUS_PHI_L 0.35 // Luma edge-stopping sensitivity. Higher = more aggressive denoising. [0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5]
 #define ATROUS_POSITION_PARAM 0.01 // Depth edge-stopping sensitivity. Higher = sharper depth boundaries preserved. [0.00075 0.00125 0.0025 0.005 0.01 0.02 0.04 0.08]
 #define ATROUS_GAMMA 1.0 // Roughness-dependent filter order adaptation strength. 0 = constant filter width regardless of roughness (blurrier on rough surfaces), 1 = standard roughness adaptation, higher = more aggressive widening on rough surfaces. [0.0 0.25 0.5 0.75 1.0 1.5 2.0]
 

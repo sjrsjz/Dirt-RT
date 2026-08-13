@@ -1,0 +1,10 @@
+#version 460 core
+#extension GL_EXT_ray_tracing : enable
+// Allocation/LRU phase. All path passes have already submitted their
+// current-frame geometry requests before the group-4 barrier reaches here.
+#include "/lib/buffers/radiance_cache.glsl"
+
+void main() {
+    if (any(notEqual(gl_LaunchIDEXT, uvec3(0u)))) return;
+    processRadianceCacheAllocationRequests(camPos, uint(max(frame_id, 0)));
+}

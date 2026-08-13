@@ -29,6 +29,32 @@ option.RAY_BOUNCES.comment = 每条相机路径最多访问的表面数。增加
 option.PATH_GUIDING_STRENGTH = 路径引导强度
 option.PATH_GUIDING_STRENGTH.comment = 漫反射路径的 MaxEnt 引导强度，同时控制辐射率缓存探针的 MaxEnt+RIS 总引导概率；缓存探针始终保留至少 10% 均匀球面采样。提高可加快稳定场景收敛，过高则可能在光照变化后增加延迟或方差。
 
+option.RESTIR_GI_ENABLED = 低历史有偏 ReSTIR GI 路径引导预热
+option.RESTIR_GI_ENABLED.comment = 仅在几何校验后的漫反射历史较低时，以亮度重采样并用邻域均值约束能量，为 MaxEnt 路径引导提供低方差启动方向；历史成熟后清除偏置并退回 canonical 路径。需要启用 EON。
+value.RESTIR_GI_ENABLED.1 = 启用
+value.RESTIR_GI_ENABLED.0 = 关闭
+
+option.RESTIR_GI_SPATIAL_SAMPLES = 预热空域样本数
+option.RESTIR_GI_SPATIAL_SAMPLES.comment = 每像素纳入的当前帧邻域 Proposal 数量。候选只做缓冲读取，只有最终选中的空域 donor 发出一条纯几何遮蔽光线。
+
+option.RESTIR_GI_SPATIAL_RADIUS = 预热空域半径
+option.RESTIR_GI_SPATIAL_RADIUS.comment = 在当前帧中搜索邻居的像素半径。增大可探索相关性更低的路径，但会有更多候选无法通过主表面共面检查。
+
+option.RESTIR_GI_VISIBILITY_MAX_DISTANCE = 预热遮蔽追踪距离
+option.RESTIR_GI_VISIBILITY_MAX_DISTANCE.comment = 空域支持性光线的最大追踪距离（方块）。该专用通道只测试不透明三角形几何体，跳过 Alpha、透射、纹理和 closest-hit 材质求值；降低数值更快，但不会查询上限外的遮挡物。
+
+option.RESTIR_GI_HISTORY_FADE_START = 预热退场起点
+option.RESTIR_GI_HISTORY_FADE_START.comment = 几何校验后的上一帧漫反射历史长度低于此值时，保留完整的 ReSTIR 冷启动加速贡献。
+
+option.RESTIR_GI_HISTORY_FADE_END = 预热退场终点
+option.RESTIR_GI_HISTORY_FADE_END.comment = 漫反射历史达到此值后清除有偏预热信号并完全切回 canonical MaxEnt 路径样本；稳定像素会跳过候选处理和遮蔽光线。
+
+option.RESTIR_GI_NORMAL_COS = 预热法线余弦
+option.RESTIR_GI_NORMAL_COS.comment = 邻居加入 Proposal 集所需的最小几何法线余弦。提高可在方块折角处分离不同表面，减少有偏预热跨面的漏光。
+
+option.RESTIR_GI_PLANE_DISTANCE = 预热共面距离
+option.RESTIR_GI_PLANE_DISTANCE.comment = 邻居到目标切平面的最大距离（方块单位）。降低可更强地拒绝相邻方块面、台阶和薄边。
+
 option.SUN_PATH_ROTATION = 日照路径旋转
 option.SUN_PATH_ROTATION.comment = 类似纬度地绕世界 X 轴倾斜太阳和月亮的视运动路径，只改变光照方向，不改变昼夜长度。30° 对应当前大气模型的北纬 30° 春季晴空标定基准。
 

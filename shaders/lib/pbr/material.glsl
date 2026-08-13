@@ -35,7 +35,7 @@ struct Material {
 // yet point behind the viewer at grazing angles.  That makes NoV non-positive,
 // zeroes the BSDF, and can turn isolated texels completely black.
 //
-// Alpha-Piscium applies a 0.5 * geometric NoV floor to the Fresnel cosine.  We
+// Apply a 0.5 * geometric NoV floor to the Fresnel cosine.  We
 // enforce the same floor on the normal itself so every RT consumer (sampling,
 // Fresnel, G-buffer reconstruction and the denoisers) sees one convention.
 vec3 constrainMappedNormal(vec3 mappedNormal, vec3 geometryNormal,

@@ -485,7 +485,7 @@ void processRadianceCacheAllocationRequests(vec3 cameraPosition, uint frameStamp
         }
     }
 
-    // Alpha-Piscium-style nearest-first admission across both resident and
+    // Nearest-first admission across both resident and
     // missing pages. Overflow is rejected before it can perturb the LRU.
     uint residencyBudget = uint(RADIANCE_CACHE_POOL_CAPACITY);
     for (uint bucket = 0u; bucket < uint(RADIANCE_CACHE_DISTANCE_BUCKET_COUNT); ++bucket) {

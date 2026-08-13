@@ -195,6 +195,23 @@ void addDenoisedPrior(inout Reservoir r, ivec2 pix, vec3 centerNormal, inout uin
     reservoirUpdate(r, y, target, target, 1.0, seed);
 }
 
+// Inject ray4's center-pixel low-history atom directly into the guide build.
+// This atom is deliberately biased and energy-bounded: its purpose is to put a
+// useful direction into an empty/young guide, not to estimate final GI. ray4
+// clears the plane when validated history matures, so this prior retires by
+// itself and cannot keep increasing the temporal reservoir's M indefinitely.
+void addRestirGIPrewarmPrior(inout Reservoir r, uvec2 pix,
+        vec3 centerNormal, inout uint seed) {
+    #if RESTIR_GI_ENABLED && EON_ENABLED
+    MaxEntEncoding prewarm;
+    readRestirGIPrewarm(pix, prewarm);
+    vec4 y = prewarm.maxEntY;
+    if (isSky(y)) return;
+    float target = max(guideTarget(y, centerNormal), 0.0);
+    reservoirUpdate(r, y, target, target, 1.0, seed);
+    #endif
+}
+
 // ---------------------------------------------------------------------------
 // Phase 4: 2×2 随机重投影历史蓄水池
 // ---------------------------------------------------------------------------
@@ -292,6 +309,9 @@ void main() {
 
     // Phase 3: 降噪先验
     addDenoisedPrior(r, pix, centerNormal, seed);
+
+    // Low-history biased directional prior from the dedicated RT prewarm.
+    addRestirGIPrewarmPrior(r, gxy, centerNormal, seed);
 
     // Phase 4+5: 历史重投影 + RIS 合并
     StoredReservoir hist;

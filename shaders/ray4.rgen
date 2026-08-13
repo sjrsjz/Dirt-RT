@@ -1,10 +1,8 @@
 #version 460 core
-#extension GL_EXT_ray_tracing : enable
-// Allocation/LRU phase. A distinct Vulkanite execution group provides the
-// barrier between atomic geometry requests and this single-writer allocator.
-#include "/lib/buffers/radiance_cache.glsl"
-
-void main() {
-    if (any(notEqual(gl_LaunchIDEXT, uvec3(0u)))) return;
-    processRadianceCacheAllocationRequests(camPos, uint(max(frame_id, 0)));
-}
+// Low-history biased ReSTIR GI path-guiding prewarm resolve. Compatible
+// current-frame proposals are luminance-resampled into one bounded MaxEnt
+// prior; only the selected shifted donor receives a geometry visibility ray.
+#define FIRST_LOBE_DIFFUSE
+#define FIRST_LOBE_VAL 2
+#define RESTIR_GI_RESOLVE_PASS
+#include "/lib/rt/raytrace_rgen.glsl"
