@@ -23,13 +23,34 @@ struct RelaxSpecularHistory {
     vec3 geometryNormal;
     SpecularMaxEnt slowSignal;
     float secondMoment;
-    vec3 responsiveYCoCg;
+    SpecularMaxEnt responsiveSignal;
     float hitDistance;
     float roughness;
     float historyLength;
     uint materialID;
     float reprojectionConfidence;
 };
+
+uint packRelaxHistoryNormalMaterial(vec3 n, uint materialID) {
+    n = normalize(n);
+    vec2 p = n.xy / max(abs(n.x) + abs(n.y) + abs(n.z), 1e-8);
+    if (n.z < 0.0)
+        p = (1.0 - abs(p.yx)) * mix(vec2(-1.0), vec2(1.0),
+            greaterThanEqual(p, vec2(0.0)));
+    uint oct8 = packUnorm4x8(vec4(p * 0.5 + 0.5, 0.0, 0.0)) & 0xffffu;
+    return oct8 | ((materialID & 0xffffu) << 16u);
+}
+
+void unpackRelaxHistoryNormalMaterial(uint word, out vec3 n,
+        out uint materialID) {
+    vec2 f = unpackUnorm4x8(word & 0xffffu).xy * 2.0 - 1.0;
+    n = vec3(f, 1.0 - abs(f.x) - abs(f.y));
+    if (n.z < 0.0)
+        n.xy = (1.0 - abs(n.yx)) * mix(vec2(-1.0), vec2(1.0),
+            greaterThanEqual(n.xy, vec2(0.0)));
+    n = normalize(n);
+    materialID = word >> 16u;
+}
 
 SpecularMaxEnt emptySpecularMaxEnt() {
     SpecularMaxEnt s;
@@ -211,20 +232,21 @@ void readRefrHistLight(uvec2 xy, out vec3 color, out float vprojDist,
 }
 
 // N3: slow MaxEnt6 + sqrt(E[Y^2]) + hitDistance.
-// N4: fast YCoCg3 + roughness + history + confidence + material uint.
+// N4: responsive MaxEnt6 + roughness + history length. Material is packed
+// with the octahedral history normal in N2.w.
 void writeRelaxSpecularHistory(uvec2 xy, RelaxSpecularHistory h) {
     h.slowSignal = sanitizeSpecularMaxEnt(h.slowSignal);
+    h.responsiveSignal = sanitizeSpecularMaxEnt(h.responsiveSignal);
     reflectBuffer.data[addr(SPEC_N_HISTGEO, xy)] = uvec4(
-        floatBitsToUint(h.surfacePosition), encodeNormalU(h.geometryNormal));
+        floatBitsToUint(h.surfacePosition), packRelaxHistoryNormalMaterial(
+            h.geometryNormal, h.materialID));
     uvec3 slow = packSpecularMaxEnt(h.slowSignal);
     reflectBuffer.data[addr(SPEC_N_HISTLIGHT, xy)] = uvec4(slow,
         pack2HalfClampedU(encodeSqrtMomentFP16(h.secondMoment),
             h.hitDistance));
-    reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)] = uvec4(
-        pack2HalfClampedU(h.responsiveYCoCg.x, h.responsiveYCoCg.y),
-        pack2HalfClampedU(h.responsiveYCoCg.z, h.roughness),
-        pack2HalfClampedU(h.historyLength, h.reprojectionConfidence),
-        h.materialID);
+    uvec3 responsive = packSpecularMaxEnt(h.responsiveSignal);
+    reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)] = uvec4(responsive,
+        pack2HalfClampedU(h.roughness, h.historyLength));
 }
 
 RelaxSpecularHistory readRelaxSpecularHistory(uvec2 xy) {
@@ -233,19 +255,16 @@ RelaxSpecularHistory readRelaxSpecularHistory(uvec2 xy) {
     uvec4 s = reflectBuffer.data[addr(SPEC_N_HISTLIGHT, xy)];
     uvec4 m = reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)];
     vec2 m2Hit = unpackHalf2x16(s.w);
-    vec2 fastYC = unpackHalf2x16(m.x);
-    vec2 fastCRough = unpackHalf2x16(m.y);
-    vec2 historyConfidence = unpackHalf2x16(m.z);
+    vec2 roughnessHistory = unpackHalf2x16(m.w);
     h.surfacePosition = uintBitsToFloat(g.xyz);
-    h.geometryNormal = decodeNormalU(g.w);
+    unpackRelaxHistoryNormalMaterial(g.w, h.geometryNormal, h.materialID);
     h.slowSignal = unpackSpecularMaxEnt(s.xyz);
     h.secondMoment = decodeSqrtMomentFP16(m2Hit.x);
     h.hitDistance = max(m2Hit.y, 0.0);
-    h.responsiveYCoCg = vec3(fastYC, fastCRough.x);
-    h.roughness = clamp(fastCRough.y, 0.0, 1.0);
-    h.historyLength = max(historyConfidence.x, 0.0);
-    h.reprojectionConfidence = clamp(historyConfidence.y, 0.0, 1.0);
-    h.materialID = m.w;
+    h.responsiveSignal = unpackSpecularMaxEnt(m.xyz);
+    h.roughness = clamp(roughnessHistory.x, 0.0, 1.0);
+    h.historyLength = max(roughnessHistory.y, 0.0);
+    h.reprojectionConfidence = 1.0;
 
     bool valid = !any(isnan(h.surfacePosition)) &&
         !any(isinf(h.surfacePosition)) &&
@@ -255,7 +274,7 @@ RelaxSpecularHistory readRelaxSpecularHistory(uvec2 xy) {
         h.geometryNormal = vec3(0.0, 1.0, 0.0);
         h.slowSignal = emptySpecularMaxEnt();
         h.secondMoment = 0.0;
-        h.responsiveYCoCg = vec3(0.0);
+        h.responsiveSignal = emptySpecularMaxEnt();
         h.hitDistance = 0.0;
         h.roughness = 1.0;
         h.historyLength = 0.0;

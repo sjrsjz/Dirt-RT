@@ -4,6 +4,7 @@
 // rotated Poisson disk because their 8/16-pixel halo is unsuitable for LDS.
 layout(local_size_x = 8, local_size_y = 8) in;
 
+#include "/lib/common.glsl"
 #include "/lib/denoise/relax_specular_atrous_common.glsl"
 
 const vec4 RELAX_POISSON_8[8] = vec4[](
@@ -45,8 +46,9 @@ void main() {
     RelaxAtrousBuresData centerBures = relaxMakeAtrousBuresData(
         center.signal.aliceY);
 
-    float rotationAngle = 2.0 * PI * relaxHash2(
-        uvec2(pixel), uint(RELAX_ATROUS_STEP)).x;
+    // Keep the large-kernel rotation identical to the diffuse denoiser.
+    float rotationAngle = 2.0 * PI * fract(rand(vec2(pixel))
+        + float(RELAX_ATROUS_STEP) * 0.6180339887498949);
     float cs = cos(rotationAngle);
     float sn = sin(rotationAngle);
     mat2 rotation = mat2(cs, -sn, sn, cs)

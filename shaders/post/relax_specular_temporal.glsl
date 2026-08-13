@@ -12,7 +12,7 @@ layout(rgba32ui) uniform writeonly uimage2D colorimg5;
 struct RelaxReprojectedHistory {
     SpecularMaxEnt slowSignal;
     float secondMoment;
-    vec3 fastYCoCg;
+    SpecularMaxEnt responsiveSignal;
     float hitDistance;
     vec3 normal;
     float roughness;
@@ -26,7 +26,7 @@ RelaxReprojectedHistory relaxEmptyHistory() {
     RelaxReprojectedHistory h;
     h.slowSignal = emptySpecularMaxEnt();
     h.secondMoment = 0.0;
-    h.fastYCoCg = vec3(0.0);
+    h.responsiveSignal = emptySpecularMaxEnt();
     h.hitDistance = 0.0;
     h.normal = vec3(0.0, 1.0, 0.0);
     h.roughness = 1.0;
@@ -98,7 +98,10 @@ RelaxReprojectedHistory relaxLoadHistory(
         outHistory.slowSignal.aliceY += h.slowSignal.aliceY * w;
         outHistory.slowSignal.CoCg += h.slowSignal.CoCg * w;
         outHistory.secondMoment += h.secondMoment * w;
-        outHistory.fastYCoCg += h.responsiveYCoCg * w;
+        outHistory.responsiveSignal.aliceY +=
+            h.responsiveSignal.aliceY * w;
+        outHistory.responsiveSignal.CoCg +=
+            h.responsiveSignal.CoCg * w;
         outHistory.hitDistance += h.hitDistance * w;
         outHistory.roughness += (h.roughness - 1.0) * w;
         outHistory.historyLength += h.historyLength * w;
@@ -117,7 +120,10 @@ RelaxReprojectedHistory relaxLoadHistory(
     outHistory.slowSignal.CoCg *= invWeight;
     outHistory.slowSignal = sanitizeSpecularMaxEnt(outHistory.slowSignal);
     outHistory.secondMoment *= invWeight;
-    outHistory.fastYCoCg *= invWeight;
+    outHistory.responsiveSignal.aliceY *= invWeight;
+    outHistory.responsiveSignal.CoCg *= invWeight;
+    outHistory.responsiveSignal = sanitizeSpecularMaxEnt(
+        outHistory.responsiveSignal);
     outHistory.hitDistance *= invWeight;
     outHistory.roughness = clamp(1.0 +
         (outHistory.roughness - 1.0) * invWeight, 0.0, 1.0);
@@ -129,21 +135,24 @@ RelaxReprojectedHistory relaxLoadHistory(
     return outHistory;
 }
 
-RelaxReprojectedHistory relaxMixHistory(RelaxReprojectedHistory a,
-        RelaxReprojectedHistory b, float t) {
-    if (!a.found) return b;
-    if (!b.found) return a;
-    RelaxReprojectedHistory h = a;
-    h.slowSignal = relaxMixMaxEnt(a.slowSignal, b.slowSignal, t);
-    h.secondMoment = mix(a.secondMoment, b.secondMoment, t);
-    h.fastYCoCg = mix(a.fastYCoCg, b.fastYCoCg, t);
-    h.hitDistance = mix(a.hitDistance, b.hitDistance, t);
-    h.roughness = mix(a.roughness, b.roughness, t);
-    h.historyLength = mix(a.historyLength, b.historyLength, t);
-    h.confidence = mix(a.confidence, b.confidence, t);
-    h.footprintQuality = mix(a.footprintQuality, b.footprintQuality, t);
-    h.found = true;
-    return h;
+float relaxSmoothWeight(float x) {
+    x = clamp(x, 0.0, 1.0);
+    return x * x * (3.0 - 2.0 * x);
+}
+
+float relaxAngularConfidence(vec3 a, vec3 b, float maxAngle) {
+    float angle = acos(clamp(dot(a, b), -1.0, 1.0));
+    return relaxSmoothWeight(1.0 - angle / max(maxAngle, 1e-5));
+}
+
+float relaxDominantFactor(float NoV, float roughness) {
+    float a = 0.298475 * log(max(39.4115 - 39.0029 * roughness, 1e-5));
+    return clamp(pow(clamp(1.0 - NoV, 0.0, 1.0), 10.8649)
+        * (1.0 - a) + a, 0.0, 1.0);
+}
+
+float relaxSpecMagicCurve(float roughness) {
+    return 1.0 - exp2(-200.0 * roughness * roughness);
 }
 
 void main() {
@@ -183,16 +192,26 @@ void main() {
         currentPos, currentNormal, currentMaterial, cameraDelta,
         false, true);
 
-    // Classical hit-distance virtual reprojection, constrained to the primary
-    // view ray. Under a pure camera rotation every positive scalar multiple
-    // projects to the same UV, so roughness and sampled normals cannot twist
-    // the history address.
+    // Match RELAX's stable 3x3 hit-distance choice for virtual reprojection.
+    float focusedHitDistance = noisy.hitDistance > 0.0
+        ? noisy.hitDistance : 1e30;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            ivec2 q = ivec2(pixel) + ivec2(x, y);
+            if (!relaxInBounds(q, ivec2(resolution_global))) continue;
+            float qHit = relaxUnpackPrepass(texelFetch(colortex6, q, 0)).hitDistance;
+            if (qHit > 0.0) focusedHitDistance = min(focusedHitDistance, qHit);
+        }
+    }
+    if (focusedHitDistance == 1e30) focusedHitDistance = 0.0;
+
     float surfaceDistance = length(currentPos);
     vec3 primaryRay = relaxSafeNormalize(currentPos, vec3(0.0, 0.0, 1.0));
-    float virtualScale = 1.0 - currentRoughness;
-    virtualScale *= virtualScale;
+    vec3 V = -primaryRay;
+    float NoV = abs(dot(currentNormal, V));
+    float virtualScale = relaxDominantFactor(NoV, currentRoughness);
     vec3 virtualPoint = primaryRay *
-        (surfaceDistance + noisy.hitDistance * virtualScale);
+        (surfaceDistance + focusedHitDistance * virtualScale);
     vec2 virtualUv = relaxProjectPrevious(virtualPoint, cameraDelta);
     RelaxReprojectedHistory virtualHistory = relaxLoadHistory(virtualUv,
         pixel, currentPos, currentNormal, currentMaterial, cameraDelta,
@@ -203,58 +222,115 @@ void main() {
         virtualHistory.found = false;
     }
 
-    float roughnessAgreement = 1.0;
-    if (virtualHistory.found)
-        roughnessAgreement = exp(-8.0 * abs(
-            virtualHistory.roughness - currentRoughness));
-    float virtualAmount = virtualHistory.found
-        ? virtualScale * virtualHistory.footprintQuality * roughnessAgreement
-        : 0.0;
-    RelaxReprojectedHistory history = relaxMixHistory(
-        surface, virtualHistory, clamp(virtualAmount, 0.0, 1.0));
-
-    float historyLength = history.found ? history.historyLength : 0.0;
-    float confidence = history.found
-        ? history.footprintQuality * mix(1.0, history.confidence, 0.5)
-        : 0.0;
-    if (history.found)
-        confidence *= exp(-8.0 * abs(history.roughness - currentRoughness));
-    confidence = clamp(confidence, 0.0, 1.0);
-
+    float historyLength = surface.found ? surface.historyLength
+        : (virtualHistory.found ? virtualHistory.historyLength : 0.0);
+    if (surface.found && surface.footprintQuality < 1.0)
+        historyLength = max(1.0, historyLength
+            * sqrt(surface.footprintQuality));
     float slowFrames = min(historyLength, float(RELAX_SPEC_MAX_HISTORY));
-    float fastFrames = min(historyLength, float(RELAX_SPEC_MAX_FAST_HISTORY));
-    float slowAlpha = history.found
-        ? max(1.0 - confidence, 1.0 / (1.0 + slowFrames)) : 1.0;
-    float fastAlpha = history.found
-        ? max(1.0 - confidence, 1.0 / (1.0 + fastFrames)) : 1.0;
+    float responsiveFrames = min(historyLength,
+        float(RELAX_SPEC_MAX_FAST_HISTORY));
+
+    float lobeHalfAngle = max(atan(relaxSpecLobeTanHalfAngle(
+        currentRoughness, RELAX_LOBE_ANGLE_FRACTION)), 1.5 / 255.0);
+    vec3 Vprev = -relaxSafeNormalize(currentPos + cameraDelta, currentPos);
+    float smbConfidence = surface.found
+        ? relaxAngularConfidence(V, Vprev,
+            lobeHalfAngle * max(NoV, 0.01)) : 0.0;
+
+    float virtualRoughnessWeight = virtualHistory.found
+        ? exp(-8.0 * abs(virtualHistory.roughness - currentRoughness)) : 0.0;
+    float vmbConfidence = virtualHistory.found
+        ? 0.1 + 0.9 * virtualRoughnessWeight : 0.0;
+    if (virtualHistory.found)
+        vmbConfidence *= float(dot(virtualHistory.normal, currentNormal) > 0.0);
+
+    float magicCurve = relaxSpecMagicCurve(currentRoughness);
+    float hitDistanceCenter = mix(noisy.hitDistance,
+        surface.found ? surface.hitDistance : noisy.hitDistance, magicCurve);
+    float maxHitDistance = max(hitDistanceCenter,
+        virtualHistory.found ? virtualHistory.hitDistance : hitDistanceCenter);
+    float relativeHitError = abs(hitDistanceCenter -
+        (virtualHistory.found ? virtualHistory.hitDistance : hitDistanceCenter))
+        / max(surfaceDistance + maxHitDistance, 1e-5);
+    float hitConfidence = mix(1.0 - clamp(mix(20.0, 0.0, magicCurve)
+        * relativeHitError, 0.0, 1.0), 1.0, magicCurve);
+
+    if (virtualHistory.found) {
+        vec3 trackedVirtualPoint = primaryRay * (surfaceDistance
+            + virtualHistory.hitDistance * virtualScale);
+        vec2 trackedUv = relaxProjectPrevious(trackedVirtualPoint, cameraDelta);
+        float uvErrorPixels = length((trackedUv - virtualUv)
+            * vec2(resolution_global));
+        float lobeTan = max(relaxSpecLobeTanHalfAngle(currentRoughness, 0.6),
+            0.5 / max(float(resolution_global.x), 1.0));
+        float lobeRadiusPixels = min(focusedHitDistance,
+            virtualHistory.hitDistance) * lobeTan
+            * float(resolution_global.y) / max(surfaceDistance, 1e-4);
+        hitConfidence *= 1.0 - smoothstep(0.0,
+            lobeRadiusPixels + 0.25, uvErrorPixels);
+    }
+
+    float smbSlowAlpha = surface.found
+        ? max(1.0 - smbConfidence, 1.0 / (1.0 + slowFrames)) : 1.0;
+    float smbFastAlpha = surface.found
+        ? max(smbSlowAlpha, 1.0 / (1.0 + responsiveFrames)) : 1.0;
+    float vmbSlowAlpha = virtualHistory.found
+        ? max(1.0 - vmbConfidence, 1.0 / (1.0 + slowFrames)) : 1.0;
+    float vmbFastAlpha = virtualHistory.found
+        ? max(1.0 - vmbConfidence * hitConfidence,
+            1.0 / (1.0 + responsiveFrames)) : 1.0;
+    float vmbHitAlpha = virtualHistory.found
+        ? max(1.0 - vmbConfidence * hitConfidence,
+            max(0.1, 1.0 / (1.0 + slowFrames))) : 1.0;
+
+    SpecularMaxEnt slowSMB = surface.found
+        ? relaxMixMaxEnt(surface.slowSignal, noisy.signal, smbSlowAlpha)
+        : noisy.signal;
+    SpecularMaxEnt slowVMB = virtualHistory.found
+        ? relaxMixMaxEnt(virtualHistory.slowSignal, noisy.signal, vmbSlowAlpha)
+        : noisy.signal;
+    SpecularMaxEnt fastSMB = surface.found
+        ? relaxMixMaxEnt(surface.responsiveSignal, noisy.signal, smbFastAlpha)
+        : noisy.signal;
+    SpecularMaxEnt fastVMB = virtualHistory.found
+        ? relaxMixMaxEnt(virtualHistory.responsiveSignal, noisy.signal,
+            vmbFastAlpha) : noisy.signal;
+    float m2SMB = surface.found ? mix(surface.secondMoment,
+        noisyM2, smbSlowAlpha) : noisyM2;
+    float m2VMB = virtualHistory.found ? mix(virtualHistory.secondMoment,
+        noisyM2, vmbSlowAlpha) : noisyM2;
+    float hitSMB = surface.found ? mix(surface.hitDistance,
+        noisy.hitDistance, max(smbSlowAlpha, 0.1)) : noisy.hitDistance;
+    float hitVMB = virtualHistory.found ? mix(virtualHistory.hitDistance,
+        noisy.hitDistance, vmbHitAlpha) : noisy.hitDistance;
+
+    float virtualAmount = virtualHistory.found
+        ? virtualScale * virtualHistory.footprintQuality : 0.0;
+    virtualAmount *= clamp(vmbConfidence / max(smbConfidence, 1e-6), 0.0, 1.0);
+    virtualAmount = clamp(virtualAmount, 0.0, 1.0);
 
     RelaxSlowSignal slow;
-    slow.signal = history.found
-        ? relaxMixMaxEnt(history.slowSignal, noisy.signal, slowAlpha)
-        : noisy.signal;
-    slow.secondMoment = history.found
-        ? mix(history.secondMoment, noisyM2, slowAlpha) : noisyM2;
+    slow.signal = relaxMixMaxEnt(slowSMB, slowVMB, virtualAmount);
+    slow.secondMoment = mix(m2SMB, m2VMB, virtualAmount);
+    slow.confidence = mix(smbConfidence, vmbConfidence, virtualAmount);
 
     RelaxFastSignal fast;
-    vec3 noisyYCoCg = relaxMaxEntYCoCg(noisy.signal);
-    fast.YCoCg = history.found
-        ? mix(history.fastYCoCg, noisyYCoCg, fastAlpha) : noisyYCoCg;
-    fast.hitDistance = history.found
-        ? mix(history.hitDistance, noisy.hitDistance, slowAlpha)
-        : noisy.hitDistance;
+    fast.signal = relaxMixMaxEnt(fastSMB, fastVMB, virtualAmount);
+    fast.hitDistance = mix(hitSMB, hitVMB, virtualAmount);
     fast.historyLength = min(historyLength + 1.0,
         float(RELAX_SPEC_MAX_HISTORY));
-    fast.confidence = confidence;
-    fast.materialID = currentMaterial;
 
     imageStore(colorimg4, ivec2(pixel), relaxPackSlow(slow));
     imageStore(colorimg5, ivec2(pixel), relaxPackFast(fast));
 
 #if DEBUG_VIEW == 12
     writeReflLight(pixel, specularMaxEntTotalRgb(slow.signal),
-        fast.hitDistance, history.found ? 1.0 - slowAlpha : 0.0);
+        fast.hitDistance, 1.0 - mix(smbSlowAlpha, vmbSlowAlpha,
+            virtualAmount));
 #elif DEBUG_VIEW == 14
-    writeReflLight(pixel, vec3(history.found ? 1.0 - slowAlpha : 0.0),
+    writeReflLight(pixel, vec3(1.0 - mix(smbSlowAlpha, vmbSlowAlpha,
+        virtualAmount)),
         fast.hitDistance, 0.0);
 #endif
 }

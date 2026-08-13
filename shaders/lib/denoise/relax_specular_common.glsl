@@ -107,47 +107,41 @@ RelaxPrepassSignal relaxUnpackPrepass(uvec4 p) {
 struct RelaxSlowSignal {
     SpecularMaxEnt signal;
     float secondMoment;
+    float confidence;
 };
 
 uvec4 relaxPackSlow(RelaxSlowSignal s) {
     uvec3 p = packSpecularMaxEnt(s.signal);
     return uvec4(p, relaxPackHalf2(
-        encodeSqrtMomentFP16(s.secondMoment), 0.0));
+        encodeSqrtMomentFP16(s.secondMoment), s.confidence));
 }
 
 RelaxSlowSignal relaxUnpackSlow(uvec4 p) {
     RelaxSlowSignal s;
     s.signal = unpackSpecularMaxEnt(p.xyz);
-    s.secondMoment = decodeSqrtMomentFP16(unpackHalf2x16(p.w).x);
+    vec2 momentConfidence = unpackHalf2x16(p.w);
+    s.secondMoment = decodeSqrtMomentFP16(momentConfidence.x);
+    s.confidence = clamp(momentConfidence.y, 0.0, 1.0);
     return s;
 }
 
-// Responsive history intentionally carries only total YCoCg. The angular
-// state remains in the slow MaxEnt record, where it is stable enough to use.
 struct RelaxFastSignal {
-    vec3 YCoCg;
+    SpecularMaxEnt signal;
     float hitDistance;
     float historyLength;
-    float confidence;
-    uint materialID;
 };
 
 uvec4 relaxPackFast(RelaxFastSignal s) {
-    return uvec4(relaxPackHalf2(s.YCoCg.x, s.YCoCg.y),
-        relaxPackHalf2(s.YCoCg.z, s.hitDistance),
-        relaxPackHalf2(s.historyLength, s.confidence), s.materialID);
+    uvec3 p = packSpecularMaxEnt(s.signal);
+    return uvec4(p, relaxPackHalf2(s.hitDistance, s.historyLength));
 }
 
 RelaxFastSignal relaxUnpackFast(uvec4 p) {
     RelaxFastSignal s;
-    vec2 yc = unpackHalf2x16(p.x);
-    vec2 ch = unpackHalf2x16(p.y);
-    vec2 nc = unpackHalf2x16(p.z);
-    s.YCoCg = vec3(yc, ch.x);
-    s.hitDistance = max(ch.y, 0.0);
-    s.historyLength = max(nc.x, 0.0);
-    s.confidence = clamp(nc.y, 0.0, 1.0);
-    s.materialID = p.w;
+    s.signal = unpackSpecularMaxEnt(p.xyz);
+    vec2 hn = unpackHalf2x16(p.w);
+    s.hitDistance = max(hn.x, 0.0);
+    s.historyLength = max(hn.y, 0.0);
     return s;
 }
 
