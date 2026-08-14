@@ -26,17 +26,15 @@ void markRadianceCacheGeometryHit(uvec2 pixel, vec3 hitPosition,
 #endif
 
 // ===========================================================================
-// NEE: Direct Sunlight (branch-free per lobe type)
+// NEE: Direct Sunlight
 // ===========================================================================
 
-bool sampleDirectSun(vec3 ro, vec3 geometryNormal, vec3 lightDir, bool inside,
-    vec2 xi,
+bool sampleDirectSun(vec3 ro, vec3 geometryNormal, vec3 shadingNormal,
+    vec3 lightDir, bool inside, vec2 xi,
     out vec3 wi, out vec3 Li, out float lightPdf) {
     wi = -lightDir;
     Li = vec3(0.0);
     lightPdf = 1.0 / sunSolidAngle();
-    ro += (dot(lightDir, geometryNormal) > 0.15 ? lightDir : geometryNormal) * 0.001;
-
     vec3 X, Y, Z;
     XYZ(lightDir, X, Y, Z);
     float r1 = xi.x;
@@ -44,11 +42,18 @@ bool sampleDirectSun(vec3 ro, vec3 geometryNormal, vec3 lightDir, bool inside,
     float cosbeta = 1.0 - r1 * (1.0 - cosD_S);
     vec3 sampleDir = cosbeta * Y + sqrt(1.0 - cosbeta * cosbeta) * (cos(alpha) * X + sin(alpha) * Z);
 
+    wi = -sampleDir;
+    // Reject directions that no surface lobe can consume before paying for
+    // an RT visibility traversal.
+    if (dot(wi, geometryNormal) <= 0.0
+            || dot(wi, shadingNormal) <= 0.0) return false;
+
+    ro += (dot(lightDir, geometryNormal) > 0.15 ? lightDir : geometryNormal) * 0.001;
+
     vec3 ro_o, rd_o;
-    float t = raycast(ro, -sampleDir, ro_o, rd_o, !inside, true);
+    float t = raycast(ro, wi, ro_o, rd_o, !inside, true);
     if (t > -0.5) return false;
 
-    wi = -sampleDir;
     // NEE owns only the solar disc. Atmospheric scattering remains in the
     // BSDF-sampled no-disc environment and is therefore never double counted.
     Li = sampleSkySunDisc(ro.y, wi, lightDir).xyz
@@ -56,9 +61,10 @@ bool sampleDirectSun(vec3 ro, vec3 geometryNormal, vec3 lightDir, bool inside,
     return !any(isnan(Li)) && !any(isinf(Li));
 }
 
-bool sampleDirectSun(vec3 ro, vec3 geometryNormal, vec3 lightDir, bool inside,
+bool sampleDirectSun(vec3 ro, vec3 geometryNormal, vec3 shadingNormal,
+    vec3 lightDir, bool inside,
     out vec3 wi, out vec3 Li, out float lightPdf) {
-    return sampleDirectSun(ro, geometryNormal, lightDir, inside,
+    return sampleDirectSun(ro, geometryNormal, shadingNormal, lightDir, inside,
         vec2(getRandom(), getRandom()), wi, Li, lightPdf);
 }
 
@@ -66,15 +72,14 @@ vec3 evalDirectDiffuse(vec3 ro, vec3 geometryNormal, vec3 shadingNormal,
     vec3 diffuseAlbedo, vec3 rd_i, vec3 lightDir, bool inside) {
     vec3 wi, Li;
     float lightPdf;
-    if (!sampleDirectSun(
-            ro, geometryNormal, lightDir, inside, wi, Li, lightPdf))
+    if (!sampleDirectSun(ro, geometryNormal, shadingNormal,
+            lightDir, inside, wi, Li, lightPdf))
         return vec3(0.0);
 
+    // sampleDirectSun already rejected both invalid hemispheres.
     float OiN = dot(wi, shadingNormal);
-    float oiNWeight = float(OiN > 0.0 && dot(wi, geometryNormal) > 0.0);
-
     return max(vec3(0.0), diffuseAlbedo * Li
-            * (OiN * oiNWeight / max(PI * lightPdf, 1e-20)));
+            * (OiN / max(PI * lightPdf, 1e-20)));
 }
 
 vec3 evalDirectDiffuseIncident(vec3 ro, vec3 geometryNormal,

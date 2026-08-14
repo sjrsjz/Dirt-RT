@@ -111,6 +111,7 @@
 // -- Exposure & Display --
 #define DISPLAY_MAX_LUMINANCE 100 // Peak brightness of your display in nits (cd/m²). Used for HDR exposure calculation. [50 75 100 150 200 300 400 500 600 700 800 900 1000]
 #define DISPLAY_PAPER_WHITE_LUMINANCE 0.5 // Target paper white luminance in sRGB normalized space (0–1). Sets the mid-gray anchor for auto exposure — lower = brighter scene. [0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
+#define AUTO_EXPOSURE_OUTLIER_TOLERANCE 2.0 // Log-luminance outlier weighting width. Lower values reject extreme samples more aggressively; higher values retain more of them. [0.25 0.5 0.75 1.0 1.5 2.0 3.0 4.0 6.0 8.0]
 #define EXPOSURE_CURVE_K 0.0 // Highlight compression before tonemap: f(x)=ln(k+e^x)-ln(1+k). 0=off, higher=more compression. [0.0 0.1 0.25 0.5 1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0 9.0 10.0]
 #define PUPIL_MIN_DIAMETER_MM 2.0 // Minimum physical pupil diameter in millimetres. Limits fast optical adaptation in bright scenes; neural adaptation still supplies the remaining exposure range. [1.0 1.5 2.0 2.5 3.0 3.5 4.0]
 #define PUPIL_MAX_DIAMETER_MM 8.0 // Maximum physical pupil diameter in millimetres. Limits fast optical adaptation in dark scenes; neural adaptation still supplies the remaining exposure range. [4.0 5.0 6.0 7.0 8.0 9.0 10.0]

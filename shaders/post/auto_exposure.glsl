@@ -135,7 +135,7 @@ void main() {
     float weighted_sum_log = 0.0;
     float total_weight = 0.0;
 
-    float tolerance = 2.0; 
+    float tolerance = max(float(AUTO_EXPOSURE_OUTLIER_TOLERANCE), 1e-4);
 
     for (int i = 0; i < NUM_SAMPLES; i++) {
         float diff = logLumas[i] - mean;

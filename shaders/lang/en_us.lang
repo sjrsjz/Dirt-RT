@@ -310,6 +310,9 @@ option.DISPLAY_MAX_LUMINANCE.comment = Approximate display peak brightness in ni
 option.DISPLAY_PAPER_WHITE_LUMINANCE = sRGB Paper White Luminance
 option.DISPLAY_PAPER_WHITE_LUMINANCE.comment = Target brightness of ordinary diffuse white relative to the display range. Lower values leave more highlight headroom and make exposure appear brighter.
 
+option.AUTO_EXPOSURE_OUTLIER_TOLERANCE = Auto-Exposure Outlier Tolerance
+option.AUTO_EXPOSURE_OUTLIER_TOLERANCE.comment = Controls the width of soft outlier weighting in log-luminance space. Lower values reject isolated bright and dark samples more aggressively; higher values let them influence exposure more strongly.
+
 option.EXPOSURE_CURVE_K = Exposure Curve
 option.EXPOSURE_CURVE_K.comment = Compresses highlights before tone mapping. Zero disables the curve; higher values retain more bright detail but reduce highlight contrast.
 

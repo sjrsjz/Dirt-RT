@@ -55,18 +55,24 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     } else {
         vec3 geometryNormal = fb.geometry_n;
         vec3 macroNormal = fb.macro_n;
-        #if defined(FIRST_LOBE_DIFFUSE)
-        // The diffuse continuation never consumes a GGX micro-normal.
-        vec3 microNormal = macroNormal;
-        #else
-        vec3 microNormal = isDeltaSpecular(surf.R.x) ? macroNormal
-            : GGXVNDFNormal(macroNormal, -fb.rd_i, surf.R.x,
-                rtBlueNoise2D(xy, 0u));
-        #endif
         float n_i = inside ? REFRACTIVE_INDEX : 1.0;
         float n_o = inside ? 1.0 : REFRACTIVE_INDEX;
         float rs = n_i / n_o;
         LobeProbs lobes = computeLobeProbs(surf, fb.rd_i, macroNormal, rs);
+        #if defined(FIRST_LOBE_DIFFUSE)
+        // The diffuse continuation never consumes a GGX micro-normal.
+        vec3 microNormal = macroNormal;
+        #elif defined(FIRST_LOBE_REFLECTION)
+        vec3 microNormal = macroNormal;
+        if (lobes.P_spec > 1e-8 && !isDeltaSpecular(surf.R.x))
+            microNormal = GGXVNDFNormal(macroNormal, -fb.rd_i, surf.R.x,
+                rtBlueNoise2D(xy, 0u));
+        #else
+        vec3 microNormal = macroNormal;
+        if (lobes.P_refr > 1e-8 && !isDeltaSpecular(surf.R.x))
+            microNormal = GGXVNDFNormal(macroNormal, -fb.rd_i, surf.R.x,
+                rtBlueNoise2D(xy, 0u));
+        #endif
 
         vec3 bsdf_weight = vec3(0.0);
         vec3 next_rd = fb.rd_i;
@@ -110,18 +116,19 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         lastNeeCompatible = true;
         #endif
 
-        bool firstHasSunNee = current_type == DIFFUSION
-                || (current_type == REFLECTION && !isDeltaSpecular(surf.R.x));
+        bool firstHasSunNee = (current_type == DIFFUSION
+                    && lobes.P_diff > 1e-8)
+                || (current_type == REFLECTION && lobes.P_spec > 1e-8
+                    && !isDeltaSpecular(surf.R.x));
         if (!isDarkened && firstHasSunNee) {
             vec3 sunWi, sunLi;
             float lightPdf;
-            if (sampleDirectSun(ro_o, geometryNormal, lightDir, inside,
+            if (sampleDirectSun(ro_o, geometryNormal, macroNormal,
+                    lightDir, inside,
                     rtBlueNoise2D(xy, 1u),
                     sunWi, sunLi, lightPdf)) {
                 L_direct_0_dir = sunWi;
-                if (current_type == DIFFUSION
-                        && dot(sunWi, geometryNormal) > 0.0
-                        && dot(sunWi, macroNormal) > 0.0) {
+                if (current_type == DIFFUSION) {
                     GuideInfo directGuide = computeMaxEntGuide(
                             ro_o, PATH_GUIDING_STRENGTH);
                     float proposalPdf = (1.0 - directGuide.prob)
@@ -146,8 +153,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                                 * (Fd * misWeight / max(PI * lightPdf, 1e-20)));
                     #endif
                 } else if (current_type == REFLECTION
-                        && !isDeltaSpecular(surf.R.x)
-                        && dot(sunWi, geometryNormal) > 0.0) {
+                        && !isDeltaSpecular(surf.R.x)) {
                     vec3 fSpecTimesNoL;
                     float pdfNDF;
                     if (evaluateSpecularBRDF(-fb.rd_i, sunWi, macroNormal,
@@ -278,20 +284,20 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         #endif
 
         // --- NEE at depth 0 ---
-        bool firstHasSunNee = current_type == DIFFUSION
-                || (current_type == REFLECTION
+        bool firstHasSunNee = (current_type == DIFFUSION
+                    && lobes.P_diff > 1e-8)
+                || (current_type == REFLECTION && lobes.P_spec > 1e-8
                     && !isDeltaSpecular(surf.R.x));
         if (!isDarkened && firstHasSunNee) {
             vec3 sunWi, sunLi;
             float lightPdf;
-            if (sampleDirectSun(ro_o, geometryNormal, lightDir, inside,
+            if (sampleDirectSun(ro_o, geometryNormal, macroNormal,
+                    lightDir, inside,
                     rtBlueNoise2D(xy, 1u),
                     sunWi, sunLi, lightPdf)) {
                 L_direct_0_dir = sunWi;
 
-                if (current_type == DIFFUSION
-                        && dot(sunWi, geometryNormal) > 0.0
-                        && dot(sunWi, macroNormal) > 0.0) {
+                if (current_type == DIFFUSION) {
                     GuideInfo directGuide = computeMaxEntGuide(
                             ro_o, PATH_GUIDING_STRENGTH);
                     float proposalPdf = (1.0 - directGuide.prob)
@@ -315,8 +321,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                                 * (Fd * misWeight / max(PI * lightPdf, 1e-20)));
                     #endif
                 } else if (current_type == REFLECTION
-                        && !isDeltaSpecular(surf.R.x)
-                        && dot(sunWi, geometryNormal) > 0.0) {
+                        && !isDeltaSpecular(surf.R.x)) {
                     vec3 fSpecTimesNoL;
                     float pdfNDF;
                     if (evaluateSpecularBRDF(
@@ -481,8 +486,8 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                 vec3 sunWi, sunLi;
                 float lightPdf;
                 vec3 sunL = vec3(0.0);
-                if (sampleDirectSun(
-                        ro_o, geometryNormal, lightDir, surfaceInside,
+                if (sampleDirectSun(ro_o, geometryNormal, macroNormal,
+                        lightDir, surfaceInside,
                         sunWi, sunLi, lightPdf)) {
                     if (hasDiffuseSunNee) {
                         vec3 diffuseColor = surf.Cd
@@ -499,8 +504,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                         }
                     }
 
-                    if (hasSpecularSunNee
-                            && dot(sunWi, geometryNormal) > 0.0) {
+                    if (hasSpecularSunNee) {
                         vec3 fSpecTimesNoL;
                         float pdfNDF;
                         if (evaluateSpecularBRDF(

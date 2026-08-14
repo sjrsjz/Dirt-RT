@@ -14,8 +14,13 @@ void handleFirstBounce_Reflection(
     out float sampledStrategyPdf, out bool sampledDelta
 ) {
     vec3 wo = -rd_i;
+    bsdf_weight = vec3(0.0);
+    next_rd = rd_i;
     sampledStrategyPdf = 0.0;
     sampledDelta = isDeltaSpecular(surf.R.x);
+    // Dedicated first-lobe passes are full-screen. Do not start a
+    // continuation for a material whose reflection lobe has zero support.
+    if (lobes.P_spec <= 1e-8) return;
 
     if (sampledDelta) {
         next_rd = reflect(rd_i, macroNormal);
@@ -59,6 +64,15 @@ void handleFirstBounce_Refraction(
     out vec3 bsdf_weight, out vec3 next_rd, inout bool inside_state,
     out PSRResult psr, bool wasInside, int baseDepth
 ) {
+    bsdf_weight = vec3(0.0);
+    next_rd = rd_i;
+    psr.virtualDist = 0.0;
+    psr.pathRoughness = 0.0;
+    psr.refrDir = rd_i;
+    // Most primary surfaces are opaque. This guard must precede refract() and,
+    // especially, tracePSRChain(), which can issue four additional RT rays.
+    if (lobes.P_refr <= 1e-8) return;
+
     vec3 refract_dir = refract(rd_i, microNormal, rs);
     vec3 psr_refract_dir = refract(rd_i, geometryNormal, rs);
 
@@ -110,6 +124,13 @@ void handleFirstBounce_Diffuse(
     material surf, LobeProbs lobes, vec2 xi,
     out vec3 bsdf_weight, out vec3 next_rd, out float sampledStrategyPdf
 ) {
+    bsdf_weight = vec3(0.0);
+    next_rd = rd_i;
+    sampledStrategyPdf = 0.0;
+    // Metals and fully transmissive interfaces cannot consume the dedicated
+    // diffuse sample; avoid the guide-buffer lookup and continuation ray.
+    if (lobes.P_diff <= 1e-8) return;
+
     GuideInfo guide = computeMaxEntGuide(ro_o, PATH_GUIDING_STRENGTH);
     float guideWeight;
     sampleDiffuseWithGuide(

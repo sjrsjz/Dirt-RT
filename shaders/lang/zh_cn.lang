@@ -310,6 +310,9 @@ option.DISPLAY_MAX_LUMINANCE.comment = 显示器大致的持续峰值亮度，�
 option.DISPLAY_PAPER_WHITE_LUMINANCE = sRGB 纸白亮度
 option.DISPLAY_PAPER_WHITE_LUMINANCE.comment = 普通漫反射白色相对于显示范围的目标亮度。降低它会给高光留下更多余量，并使场景曝光看起来更亮。
 
+option.AUTO_EXPOSURE_OUTLIER_TOLERANCE = 自动曝光离群容差
+option.AUTO_EXPOSURE_OUTLIER_TOLERANCE.comment = 控制对数亮度空间中离群样本的软权重宽度。数值越低，越激进地剔除孤立的极亮和极暗样本；数值越高，这些样本对自动曝光的影响越强。
+
 option.EXPOSURE_CURVE_K = 曝光曲线
 option.EXPOSURE_CURVE_K.comment = 在色调映射前压缩高光。设为 0 表示关闭；数值越高越能保留亮部细节，但高光对比度会降低。
 

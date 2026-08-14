@@ -110,13 +110,12 @@ bool restirGIDomainAlreadyPresent(
     return false;
 }
 
-int restirGIBuildDomains(uvec2 targetPixel, vec3 cameraOrigin,
+int restirGIBuildDomains(RestirGIPrimaryDomain target, vec3 cameraOrigin,
         out RestirGIPrimaryDomain domains[RESTIR_GI_MAX_DOMAINS]) {
-    RestirGIPrimaryDomain target = restirGILoadDomain(
-        targetPixel, cameraOrigin);
+    uvec2 targetPixel = target.pixel;
     domains[0] = target;
-    int count = target.valid ? 1 : 0;
-    if (!target.valid) return 0;
+    // Resolve validates the target before entering the neighbour builder.
+    int count = 1;
 
     float angle = 2.0 * PI * hash12(vec2(targetPixel)
         + vec2(float(cam.frameId) * 0.754877666,
@@ -297,7 +296,6 @@ float restirGIHistoryActivity(RestirGIPrimaryDomain target) {
 
 void ResolveFirstBounceRestirGI(uvec2 coord, vec3 ro) {
     #if RESTIR_GI_ENABLED && EON_ENABLED
-    MaxEntEncoding canonicalIndirect = restirGILoadCanonicalIndirect(coord);
     RestirGIPrimaryDomain target = restirGILoadDomain(coord, ro);
     if (!target.valid) {
         writeRestirGIPrewarm(coord, init_maxent());
@@ -313,14 +311,12 @@ void ResolveFirstBounceRestirGI(uvec2 coord, vec3 ro) {
         return;
     }
 
-    RestirGIPrimaryDomain domains[RESTIR_GI_MAX_DOMAINS];
-    int domainCount = restirGIBuildDomains(coord, ro, domains);
-    if (domainCount == 0) {
-        writeRestirGIPrewarm(coord, canonicalIndirect);
-        return;
-    }
+    // Mature pixels only clear the transient atom, so they need no canonical
+    // light-buffer read. Defer it until a fallback or mixture actually uses it.
+    MaxEntEncoding canonicalIndirect = restirGILoadCanonicalIndirect(coord);
 
-    target = domains[0];
+    RestirGIPrimaryDomain domains[RESTIR_GI_MAX_DOMAINS];
+    int domainCount = restirGIBuildDomains(target, ro, domains);
     int eligibleCount = 0;
     int selectedIndex = -1;
     float luminanceSum = 0.0;
