@@ -100,10 +100,11 @@
 // -- À-trous spatial filter (atrous_denoise_diffuse.glsl) --
 #define ATROUS_NORMAL_POWER 32.0 // Normal edge-stopping sensitivity in à-trous wavelet filter. Higher = sharper normal edges preserved. [1 2 4 8 16 32 64 128]
 #define ATROUS_PHI_L 0.35 // Luma edge-stopping sensitivity. Higher = more aggressive denoising. [0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5]
-#define ATROUS_POSITION_PARAM 0.01 // Depth edge-stopping sensitivity. Higher = sharper depth boundaries preserved. [0.00075 0.00125 0.0025 0.005 0.01 0.02 0.04 0.08]
+#define ATROUS_POSITION_PARAM 0.1 // Depth edge-stopping sensitivity. Higher = sharper depth boundaries preserved. [0.005 0.01 0.02 0.03 0.04 0.05 0.06 0.07 0.08 0.09 0.1 0.2 0.3 0.4 0.5]
 #define ATROUS_GAMMA 1.0 // Roughness-dependent filter order adaptation strength. 0 = constant filter width regardless of roughness (blurrier on rough surfaces), 1 = standard roughness adaptation, higher = more aggressive widening on rough surfaces. [0.0 0.25 0.5 0.75 1.0 1.5 2.0]
 
 // -- Bloom --
+#define CAMERA_VIGNETTE_STRENGTH 0.5 // Mix weight of the RT-projection/FOV-aware cos^4 lens falloff. 0 = off, 1 = ideal cos^4 falloff. [0.0 0.1 0.2 0.25 0.3 0.4 0.5 0.6 0.75 1.0]
 #define BLOOM_MIX 0.15 // Bloom blend strength. 0 = off (scene only), 1 = full bloom. [0.0 0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5 0.6 0.8 1.0]
 #define BLOOM_DIFFUSION_SCALE 1.0 // Multiplies the physical RGB scattering sigma at every Gaussian diffusion stage. [0.5 0.625 0.75 0.875 1.0 1.125 1.25 1.5]
 #define BLOOM_CHROMATIC_SCATTER 0.5 // Rayleigh fraction of lens-scattering power. 0 = wavelength-independent large-particle limit; 1 = pure small-particle Rayleigh limit. [0.0 0.125 0.25 0.375 0.5 0.625 0.75 0.875 1.0]
@@ -122,7 +123,7 @@
 #define VPROJDIST_SKY 60000.0 // Virtual projected distance assigned to sky hits (m). Used by specular/refraction denoiser to tag infinity. [5000.0 10000.0 25000.0 50000.0 60000.0 100000.0 250000.0]
 
 // -- Debug view --
-#define DEBUG_VIEW 3 // Debug output mode. [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37]
+#define DEBUG_VIEW 0 // Debug output mode. [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37]
 
 /*
 const int depthtex0Format = RGBA32F;

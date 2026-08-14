@@ -4,11 +4,12 @@
 // Ray traversal, material decoding and primary-space helpers.
 
 float raycastMin(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o,
-    bool inverse_0, bool isNEE, float tMin) {
+    bool inverse_0, bool isNEE, bool ignoreTransmissive, float tMin) {
     bool inside = !inverse_0;
     payload_packRayCone(payload.data, rtCurrentConeWidth,
         rtCurrentConeSpread);
-    payload_packFlags(payload.data, 0.0, inside, false, isNEE);
+    payload_packFlags(payload.data, 0.0, inside, false, isNEE,
+        ignoreTransmissive);
     payload_packShadow(payload.data, vec3(1.0), 0);
     float tMax = 2048.0;
     traceRayEXT(acc, gl_RayFlagsNoneEXT, 0xFF, 0, 0, 0, ro, tMin, rd, tMax, 6);
@@ -23,12 +24,23 @@ float raycastMin(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o,
     return t;
 }
 
+float raycastMin(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o,
+    bool inverse_0, bool isNEE, float tMin) {
+    return raycastMin(ro, rd, ro_o, rd_o, inverse_0, isNEE, false,
+        tMin);
+}
+
 float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse_0, bool isNEE) {
     return raycastMin(ro, rd, ro_o, rd_o, inverse_0, isNEE, 0.0);
 }
 
 float raycast(in vec3 ro, in vec3 rd, out vec3 ro_o, out vec3 rd_o, bool inverse_0) {
     return raycast(ro, rd, ro_o, rd_o, inverse_0, false);
+}
+
+float raycastIgnoreTransmissive(in vec3 ro, in vec3 rd,
+        out vec3 ro_o, out vec3 rd_o, bool inverse_0) {
+    return raycastMin(ro, rd, ro_o, rd_o, inverse_0, false, true, 0.0);
 }
 
 vec4 getPrimarySurfaceMotion(Payload hitPayload) {

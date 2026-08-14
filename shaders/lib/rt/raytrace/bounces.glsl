@@ -85,7 +85,10 @@ void handleFirstBounce_Refraction(
         if (psrEnabled) {
             vec3 chain_rd = dot(psr_refract_dir, psr_refract_dir) > 0.0 ? psr_refract_dir : refract_dir;
             float savedConeWidth = rtCurrentConeWidth;
-            psr = tracePSRChain(ro_o, chain_rd, geometryNormal, surf.R.x, was_inverse_0, baseDepth);
+            int firstMediumBlockID = surf.R.z > 0.5
+                ? BLOCK_WATER : BLOCK_GLASS;
+            psr = tracePSRChain(ro_o, chain_rd, geometryNormal,
+                surf.R.x, was_inverse_0, firstMediumBlockID, baseDepth);
             rtCurrentConeWidth = savedConeWidth;
         } else {
             psr.virtualDist = 0.0;

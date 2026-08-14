@@ -165,8 +165,8 @@ Reservoir spatialReservoir(uvec2 gid, vec3 centerNormal, vec3 centerPos, inout u
 
         // 深度不连续拒绝
         vec3 pos;
-        float dist;
-        readGeo0(GEO_N_GEO, xy, pos, dist);
+        float surfaceMask;
+        readDiffuseGeo(xy, pos, surfaceMask);
         // Plane distance in units of the center pixel's world-space footprint.
         // ATROUS_POSITION_PARAM is a scale, so it belongs in the denominator;
         // multiplying by its small value would make almost every edge weight 1.
@@ -240,7 +240,7 @@ bool sampleHistory(uvec2 gxy, vec3 curPos, float curDist, inout uint seed,
 
     vec3 surfaceMotion;
     float motionValid;
-    readSurfaceMotion(gxy, surfaceMotion, motionValid);
+    readDiffuseMotion(gxy, surfaceMotion, motionValid);
     if (motionValid < 0.5) return false;
 
     vec3 prevPos = curPos + camPos - prevRaytracingCamPos - surfaceMotion;
@@ -290,7 +290,9 @@ void main() {
     vec3 centerNormal, centerPos;
     float centerDist;
     {
-        readGeo0(GEO_N_GEO, gxy, centerPos, centerDist);
+        float centerMask;
+        readDiffuseGeo(gxy, centerPos, centerMask);
+        centerDist = centerMask > 0.5 ? length(centerPos) : -1.0;
     }
 
     // Guiding is consumed only by surface rays. Skip eight scattered probes,
@@ -299,10 +301,7 @@ void main() {
         imageStore(colorimg6, pix, uvec4(0u));
         return;
     }
-    float roughnessUnused, pathRoughnessUnused;
-    int materialUnused;
-    readGeo1(GEO_N_NORMALS, gxy, centerNormal, roughnessUnused,
-        materialUnused, pathRoughnessUnused);
+    centerNormal = readDiffuseGeometryNormal(gxy);
 
     // Phase 2: Poisson 盘空间蓄水池
     Reservoir r = spatialReservoir(gid, centerNormal, centerPos, seed);

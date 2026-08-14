@@ -67,13 +67,81 @@ vec3 projectDiffuseLighting(MaxEntEncoding encoded, vec3 normal,
     #endif
 }
 
+vec3 resolvePSRRefraction(uvec2 xy) {
+    PSRResolveData psr = readPSRResolve(xy);
+
+    if (psr.environment) {
+        setSkyVars();
+        vec3 sky = sampleSky(camPos.y, psr.refractedDirection,
+            -lightDir_global);
+        return psr.transmittance * max(sky, vec3(0.0));
+    }
+    if (!psr.endpointValid) return vec3(0.0);
+
+    vec3 resolved = vec3(0.0);
+    bool reusedScreen = false;
+    if (psr.screenCandidate) {
+        vec4 clip = rtViewProjection * vec4(psr.endpointRelative, 1.0);
+        if (clip.w > 1e-6) {
+            vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
+            if (all(greaterThanEqual(uv, vec2(0.0)))
+                    && all(lessThan(uv, vec2(1.0)))) {
+                vec2 samplePixel = uv * vec2(resolution_global) - 0.5;
+                ivec2 nearestPixel = clamp(
+                    ivec2(floor(samplePixel + 0.5)), ivec2(0),
+                    ivec2(resolution_global) - 1);
+                vec3 backgroundPosition;
+                float backgroundMask;
+                readDiffuseGeo(uvec2(nearestPixel), backgroundPosition,
+                    backgroundMask);
+                vec3 backgroundGeometryNormal =
+                    readDiffuseGeometryNormal(uvec2(nearestPixel));
+
+                float pixelFootprint = max(length(psr.endpointRelative)
+                    / max(float(resolution_global.y), 1.0), 0.025);
+                float positionTolerance = max(0.12,
+                    6.0 * pixelFootprint);
+                bool geometryMatches = backgroundMask > 0.5
+                    && length(backgroundPosition - psr.endpointRelative)
+                        <= positionTolerance
+                    && dot(backgroundGeometryNormal,
+                        psr.geometryNormal) > 0.75;
+                if (geometryMatches) {
+                    diffuseIlluminationData background =
+                        sampleDiffuse(samplePixel);
+                    resolved = projectDiffuseLighting(background.data_swap,
+                        psr.macroNormal, psr.refractedDirection,
+                        psr.roughness, psr.diffuseAlbedo);
+                    reusedScreen = true;
+                }
+            }
+        }
+    }
+
+    if (!reusedScreen) {
+        vec3 cachePosition = camPos + psr.endpointRelative
+            + psr.geometryNormal * RADIANCE_CACHE_SURFACE_EPSILON;
+        RadianceCache cache = loadRadianceCacheHistWorld(cachePosition);
+        if (radianceCacheValueValid(cache)) {
+            resolved = radianceCacheDiffuseIncident(cache,
+                psr.macroNormal) * psr.diffuseAlbedo;
+        }
+    }
+
+    return psr.transmittance * (resolved + psr.surfaceLight);
+}
+
 void main() {
     uvec2 xy = uvec2(gl_FragCoord.xy);
     ivec2 pix = ivec2(gl_FragCoord.xy);
     fragColor = vec4(0.0, 0.0, 0.0, 1.0);
 
-    // 用 N=1 surfaceMask 判定天空/表面（surfaceMask 不再在 N=0 重复存储）
-    float surfaceMask = readDiffuseSurfaceMask(xy);
+    // Primary visibility remains authoritative. The diffuse domain may be sky
+    // behind water/glass even though the primary pixel itself is a surface.
+    vec3 primaryPosition;
+    float primaryDistance;
+    readGeo0(GEO_N_GEO, xy, primaryPosition, primaryDistance);
+    float surfaceMask = primaryDistance > -0.5 ? 1.0 : 0.0;
 
     #if DEBUG_VIEW >= 35 && DEBUG_VIEW <= 37
     // Sky pixels do not contain a surface motion record.
@@ -132,7 +200,7 @@ void main() {
 
     diffuseIlluminationData tmp = fetchDiffuse(pix);
     vec3IlluminationData tmp2 = fetchReflect(pix);
-    vec3IlluminationData tmp3 = fetchRefract(pix);
+    vec3 refractionLighting = resolvePSRRefraction(xy);
     SpecularMaxEnt reflectionMaxEnt;
     float reflectionHitDistance, reflectionDebugWeight;
     readReflMaxEnt(xy, reflectionMaxEnt, reflectionHitDistance,
@@ -152,7 +220,7 @@ void main() {
     #if DEBUG_VIEW == 0
     fragColor.xyz = absorptionVal
             * (diffuseLighting
-                + tmp3.data_swap * transAlbedo
+                + refractionLighting * transAlbedo
                 + specularLighting
                 + lightVal)
             + emisVal;
@@ -163,7 +231,7 @@ void main() {
 
     #elif DEBUG_VIEW == 2
     // Refract only
-    fragColor.xyz = tmp3.data_swap * transAlbedo;
+    fragColor.xyz = refractionLighting * transAlbedo;
 
     #elif DEBUG_VIEW == 3
     // Reflect only
@@ -223,8 +291,14 @@ void main() {
     fragColor.xyz = jetColormap(clamp(tmp2.data_swap.r, 0.0, 1.0));
 
     #elif DEBUG_VIEW == 15
-    // Refract temporal accumulation weight (heatmap)
-    fragColor.xyz = jetColormap(clamp(tmp3.weight / ACCUMULATION_LENGTH, 0.0, 1.0));
+    // PSR route: green=screen reuse, blue=environment, orange=cache fallback.
+    {
+        PSRResolveData psr = readPSRResolve(xy);
+        fragColor.xyz = psr.environment ? vec3(0.0, 0.35, 1.0)
+            : psr.screenCandidate ? vec3(0.0, 1.0, 0.0)
+            : psr.endpointValid ? vec3(1.0, 0.35, 0.0)
+            : vec3(0.0);
+    }
 
     #elif DEBUG_VIEW == 16
     // First-surface material emission
@@ -241,10 +315,10 @@ void main() {
     #elif DEBUG_VIEW == 19
     // Refraction virtual projection distance (IOR-adjusted, rainbow colormap, log scale)
     {
-        vec3 dummyColor;
-        float d, dummyW;
-        readRefrLight(xy, dummyColor, d, dummyW);
-        fragColor.xyz = (d >= VPROJDIST_SKY * 0.99) ? vec3(1.0) : jetColormap(logDistNorm(d));
+        PSRResolveData psr = readPSRResolve(xy);
+        float d = length(psr.endpointRelative);
+        fragColor.xyz = psr.environment ? vec3(1.0)
+            : jetColormap(logDistNorm(d));
     }
 
     #elif DEBUG_VIEW == 20

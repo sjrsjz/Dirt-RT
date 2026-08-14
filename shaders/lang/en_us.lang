@@ -294,6 +294,9 @@ option.ATROUS_GAMMA.comment = Controls roughness-dependent widening of the diffu
 # ===========================================================================
 # Bloom
 # ===========================================================================
+option.CAMERA_VIGNETTE_STRENGTH = Camera Vignette Strength
+option.CAMERA_VIGNETTE_STRENGTH.comment = Mixes RT-projection and FOV-aware cos^4 lens falloff into the HDR scene before bloom. Zero disables it; one applies the ideal cos^4 law.
+
 option.BLOOM_MIX = Bloom Strength
 option.BLOOM_MIX.comment = Fraction of the final image contributed by bloom. Zero disables bloom blending; high values can wash out local contrast.
 option.BLOOM_DIFFUSION_SCALE = Bloom Diffusion Scale

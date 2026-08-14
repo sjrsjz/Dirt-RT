@@ -122,23 +122,39 @@ vec3 payload_unpackShadow(uint d[PAYLOAD_SLOTS]) {
 //   bit0: inside
 //   bit1: handedness
 //   bit2: isNEE  (direct sunlight shadow ray)
+//   bit3: ignore transmissive surfaces (background visibility ray)
 // ---------------------------------------------------------------------------
 void payload_packFlags(inout uint d[PAYLOAD_SLOTS], float prevDist,
-    bool inside, bool handedness, bool isNEE) {
+    bool inside, bool handedness, bool isNEE, bool ignoreTransmissive) {
     uint f = (inside ? 1u : 0u)
             | (handedness ? 2u : 0u)
-            | (isNEE ? 4u : 0u);
+            | (isNEE ? 4u : 0u)
+            | (ignoreTransmissive ? 8u : 0u);
     d[8] = packHalf2x16(vec2(prevDist, float(f)));
 }
 
+void payload_packFlags(inout uint d[PAYLOAD_SLOTS], float prevDist,
+    bool inside, bool handedness, bool isNEE) {
+    payload_packFlags(d, prevDist, inside, handedness, isNEE, false);
+}
+
 float payload_unpackFlags(uint d[PAYLOAD_SLOTS],
-    out bool inside, out bool handedness, out bool isNEE) {
+    out bool inside, out bool handedness, out bool isNEE,
+    out bool ignoreTransmissive) {
     vec2 v = unpackHalf2x16(d[8]);
     uint f = uint(v.y + 0.5);
     inside     = (f & 1u) != 0u;
     handedness = (f & 2u) != 0u;
     isNEE      = (f & 4u) != 0u;
+    ignoreTransmissive = (f & 8u) != 0u;
     return v.x;
+}
+
+float payload_unpackFlags(uint d[PAYLOAD_SLOTS],
+    out bool inside, out bool handedness, out bool isNEE) {
+    bool ignoreTransmissive;
+    return payload_unpackFlags(d, inside, handedness, isNEE,
+        ignoreTransmissive);
 }
 
 // ---------------------------------------------------------------------------

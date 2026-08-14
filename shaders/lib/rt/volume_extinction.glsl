@@ -15,9 +15,13 @@
 // Pure-water absorption coefficients (m⁻¹) at RGB wavelengths
 const vec3 WATER_ABSORPTION = vec3(0.14426950, 0.04328085, 0.05770780);
 
+vec3 waterVolumeTransmittance(float segmentDistance) {
+    return exp2(-max(segmentDistance, 0.0) * WATER_ABSORPTION);
+}
+
 vec3 applyVolumeExtinction(vec3 shadowTrans, float segDist, vec4 texColor, int blockID) {
     if (blockID == BLOCK_WATER) {
-        return shadowTrans * exp2(-segDist * WATER_ABSORPTION);
+        return shadowTrans * waterVolumeTransmittance(segDist);
     }
     float translucency = texColor.a;
     vec3 beersLambert = pow(max(texColor.rgb, 0.005), vec3(segDist));

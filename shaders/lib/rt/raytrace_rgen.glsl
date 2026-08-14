@@ -16,6 +16,7 @@
 #define PREV_DIFFUSE_BUFFER
 
 #include "/lib/rt/payload.glsl"
+#include "/lib/rt/volume_extinction.glsl"
 #define FRAGMENT_INFO_NO_PRIMITIVE
 #include "/lib/rt/fragment_info.glsl"
 #include "/lib/common/bicubic.glsl"
@@ -54,8 +55,10 @@
 // ---------------------------------------------------------------------------
 // PSR (Primary Surface Replacement) — refraction virtual-image reprojection
 // ---------------------------------------------------------------------------
-const float PSR_ROUGHNESS_THRESHOLD = 0.15; // first-surface roughness above this → disable PSR, fall back to first-surface temporal accumulation
-const float PATH_ROUGHNESS_TERMINATE = 0.8; // accumulated sqrt(Σ r_i²) above this → terminate refractive chain early (too diffuse)
+// Rough paths still trace an endpoint, but use the radiance cache instead of
+// screen-space diffuse reuse.
+const float PSR_ROUGHNESS_THRESHOLD = 0.15;
+const float PSR_PATH_ROUGHNESS_THRESHOLD = 0.8;
 const int MAX_REFRACTIVE_BOUNCES = 4; // max refractive surfaces to trace through before stopping
 
 layout(std430, binding = 0) uniform CameraInfo {
@@ -128,6 +131,7 @@ bool clearSkyContinuation(uvec2 pixel) {
     #if defined(FIRST_LOBE_DIFFUSE)
     diffuseBuffer.data[addr(DIF_N_LIGHT, pixel)] = uvec4(0u);
     diffuseBuffer.data[addr(DIF_N_GEO, pixel)] = uvec4(0u);
+    diffuseBuffer.data[addr(DIF_N_SURFACE, pixel)] = uvec4(0u);
     clearRestirGIScratch(pixel);
     #elif defined(FIRST_LOBE_REFLECTION)
     reflectBuffer.data[addr(SPEC_N_GEO, pixel)] = uvec4(0u);
@@ -135,7 +139,8 @@ bool clearSkyContinuation(uvec2 pixel) {
     #else
     refractBuffer.data[addr(SPEC_N_GEO, pixel)] = uvec4(0u);
     refractBuffer.data[addr(SPEC_N_LIGHT, pixel)] = uvec4(0u);
-    geomBuffer.data[addr(GEO_N_NORMALS, pixel)].w = 0u;
+    refractBuffer.data[addr(SPEC_N_HISTGEO, pixel)] = uvec4(0u);
+    refractBuffer.data[addr(SPEC_N_HISTLIGHT, pixel)] = uvec4(0u);
     #endif
     return true;
 }
@@ -185,6 +190,8 @@ void main() {
     setSkyVars();
     #if defined(PRIMARY_GBUFFER_PASS)
     TracePrimaryGBuffer(pixel, origin, direction);
+    #elif defined(FIRST_LOBE_REFRACTION)
+    TraceRefractionPSR(pixel, origin);
     #else
     Trace(pixel, origin, direction, -lightDir_global);
     #endif
@@ -221,6 +228,9 @@ void main() {
         projection[3][2] = -(2.0 * farD * zNear) / (farD - zNear);
         rtViewProjection = projection * rtModelView;
         rtInverseViewProjection = inverse(rtViewProjection);
+        rtProjectionParams = vec4(
+            projection[0][0], projection[1][1],
+            projection[2][0], projection[2][1]);
     }
     #endif
     #endif

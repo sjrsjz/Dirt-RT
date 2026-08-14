@@ -56,9 +56,7 @@ void main() {
     unpackLightSample(pix, packedGeometry, packedLight, pos, encoded,
         blurred_maxent);
     tmp.pos = pos;
-    float roughness_unused, pathRoughness_unused;
-    int illumType_unused;
-    readGeo1(GEO_N_NORMALS, gxy, tmp.histNormal, roughness_unused, illumType_unused, pathRoughness_unused);
+    tmp.histNormal = readDiffuseGeometryNormal(gxy);
     tmp.data_swap = encoded;
     tmp.data = mix_maxent(tmp.data, blurred_maxent,
             clamp(NRD_BLEND_STRENGTH * exp(-NRD_BLEND_STRENGTH * clamp(tmp.weight, 0.0, 100.0)), 0.0, 1.0));

@@ -42,6 +42,19 @@ Quad getRayQuad() {
 
 void main() {
     Quad quad = getRayQuad();
+    int blockID = quad.vertices[0].block_id.x;
+    bool inside, handedness, isNEE, ignoreTransmissive;
+    float prevDist = payload_unpackFlags(payload.data, inside, handedness,
+        isNEE, ignoreTransmissive);
+    bool isTransmissive = blockID == BLOCK_WATER || blockID == BLOCK_GLASS;
+
+    // Background visibility rays intentionally see the first opaque surface.
+    // Reject water/glass before UV gradients and anisotropic texture reads.
+    if (ignoreTransmissive && isTransmissive) {
+        ignoreIntersectionEXT;
+        return;
+    }
+
     bool sideB = getTriangleSide();
     vec2 uv = getFragmentUV(quad, baryCoord);
     int entityTextureIndex = quad.vertices[0].block_id.x == -2
@@ -96,12 +109,7 @@ void main() {
             textureResolution, footprint, true);
     }
 
-    bool inside, handedness, isNEE;
-    float prevDist = payload_unpackFlags(payload.data, inside, handedness, isNEE);
     vec3 shadowTrans = payload_unpackShadow(payload.data);
-
-    int blockID = quad.vertices[0].block_id.x;
-    bool isTransmissive = blockID == BLOCK_WATER || blockID == BLOCK_GLASS;
 
     if (inside) {
         float segDist = clamp(gl_HitTEXT - prevDist, 0.0, 100.0);
@@ -112,6 +120,7 @@ void main() {
     // hat/jacket layers contain transparent black texels over the base skin.
     if (texColor.a < 0.1) {
         ignoreIntersectionEXT;
+        return;
     }
 
     // Transmissive blocks do cross a volume boundary on NEE shadow rays.
@@ -119,10 +128,13 @@ void main() {
         prevDist = gl_HitTEXT;
         inside = !inside;
         payload_packShadow(payload.data, shadowTrans, blockID);
-        payload_packFlags(payload.data, prevDist, inside, handedness, isNEE);
+        payload_packFlags(payload.data, prevDist, inside, handedness, isNEE,
+            ignoreTransmissive);
         ignoreIntersectionEXT;
+        return;
     }
 
     payload_packShadow(payload.data, shadowTrans, blockID);
-    payload_packFlags(payload.data, prevDist, inside, handedness, isNEE);
+    payload_packFlags(payload.data, prevDist, inside, handedness, isNEE,
+        ignoreTransmissive);
 }

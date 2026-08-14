@@ -31,6 +31,73 @@ struct RelaxSpecularHistory {
     float reprojectionConfidence;
 };
 
+// ray3 publishes only PSR resolve metadata. The old refraction history planes
+// are intentionally repurposed because refraction no longer has a standalone
+// temporal/spatial denoiser.
+struct PSRResolveData {
+    vec3 endpointRelative;
+    vec3 refractedDirection;
+    vec3 geometryNormal;
+    vec3 macroNormal;
+    vec3 diffuseAlbedo;
+    float roughness;
+    float pathRoughness;
+    vec3 transmittance;
+    vec3 surfaceLight;
+    bool endpointValid;
+    bool environment;
+    bool screenCandidate;
+};
+
+void writePSRResolve(uvec2 xy, PSRResolveData p) {
+    uint flags = (p.endpointValid ? 1u : 0u)
+        | (p.environment ? 2u : 0u)
+        | (p.screenCandidate ? 4u : 0u);
+    refractBuffer.data[addr(SPEC_N_GEO, xy)] = uvec4(
+        floatBitsToUint(p.endpointRelative),
+        encodeNormalU(p.refractedDirection));
+    refractBuffer.data[addr(SPEC_N_LIGHT, xy)] = uvec4(
+        encodeNormalU(p.geometryNormal), encodeNormalU(p.macroNormal),
+        packHalf2x16(clamp(p.diffuseAlbedo.rg, vec2(0.0), vec2(65504.0))),
+        packHalf2x16(clamp(vec2(p.diffuseAlbedo.b, p.roughness),
+            vec2(0.0), vec2(65504.0))));
+    refractBuffer.data[addr(SPEC_N_HISTGEO, xy)] = uvec4(flags,
+        floatBitsToUint(p.pathRoughness), 0u, 0u);
+    refractBuffer.data[addr(SPEC_N_HISTLIGHT, xy)] = uvec4(
+        packHalf2x16(clamp(p.transmittance.rg, vec2(0.0), vec2(8.0))),
+        packHalf2x16(clamp(vec2(p.transmittance.b, p.surfaceLight.r),
+            vec2(0.0), vec2(8.0, 65504.0))),
+        packHalf2x16(clamp(p.surfaceLight.gb, vec2(0.0), vec2(65504.0))),
+        0u);
+}
+
+PSRResolveData readPSRResolve(uvec2 xy) {
+    uvec4 endpoint = refractBuffer.data[addr(SPEC_N_GEO, xy)];
+    uvec4 surface = refractBuffer.data[addr(SPEC_N_LIGHT, xy)];
+    uvec4 metadata = refractBuffer.data[addr(SPEC_N_HISTGEO, xy)];
+    uvec4 transport = refractBuffer.data[addr(SPEC_N_HISTLIGHT, xy)];
+    vec2 albedoRG = unpackHalf2x16(surface.z);
+    vec2 albedoBRoughness = unpackHalf2x16(surface.w);
+    vec2 transRG = unpackHalf2x16(transport.x);
+    vec2 transBLightR = unpackHalf2x16(transport.y);
+    vec2 lightGB = unpackHalf2x16(transport.z);
+
+    PSRResolveData p;
+    p.endpointRelative = uintBitsToFloat(endpoint.xyz);
+    p.refractedDirection = decodeNormalU(endpoint.w);
+    p.geometryNormal = decodeNormalU(surface.x);
+    p.macroNormal = decodeNormalU(surface.y);
+    p.diffuseAlbedo = max(vec3(albedoRG, albedoBRoughness.x), vec3(0.0));
+    p.roughness = clamp(albedoBRoughness.y, 0.0, 1.0);
+    p.pathRoughness = uintBitsToFloat(metadata.y);
+    p.transmittance = max(vec3(transRG, transBLightR.x), vec3(0.0));
+    p.surfaceLight = max(vec3(transBLightR.y, lightGB), vec3(0.0));
+    p.endpointValid = (metadata.x & 1u) != 0u;
+    p.environment = (metadata.x & 2u) != 0u;
+    p.screenCandidate = (metadata.x & 4u) != 0u;
+    return p;
+}
+
 uint packRelaxHistoryNormalMaterial(vec3 n, uint materialID) {
     n = normalize(n);
     vec2 p = n.xy / max(abs(n.x) + abs(n.y) + abs(n.z), 1e-8);

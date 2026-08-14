@@ -15,6 +15,20 @@ uniform sampler2D colortex8; // linear depth:  >0 = entity (distance),
 /* RENDERTARGETS: 0 */
 layout(location = 0) out vec4 fragColor;
 
+vec3 applyCameraVignette(vec3 hdrColor, vec2 uv) {
+    // Reconstruct x/z and y/z from the exact asymmetric RT projection. This
+    // makes the optical falloff respond to FOV, aspect ratio and lens shift.
+    vec2 ndc = uv * 2.0 - 1.0;
+    vec2 projectionScale = max(abs(rtProjectionParams.xy), vec2(1e-6));
+    vec2 viewSlope = (ndc + rtProjectionParams.zw) / projectionScale;
+    float cosSquared = 1.0 / (1.0 + dot(viewSlope, viewSlope));
+
+    // Strength zero is the disabled state; one applies the ideal cos^4 law.
+    float lensFalloff = mix(1.0, cosSquared * cosSquared,
+        CAMERA_VIGNETTE_STRENGTH);
+    return hdrColor * lensFalloff;
+}
+
 void main() {
     uvec2 xy = uvec2(gl_FragCoord.xy);
     vec4 entity = texture(colortex7, texCoord);
@@ -23,7 +37,7 @@ void main() {
 
     // --- No overlay at this pixel ---
     if (abs(marker) < 1e-6) {
-        fragColor = vec4(scene.rgb, 1.0);
+        fragColor = vec4(applyCameraVignette(scene.rgb, texCoord), 1.0);
         return;
     }
 
@@ -37,8 +51,8 @@ void main() {
 
     // RT hit sky → entity always visible
     if (rtDist < -0.5) {
-        fragColor.rgb = mix(scene.rgb, entity.rgb * div_avgExposure, entity.a);
-        fragColor.a = 1.0;
+        vec3 composited = mix(scene.rgb, entity.rgb * div_avgExposure, entity.a);
+        fragColor = vec4(applyCameraVignette(composited, texCoord), 1.0);
         return;
     }
 
@@ -49,5 +63,6 @@ void main() {
     } else {
         fragColor.rgb = scene.rgb;
     }
+    fragColor.rgb = applyCameraVignette(fragColor.rgb, texCoord);
     fragColor.a = 1.0;
 }

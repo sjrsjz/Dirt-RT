@@ -242,9 +242,7 @@ void main() {
 
     if (isActive) {
         // ---- Phase 3: center normal & temporal variance ----
-        float _r, _pr;
-        int _it;
-        readGeo1(GEO_N_NORMALS, gid, centerN, _r, _it, _pr);
+        centerN = readDiffuseGeometryNormal(gid);
 
         vec4 cState = ctrMaxEntY;
         float cN = ctrMoments.y;

@@ -17,6 +17,7 @@
 // N=6: ReSTIR GI prewarm first-hit direct-light MaxEnt atom.
 // N=7: ReSTIR GI prewarm fresh endpoint.xyz + signed first-direction PDF.
 // N=8: Current-frame biased ReSTIR GI path-guide prewarm MaxEnt atom.
+// N=9: Quantized current diffuse-domain normals, material and motion.
 //
 // .w lane uses packHalf2x16: weight:f16 + sqrt(meanY2):f16.
 // sqrt compression keeps HDR second moments within f16 range (e.g. Y=1000 →
@@ -32,6 +33,7 @@
 #define DIF_N_RESTIR_DIRECT   6u
 #define DIF_N_RESTIR_ENDPOINT 7u
 #define DIF_N_RESTIR_PREWARM  8u
+#define DIF_N_SURFACE          9u
 
 // ===========================================================================
 // N=0 — Current RT Light
@@ -85,6 +87,62 @@ void readDiffuseGeo(uvec2 xy, out vec3 pos, out float surfaceMask) {
 // Convenience: read only surfaceMask from N=1
 float readDiffuseSurfaceMask(uvec2 xy) {
     return uintBitsToFloat(diffuseBuffer.data[addr(DIF_N_GEO, xy)].w);
+}
+
+// ===========================================================================
+// N=9 -- current diffuse-domain surface state
+// ===========================================================================
+
+uint encodeDiffuseNormalOct8(vec3 n) {
+    n = normalize(n);
+    vec2 p = n.xy / max(abs(n.x) + abs(n.y) + abs(n.z), 1e-8);
+    if (n.z < 0.0)
+        p = (1.0 - abs(p.yx)) * mix(vec2(-1.0), vec2(1.0),
+            greaterThanEqual(p, vec2(0.0)));
+    return packUnorm4x8(vec4(p * 0.5 + 0.5, 0.0, 0.0)) & 0xffffu;
+}
+
+vec3 decodeDiffuseNormalOct8(uint packedNormal) {
+    vec2 p = unpackUnorm4x8(packedNormal & 0xffffu).xy * 2.0 - 1.0;
+    vec3 n = vec3(p, 1.0 - abs(p.x) - abs(p.y));
+    if (n.z < 0.0)
+        n.xy = (1.0 - abs(n.yx)) * mix(vec2(-1.0), vec2(1.0),
+            greaterThanEqual(n.xy, vec2(0.0)));
+    return normalize(n);
+}
+
+void writeDiffuseSurface(uvec2 xy, vec3 geometryNormal, vec3 macroNormal,
+        vec3 diffuseAlbedo, float roughness, vec3 motion,
+        float motionValid) {
+    uint packedNormals = encodeDiffuseNormalOct8(geometryNormal)
+        | (encodeDiffuseNormalOct8(macroNormal) << 16u);
+    diffuseBuffer.data[addr(DIF_N_SURFACE, xy)] = uvec4(
+        packedNormals,
+        packUnorm4x8(clamp(vec4(diffuseAlbedo, roughness), 0.0, 1.0)),
+        packSnorm4x8(vec4(clamp(motion / 4.0, -1.0, 1.0),
+            motionValid >= 0.5 ? 1.0 : 0.0)), 0u);
+}
+
+void readDiffuseSurface(uvec2 xy, out vec3 geometryNormal,
+        out vec3 macroNormal, out vec3 diffuseAlbedo, out float roughness) {
+    uvec4 v = diffuseBuffer.data[addr(DIF_N_SURFACE, xy)];
+    geometryNormal = decodeDiffuseNormalOct8(v.x);
+    macroNormal = decodeDiffuseNormalOct8(v.x >> 16u);
+    vec4 materialState = unpackUnorm4x8(v.y);
+    diffuseAlbedo = materialState.rgb;
+    roughness = materialState.a;
+}
+
+vec3 readDiffuseGeometryNormal(uvec2 xy) {
+    return decodeDiffuseNormalOct8(
+        diffuseBuffer.data[addr(DIF_N_SURFACE, xy)].x);
+}
+
+void readDiffuseMotion(uvec2 xy, out vec3 motion, out float valid) {
+    vec4 packedMotion = unpackSnorm4x8(
+        diffuseBuffer.data[addr(DIF_N_SURFACE, xy)].z);
+    motion = packedMotion.xyz * 4.0;
+    valid = packedMotion.w > 0.5 ? 1.0 : 0.0;
 }
 
 // ===========================================================================

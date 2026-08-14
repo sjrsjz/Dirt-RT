@@ -90,9 +90,12 @@ void loadPrimarySurfaceGBuffer(uvec2 xy, vec3 ro,
     fb.p = ro + posRel;
     readGeo1(GEO_N_NORMALS, xy, fb.geometry_n, fb.roughness,
         fb.materialID, fb.pathRoughness);
-    #if defined(FIRST_LOBE_REFLECTION)
+    #if defined(FIRST_LOBE_DIFFUSE)
+    readAlbedosPathMicroNormal(GEO_N_ALBEDOS, xy, fb.specularAlbedo,
+        fb.diffuseAlbedo, fb.macro_n);
+    #elif defined(FIRST_LOBE_REFLECTION)
     fb.specularAlbedo = readPrimarySpecularAlbedoMicroNormal(xy,
-            fb.macro_n);
+        fb.macro_n);
     #else
     fb.macro_n = readMicroNormal(GEO_N_MICRONORMAL, xy);
     #endif
@@ -111,6 +114,9 @@ void loadPrimarySurfaceGBuffer(uvec2 xy, vec3 ro,
     readPrimaryMaterial(xy, Cs, Cd, S);
     surf = newMaterial(Cs, Cd, S, vec4(fb.roughness, 0.0, 0.0, 0.0),
             vec3(0.0));
+    #if defined(FIRST_LOBE_DIFFUSE)
+    readSurfaceMotion(xy, fb.surfaceMotion, fb.motionValid);
+    #endif
 }
 
 void writeDiffuseOutput(uvec2 xy, FirstBounceData fb, vec3 L_indirect,
@@ -133,6 +139,13 @@ void writeDiffuseOutput(uvec2 xy, FirstBounceData fb, vec3 L_indirect,
     float currentMeanY2 = combinedMaxEnt.maxEntY.w * combinedMaxEnt.maxEntY.w; // Y² for 1-spp
     writeDiffuseLightRT(xy, combinedMaxEnt, currentMeanY2);
     writeDiffuseGeo(xy, pos_rel, mask);
+    if (mask > 0.5) {
+        writeDiffuseSurface(xy, fb.geometry_n, fb.macro_n,
+            fb.diffuseAlbedo, fb.roughness, fb.surfaceMotion,
+            fb.motionValid);
+    } else {
+        diffuseBuffer.data[addr(DIF_N_SURFACE, xy)] = uvec4(0u);
+    }
 }
 
 vec3 recoverFirstBounceIncident(vec3 pathContribution,
@@ -186,5 +199,60 @@ void writeRefractionOutput(uvec2 xy, FirstBounceData fb, vec3 totalIllumination,
     writeRefrLight(xy, refr_color, refr_vprojdist, 0.0);
     writePathRoughness(GEO_N_NORMALS, xy, fb.pathRoughness);
 }
+
+#if defined(FIRST_LOBE_REFRACTION)
+void TraceRefractionPSR(uvec2 xy, vec3 ro) {
+    PSRResolveData outputData;
+    outputData.endpointRelative = vec3(0.0);
+    outputData.refractedDirection = vec3(0.0, 0.0, -1.0);
+    outputData.geometryNormal = vec3(0.0, 1.0, 0.0);
+    outputData.macroNormal = vec3(0.0, 1.0, 0.0);
+    outputData.diffuseAlbedo = vec3(0.0);
+    outputData.roughness = 1.0;
+    outputData.pathRoughness = 0.0;
+    outputData.transmittance = vec3(1.0);
+    outputData.surfaceLight = vec3(0.0);
+    outputData.endpointValid = false;
+    outputData.environment = false;
+    outputData.screenCandidate = false;
+
+    FirstBounceData fb;
+    material surf;
+    loadPrimarySurfaceGBuffer(xy, ro, fb, surf);
+    if (fb.t > -0.5 && surf.S.y > 1e-4) {
+        bool wasInside = (cam.flags & 3u) != 0u;
+        float nI = wasInside ? REFRACTIVE_INDEX : 1.0;
+        float nO = wasInside ? 1.0 : REFRACTIVE_INDEX;
+        vec3 chainDirection = refract(fb.rd_i, fb.geometry_n, nI / nO);
+        if (dot(chainDirection, chainDirection) > 0.0) {
+            rtCurrentConeWidth = max(fb.t, 0.0) * rtCurrentConeSpread;
+            int firstMediumBlockID = surf.R.z > 0.5
+                ? BLOCK_WATER : BLOCK_GLASS;
+            PSRResult psr = tracePSRChain(fb.p, chainDirection,
+                fb.geometry_n, surf.R.x, wasInside,
+                firstMediumBlockID, 0);
+            float firstEta = nI / nO;
+            float firstFresnel = clamp(fresnel(-fb.rd_i, fb.geometry_n,
+                firstEta), 0.0, 1.0);
+            outputData.endpointRelative = psr.endpoint - ro;
+            outputData.refractedDirection = psr.refrDir;
+            outputData.geometryNormal = psr.endpointGeometryNormal;
+            outputData.macroNormal = psr.endpointMacroNormal;
+            outputData.diffuseAlbedo = psr.endpointDiffuseAlbedo;
+            outputData.roughness = psr.endpointRoughness;
+            outputData.pathRoughness = psr.pathRoughness;
+            outputData.transmittance = psr.transmittance
+                * ((1.0 - firstFresnel) * firstEta * firstEta);
+            outputData.surfaceLight = psr.endpointLight;
+            outputData.endpointValid = psr.endpointValid;
+            outputData.environment = psr.environment;
+            outputData.screenCandidate = psr.endpointValid
+                && surf.R.x < PSR_ROUGHNESS_THRESHOLD
+                && psr.pathRoughness < PSR_PATH_ROUGHNESS_THRESHOLD;
+        }
+    }
+    writePSRResolve(xy, outputData);
+}
+#endif
 
 #endif // DIRT_RT_RAYTRACE_GBUFFER_IO_GLSL

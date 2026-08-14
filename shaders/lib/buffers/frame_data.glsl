@@ -37,6 +37,10 @@ layout(std430, set = 3, binding = 1) buffer FrameData {
     // retinal/neural response. Their product is avgExposure.
     float pupilExposure;
     float neuralExposure;
+    // RT projection coefficients (P00, P11, P20, P21). Cached when ray0
+    // constructs the projection so post passes can recover view-ray angles
+    // without performing a matrix inverse per pixel.
+    vec4 rtProjectionParams;
 };
 
 #endif // FRAME_DATA_GLSL

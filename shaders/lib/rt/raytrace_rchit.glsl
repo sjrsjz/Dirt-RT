@@ -113,8 +113,9 @@ void main() {
     }
 
     // === Volume absorption (accumulated across intersections) ===
-    bool inside, handedness, isNEE;
-    float prevDist = payload_unpackFlags(payload.data, inside, handedness, isNEE);
+    bool inside, handedness, isNEE, ignoreTransmissive;
+    float prevDist = payload_unpackFlags(payload.data, inside, handedness,
+        isNEE, ignoreTransmissive);
     vec3 shadowTrans = payload_unpackShadow(payload.data);
     if (inside) {
         vec3 texturePlaneNormal = normalize(cross(gradientU, gradientV));
@@ -143,5 +144,6 @@ void main() {
     }
 
     payload_packShadow(payload.data, shadowTrans, blockID);
-    payload_packFlags(payload.data, prevDist, inside, bitangentSign > 0.0, isNEE);
+    payload_packFlags(payload.data, prevDist, inside, bitangentSign > 0.0,
+        isNEE, ignoreTransmissive);
 }

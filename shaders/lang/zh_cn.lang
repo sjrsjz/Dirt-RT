@@ -294,6 +294,9 @@ option.ATROUS_GAMMA.comment = 控制滤波范围随粗糙度扩大的程度。0 
 # ===========================================================================
 # 泛光
 # ===========================================================================
+option.CAMERA_VIGNETTE_STRENGTH = 摄像机暗角强度
+option.CAMERA_VIGNETTE_STRENGTH.comment = 在生成泛光前，将基于 RT 投影与视场角的 cos^4 镜头衰减混入 HDR 场景。0 为关闭，1 为理想 cos^4 衰减。
+
 option.BLOOM_MIX = 泛光强度
 option.BLOOM_MIX.comment = 最终画面中泛光所占的混合比例。设为 0 可关闭泛光；过高会冲淡局部对比度。
 option.BLOOM_DIFFUSION_SCALE = 泛光扩散尺度

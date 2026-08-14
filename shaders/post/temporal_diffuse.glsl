@@ -457,9 +457,9 @@ void main() {
 
     if (any(greaterThanEqual(pix, uvec2(resolution)))) return;
 
-    {
-        readGeo0(GEO_N_GEO, pix, current_data.pos, info_distance);
-    }
+    readDiffuseGeo(pix, current_data.pos, current_data.surfaceMask);
+    info_distance = current_data.surfaceMask > 0.5
+        ? length(current_data.pos) : -1.0;
 
     if (info_distance < -0.5) {
         // All AABB entries for a sky center are invalid. Clear only the two
@@ -489,10 +489,7 @@ void main() {
         #endif
         current_data.weight = 1.0;
         // 从 Geo1 取 geometryNormal（仅用于 buildTemporalFootprint 切空间）
-        float _r;
-        int _it;
-        float _pr;
-        readGeo1(GEO_N_NORMALS, pix, geometryNormal, _r, _it, _pr);
+        geometryNormal = readDiffuseGeometryNormal(pix);
     }
 
     out_data.data_swap = current_data.data_swap;
@@ -506,7 +503,7 @@ void main() {
 
     vec3 surfaceMotion;
     float motionValid;
-    readSurfaceMotion(pix, surfaceMotion, motionValid);
+    readDiffuseMotion(pix, surfaceMotion, motionValid);
     if (motionValid < 0.5) {
         resetToCurrentSample();
         out_data.weight = output_weight;

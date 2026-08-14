@@ -74,21 +74,19 @@ RestirGIPrimaryDomain restirGILoadDomain(uvec2 pixel, vec3 cameraOrigin) {
     domain.pixel = pixel;
     vec3 positionRelative;
     float distance;
-    readGeo0(GEO_N_GEO, pixel, positionRelative, distance);
+    readDiffuseGeo(pixel, positionRelative, distance);
     domain.position = cameraOrigin + positionRelative;
-    float roughness;
-    int materialID;
-    float pathRoughness;
-    readGeo1(GEO_N_NORMALS, pixel, domain.geometryNormal, roughness,
-        materialID, pathRoughness);
-    domain.macroNormal = readMicroNormal(GEO_N_MICRONORMAL, pixel);
+    vec3 diffuseAlbedoUnused;
+    float roughnessUnused;
+    readDiffuseSurface(pixel, domain.geometryNormal, domain.macroNormal,
+        diffuseAlbedoUnused, roughnessUnused);
     vec3 geometryNormal = domain.geometryNormal;
     vec3 macroNormal = domain.macroNormal;
     bool geometryNormalValid = restirGISafeNormalize(
         geometryNormal, domain.geometryNormal);
     bool macroNormalValid = restirGISafeNormalize(
         macroNormal, domain.macroNormal);
-    domain.valid = distance > -0.5
+    domain.valid = distance > 0.5
         && restirGIIsFinite(domain.position)
         && geometryNormalValid && macroNormalValid;
     return domain;

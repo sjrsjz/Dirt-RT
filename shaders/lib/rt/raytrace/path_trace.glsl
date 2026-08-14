@@ -46,6 +46,54 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     #if defined(FIRST_LOBE_DIFFUSE) || defined(FIRST_LOBE_REFLECTION) || defined(FIRST_LOBE_REFRACTION)
     material surf;
     loadPrimarySurfaceGBuffer(xy, ro, fb, surf);
+
+    #if defined(FIRST_LOBE_DIFFUSE)
+    // The denoised diffuse domain represents the opaque scene behind primary
+    // water/glass. PSR can therefore reproject its terminal hit directly into
+    // this buffer without running a separate refraction denoiser.
+    if (fb.t > -0.5 && surf.S.y > 1e-4) {
+        vec3 backgroundRay = fb.rd_i;
+        vec3 backgroundHit, backgroundDirection;
+        rtCurrentConeWidth = 0.0;
+        float backgroundT = raycastIgnoreTransmissive(ro, backgroundRay,
+            backgroundHit, backgroundDirection, !originalInside);
+
+        if (backgroundT < -0.5) {
+            fb = initFirstBounceData(ro, backgroundRay);
+            surf = newMaterial(vec3(0.0), vec3(0.0), vec2(0.0),
+                vec4(1.0, 0.0, 0.0, 0.0), vec3(0.0));
+        } else {
+            vec4 backgroundMotion = getPrimarySurfaceMotion(tmp_Payload);
+            Material backgroundMat = evaluateMaterial(tmp_Payload, ro,
+                backgroundRay, 0u);
+            vec3 rawGeometryNormal =
+                payload_unpackGeomNormal(tmp_Payload.data);
+            vec3 backgroundGeometryNormal = faceforward(rawGeometryNormal,
+                rawGeometryNormal, backgroundRay);
+            int backgroundBlockID;
+            payload_unpackShadow(tmp_Payload.data, backgroundBlockID);
+            surf = materialFromEvaluated(backgroundMat, backgroundBlockID);
+            int backgroundMaterialID = getRelaxMaterialID(tmp_Payload,
+                backgroundBlockID);
+            markRadianceCacheGeometryHit(xy, backgroundHit,
+                backgroundGeometryNormal);
+
+            float backgroundNI = originalInside ? REFRACTIVE_INDEX : 1.0;
+            MediumResult backgroundMedium = evalMedium(backgroundT,
+                backgroundRay, ro.y, originalInside, fogColor,
+                globalEmission);
+            recordFirstBounceGBuffer(backgroundHit, ro,
+                backgroundMat.macroNormal, backgroundGeometryNormal,
+                backgroundMat.macroNormal, surf, backgroundMaterialID,
+                backgroundRay, backgroundRay, backgroundT, backgroundNI,
+                backgroundNI, -1, backgroundMedium.emission,
+                backgroundMedium.absorption, fb);
+            fb.surfaceMotion = backgroundMotion.xyz;
+            fb.motionValid = backgroundMotion.w;
+        }
+    }
+    #endif
+
     rtCurrentConeWidth = max(fb.t, 0.0) * rtCurrentConeSpread;
     vec3 ro_o = fb.p;
     vec3 rd_o = fb.rd_i;
