@@ -196,14 +196,8 @@ option.MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY.comment = Maximum Kish effective sam
 option.MAXENT_SPECULAR_TEMPORAL_MAX_FAST_HISTORY = Fast History Samples
 option.MAXENT_SPECULAR_TEMPORAL_MAX_FAST_HISTORY.comment = Maximum Kish effective sample count of the responsive history used by anti-lag and history clamping.
 
-option.MAXENT_SPECULAR_PREPASS_RADIUS = Pre-pass Radius
-option.MAXENT_SPECULAR_PREPASS_RADIUS.comment = Radius of the geometry-aware filter applied to the raw 1 spp reflection before reprojection. Zero disables it; large values can soften sharp reflections.
-
 option.MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD = Disocclusion Threshold
 option.MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD.comment = Relative plane-distance tolerance for reprojected surfaces. Lower values reject more history; higher values can leak history across thin geometry.
-
-option.MAXENT_SPECULAR_PREPASS_ROUGHNESS_TOLERANCE = Pre-pass Roughness Tolerance
-option.MAXENT_SPECULAR_PREPASS_ROUGHNESS_TOLERANCE.comment = Roughness difference accepted by the reflection prefilter. Lower values preserve roughness boundaries; higher values share more noisy samples across gradual roughness changes.
 
 option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION = Lobe Fraction
 option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION.comment = Portion of the GGX lobe accepted during temporal reprojection. Lower values reject more history around view-dependent reflection changes.

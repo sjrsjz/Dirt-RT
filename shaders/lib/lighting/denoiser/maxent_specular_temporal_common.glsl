@@ -1,7 +1,7 @@
 #ifndef MAXENT_SPECULAR_TEMPORAL_COMMON_GLSL
 #define MAXENT_SPECULAR_TEMPORAL_COMMON_GLSL
 
-// MaxEnt specular temporal/prepass geometry, reprojection and signal helpers.
+// MaxEnt specular temporal geometry, reprojection and signal helpers.
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/buffer_io.glsl"
@@ -107,19 +107,19 @@ SpecularMaxEnt maxentSetMaxEntYCoCg(SpecularMaxEnt s, vec3 ycocg) {
     return sanitizeSpecularMaxEnt(s);
 }
 
-// Raw/prepass and A-trous payload: MaxEnt6 plus two scalar slots.
-struct MaxEntPrepassSignal {
+// Raw temporal input: MaxEnt6 plus the reflection hit distance.
+struct MaxEntSpecularInput {
     SpecularMaxEnt signal;
     float hitDistance;
 };
 
-uvec4 maxentPackPrepass(MaxEntPrepassSignal s) {
+uvec4 maxentPackSpecularInput(MaxEntSpecularInput s) {
     uvec3 p = packSpecularMaxEnt(s.signal);
     return uvec4(p, maxentPackHalf2(s.hitDistance, 0.0));
 }
 
-MaxEntPrepassSignal maxentUnpackPrepass(uvec4 p) {
-    MaxEntPrepassSignal s;
+MaxEntSpecularInput maxentUnpackSpecularInput(uvec4 p) {
+    MaxEntSpecularInput s;
     s.signal = unpackSpecularMaxEnt(p.xyz);
     s.hitDistance = max(unpackHalf2x16(p.w).x, 0.0);
     return s;
@@ -171,34 +171,6 @@ float maxentSpecLobeTanHalfAngle(float roughness, float volumeFraction) {
     volumeFraction = clamp(volumeFraction, 0.0, 1.0);
     return roughness * roughness * volumeFraction /
         max(1.0 - volumeFraction, 1e-6);
-}
-
-float maxentSpatialPlaneExponent(vec3 centerPos, vec3 centerNormal,
-        vec3 samplePos) {
-    float resolutionY = max(float(resolution_global.y), 1.0);
-    float centerDistance = max(length(centerPos), 0.001);
-    float footprintDistance = max(centerDistance, resolutionY * 1e-5);
-    float invPixelFootprint = resolutionY / max(
-        MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE * footprintDistance, resolutionY * 1e-6);
-    return abs(dot(samplePos, centerNormal)
-        - dot(centerPos, centerNormal)) * invPixelFootprint;
-}
-
-float maxentSpatialPlaneWeight(vec3 centerPos, vec3 centerNormal,
-        vec3 samplePos) {
-    return exp(-maxentSpatialPlaneExponent(centerPos,
-        centerNormal, samplePos));
-}
-
-vec2 maxentRoughnessWeightParams(float roughness, float fraction) {
-    const float sensitivity = 0.03;
-    float a = 1.0 / mix(sensitivity, 1.0,
-        clamp(roughness * fraction, 0.0, 1.0));
-    return vec2(a, -roughness * a);
-}
-
-float maxentExponentialWeight(float x, vec2 p) {
-    return exp(-3.0 * abs(x * p.x + p.y));
 }
 
 #endif // MAXENT_SPECULAR_TEMPORAL_COMMON_GLSL

@@ -33,7 +33,7 @@ void main() {
     // into the independent-current-sample ESS recurrence.
     float slowTemporalSamples = slow.historyLength;
     float fastTemporalSamples = fast.historyLength;
-    MaxEntPrepassSignal noisyCenter = maxentUnpackPrepass(
+    MaxEntSpecularInput noisyCenter = maxentUnpackSpecularInput(
         texelFetch(colortex6, ivec2(pixel), 0));
 
     vec3 fastM1 = vec3(0.0);
@@ -53,7 +53,7 @@ void main() {
             if (uintBitsToFloat(qGeometry.w) < 0.0
                     || (qGeometry.y >> 16u) != geometry.materialID)
                 continue;
-            MaxEntPrepassSignal qNoisy = maxentUnpackPrepass(
+            MaxEntSpecularInput qNoisy = maxentUnpackSpecularInput(
                 texelFetch(colortex6, q, 0));
             vec3 qNoisyYCoCg = maxentMaxEntYCoCg(qNoisy.signal);
             vec3 qFastYCoCg = maxentMaxEntYCoCg(qFast.signal);

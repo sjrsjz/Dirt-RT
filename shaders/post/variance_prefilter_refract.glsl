@@ -12,7 +12,7 @@ layout(local_size_x = 16, local_size_y = 16) in;
 
 uniform vec2 resolution;
 
-layout(rgba32f) uniform writeonly image2D colorimg3;
+layout(rgba32ui) uniform writeonly uimage2D colorimg3;
 layout(rgba32ui) uniform writeonly uimage2D colorimg4;
 
 const uint HALO = 2u;
@@ -102,7 +102,7 @@ void main() {
     float cRough = uintBitsToFloat(cSurface.y);
 
     if (cRough < 0.0) {
-        imageStore(colorimg3, ivec2(gid), vec4(0.0));
+        imageStore(colorimg3, ivec2(gid), uvec4(0u));
         imageStore(colorimg4, ivec2(gid),
             uvec4(0u, 0u, packHalf2x16(vec2(-1.0, 0.0)), 0u));
         return;
@@ -161,6 +161,8 @@ void main() {
 
     PackedLightSample packed_ = packSpecularSample(cPos, cR, cColor, cRough,
         variance, cVproj, cH);
-    imageStore(colorimg3, ivec2(gid), packed_.data0);
+    imageStore(colorimg3, ivec2(gid), uvec4(
+        floatBitsToUint(packed_.data0.xyz),
+        floatBitsToUint(packed_.data0.w)));
     imageStore(colorimg4, ivec2(gid), packed_.data1);
 }

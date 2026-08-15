@@ -105,13 +105,18 @@ float denoiserSpatialTextureNormalExponent(
         * (1.0 - normalCosine);
 }
 
+float denoiserSpatialLightSourceToleranceScale(float roughness) {
+    return sqrt(clamp(roughness, 0.0, 1.0));
+}
+
 float denoiserSpatialWeight(DenoiserMaxEntSignal centerSignal,
         DenoiserSpatialBuresData centerBures,
         DenoiserSpatialGeometry centerGeometry,
         DenoiserMaxEntSignal sampleSignal,
         DenoiserSpatialBuresData sampleBures,
         DenoiserSpatialGeometry sampleGeometry, float kernelWeight,
-        float phiLuminance, float resolutionY) {
+        float lightSourceToleranceScale, float phiLuminance,
+        float resolutionY) {
     float exponent = denoiserSpatialPlaneExponent(centerGeometry,
         sampleGeometry, resolutionY);
     exponent += denoiserSpatialTextureNormalExponent(centerGeometry,
@@ -120,7 +125,8 @@ float denoiserSpatialWeight(DenoiserMaxEntSignal centerSignal,
         centerSignal.maxEntY, centerBures,
         sampleSignal.maxEntY, sampleBures);
     float variance = centerSignal.variance + sampleSignal.variance;
-    exponent += phiLuminance * distanceSq / max(variance, 1e-12);
+    exponent += phiLuminance * distanceSq
+        / max(lightSourceToleranceScale * variance, 1e-12);
     return kernelWeight * exp(-exponent);
 }
 

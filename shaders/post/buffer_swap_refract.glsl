@@ -15,7 +15,7 @@ layout(local_size_x = 16, local_size_y = 16) in;
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/buffer_io.glsl"
 
-uniform sampler2D colortex3; // (pos.xyz, oct(R))
+uniform usampler2D colortex3; // fbits(pos.xyz), oct32(R)
 uniform usampler2D colortex4; // 降噪后: f16(R,G)|f16(B,roughness)|f16(variance,virtualProjDist)|oct(H)
 
 void main() {
@@ -29,7 +29,7 @@ void main() {
     float virtualProjDist = vv.y;
     if (vv.x < 0.0) return; // 天空
 
-    vec4 geom = texelFetch(colortex3, pix, 0);
+    uvec4 geom = texelFetch(colortex3, pix, 0);
 
     // 从 SSBO 读 102 写入的累积颜色 + 权重 (pre-denoise history 源)
     uvec2 xy = uvec2(pix);
@@ -39,11 +39,13 @@ void main() {
 
     // 写回降噪颜色到 SSBO 当前帧区段
     vec2 drg = unpackHalf2x16(light.x);
+    vec2 drg = unpackHalf2x16(light.x);
     vec2 dbr = unpackHalf2x16(light.y);
     vec3 denoised = vec3(drg.x, drg.y, dbr.x);
     if (any(isnan(denoised))) denoised = vec3(0.0);
     writeRefrLight(xy, denoised, vproj, weight);
 
-    vec3 R = decodeNormal(geom.w);
-    writeRefractHistory(preDenoise, weight, geom.xyz, R, virtualProjDist, pix);
+    vec3 R = decodeNormalU(geom.w);
+    writeRefractHistory(preDenoise, weight, uintBitsToFloat(geom.xyz), R,
+        virtualProjDist, pix);
 }

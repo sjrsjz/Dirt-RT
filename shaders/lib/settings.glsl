@@ -68,8 +68,6 @@
 // roughness exactly once before these controls are evaluated.
 #define MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY 30 // Maximum slow-history Kish effective sample count. [5 10 15 20 30 40 60 90]
 #define MAXENT_SPECULAR_TEMPORAL_MAX_FAST_HISTORY 6 // Maximum responsive-history Kish effective sample count. [1 2 3 4 6 8 12 16]
-#define MAXENT_SPECULAR_PREPASS_RADIUS 1.0 // Geometry-aware prefilter radius in pixels. [0.0 1.0 2.0 3.0 4.0]
-#define MAXENT_SPECULAR_PREPASS_ROUGHNESS_TOLERANCE 0.15 // Roughness tolerance used by the prefilter. [0.05 0.1 0.15 0.2 0.25 0.35 0.5]
 #define MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD 0.01 // Relative temporal plane threshold. [0.0025 0.005 0.0075 0.01 0.015 0.02 0.03 0.05]
 #define MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION 0.5 // Accepted GGX lobe fraction. [0.25 0.35 0.5 0.65 0.75 0.9]
 #define MAXENT_SPECULAR_TEMPORAL_HISTORY_FIX_THRESHOLD 3.0 // N_eff threshold repaired after disocclusion. [1.0 2.0 3.0 4.0 5.0 8.0]
@@ -88,8 +86,8 @@
 #define MAXENT_SPATIAL_NORMAL_SENSITIVITY 32.0 // Texture-normal rejection strength; unit roughness disables this term. [1 2 4 8 16 32 64 128]
 #define MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE 0.1 // Projected plane-distance tolerance. Higher = more permissive geometry support. [0.005 0.01 0.02 0.03 0.04 0.05 0.06 0.07 0.08 0.09 0.1 0.2 0.3 0.4 0.5]
 #define MAXENT_SPATIAL_VARIANCE_ADAPTATION 1.0 // Conservativeness of variance propagation across spatial levels. Higher retains more variance. [0.0 0.25 0.5 0.75 1.0 1.5 2.0]
-#define MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY 0.2 // Diffuse variance-normalized MaxEnt rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5]
-#define MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY 0.2 // Specular variance-normalized MaxEnt rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.5]
+#define MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY 0.35 // Diffuse variance-normalized MaxEnt rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5]
+#define MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY 0.35 // Specular variance-normalized MaxEnt rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.5]
 #define MAXENT_SPATIAL_DIFFUSE_LOW_CONFIDENCE_BLEND 1.0 // Wide-filter blend applied to low-confidence diffuse history. [0.0 0.1 0.25 0.5 0.75 1.0 1.25 1.5 2.0 3.0 4.0 5.0]
 
 // -- Bloom --
@@ -119,7 +117,7 @@ const int depthtex0Format = RGBA32F;
 const int colortex0Format = RGBA32F;
 const int colortex1Format = RGBA32F;
 const int colortex2Format = RGBA32F;
-const int colortex3Format = RGBA32F;
+const int colortex3Format = RGBA32UI;
 const int colortex4Format = RGBA32UI;
 const int colortex5Format = RGBA32UI;
 const int colortex6Format = RGBA32UI;

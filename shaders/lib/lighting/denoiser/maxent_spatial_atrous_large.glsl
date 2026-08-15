@@ -39,6 +39,8 @@ bool denoiserSpatialFilterLarge(ivec2 pixel,
         denoiserUnpackMaxEntSignal(centerSignalWords);
     DenoiserSpatialBuresData centerBures =
         denoiserSpatialMakeBuresData(centerSignal.maxEntY);
+    float lightSourceToleranceScale =
+        denoiserSpatialLightSourceToleranceScale(centerGeometry.roughness);
     DenoiserSpatialAccumulator accum =
         denoiserSpatialBeginAccumulation(centerSignal);
 
@@ -73,6 +75,7 @@ bool denoiserSpatialFilterLarge(ivec2 pixel,
         float weight = denoiserSpatialWeight(centerSignal, centerBures,
             centerGeometry, sampleSignal, sampleBures, sampleGeometry,
             DENOISER_SPATIAL_POISSON_8[i].w,
+            lightSourceToleranceScale,
             DENOISER_SPATIAL_PHI_LUMINANCE, float(size.y));
         if (weight <= 1e-6) continue;
         denoiserSpatialAccumulate(accum, sampleSignal, weight);

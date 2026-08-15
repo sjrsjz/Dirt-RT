@@ -185,7 +185,7 @@ void main() {
     uvec2 pixel = gl_GlobalInvocationID.xy;
     if (any(greaterThanEqual(pixel, resolution_global))) return;
 
-    MaxEntPrepassSignal noisy = maxentUnpackPrepass(
+    MaxEntSpecularInput noisy = maxentUnpackSpecularInput(
         texelFetch(colortex6, ivec2(pixel), 0));
     float noisyY = noisy.signal.maxEntY.w;
     float noisyM2 = noisyY * noisyY;
@@ -220,7 +220,8 @@ void main() {
         for (int x = -1; x <= 1; ++x) {
             ivec2 q = ivec2(pixel) + ivec2(x, y);
             if (!maxentInBounds(q, ivec2(resolution_global))) continue;
-            float qHit = maxentUnpackPrepass(texelFetch(colortex6, q, 0)).hitDistance;
+            float qHit = maxentUnpackSpecularInput(
+                texelFetch(colortex6, q, 0)).hitDistance;
             if (qHit > 0.0) focusedHitDistance = min(focusedHitDistance, qHit);
         }
     }

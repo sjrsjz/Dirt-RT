@@ -196,14 +196,8 @@ option.MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY.comment = 稳定反射历史的最�
 option.MAXENT_SPECULAR_TEMPORAL_MAX_FAST_HISTORY = 响应历史有效样本数
 option.MAXENT_SPECULAR_TEMPORAL_MAX_FAST_HISTORY.comment = 抗延迟与历史钳制使用的响应历史最大 Kish 有效样本数。
 
-option.MAXENT_SPECULAR_PREPASS_RADIUS = 预滤波半径
-option.MAXENT_SPECULAR_PREPASS_RADIUS.comment = 重投影前对原始 1 spp 反射执行的几何感知滤波半径。0 表示关闭；过大会软化清晰反射。
-
 option.MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD = 解遮挡阈值
 option.MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD.comment = 重投影表面的相对平面距离容差。降低会拒绝更多历史，提高则可能使历史越过薄小几何体。
-
-option.MAXENT_SPECULAR_PREPASS_ROUGHNESS_TOLERANCE = 预滤波粗糙度容差
-option.MAXENT_SPECULAR_PREPASS_ROUGHNESS_TOLERANCE.comment = 反射预滤波允许的粗糙度差异。降低可保留粗糙度边界，提高可在渐变粗糙度区域共享更多噪声样本。
 
 option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION = 镜面波瓣比例
 option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION.comment = 时域重投影允许的 GGX 波瓣比例。降低会在视角相关的反射变化处拒绝更多历史。

@@ -101,6 +101,8 @@ void main() {
     DenoiserSpatialBuresData centerBures =
         denoiserSpatialMakeBuresDataFromStddev(centerSignal.maxEntY,
             unpackHalf2x16(denoiserSpatialTileStddev[centerIndex]));
+    float lightSourceToleranceScale =
+        denoiserSpatialLightSourceToleranceScale(centerGeometry.roughness);
     DenoiserSpatialAccumulator accum =
         denoiserSpatialBeginAccumulation(centerSignal);
 
@@ -132,6 +134,7 @@ void main() {
         float weight = denoiserSpatialWeight(centerSignal, centerBures,
             centerGeometry, sampleSignal, sampleBures, sampleGeometry,
             DENOISER_SPATIAL_GRID_WEIGHT[i],
+            lightSourceToleranceScale,
             DENOISER_SPATIAL_PHI_LUMINANCE, float(size.y));
         if (weight <= 1e-6) continue;
         denoiserSpatialAccumulate(accum, sampleSignal, weight);

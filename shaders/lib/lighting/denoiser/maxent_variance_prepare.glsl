@@ -11,11 +11,15 @@
 //   meanY2       = raw temporal second moment E[Y^2]
 //   historyLength = Kish effective temporal sample count N_eff
 //
-// Output is the canonical RGBA32UI spatial-denoiser payload documented in
-// maxent_spatial_signal.glsl. Its F32 variance is the estimator variance of
-// the temporally accumulated MaxEnt mean, never the population variance.
-// Diffuse and specular differ only in source packing; both publish to logical
-// colortex4. Iris owns the physical ping-pong backing between spatial passes.
+// Outputs:
+//   colortex3 = canonical RGBA32UI denoiser geometry documented in
+//               maxent_spatial_geometry.glsl
+//   colortex4 = canonical RGBA32UI MaxEnt signal documented in
+//               maxent_spatial_signal.glsl
+// The F32 variance carried by colortex4 is the estimator variance of the
+// temporally accumulated MaxEnt mean, never the population variance. Diffuse
+// and specular differ in source packing and spatial roughness policy only.
+// Iris owns the physical colortex4 ping-pong backing between spatial passes.
 
 #if !defined(MAXENT_VARIANCE_DIFFUSE) && !defined(MAXENT_VARIANCE_SPECULAR)
 #error "Select one MaxEnt variance source"
@@ -25,6 +29,7 @@
 #endif
 
 layout(rgba32ui) uniform writeonly uimage2D colorimg4;
+layout(rgba32ui) uniform writeonly uimage2D colorimg3;
 
 struct DenoiserVarianceSource {
     vec4 maxEntY;
@@ -49,8 +54,8 @@ DenoiserVarianceSource denoiserVarianceEmptySource() {
     return source;
 }
 
-DenoiserVarianceGeometry denoiserVarianceLoadGeometry(ivec2 pixel) {
-    uvec4 words = readPrimaryGeometryWords(uvec2(pixel));
+DenoiserVarianceGeometry denoiserVarianceDecodeGeometry(uvec4 words,
+        ivec2 pixel) {
     DenoiserVarianceGeometry geometry;
     float distance;
     float roughnessUnused;
@@ -63,6 +68,24 @@ DenoiserVarianceGeometry denoiserVarianceLoadGeometry(ivec2 pixel) {
     geometry.valid = distance >= 0.0 && !isnan(distance)
         && !isinf(distance);
     return geometry;
+}
+
+DenoiserVarianceGeometry denoiserVarianceLoadGeometry(ivec2 pixel) {
+    return denoiserVarianceDecodeGeometry(
+        readPrimaryGeometryWords(uvec2(pixel)), pixel);
+}
+
+uvec4 denoiserVariancePackSpatialGeometry(uvec4 primaryWords) {
+    float ggxAlpha = clamp(unpackHalf2x16(primaryWords.y).x, 0.0, 1.0);
+#if defined(MAXENT_VARIANCE_DIFFUSE)
+    float signalRoughness = 1.0;
+#else
+    float signalRoughness = sqrt(ggxAlpha);
+#endif
+    uint roughnessMaterial = (primaryWords.y & 0xffff0000u)
+        | (packHalf2x16(vec2(signalRoughness, 0.0)) & 0xffffu);
+    return uvec4(primaryWords.w, primaryWords.x, primaryWords.z,
+        roughnessMaterial);
 }
 
 DenoiserVarianceSource denoiserVarianceLoadSource(ivec2 pixel) {
@@ -88,7 +111,10 @@ DenoiserVarianceSource denoiserVarianceLoadSource(ivec2 pixel) {
     return source;
 }
 
-void denoiserVarianceStore(ivec2 pixel, DenoiserMaxEntSignal signal) {
+void denoiserVarianceStore(ivec2 pixel, DenoiserMaxEntSignal signal,
+        uvec4 primaryGeometryWords) {
+    imageStore(colorimg3, pixel,
+        denoiserVariancePackSpatialGeometry(primaryGeometryWords));
     imageStore(colorimg4, pixel, denoiserPackMaxEntSignal(signal));
 #if defined(MAXENT_VARIANCE_SPECULAR)
 #if DEBUG_VIEW == 25
@@ -107,6 +133,8 @@ void denoiserVarianceStore(ivec2 pixel, DenoiserMaxEntSignal signal) {
 }
 
 void denoiserVarianceStoreInvalid(ivec2 pixel) {
+    imageStore(colorimg3, pixel,
+        uvec4(floatBitsToUint(-1.0), 0u, 0u, 0u));
     imageStore(colorimg4, pixel, denoiserInvalidMaxEntSignalWords());
 }
 
@@ -257,8 +285,10 @@ void main() {
     ivec2 centerPixel = ivec2(pixel);
     ivec2 clampedCenter = clamp(centerPixel, ivec2(0), imageMax);
     bool centerInBounds = all(equal(centerPixel, clampedCenter));
+    uvec4 centerGeometryWords = readPrimaryGeometryWords(
+        uvec2(clampedCenter));
     DenoiserVarianceGeometry centerGeometry =
-        denoiserVarianceLoadGeometry(clampedCenter);
+        denoiserVarianceDecodeGeometry(centerGeometryWords, clampedCenter);
     bool centerValid = centerInBounds && centerGeometry.valid;
     DenoiserVarianceSource centerSource = centerValid
         ? denoiserVarianceLoadSource(clampedCenter)
@@ -318,7 +348,6 @@ void main() {
                 centerGeometry.normal);
 
             float sumMass = 0.0;
-            float sumSquaredWeights = 0.0;
             vec4 sumMean = vec4(0.0);
             float sumMeanY2 = 0.0;
 
@@ -345,7 +374,6 @@ void main() {
                     float mass = spatialWeight * sampleMomentHistory.y;
 
                     sumMass += mass;
-                    sumSquaredWeights += mass * spatialWeight;
                     sumMean += mass
                         * denoiserVarianceTileMean(sampleIndex);
                     sumMeanY2 += mass * sampleMomentHistory.x;
@@ -360,11 +388,6 @@ void main() {
                     pooledMean, sumMeanY2 * inverseMass);
                 float pooledPopulationVariance =
                     denoiserVariancePopulation(pooledMean, pooledMeanY2);
-                float effectiveSamples = sumMass * sumMass
-                    / max(sumSquaredWeights, 1e-12);
-                if (effectiveSamples > 1.01)
-                    pooledPopulationVariance *= effectiveSamples
-                        / (effectiveSamples - 1.0);
                 spatialVariance = pooledPopulationVariance
                     / max(centerHistory, 1.0);
             }
@@ -424,7 +447,7 @@ void main() {
     outputSignal.CoCg = centerSource.CoCg;
     outputSignal.variance = denoiserVarianceSanitizeNonnegative(
         blurredVariance / max(blurWeight, 1e-8));
-    denoiserVarianceStore(centerPixel, outputSignal);
+    denoiserVarianceStore(centerPixel, outputSignal, centerGeometryWords);
 }
 
 #endif // MAXENT_VARIANCE_PREPARE_GLSL

@@ -20,8 +20,9 @@ void main() {
     SpecularMaxEnt signal;
     float hitDistance, unusedWeight;
     readReflMaxEnt(pixel, signal, hitDistance, unusedWeight);
-    MaxEntPrepassSignal outSignal;
+    MaxEntSpecularInput outSignal;
     outSignal.signal = signal;
     outSignal.hitDistance = hitDistance;
-    imageStore(colorimg6, ivec2(pixel), maxentPackPrepass(outSignal));
+    imageStore(colorimg6, ivec2(pixel),
+        maxentPackSpecularInput(outSignal));
 }
