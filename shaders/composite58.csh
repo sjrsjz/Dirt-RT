@@ -1,1 +1,1 @@
-#include "/post/buffer_swap_diffuse.glsl"
+#include "/post/maxent_diffuse_history_resolve.glsl"

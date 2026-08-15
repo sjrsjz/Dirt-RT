@@ -28,7 +28,8 @@
 // -- Material --
 #define EON_ENABLED 1 // Enable energy-preserving Oren--Nayar rough diffuse. 0 keeps the legacy Disney/Lambert reconstruction. [0 1]
 #define REFRACTIVE_INDEX 1.331 // Water Index of Refraction (IOR). Affects caustics, underwater distortion and specular. [1.30 1.31 1.32 1.33 1.34 1.35 1.36 1.37 1.38 1.39 1.40 1.41 1.42 1.43 1.44 1.45 1.46 1.47 1.48 1.49 1.50]
-#define MAX_WETNESS 0.4 // Maximum surface wetness from rain or water. Controls specular reflection on wet blocks. [0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
+#define GLASS_REFRACTIVE_INDEX 1.52 // Glass Index of Refraction (IOR). Kept separate from water throughout reflection, BTDF and PSR. [1.40 1.42 1.45 1.47 1.50 1.52 1.55 1.60 1.65 1.70]
+#define MAX_WETNESS 0.4 // Maximum surface wetness from rain or water. Controls porous darkening and roughness without altering substrate F0. [0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
 #define POM_ENABLED 1 // Enable Parallax Occlusion Mapping (POM) for detailed surface displacement on the first ray hit. 0 = off (better FPS), 1 = on (better visuals). [0 1]
 
 // -- POM Quality --
@@ -49,59 +50,47 @@
 #define RADIANCE_CACHE_RIS_GUIDING_STRENGTH 0.35 // Fraction of the cache probe's guided probability assigned to a directionally consistent temporal RIS proposal. [0.0 0.1 0.2 0.25 0.35 0.5 0.65 0.75 1.0]
 #define RADIANCE_CACHE_RIS_GUIDING_KAPPA 0.75 // Concentration of the finite-width RIS proposal lobe. Higher values focus more tightly around the selected direction. [0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.95]
 
-// -- NRD-inspired low-weight blend (buffer_swap_diffuse.glsl) --
-#define NRD_BLEND_STRENGTH 1.0 // Spatial filter blend strength at low temporal confidence. Blends the large-radius spatial result back into history when frame accumulation is insufficient. 0 = off. [0.0 0.1 0.25 0.5 0.75 1.0 1.25 1.5 2.0 3.0 4.0 5.0]
+// -- MaxEnt diffuse temporal accumulation --
+#define MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY 32 // Maximum Kish effective sample count. Higher = smoother but slower response. [1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384]
+#define MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT 0.0001 // History confidence below which reprojection is discarded. [0.000001 0.00001 0.0001 0.001 0.01]
+#define MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE 1 // Clamp reprojected MaxEnt history to the current neighborhood. [0 1]
+#define MAXENT_DIFFUSE_TEMPORAL_AABB_RADIUS 2 // Current-frame clamp radius. 1 = 3×3, 2 = 5×5. [1 2 3]
+#define MAXENT_DIFFUSE_TEMPORAL_AABB_EXPANSION 2.0 // Expands sampled AABB extents before clamping. [0.5 1.0 1.5 2.0 3.0 4.0]
+#define MAXENT_DIFFUSE_TEMPORAL_AABB_SIGMA_SCALE 3.0 // Variance-guided AABB expansion. [0.5 1.0 1.5 2.0 3.0 4.0 5.0]
+#define MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_EXTENT 1.0 // Minimum absolute clamp extent. [0.01 0.1 0.5 1.0 2.0 5.0]
+#define MAXENT_DIFFUSE_TEMPORAL_AABB_SCALE 1.0 // Global clamp-box width multiplier. [0.25 0.5 0.75 1.0 1.5 2.0]
+#define MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_SAMPLES 2 // Minimum valid current samples required to clamp. [1 2 3 4 5 6 7 8]
+#define MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE 1.0 // Reprojection footprint depth tolerance. [0.25 0.5 0.75 1.0 1.5 2.0 3.0 4.0]
+#define MAXENT_TEMPORAL_REPROJECTION_RADIUS 1.0 // Shared reprojection footprint radius in pixels. [0.5 1.0 1.5 2.0 3.0]
 
-// -- Diffuse temporal accumulation (temporal_diffuse.glsl) --
-#define TEMPORAL_MAX_HISTORY 32 // Maximum effective sample count clamped per pixel. Higher = smoother but more ghosting. [1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384]
-#define TEMPORAL_HISTORY_MIN_WEIGHT 0.0001 // Weight threshold below which history is discarded and reset. [0.000001 0.00001 0.0001 0.001 0.01]
-#define TEMPORAL_AABB_ENABLE 1 // AABB clamp in MaxEnt augmented space to prevent ghosting. 0 = fall back to raw EMA blend. [0 1]
-#define TEMPORAL_AABB_NEIGHBOR_RADIUS 2 // AABB neighborhood radius. 1 = 3×3, 2 = 5×5. [1 2 3]
-#define TEMPORAL_AABB_EXPAND 2.0 // AABB extent expand factor. Compensates for min/max underestimation from sparse neighbor samples. [0.5 1.0 1.5 2.0 3.0 4.0]
-#define TEMPORAL_AABB_SIGMA_SCALE 3.0 // AABB sigma-guided expansion (× √Var_scalar). 3.0 ≈ 3-sigma. [0.5 1.0 1.5 2.0 3.0 4.0 5.0]
-#define TEMPORAL_AABB_MIN_EXTENT 1.0 // AABB minimum absolute extent. Prevents dark regions from being clamped to zero. [0.01 0.1 0.5 1.0 2.0 5.0]
-#define TEMPORAL_AABB_BOX_SCALE 1.0 // AABB global scale. Tweak this first when overall clamp feels too aggressive or too conservative. [0.25 0.5 0.75 1.0 1.5 2.0]
-#define TEMPORAL_AABB_MIN_VALID_NEIGHBORS 2 // Minimum valid neighbor count below which AABB clamp is skipped. [1 2 3 4 5 6 7 8]
-#define TEMPORAL_DEPTH_FOOTPRINT_SCALE 1.0 // Scales the depth half-extent of the temporal footprint trapezoid. Higher = more permissive history acceptance. [0.25 0.5 0.75 1.0 1.5 2.0 3.0 4.0]
-#define TEMPORAL_CLIP_PIXEL_RADIUS 1.0 // Pixel radius for temporal footprint corners. Larger values widen the reprojection acceptance region. [0.5 1.0 1.5 2.0 3.0]
+// -- MaxEnt specular temporal accumulation --
+// The G-buffer stores GGX alpha; the front end converts it to perceptual
+// roughness exactly once before these controls are evaluated.
+#define MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY 30 // Maximum slow-history Kish effective sample count. [5 10 15 20 30 40 60 90]
+#define MAXENT_SPECULAR_TEMPORAL_MAX_FAST_HISTORY 6 // Maximum responsive-history Kish effective sample count. [1 2 3 4 6 8 12 16]
+#define MAXENT_SPECULAR_PREPASS_RADIUS 1.0 // Geometry-aware prefilter radius in pixels. [0.0 1.0 2.0 3.0 4.0]
+#define MAXENT_SPECULAR_PREPASS_ROUGHNESS_TOLERANCE 0.15 // Roughness tolerance used by the prefilter. [0.05 0.1 0.15 0.2 0.25 0.35 0.5]
+#define MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD 0.01 // Relative temporal plane threshold. [0.0025 0.005 0.0075 0.01 0.015 0.02 0.03 0.05]
+#define MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION 0.5 // Accepted GGX lobe fraction. [0.25 0.35 0.5 0.65 0.75 0.9]
+#define MAXENT_SPECULAR_TEMPORAL_HISTORY_FIX_THRESHOLD 3.0 // N_eff threshold repaired after disocclusion. [1.0 2.0 3.0 4.0 5.0 8.0]
+#define MAXENT_SPECULAR_TEMPORAL_CLAMP_SIGMA 2.0 // Responsive YCoCg history-box width. [0.5 1.0 1.5 2.0 2.5 3.0 4.0]
+#define MAXENT_SPECULAR_TEMPORAL_ANTI_LAG 1.0 // Slow-to-responsive anti-lag acceleration. [0.0 0.25 0.5 0.75 1.0 1.5 2.0]
+#define MAXENT_SPECULAR_TEMPORAL_RESET_TEMPORAL_SIGMA 3.0 // Temporal reset tolerance. [1.0 2.0 3.0 4.0 5.0]
+#define MAXENT_SPECULAR_TEMPORAL_RESET_SPATIAL_SIGMA 3.0 // Spatial reset tolerance. [1.0 2.0 3.0 4.0 5.0]
+#define MAXENT_SPECULAR_TEMPORAL_RESET_AMOUNT 0.5 // Maximum reset fraction. [0.0 0.25 0.5 0.75 1.0]
 
-// -- NVIDIA RELAX specular denoiser --
-// RELAX consumes perceptual roughness. The G-buffer stores GGX alpha and the
-// front end converts it exactly once.
-#define RELAX_SPEC_MAX_HISTORY 30 // Slow specular history length. [5 10 15 20 30 40 60 90]
-#define RELAX_SPEC_MAX_FAST_HISTORY 6 // Responsive history length. [1 2 3 4 6 8 12 16]
-#define RELAX_PREPASS_RADIUS 1.0 // Specular pre-pass radius in pixels. [0.0 1.0 2.0 3.0 4.0]
-#define RELAX_DISOCCLUSION_THRESHOLD 0.01 // Relative temporal plane threshold. [0.0025 0.005 0.0075 0.01 0.015 0.02 0.03 0.05]
-#define RELAX_ROUGHNESS_FRACTION 0.15 // Roughness edge tolerance. [0.05 0.1 0.15 0.2 0.25 0.35 0.5]
-#define RELAX_LOBE_ANGLE_FRACTION 0.5 // Accepted GGX lobe fraction. [0.25 0.35 0.5 0.65 0.75 0.9]
-#define RELAX_LOBE_ANGLE_SLACK 0.02 // Additional lobe tolerance in radians. [0.0 0.005 0.01 0.02 0.04 0.08]
-#define RELAX_MIN_HIT_DISTANCE_WEIGHT 0.1 // Minimum pre-pass hit-distance weight. [0.0 0.05 0.1 0.2 0.35 0.5]
-#define RELAX_ANTIFIREFLY_ENABLE 1 // Rank-conditioned anti-firefly pass. [0 1]
-#define RELAX_HISTORY_FIX_FRAMES 3.0 // Frames repaired after disocclusion. [1.0 2.0 3.0 4.0 5.0 8.0]
-#define RELAX_HISTORY_FIX_BASE_STRIDE 14.0 // Maximum history-fix stride. [4.0 8.0 12.0 14.0 18.0 24.0]
-#define RELAX_COLOR_BOX_SIGMA 2.0 // Responsive YCoCg color-box width. [0.5 1.0 1.5 2.0 2.5 3.0 4.0]
-#define RELAX_HISTORY_ACCELERATION 1.0 // Slow-to-responsive anti-lag acceleration. [0.0 0.25 0.5 0.75 1.0 1.5 2.0]
-#define RELAX_HISTORY_RESET_TEMPORAL_SIGMA 3.0 // Temporal reset tolerance. [1.0 2.0 3.0 4.0 5.0]
-#define RELAX_HISTORY_RESET_SPATIAL_SIGMA 3.0 // Spatial reset tolerance. [1.0 2.0 3.0 4.0 5.0]
-#define RELAX_HISTORY_RESET_AMOUNT 0.5 // Maximum reset fraction. [0.0 0.25 0.5 0.75 1.0]
-#define RELAX_HISTORY_THRESHOLD 5.0 // Frames before temporal variance is trusted. [1.0 2.0 3.0 5.0 8.0 12.0]
-#define RELAX_SPEC_VARIANCE_BOOST 8.0 // Low-confidence zero-sample variance. [0.0 1.0 2.0 4.0 8.0 16.0]
-#define RELAX_ROUGHNESS_EDGE_RELAXATION 0.3 // View-vector edge relaxation. [0.0 0.1 0.2 0.3 0.5 0.75 1.0]
-#define RELAX_NORMAL_RELAXATION 0.5 // Low-confidence normal relaxation. [0.0 0.25 0.5 0.75 1.0]
-#define RELAX_LUMINANCE_RELAXATION 0.5 // Low-confidence luminance relaxation. [0.0 0.25 0.5 0.75 1.0]
-#define RELAX_SPEC_PHI_LUMINANCE 10.0 // Variance-normalized MaxEnt light-field tolerance. Higher values denoise more. [0.25 0.5 0.75 1.0 1.5 2.0 3.0 4.0 5.0 6.0 8.0 10.0]
-#define RELAX_MAX_LUMINANCE_DIFFERENCE 2.0 // Relative luminance rejection clamp. [0.5 1.0 1.5 2.0 3.0 4.0 8.0]
+// -- Shared MaxEnt variance preparation (diffuse + specular) --
+#define MAXENT_VARIANCE_KERNEL_SIGMA 1.25 // Gaussian kernel sigma (pixels) for short-history spatial variance pooling. Higher = wider support. [0.5 0.75 1.0 1.25 1.5 2.0 2.5]
+#define MAXENT_VARIANCE_HISTORY_BEGIN 2.0 // N_eff at which spatial→temporal variance transition begins. [1.0 2.0 4.0 6.0 8.0]
+#define MAXENT_VARIANCE_HISTORY_END 12.0 // N_eff at which temporal estimator variance becomes fully trusted. [4.0 6.0 8.0 12.0 16.0 24.0 32.0]
 
-// -- Variance prefilter (before A-Trous denoiser) --
-#define VAR_FILTER_KERNEL_SIGMA 1.25 // Gaussian kernel sigma (pixels) for spatial variance pooling. Higher = wider blur. [0.5 0.75 1.0 1.25 1.5 2.0 2.5]
-#define VAR_FILTER_HISTORY_BEGIN 2.0 // Frames at which spatial→temporal transition begins. Below this = mostly spatial. [1.0 2.0 4.0 6.0 8.0]
-#define VAR_FILTER_HISTORY_END 12.0 // Frames at which spatial→temporal transition ends. Above this = mostly temporal. [4.0 6.0 8.0 12.0 16.0 24.0 32.0]
-
-// -- À-trous spatial filter (atrous_denoise_diffuse.glsl) --
-#define ATROUS_NORMAL_POWER 32.0 // Normal edge-stopping sensitivity in à-trous wavelet filter. Higher = sharper normal edges preserved. [1 2 4 8 16 32 64 128]
-#define ATROUS_PHI_L 0.35 // Luma edge-stopping sensitivity. Higher = more aggressive denoising. [0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5]
-#define ATROUS_POSITION_PARAM 0.1 // Depth edge-stopping sensitivity. Higher = sharper depth boundaries preserved. [0.005 0.01 0.02 0.03 0.04 0.05 0.06 0.07 0.08 0.09 0.1 0.2 0.3 0.4 0.5]
-#define ATROUS_GAMMA 1.0 // Roughness-dependent filter order adaptation strength. 0 = constant filter width regardless of roughness (blurrier on rough surfaces), 1 = standard roughness adaptation, higher = more aggressive widening on rough surfaces. [0.0 0.25 0.5 0.75 1.0 1.5 2.0]
+// -- Unified MaxEnt spatial filter --
+#define MAXENT_SPATIAL_NORMAL_SENSITIVITY 32.0 // Texture-normal rejection strength; unit roughness disables this term. [1 2 4 8 16 32 64 128]
+#define MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE 0.1 // Projected plane-distance tolerance. Higher = more permissive geometry support. [0.005 0.01 0.02 0.03 0.04 0.05 0.06 0.07 0.08 0.09 0.1 0.2 0.3 0.4 0.5]
+#define MAXENT_SPATIAL_VARIANCE_ADAPTATION 1.0 // Conservativeness of variance propagation across spatial levels. Higher retains more variance. [0.0 0.25 0.5 0.75 1.0 1.5 2.0]
+#define MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY 0.2 // Diffuse variance-normalized MaxEnt rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5]
+#define MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY 0.2 // Specular variance-normalized MaxEnt rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.5]
+#define MAXENT_SPATIAL_DIFFUSE_LOW_CONFIDENCE_BLEND 1.0 // Wide-filter blend applied to low-confidence diffuse history. [0.0 0.1 0.25 0.5 0.75 1.0 1.25 1.5 2.0 3.0 4.0 5.0]
 
 // -- Bloom --
 #define CAMERA_VIGNETTE_STRENGTH 0.5 // Mix weight of the RT-projection/FOV-aware cos^4 lens falloff. 0 = off, 1 = ideal cos^4 falloff. [0.0 0.1 0.2 0.25 0.3 0.4 0.5 0.6 0.75 1.0]
@@ -136,7 +125,6 @@ const int colortex5Format = RGBA32UI;
 const int colortex6Format = RGBA32UI;
 const int colortex7Format = RGBA32F;
 const int colortex8Format = RGBA32F;
-const int colortex9Format = RGBA32F;
 
 const bool depthtex0Clear = true;
 const bool colortex1Clear = true;
@@ -147,7 +135,6 @@ const bool colortex5Clear = true;
 const bool colortex6Clear = true;
 const bool colortex7Clear = true;
 const bool colortex8Clear = true;
-const bool colortex9Clear = true;
 */
 
 #endif // SETTINGS_GLSL

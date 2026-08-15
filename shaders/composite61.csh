@@ -1,1 +1,1 @@
-#include "/post/relax_specular_temporal.glsl"
+#include "/post/maxent_specular_temporal.glsl"

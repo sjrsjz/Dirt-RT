@@ -46,7 +46,8 @@ void main() {
     bool inside, handedness, isNEE, ignoreTransmissive;
     float prevDist = payload_unpackFlags(payload.data, inside, handedness,
         isNEE, ignoreTransmissive);
-    bool isTransmissive = blockID == BLOCK_WATER || blockID == BLOCK_GLASS;
+    bool isTransmissive = blockID == BLOCK_WATER || blockID == BLOCK_GLASS
+        || blockID == BLOCK_ICE;
 
     // Background visibility rays intentionally see the first opaque surface.
     // Reject water/glass before UV gradients and anisotropic texture reads.
@@ -109,11 +110,13 @@ void main() {
             textureResolution, footprint, true);
     }
 
-    vec3 shadowTrans = payload_unpackShadow(payload.data);
+    int mediumBlockID;
+    vec3 shadowTrans = payload_unpackShadow(payload.data, mediumBlockID);
 
     if (inside) {
         float segDist = clamp(gl_HitTEXT - prevDist, 0.0, 100.0);
-        shadowTrans = applyVolumeExtinction(shadowTrans, segDist, texColor, blockID);
+        shadowTrans = applyVolumeExtinction(shadowTrans, segDist, texColor,
+            mediumBlockID);
     }
 
     // Alpha-tested coverage is not a volume boundary. In particular, player

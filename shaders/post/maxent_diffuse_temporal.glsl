@@ -1,7 +1,7 @@
 #version 430 core
 
 // ===========================================================================
-// Pass 100 CS: 漫反射时域累积 (当前像素梯形 → 历史空间厚梯形版)
+// MaxEnt diffuse temporal accumulation.
 // ===========================================================================
 
 layout(local_size_x = 16, local_size_y = 16) in;
@@ -14,19 +14,20 @@ layout(rgba32ui) uniform writeonly uimage2D colorimg6;
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/buffer_io.glsl"
 #include "/lib/lighting/maxent.glsl"
+#include "/lib/lighting/denoiser/maxent_temporal_statistics.glsl"
 
 uniform vec2 resolution;
 
-#ifndef TEMPORAL_DEPTH_FOOTPRINT_SCALE
-#define TEMPORAL_DEPTH_FOOTPRINT_SCALE 1.0
+#ifndef MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE
+#define MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE 1.0
 #endif
 
-#ifndef TEMPORAL_CLIP_PIXEL_RADIUS
-#define TEMPORAL_CLIP_PIXEL_RADIUS 1.0
+#ifndef MAXENT_TEMPORAL_REPROJECTION_RADIUS
+#define MAXENT_TEMPORAL_REPROJECTION_RADIUS 1.0
 #endif
 
-#ifndef TEMPORAL_GEOMETRY_EPSILON
-#define TEMPORAL_GEOMETRY_EPSILON 1e-5
+#ifndef MAXENT_TEMPORAL_GEOMETRY_EPSILON
+#define MAXENT_TEMPORAL_GEOMETRY_EPSILON 1e-5
 #endif
 
 // ===========================================================================
@@ -35,8 +36,8 @@ uniform vec2 resolution;
 
 #define TILE_SIZE 16u
 
-#if TEMPORAL_AABB_ENABLE
-#define AABB_HALO uint(TEMPORAL_AABB_NEIGHBOR_RADIUS)
+#if MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE
+#define AABB_HALO uint(MAXENT_DIFFUSE_TEMPORAL_AABB_RADIUS)
 #define AABB_SM_W (TILE_SIZE + 2u * AABB_HALO)
 #define AABB_SM_H (TILE_SIZE + 2u * AABB_HALO)
 
@@ -133,8 +134,8 @@ bool buildTemporalFootprint(uvec2 pix, vec3 currentPos, vec3 geometryNormal, vec
 
     mat4 invVP = rtInverseViewProjection;
     vec2 curRes = vec2(resolution);
-    vec2 uvMin = (vec2(pix) - TEMPORAL_CLIP_PIXEL_RADIUS) / curRes * 2.0 - 1.0;
-    vec2 uvMax = (vec2(pix) + TEMPORAL_CLIP_PIXEL_RADIUS) / curRes * 2.0 - 1.0;
+    vec2 uvMin = (vec2(pix) - MAXENT_TEMPORAL_REPROJECTION_RADIUS) / curRes * 2.0 - 1.0;
+    vec2 uvMax = (vec2(pix) + MAXENT_TEMPORAL_REPROJECTION_RADIUS) / curRes * 2.0 - 1.0;
 
     bool v0, v1, v2, v3;
     fp.origin = currentPos + camDelta;
@@ -152,8 +153,8 @@ bool buildTemporalFootprint(uvec2 pix, vec3 currentPos, vec3 geometryNormal, vec
     fp.plane3 = vec2(dot(w3 - fp.origin, fp.tangent), dot(w3 - fp.origin, fp.bitangent));
 
     float footprintDiameter = max(length(fp.plane2 - fp.plane0), length(fp.plane3 - fp.plane1));
-    fp.depthHalfExtent = footprintDiameter * TEMPORAL_DEPTH_FOOTPRINT_SCALE;
-    fp.planeEdgeEpsilon = TEMPORAL_GEOMETRY_EPSILON * max(footprintDiameter, 1.0);
+    fp.depthHalfExtent = footprintDiameter * MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE;
+    fp.planeEdgeEpsilon = MAXENT_TEMPORAL_GEOMETRY_EPSILON * max(footprintDiameter, 1.0);
 
     return true;
 }
@@ -199,8 +200,8 @@ bool buildTemporalFootprintFast(
     // A two-pixel diagonal at unit aspect is approximately 4*d/resY in
     // world space. Division by NoV reproduces the ray/plane expansion at
     // grazing angles without reconstructing four near/far ray pairs.
-    fp.depthHalfExtent = max(4.0 * TEMPORAL_CLIP_PIXEL_RADIUS *
-        pixelWorldSize * TEMPORAL_DEPTH_FOOTPRINT_SCALE / max(noV, 0.05),
+    fp.depthHalfExtent = max(4.0 * MAXENT_TEMPORAL_REPROJECTION_RADIUS *
+        pixelWorldSize * MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE / max(noV, 0.05),
         1e-5);
     return true;
 }
@@ -220,8 +221,8 @@ bool strictHistoryGeometryTestFast(
     if (clip.w <= 1e-7 || any(isnan(clip)) || any(isinf(clip))) return false;
     vec2 projectedPixel = (clip.xy / clip.w * 0.5 + 0.5) *
         vec2(resolution_global);
-    vec2 extent = vec2(TEMPORAL_CLIP_PIXEL_RADIUS +
-        TEMPORAL_GEOMETRY_EPSILON);
+    vec2 extent = vec2(MAXENT_TEMPORAL_REPROJECTION_RADIUS +
+        MAXENT_TEMPORAL_GEOMETRY_EPSILON);
     return all(lessThanEqual(abs(projectedPixel - vec2(currentPixel)), extent));
 }
 
@@ -229,7 +230,7 @@ bool strictHistoryGeometryTestFast(
 // AABB 邻域钳制
 // ===========================================================================
 
-#if TEMPORAL_AABB_ENABLE
+#if MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE
 void computeAABB_CS(out vec4 minAY, out vec4 maxAY, out vec2 minCC, out vec2 maxCC, out int validCnt) {
     int cx = int(gl_LocalInvocationID.x + AABB_HALO);
     int cy = int(gl_LocalInvocationID.y + AABB_HALO);
@@ -244,8 +245,8 @@ void computeAABB_CS(out vec4 minAY, out vec4 maxAY, out vec2 minCC, out vec2 max
     vec4 sumAY = cenAY;
     vec4 sumSqAY = cenAY * cenAY;
 
-    for (int dy = -TEMPORAL_AABB_NEIGHBOR_RADIUS; dy <= TEMPORAL_AABB_NEIGHBOR_RADIUS; dy++) {
-        for (int dx = -TEMPORAL_AABB_NEIGHBOR_RADIUS; dx <= TEMPORAL_AABB_NEIGHBOR_RADIUS; dx++) {
+    for (int dy = -MAXENT_DIFFUSE_TEMPORAL_AABB_RADIUS; dy <= MAXENT_DIFFUSE_TEMPORAL_AABB_RADIUS; dy++) {
+        for (int dx = -MAXENT_DIFFUSE_TEMPORAL_AABB_RADIUS; dx <= MAXENT_DIFFUSE_TEMPORAL_AABB_RADIUS; dx++) {
             if (dx == 0 && dy == 0) continue;
 
             uint sampleIndex = uint(cy + dy) * AABB_SM_W + uint(cx + dx);
@@ -276,10 +277,10 @@ void computeAABB_CS(out vec4 minAY, out vec4 maxAY, out vec2 minCC, out vec2 max
     float sigmaN = sqrt(max(0.0, max(max(nbVar.x, nbVar.y), max(nbVar.z, nbVar.w))));
 
     float sigCombined = max(sigmaA, sigmaN);
-    float sigExp = sigCombined * TEMPORAL_AABB_SIGMA_SCALE;
+    float sigExp = sigCombined * MAXENT_DIFFUSE_TEMPORAL_AABB_SIGMA_SCALE;
 
-    vec4 expAY = (extAY * TEMPORAL_AABB_EXPAND + sigExp + TEMPORAL_AABB_MIN_EXTENT) * TEMPORAL_AABB_BOX_SCALE;
-    vec2 expCC = (extCC * TEMPORAL_AABB_EXPAND + sigExp * 0.5 + TEMPORAL_AABB_MIN_EXTENT) * TEMPORAL_AABB_BOX_SCALE;
+    vec4 expAY = (extAY * MAXENT_DIFFUSE_TEMPORAL_AABB_EXPANSION + sigExp + MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_EXTENT) * MAXENT_DIFFUSE_TEMPORAL_AABB_SCALE;
+    vec2 expCC = (extCC * MAXENT_DIFFUSE_TEMPORAL_AABB_EXPANSION + sigExp * 0.5 + MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_EXTENT) * MAXENT_DIFFUSE_TEMPORAL_AABB_SCALE;
 
     minAY -= expAY;
     maxAY += expAY;
@@ -338,7 +339,8 @@ void MixDiffuse() {
     MaxEntEncoding accumMaxEnt = init_maxent();
     float accumMeanY2 = 0.0;
     float validKernelWeight = 0.0;
-    float accumHistWeight = 0.0;
+    float sumWeightOverSamples = 0.0;
+    float accumulatedHistoryEvidence = 0.0;
 
     float w[4] = {
         (1.0 - prevFrac.x) * (1.0 - prevFrac.y),
@@ -355,7 +357,7 @@ void MixDiffuse() {
         if (any(lessThan(sampleTexel, ivec2(0))) || any(greaterThanEqual(sampleTexel, ivec2(resolution_global)))) continue;
 
         diffuseIlluminationData tap = fetchDiffuse(sampleTexel);
-        if (tap.prev_weight < TEMPORAL_HISTORY_MIN_WEIGHT) continue;
+        if (tap.prev_weight < MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT) continue;
         // 几何一致性测试（纯位置，MaxEnt 方向编码隐式保证法线一致性）
         if (!strictHistoryGeometryTestFast(tap.pos, fp,
                 uvec2(gl_GlobalInvocationID.xy), cameraDelta)) continue;
@@ -369,13 +371,15 @@ void MixDiffuse() {
         float histVoN = dot(normalize(histPosCur), geometryNormal);
 
         float scale = clamp(d2_sq * abs(histVoN) / max(d1_sq * abs(currVoN), 1e-3), 0.0, 1.0);
-        float correctedTapW = min(tap.prev_weight * scale, float(TEMPORAL_MAX_HISTORY));
+        float tapSamples = clamp(tap.prev_weight, 1.0,
+            float(MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY));
 
         float tapWeight = w[i] * normalWeight;
         accumulate_maxent(accumMaxEnt, tap.data, tapWeight);
         accumMeanY2 += tapWeight * tap.prev_meanY2;
         validKernelWeight += tapWeight;
-        accumHistWeight += tapWeight * correctedTapW;
+        sumWeightOverSamples += tapWeight / tapSamples;
+        accumulatedHistoryEvidence += tapWeight * tapSamples * scale;
     }
 
     if (validKernelWeight < 1e-5) {
@@ -385,31 +389,38 @@ void MixDiffuse() {
     }
 
     MaxEntEncoding histMaxEnt = scale_maxent(accumMaxEnt, 1.0 / validKernelWeight);
-    float histWeight = accumHistWeight / validKernelWeight;
+    float historySamples = maxentTemporalReprojectedEffectiveSamples(
+        validKernelWeight, sumWeightOverSamples,
+        float(MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY));
+    float historyEvidence = clamp(accumulatedHistoryEvidence
+        / validKernelWeight, 0.0, float(MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY));
 
     float histMeanY2 = accumMeanY2 / validKernelWeight;
 
-    histWeight = clamp(histWeight, 0.0, float(TEMPORAL_MAX_HISTORY));
-    if (histWeight <= TEMPORAL_HISTORY_MIN_WEIGHT) {
+    if (historySamples < 1.0
+            || historyEvidence <= MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT) {
         resetToCurrentSample();
         imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), uvec4(0u));
         return;
     }
 
-    #if TEMPORAL_AABB_ENABLE
+    #if MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE
     vec4 minAY, maxAY;
     vec2 minCC, maxCC;
     int validCnt;
 
     computeAABB_CS(minAY, maxAY, minCC, maxCC, validCnt);
-    if (validCnt >= TEMPORAL_AABB_MIN_VALID_NEIGHBORS) {
+    if (validCnt >= MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_SAMPLES) {
         clampHistoryToAABB(histMaxEnt, minAY, maxAY, minCC, maxCC);
     }
     #endif
 
-    float W = histWeight + 1.0;
-    float curAlpha = 1.0 / max(W, 1e-6);
-    output_weight = min(W, float(TEMPORAL_MAX_HISTORY));
+    // Geometry confidence controls how much history is reused, while N_eff
+    // describes the noise of the history estimator itself. Keeping these
+    // quantities separate avoids inventing sub-unity Kish sample counts.
+    float curAlpha = 1.0 / (historyEvidence + 1.0);
+    output_weight = maxentTemporalUpdatedEffectiveSamples(historySamples,
+        curAlpha, float(MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY));
 
     // Blend second moment: M₂,n = (1-α)·M₂,h + α·Y²_c
     float newMeanY2 = mix(histMeanY2, current_data.meanY2, curAlpha);
@@ -426,7 +437,7 @@ void MixDiffuse() {
 void main() {
     uvec2 pix = gl_GlobalInvocationID.xy;
 
-    #if TEMPORAL_AABB_ENABLE
+    #if MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE
     {
         uint tid = gl_LocalInvocationID.y * TILE_SIZE + gl_LocalInvocationID.x;
         uint totalSamples = AABB_SM_W * AABB_SM_H;
@@ -457,9 +468,8 @@ void main() {
 
     if (any(greaterThanEqual(pix, uvec2(resolution)))) return;
 
-    readDiffuseGeo(pix, current_data.pos, current_data.surfaceMask);
-    info_distance = current_data.surfaceMask > 0.5
-        ? length(current_data.pos) : -1.0;
+    readDiffusePrimaryGeometry(pix, current_data.pos, info_distance);
+    current_data.surfaceMask = info_distance >= 0.0 ? 1.0 : 0.0;
 
     if (info_distance < -0.5) {
         // All AABB entries for a sky center are invalid. Clear only the two
@@ -471,7 +481,7 @@ void main() {
 
     {
         // 从 DiffuseBuffer N=0 读 MaxEnt + meanY2，surfaceMask 从 N=1 读
-        #if TEMPORAL_AABB_ENABLE
+        #if MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE
         uint outputCenterCol = gl_LocalInvocationID.x + AABB_HALO;
         uint outputCenterRow = gl_LocalInvocationID.y + AABB_HALO;
         uint outputCenterIndex = outputCenterRow * AABB_SM_W + outputCenterCol;
@@ -489,7 +499,7 @@ void main() {
         #endif
         current_data.weight = 1.0;
         // 从 Geo1 取 geometryNormal（仅用于 buildTemporalFootprint 切空间）
-        geometryNormal = readDiffuseGeometryNormal(pix);
+        geometryNormal = readPrimaryGeometryNormal(pix);
     }
 
     out_data.data_swap = current_data.data_swap;

@@ -143,7 +143,8 @@ vec3 evaluateCachedRoughSpecularLighting(
     vec3 incidentResponse = radianceCacheDiffuseIncident(
             cache, dominantDirection);
     vec3 specularAlbedo = evaluateSpecularAlbedo(
-            surf, rd_i, macroNormal, 1.0 / REFRACTIVE_INDEX);
+            surf, rd_i, macroNormal,
+            1.0 / transportIorFromMaterial(surf));
     return incidentResponse * specularAlbedo / max(lobes.P_spec, 1e-5);
 }
 

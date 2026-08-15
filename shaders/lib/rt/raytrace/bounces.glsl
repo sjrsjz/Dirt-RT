@@ -85,10 +85,10 @@ void handleFirstBounce_Refraction(
         if (psrEnabled) {
             vec3 chain_rd = dot(psr_refract_dir, psr_refract_dir) > 0.0 ? psr_refract_dir : refract_dir;
             float savedConeWidth = rtCurrentConeWidth;
-            int firstMediumBlockID = surf.R.z > 0.5
-                ? BLOCK_WATER : BLOCK_GLASS;
+            int firstMediumBlockID = transportBlockFromMaterial(surf);
             psr = tracePSRChain(ro_o, chain_rd, geometryNormal,
-                surf.R.x, was_inverse_0, firstMediumBlockID, baseDepth);
+                surf.R.x, was_inverse_0, firstMediumBlockID, surf.Cd,
+                transportExtinctionWeightFromMaterial(surf), baseDepth);
             rtCurrentConeWidth = savedConeWidth;
         } else {
             psr.virtualDist = 0.0;
@@ -98,7 +98,8 @@ void handleFirstBounce_Refraction(
 
         vec3 fTransmissionTimesNoL;
         float pdfTransmission;
-        vec3 transmissionColor = surf.Cd * clamp(surf.S.y, 0.0, 1.0);
+        vec3 transmissionColor = evaluateTransmissionAlbedo(surf)
+            * clamp(surf.S.y, 0.0, 1.0);
         if (isDeltaSpecular(surf.R.x)) {
             float F = clamp(fresnel(-rd_i, macroNormal, rs), 0.0, 1.0);
             // Radiance transport through a delta dielectric carries eta_i^2 /
@@ -170,8 +171,9 @@ void handleSecondaryBounce(
     sampledStrategyPdf = 0.0;
     sampledDeltaLobe = false;
     neeCompatible = false;
-    float n_i = inside_state ? REFRACTIVE_INDEX : 1.0;
-    float n_o = inside_state ? 1.0 : REFRACTIVE_INDEX;
+    float surfaceIor = transportIorFromMaterial(surf);
+    float n_i = inside_state ? surfaceIor : 1.0;
+    float n_o = inside_state ? 1.0 : surfaceIor;
     float rs = n_i / n_o;
 
     if (rnd_lobe < lobes.P_spec) {
@@ -221,7 +223,8 @@ void handleSecondaryBounce(
             next_rd = refract_dir;
             vec3 fTransmissionTimesNoL;
             float pdfTransmission;
-            vec3 transmissionColor = surf.Cd * clamp(surf.S.y, 0.0, 1.0);
+            vec3 transmissionColor = evaluateTransmissionAlbedo(surf)
+                * clamp(surf.S.y, 0.0, 1.0);
             bool validTransmission;
             if (isDeltaSpecular(surf.R.x)) {
                 float F = clamp(

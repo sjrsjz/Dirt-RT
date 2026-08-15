@@ -33,12 +33,15 @@ void TracePrimaryGBuffer(uvec2 xy, vec3 ro, vec3 rd) {
         int blockID;
         payload_unpackShadow(tmp_Payload.data, blockID);
         surf = materialFromEvaluated(surfaceMat, blockID);
-        int materialID = getRelaxMaterialID(tmp_Payload, blockID);
+        int materialID = getMaxEntMaterialID(tmp_Payload, blockID);
         markRadianceCacheGeometryHit(xy, hitPosition, geometryNormal);
 
-        float nI = inside ? REFRACTIVE_INDEX : 1.0;
-        float nO = inside ? 1.0 : REFRACTIVE_INDEX;
+        float surfaceIor = transportIorFromMaterial(surf);
+        float nI = inside ? surfaceIor : 1.0;
+        float nO = inside ? 1.0 : surfaceIor;
+        int cameraMediumBlockID = eyeMedium == 1u ? BLOCK_WATER : 0;
         MediumResult medium = evalMedium(t, rd, ro.y, inside,
+                cameraMediumBlockID, vec3(1.0), 0.0,
                 fogColor, globalEmission);
         recordFirstBounceGBuffer(hitPosition, ro, macroNormal,
             geometryNormal, macroNormal, surf, materialID, rd, rd, t,

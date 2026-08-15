@@ -173,6 +173,9 @@ vec3 evaluateRadianceCacheHit(vec3 rayOrigin, vec3 rayDirection, vec3 hitPos, fl
             rayDirection,
             rayOrigin.y,
             false,
+            0,
+            vec3(1.0),
+            0.0,
             vec4(0.0),
             vec3(0.0)
         );

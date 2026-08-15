@@ -2,38 +2,43 @@
 #define BUFFERS_DIFFUSE_BUFFER_GLSL
 
 #include "/lib/buffers/addr.glsl"
+#include "/lib/buffers/gbuffer.glsl"
 #include "/lib/common/pack_half.glsl"
 #include "/lib/lighting/maxent_encode.glsl"
 
 // ===========================================================================
 // Binding 2 — DiffuseBuffer pack/unpack (uvec4 raw-integer storage)
 // ===========================================================================
-// N=0: Current Light  — uvec4(pHalf2(maxEntY.xy), pHalf2(maxEntY.zw), pHalf2(CoCg), pHalf2(0, sqrt(meanY2)))
-// N=1: Current Geo    — uvec4(fbits(pos.xyz), fbits(surfaceMask))
-// N=2: History Light  — uvec4(pHalf2(hist_maxEntY.xy), pHalf2(hist_maxEntY.zw), pHalf2(hist_CoCg), pHalf2(weight, sqrt(meanY2)))
-// N=3: History Geo    — uvec4(fbits(hist_pos.xyz), oct(hist_geometryNormal))
-// N=4: Swap Light     — uvec4(pHalf2(swap_maxEntY.xy), pHalf2(swap_maxEntY.zw), pHalf2(swap_CoCg), pHalf2(weight, sqrt(meanY2)))
-// N=5: Path Guide     — uvec4(pHalf2(maxEntY.xy), pHalf2(maxEntY.zw), fbits(W), fbits(M))
-// N=6: ReSTIR GI prewarm first-hit direct-light MaxEnt atom.
-// N=7: ReSTIR GI prewarm fresh endpoint.xyz + signed first-direction PDF.
-// N=8: Current-frame biased ReSTIR GI path-guide prewarm MaxEnt atom.
-// N=9: Quantized current diffuse-domain normals, material and motion.
+// N=0: Current Light  — MaxEnt6 + current second moment.
+// N=1: History Light  — MaxEnt6 + history length/second moment.
+// N=2: History Geo    — F32 distance + oct ray + oct geometry normal.
+// N=3: Swap Light     — MaxEnt6 + accumulated length/second moment.
+// N=4: Path Guide     — MaxEnt4 + F32 reservoir W/M.
+// N=5: ReSTIR GI first-hit direct-light MaxEnt atom.
+// N=6: ReSTIR GI endpoint distance/direction + signed first-direction PDF.
+// N=7: Current-frame biased ReSTIR GI path-guide prewarm MaxEnt atom.
+// N=8: Macro normal, diffuse material and motion.
 //
-// .w lane uses packHalf2x16: weight:f16 + sqrt(meanY2):f16.
+// .w lane uses packHalf2x16: Kish N_eff:f16 + sqrt(meanY2):f16.
 // sqrt compression keeps HDR second moments within f16 range (e.g. Y=1000 →
 // sqrt(Y²)=1000 < 65504), at the cost of relative precision halved after squaring.
-// surfaceMask lives in N=1. N=3 stores the reprojectable history normal instead.
+// Current position, geometry normal and validity come from compact primary
+// geometry; a negative primary distance is the only sky/no-surface marker.
 
+// Active nine-plane layout. Current geometry is owned by geomBuffer and is
+// reconstructed from pixel + RT projection and F32 distance; it is not
+// duplicated here.
+// DIF_N_HISTGEO = F32 distance + oct ray + oct geometry normal.
+// DIF_N_RESTIR_ENDPOINT = F32 distance + oct direction + F32 signed PDF.
 #define DIF_N_LIGHT    0u
-#define DIF_N_GEO      1u
-#define DIF_N_HIST     2u
-#define DIF_N_HISTGEO  3u
-#define DIF_N_SWAP     4u
-#define DIF_N_PATHGUIDE 5u
-#define DIF_N_RESTIR_DIRECT   6u
-#define DIF_N_RESTIR_ENDPOINT 7u
-#define DIF_N_RESTIR_PREWARM  8u
-#define DIF_N_SURFACE          9u
+#define DIF_N_HIST     1u
+#define DIF_N_HISTGEO  2u
+#define DIF_N_SWAP     3u
+#define DIF_N_PATHGUIDE 4u
+#define DIF_N_RESTIR_DIRECT   5u
+#define DIF_N_RESTIR_ENDPOINT 6u
+#define DIF_N_RESTIR_PREWARM  7u
+#define DIF_N_SURFACE          8u
 
 // ===========================================================================
 // N=0 — Current RT Light
@@ -69,28 +74,20 @@ void writeDiffuseLightRTSky(uvec2 xy) {
 }
 
 // ===========================================================================
-// N=1 — Current Geometry (surfaceMask lives ONLY here, not duplicated in N=0)
+// Current Geometry (shared compact primary G-buffer; no diffuse plane)
 // ===========================================================================
 
-void writeDiffuseGeo(uvec2 xy, vec3 pos, float surfaceMask) {
-    diffuseBuffer.data[addr(DIF_N_GEO, xy)] = uvec4(
-        floatBitsToUint(pos),
-        floatBitsToUint(surfaceMask)
-    );
-}
-void readDiffuseGeo(uvec2 xy, out vec3 pos, out float surfaceMask) {
-    uvec4 v = diffuseBuffer.data[addr(DIF_N_GEO, xy)];
-    pos = uintBitsToFloat(v.xyz);
-    surfaceMask = uintBitsToFloat(v.w);
+void readDiffusePrimaryGeometry(uvec2 xy, out vec3 position,
+        out float distance) {
+    readPrimaryPosition(xy, position, distance);
 }
 
-// Convenience: read only surfaceMask from N=1
 float readDiffuseSurfaceMask(uvec2 xy) {
-    return uintBitsToFloat(diffuseBuffer.data[addr(DIF_N_GEO, xy)].w);
+    return readPrimaryDistance(xy) >= 0.0 ? 1.0 : 0.0;
 }
 
 // ===========================================================================
-// N=9 -- current diffuse-domain surface state
+// N=8 -- current diffuse-domain material and motion state
 // ===========================================================================
 
 uint encodeDiffuseNormalOct8(vec3 n) {
@@ -111,13 +108,11 @@ vec3 decodeDiffuseNormalOct8(uint packedNormal) {
     return normalize(n);
 }
 
-void writeDiffuseSurface(uvec2 xy, vec3 geometryNormal, vec3 macroNormal,
+void writeDiffuseSurface(uvec2 xy, vec3 macroNormal,
         vec3 diffuseAlbedo, float roughness, vec3 motion,
         float motionValid) {
-    uint packedNormals = encodeDiffuseNormalOct8(geometryNormal)
-        | (encodeDiffuseNormalOct8(macroNormal) << 16u);
     diffuseBuffer.data[addr(DIF_N_SURFACE, xy)] = uvec4(
-        packedNormals,
+        encodeDiffuseNormalOct8(macroNormal),
         packUnorm4x8(clamp(vec4(diffuseAlbedo, roughness), 0.0, 1.0)),
         packSnorm4x8(vec4(clamp(motion / 4.0, -1.0, 1.0),
             motionValid >= 0.5 ? 1.0 : 0.0)), 0u);
@@ -126,16 +121,11 @@ void writeDiffuseSurface(uvec2 xy, vec3 geometryNormal, vec3 macroNormal,
 void readDiffuseSurface(uvec2 xy, out vec3 geometryNormal,
         out vec3 macroNormal, out vec3 diffuseAlbedo, out float roughness) {
     uvec4 v = diffuseBuffer.data[addr(DIF_N_SURFACE, xy)];
-    geometryNormal = decodeDiffuseNormalOct8(v.x);
-    macroNormal = decodeDiffuseNormalOct8(v.x >> 16u);
+    geometryNormal = readPrimaryGeometryNormal(xy);
+    macroNormal = decodeDiffuseNormalOct8(v.x);
     vec4 materialState = unpackUnorm4x8(v.y);
     diffuseAlbedo = materialState.rgb;
     roughness = materialState.a;
-}
-
-vec3 readDiffuseGeometryNormal(uvec2 xy) {
-    return decodeDiffuseNormalOct8(
-        diffuseBuffer.data[addr(DIF_N_SURFACE, xy)].x);
 }
 
 void readDiffuseMotion(uvec2 xy, out vec3 motion, out float valid) {
@@ -146,9 +136,9 @@ void readDiffuseMotion(uvec2 xy, out vec3 motion, out float valid) {
 }
 
 // ===========================================================================
-// N=2 — History Light
+// N=1 — History Light
 // ===========================================================================
-// .w = packHalf2x16(weight, sqrt(meanY2))  →  weight:f16 + sqrt(meanY2):f16
+// .w = packHalf2x16(N_eff, sqrt(meanY2))
 
 void writeDiffuseHist(uvec2 xy, MaxEntEncoding maxent, float weight, float meanY2) {
     float sqrtM2 = sqrt(max(meanY2, 0.0));
@@ -172,7 +162,7 @@ void readDiffuseHist(uvec2 xy, out MaxEntEncoding maxent, out float weight, out 
 }
 
 // ===========================================================================
-// N=3 — History Geometry
+// N=2 — History Geometry
 // ===========================================================================
 
 uint encodeDiffuseHistoryNormalU(vec3 n) {
@@ -190,21 +180,27 @@ vec3 decodeDiffuseHistoryNormalU(uint packed_) {
 }
 
 void writeDiffuseHistGeo(uvec2 xy, vec3 pos, vec3 geometryNormal) {
+    float distance = length(pos);
+    vec3 primaryRay = distance > 1e-8
+        ? pos / distance : vec3(0.0, 0.0, -1.0);
     diffuseBuffer.data[addr(DIF_N_HISTGEO, xy)] = uvec4(
-        floatBitsToUint(pos),
-        encodeDiffuseHistoryNormalU(geometryNormal)
+        floatBitsToUint(distance),
+        encodeDiffuseHistoryNormalU(primaryRay),
+        encodeDiffuseHistoryNormalU(geometryNormal),
+        0u
     );
 }
 void readDiffuseHistGeo(uvec2 xy, out vec3 pos, out vec3 geometryNormal) {
     uvec4 v = diffuseBuffer.data[addr(DIF_N_HISTGEO, xy)];
-    pos = uintBitsToFloat(v.xyz);
-    geometryNormal = decodeDiffuseHistoryNormalU(v.w);
+    float distance = uintBitsToFloat(v.x);
+    pos = decodeDiffuseHistoryNormalU(v.y) * distance;
+    geometryNormal = decodeDiffuseHistoryNormalU(v.z);
 }
 
 // ===========================================================================
-// N=4 — Swap Light
+// N=3 — Swap Light
 // ===========================================================================
-// .w = packHalf2x16(weight, sqrt(meanY2))  →  weight:f16 + sqrt(meanY2):f16
+// .w = packHalf2x16(N_eff, sqrt(meanY2))
 
 void writeDiffuseSwap(uvec2 xy, MaxEntEncoding maxent, float weight, float meanY2) {
     float sqrtM2 = sqrt(max(meanY2, 0.0));
@@ -231,7 +227,7 @@ void readDiffuseSwap(uvec2 xy, out MaxEntEncoding maxent, out float weight, out 
 }
 
 // ===========================================================================
-// N=5 — ReSTIR temporal reservoir (Path Guide Reservoir)
+// N=4 — ReSTIR temporal reservoir (Path Guide Reservoir)
 // ===========================================================================
 // Layout: uvec4(
 //   packHalf2x16(maxEntY.xy),   // sample direction × luminance
@@ -291,7 +287,7 @@ vec4 samplePathGuide(vec2 prevCoord) {
 }
 
 // ===========================================================================
-// N=6..8 -- low-history ReSTIR GI path-guiding prewarm scratch
+// N=5..7 -- low-history ReSTIR GI path-guiding prewarm scratch
 // ===========================================================================
 
 struct RestirGIFreshCandidate {
@@ -368,17 +364,25 @@ void writeRestirGIFreshCandidate(uvec2 xy,
         RestirGIFreshCandidate candidate) {
     float signedPdf = candidate.environment
         ? -abs(candidate.firstPdf) : abs(candidate.firstPdf);
+    float endpointDistance = length(candidate.endpointRelative);
+    vec3 endpointDirection = endpointDistance > 1e-8
+        ? candidate.endpointRelative / endpointDistance
+        : vec3(0.0, 0.0, -1.0);
     diffuseBuffer.data[addr(DIF_N_RESTIR_ENDPOINT, xy)] = uvec4(
-        floatBitsToUint(candidate.endpointRelative),
-        floatBitsToUint(signedPdf));
+        floatBitsToUint(endpointDistance),
+        encodeDiffuseHistoryNormalU(endpointDirection),
+        floatBitsToUint(signedPdf),
+        0u);
 }
 
 RestirGIFreshCandidate readRestirGIFreshCandidate(uvec2 xy) {
     uvec4 endpointData =
         diffuseBuffer.data[addr(DIF_N_RESTIR_ENDPOINT, xy)];
-    float signedPdf = uintBitsToFloat(endpointData.w);
+    float endpointDistance = uintBitsToFloat(endpointData.x);
+    float signedPdf = uintBitsToFloat(endpointData.z);
     RestirGIFreshCandidate candidate;
-    candidate.endpointRelative = uintBitsToFloat(endpointData.xyz);
+    candidate.endpointRelative =
+        decodeDiffuseHistoryNormalU(endpointData.y) * endpointDistance;
     candidate.firstPdf = abs(signedPdf);
     candidate.environment = signedPdf < 0.0;
     return candidate;

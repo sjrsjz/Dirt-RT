@@ -124,23 +124,20 @@ Payload tmp_Payload;
 // Keep this before camera-ray reconstruction, RNG setup, setSkyVars(), and
 // material decoding: all of those are dead work when ray0 reported a miss.
 bool clearSkyContinuation(uvec2 pixel) {
-    float primaryDistance = uintBitsToFloat(
-            geomBuffer.data[addr(GEO_N_GEO, pixel)].w);
+    float primaryDistance = readPrimaryDistance(pixel);
     if (primaryDistance >= -0.5) return false;
 
     #if defined(FIRST_LOBE_DIFFUSE)
     diffuseBuffer.data[addr(DIF_N_LIGHT, pixel)] = uvec4(0u);
-    diffuseBuffer.data[addr(DIF_N_GEO, pixel)] = uvec4(0u);
     diffuseBuffer.data[addr(DIF_N_SURFACE, pixel)] = uvec4(0u);
     clearRestirGIScratch(pixel);
     #elif defined(FIRST_LOBE_REFLECTION)
-    reflectBuffer.data[addr(SPEC_N_GEO, pixel)] = uvec4(0u);
     reflectBuffer.data[addr(SPEC_N_LIGHT, pixel)] = uvec4(0u);
     #else
-    refractBuffer.data[addr(SPEC_N_GEO, pixel)] = uvec4(0u);
-    refractBuffer.data[addr(SPEC_N_LIGHT, pixel)] = uvec4(0u);
-    refractBuffer.data[addr(SPEC_N_HISTGEO, pixel)] = uvec4(0u);
-    refractBuffer.data[addr(SPEC_N_HISTLIGHT, pixel)] = uvec4(0u);
+    refractBuffer.data[addr(REFR_N_ENDPOINT, pixel)] = uvec4(0u);
+    refractBuffer.data[addr(REFR_N_SURFACE, pixel)] = uvec4(0u);
+    refractBuffer.data[addr(REFR_N_META, pixel)] = uvec4(0u);
+    refractBuffer.data[addr(REFR_N_TRANSPORT, pixel)] = uvec4(0u);
     #endif
     return true;
 }

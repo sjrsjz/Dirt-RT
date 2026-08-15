@@ -3,16 +3,19 @@
 #include "/lib/settings.glsl"
 const float EMISSION_INTENSITY = 15.0;
 
-// LabPBR 1.3 硬编码金属 F0 查找表 (specular.g ∈ [230,255])
-// 230-235: 固定金属, 236-237: 保留, 238-255: 自定义金属 (F0 = albedo.rgb)
+// LabPBR 1.3 predefined-metal F0 values derived from the standard's complex
+// IOR table. Values 238-254 are reserved; as permitted by LabPBR they fall
+// back to the same albedo-driven conductor model as value 255.
 vec3 getHardcodedMetalF0(int channel) {
     if (channel == 230) return vec3(0.53123, 0.51236, 0.49583); // Iron
     if (channel == 231) return vec3(0.94423, 0.77610, 0.37340); // Gold
     if (channel == 232) return vec3(0.91230, 0.91385, 0.91968); // Aluminium
-    if (channel == 233) return vec3(0.92595, 0.72090, 0.50415); // Copper
-    if (channel == 234) return vec3(0.63248, 0.62594, 0.64148); // Lead
-    if (channel == 235) return vec3(0.38760, 0.34111, 0.24700); // Silicon
-    return vec3(0.04); // 236-237 reserved → fallback dielectric
+    if (channel == 233) return vec3(0.55560, 0.55454, 0.55478); // Chrome
+    if (channel == 234) return vec3(0.92595, 0.72090, 0.50415); // Copper
+    if (channel == 235) return vec3(0.63248, 0.62594, 0.64148); // Lead
+    if (channel == 236) return vec3(0.67885, 0.64240, 0.58841); // Platinum
+    if (channel == 237) return vec3(0.96200, 0.94947, 0.92212); // Silver
+    return vec3(1.0);
 }
 
 struct Material {
@@ -86,10 +89,10 @@ Material getMaterial(vec4 albedo, vec4 macroNormal, vec4 specular, mat3 tbn, flo
     material.macroNormal.z = sqrt(max(1.0 - dot(material.macroNormal.xy, material.macroNormal.xy), 0.0));
     material.macroNormal = normalize(tbn * material.macroNormal);
 
-    // === Ambient Occlusion === (macroNormal.b)
-    // LabPBR 1.3: B = AO directly. 但多数纹理包沿用旧约定 B = 1-AO.
-    // 为兼容性保留取反; 若纹理包严格遵循 LabPBR 1.3, 改为 macroNormal.b.
-    material.ambientOcclusion = 1.0 - macroNormal.b;
+    // LabPBR stores the unoccluded/accessibility factor directly: zero is
+    // fully occluded and one is unoccluded. Path tracing deliberately does not
+    // multiply it into indirect transport, which would double-count geometry.
+    material.ambientOcclusion = macroNormal.b;
 
     // === F0, metallic, albedo === (specular.g)
     int f0Channel = int(specular.g * 255.0 + 0.5);
@@ -100,14 +103,14 @@ Material getMaterial(vec4 albedo, vec4 macroNormal, vec4 specular, mat3 tbn, flo
         material.F0 = vec3(f0);
         material.metallic = 0.0;
         material.albedo = albedo.rgb;
-    } else if (f0Channel <= 235) {
-        // Hardcoded metals (230-235)
-        material.F0 = getHardcodedMetalF0(f0Channel);
+    } else if (f0Channel <= 237) {
+        // Predefined conductors use albedo as a reflection tint, never as a
+        // diffuse lobe.
+        material.F0 = getHardcodedMetalF0(f0Channel) * albedo.rgb;
         material.metallic = 1.0;
         material.albedo = vec3(0.0);
     } else {
-        // Custom metals (238-255) + reserved (236-237)
-        // 为简单起见, 238+ 统一走自定义金属路径 (F0 = albedo.rgb)
+        // Reserved values 238-254 use the allowed value-255 fallback.
         material.F0 = albedo.rgb;
         material.metallic = 1.0;
         material.albedo = vec3(0.0);
@@ -116,7 +119,10 @@ Material getMaterial(vec4 albedo, vec4 macroNormal, vec4 specular, mat3 tbn, flo
     // === Porosity / Subsurface Scattering === (specular.b)
     int bChannel = int(specular.b * 255.0 + 0.5);
     float porosity = 0.0;
-    if (bChannel <= 64) {
+    if (material.metallic > 0.5) {
+        // The blue channel is reserved on conductors.
+        material.subsurface_scattering = 0.0;
+    } else if (bChannel <= 64) {
         // Porosity: 0~64 → 0.0~1.0
         porosity = float(bChannel) / 64.0;
         material.subsurface_scattering = 0.0;
@@ -130,22 +136,27 @@ Material getMaterial(vec4 albedo, vec4 macroNormal, vec4 specular, mat3 tbn, flo
     if (aChannel < 255) {
         // 0~254: emission intensity, linear
         float emissionRaw = float(aChannel) / 254.0;
-        material.emission = albedo.rgb * pow(emissionRaw, 2.0) * EMISSION_INTENSITY;
+        material.emission = albedo.rgb * emissionRaw * EMISSION_INTENSITY;
     } else {
         material.emission = vec3(0.0);
     }
 
     // === Wetness modulation ===
     float adhesion_ = clamp(adhesion(geometryNormal, vec3(0, -1, 0), vec3(0, -1, 0), material.roughness) + 0.25, 0.0, 1.0);
-    float mix0 = min(wetStrength * adhesion_ * min(skylight / 255.0, 1.0) * porosity + wetness * 0.15, 1.0);
-    mix0 *= MAX_WETNESS;
-    material.roughness = max(1.0 - mix0 * 1.5, 0.0) * material.roughness;
-    material.macroNormal = normalize(mix(material.macroNormal, geometryNormal, mix0));
-    // Wet dielectric → F0 blends toward 1.0 (thin water film); metals unaffected
-    mix0 *= 0.25;
-    if (material.metallic < 0.5) {
-        material.F0 = mix(material.F0, vec3(1.0), mix0);
-    }
+    float porousWetness = min(wetStrength * adhesion_
+        * min(skylight / 255.0, 1.0) * porosity, 1.0);
+    float absorbedWater = porousWetness * MAX_WETNESS;
+    float surfaceWetness = min(porousWetness + wetness * 0.15, 1.0)
+        * MAX_WETNESS;
+    // Porous dielectrics darken as water fills air gaps. A real water-film
+    // Fresnel lobe requires a layered BSDF; changing the substrate F0 toward
+    // one injects energy and is not a valid substitute.
+    if (material.metallic < 0.5)
+        material.albedo *= mix(1.0, 0.6, absorbedWater);
+    material.roughness = max(1.0 - surfaceWetness * 1.5, 0.0)
+        * material.roughness;
+    material.macroNormal = normalize(mix(
+        material.macroNormal, geometryNormal, surfaceWetness));
 
     return material;
 }

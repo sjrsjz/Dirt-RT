@@ -1,6 +1,6 @@
 #version 460 core
-// Refraction continuation. It runs after the other lobes because it publishes
-// the refractive path roughness into the shared geometry buffer.
+// Refraction continuation. Cascaded path roughness lives in private PSR
+// metadata; the compact primary geometry record remains immutable.
 #define FIRST_LOBE_REFRACTION
 #define FIRST_LOBE_VAL 3
 #include "/lib/rt/raytrace_rgen.glsl"

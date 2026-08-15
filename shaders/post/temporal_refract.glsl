@@ -101,7 +101,7 @@ void main() {
     if (any(greaterThanEqual(pix, uvec2(resolution)))) return;
 
     float info_distance;
-    { vec3 _pos; readGeo0(GEO_N_GEO, pix, _pos, info_distance); }
+    { vec3 _pos; readPrimaryPosition(pix, _pos, info_distance); }
 
     if (info_distance < -0.5) {
         // ray3 already cleared color/vproj. Preserve the temporal pass's sky

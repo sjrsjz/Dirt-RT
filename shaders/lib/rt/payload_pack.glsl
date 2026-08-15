@@ -7,8 +7,9 @@
 // Block ID macros — synchronized with shaders/block.properties and lib/constants.glsl.
 #ifndef BLOCK_WATER
 #define BLOCK_WATER  1000 // water
-#define BLOCK_GLASS  1001 // ice, stained glass (all colors + panes), blue_ice, packed_ice
+#define BLOCK_GLASS  1001 // glass, tinted/stained glass and panes
 #define BLOCK_PORTAL 1002 // nether_portal (frosted / translucent emissive)
+#define BLOCK_ICE    1003 // ice, packed_ice, blue_ice
 #endif
 
 // ===========================================================================
@@ -104,12 +105,16 @@ void payload_packShadow(inout uint d[PAYLOAD_SLOTS], vec3 st, int blockID) {
     if      (blockID == BLOCK_WATER)  bEnc = 1.0 / 255.0;
     else if (blockID == BLOCK_GLASS)  bEnc = 2.0 / 255.0;
     else if (blockID == BLOCK_PORTAL) bEnc = 3.0 / 255.0;
+    else if (blockID == BLOCK_ICE)    bEnc = 4.0 / 255.0;
     d[7] = packUnorm4x8(vec4(st, bEnc));
 }
 vec3 payload_unpackShadow(uint d[PAYLOAD_SLOTS], out int blockID) {
     vec4 v = unpackUnorm4x8(d[7]);
     int bEnc = int(v.a * 255.0 + 0.5);
-    blockID = bEnc == 1 ? BLOCK_WATER : (bEnc == 2 ? BLOCK_GLASS : (bEnc == 3 ? BLOCK_PORTAL : 0));
+    blockID = bEnc == 1 ? BLOCK_WATER
+        : (bEnc == 2 ? BLOCK_GLASS
+        : (bEnc == 3 ? BLOCK_PORTAL
+        : (bEnc == 4 ? BLOCK_ICE : 0)));
     return v.rgb;
 }
 vec3 payload_unpackShadow(uint d[PAYLOAD_SLOTS]) {

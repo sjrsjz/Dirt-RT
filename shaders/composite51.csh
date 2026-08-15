@@ -1,3 +1,4 @@
-#define R0 1
-#define STEP 1
-#include "/post/atrous_denoise_diffuse_cs.glsl"
+#define DENOISER_SPATIAL_PHI_LUMINANCE MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY
+#define MAXENT_ATROUS_SMALL_KERNEL
+#define MAXENT_ATROUS_STEP 1
+#include "/post/maxent_atrous.glsl"

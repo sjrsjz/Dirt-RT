@@ -1,1 +1,1 @@
-#include "/post/relax_specular_prepass.glsl"
+#include "/post/maxent_specular_prepass.glsl"

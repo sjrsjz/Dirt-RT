@@ -1,1 +1,1 @@
-#include "/post/temporal_diffuse.glsl"
+#include "/post/maxent_diffuse_temporal.glsl"

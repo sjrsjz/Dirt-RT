@@ -63,19 +63,18 @@ void recordFirstBounceGBuffer(
     float transmissionSelector = clamp(surf.S.y, 0.0, 1.0);
     vec3 nonSpecularAlbedo = evaluateNonSpecularAlbedo(surf, rd_i, macroNormal);
     fb.diffuseAlbedo = nonSpecularAlbedo * (1.0 - transmissionSelector);
-    fb.transmissionAlbedo = nonSpecularAlbedo * transmissionSelector;
+    fb.transmissionAlbedo = evaluateTransmissionAlbedo(surf)
+        * transmissionSelector;
 }
 
 void writePrimarySurfaceGBuffer(uvec2 xy, FirstBounceData fb,
     material surf, vec3 ro) {
-    vec3 posRel = fb.p - ro;
-    writeGeo0(GEO_N_GEO, xy, posRel, fb.t);
-    writeGeo1(GEO_N_NORMALS, xy, fb.geometry_n, fb.roughness,
-        fb.materialID, fb.roughness);
+    writePrimaryGeometry(xy, fb.geometry_n, fb.roughness,
+        fb.materialID, fb.macro_n, fb.t);
     writeAlbedosPath(GEO_N_ALBEDOS, xy,
-        fb.specularAlbedo, fb.diffuseAlbedo, fb.macro_n);
-    writeMisc(GEO_N_MISC, xy,
-        fb.transmissionAlbedo, fb.emission_val, fb.rd_i);
+        fb.specularAlbedo, fb.diffuseAlbedo);
+    writeMiscTransport(GEO_N_MISC, xy,
+        fb.transmissionAlbedo, fb.emission_val);
     writeLightAbs(GEO_N_LIGHTABS, xy, fb.light_surf, fb.absorption);
     writeSurfaceMotion(xy, fb.surfaceMotion, fb.motionValid);
     writePrimaryMaterial(xy, surf.Cs, surf.Cd, surf.S);
@@ -85,26 +84,26 @@ void loadPrimarySurfaceGBuffer(uvec2 xy, vec3 ro,
     out FirstBounceData fb, out material surf) {
     fb = initFirstBounceData(ro, vec3(0.0, 0.0, -1.0));
 
-    vec3 posRel;
-    readGeo0(GEO_N_GEO, xy, posRel, fb.t);
-    fb.p = ro + posRel;
-    readGeo1(GEO_N_NORMALS, xy, fb.geometry_n, fb.roughness,
-        fb.materialID, fb.pathRoughness);
+    uvec4 geometryWords = readPrimaryGeometryWords(xy);
+    fb.t = uintBitsToFloat(geometryWords.w);
+    fb.geometry_n = decodeNormalU(geometryWords.x);
+    fb.roughness = unpackHalf2x16(geometryWords.y).x;
+    fb.pathRoughness = fb.roughness;
+    fb.materialID = int(geometryWords.y >> 16u);
+    fb.rd_i = reconstructPrimaryRay(xy, uvec2(gl_LaunchSizeEXT.xy));
+    vec3 positionRelative = fb.t >= 0.0
+        ? fb.rd_i * fb.t : vec3(0.0);
+    fb.p = ro + positionRelative;
+    fb.macro_n = decodeNormalU(geometryWords.z);
     #if defined(FIRST_LOBE_DIFFUSE)
-    readAlbedosPathMicroNormal(GEO_N_ALBEDOS, xy, fb.specularAlbedo,
-        fb.diffuseAlbedo, fb.macro_n);
+    readAlbedosPath(GEO_N_ALBEDOS, xy, fb.specularAlbedo,
+        fb.diffuseAlbedo);
     #elif defined(FIRST_LOBE_REFLECTION)
-    fb.specularAlbedo = readPrimarySpecularAlbedoMicroNormal(xy,
-        fb.macro_n);
-    #else
-    fb.macro_n = readMicroNormal(GEO_N_MICRONORMAL, xy);
+    fb.specularAlbedo = readPrimarySpecularAlbedo(xy);
     #endif
     fb.micro_n = fb.macro_n;
     #if defined(FIRST_LOBE_REFRACTION)
-    readPrimaryTransmissionAndRay(xy,
-        fb.transmissionAlbedo, fb.rd_i);
-    #else
-    fb.rd_i = readPrimaryRayDirection(xy);
+    fb.transmissionAlbedo = readPrimaryTransmission(xy);
     #endif
     fb.rd_o = fb.rd_i;
     fb.refr_dir = fb.rd_i;
@@ -121,8 +120,6 @@ void loadPrimarySurfaceGBuffer(uvec2 xy, vec3 ro,
 
 void writeDiffuseOutput(uvec2 xy, FirstBounceData fb, vec3 L_indirect,
     vec3 L_direct_0, vec3 L_direct_0_dir, vec3 ro) {
-    vec3 pos_rel = fb.p - ro;
-
     MaxEntEncoding combinedMaxEnt = init_maxent();
     float mask = 0.0;
     if (fb.t > -0.5) {
@@ -138,9 +135,8 @@ void writeDiffuseOutput(uvec2 xy, FirstBounceData fb, vec3 L_indirect,
     }
     float currentMeanY2 = combinedMaxEnt.maxEntY.w * combinedMaxEnt.maxEntY.w; // Y² for 1-spp
     writeDiffuseLightRT(xy, combinedMaxEnt, currentMeanY2);
-    writeDiffuseGeo(xy, pos_rel, mask);
     if (mask > 0.5) {
-        writeDiffuseSurface(xy, fb.geometry_n, fb.macro_n,
+        writeDiffuseSurface(xy, fb.macro_n,
             fb.diffuseAlbedo, fb.roughness, fb.surfaceMotion,
             fb.motionValid);
     } else {
@@ -167,7 +163,6 @@ vec3 recoverFirstBounceIncident(vec3 pathContribution,
 void writeReflectionOutput(uvec2 xy, FirstBounceData fb,
         vec3 indirectContribution, vec3 directIncident,
         vec3 directIncidentDirection, vec3 firstBsdfWeight, vec3 ro) {
-    vec3 pos_rel = fb.p - ro;
     vec3 refl_R = fb.rd_o;
     float refl_vprojdist = fb.reflectionHitDistance;
     SpecularMaxEnt signal = emptySpecularMaxEnt();
@@ -182,8 +177,7 @@ void writeReflectionOutput(uvec2 xy, FirstBounceData fb,
         signal.CoCg += directSignal.CoCg;
         signal = sanitizeSpecularMaxEnt(signal);
     }
-    writeReflGeo(xy, pos_rel, refl_R);
-    writeReflMaxEnt(xy, signal, refl_vprojdist, 0.0);
+    writeReflMaxEntSample(xy, signal, refl_vprojdist, refl_R);
 }
 
 void writeRefractionOutput(uvec2 xy, FirstBounceData fb, vec3 totalIllumination, vec3 ro) {
@@ -197,7 +191,6 @@ void writeRefractionOutput(uvec2 xy, FirstBounceData fb, vec3 totalIllumination,
     }
     writeRefrGeo(xy, pos_rel, refr_R);
     writeRefrLight(xy, refr_color, refr_vprojdist, 0.0);
-    writePathRoughness(GEO_N_NORMALS, xy, fb.pathRoughness);
 }
 
 #if defined(FIRST_LOBE_REFRACTION)
@@ -221,16 +214,17 @@ void TraceRefractionPSR(uvec2 xy, vec3 ro) {
     loadPrimarySurfaceGBuffer(xy, ro, fb, surf);
     if (fb.t > -0.5 && surf.S.y > 1e-4) {
         bool wasInside = (cam.flags & 3u) != 0u;
-        float nI = wasInside ? REFRACTIVE_INDEX : 1.0;
-        float nO = wasInside ? 1.0 : REFRACTIVE_INDEX;
+        float surfaceIor = transportIorFromMaterial(surf);
+        float nI = wasInside ? surfaceIor : 1.0;
+        float nO = wasInside ? 1.0 : surfaceIor;
         vec3 chainDirection = refract(fb.rd_i, fb.geometry_n, nI / nO);
         if (dot(chainDirection, chainDirection) > 0.0) {
             rtCurrentConeWidth = max(fb.t, 0.0) * rtCurrentConeSpread;
-            int firstMediumBlockID = surf.R.z > 0.5
-                ? BLOCK_WATER : BLOCK_GLASS;
+            int firstMediumBlockID = transportBlockFromMaterial(surf);
             PSRResult psr = tracePSRChain(fb.p, chainDirection,
                 fb.geometry_n, surf.R.x, wasInside,
-                firstMediumBlockID, 0);
+                firstMediumBlockID, surf.Cd,
+                transportExtinctionWeightFromMaterial(surf), 0);
             float firstEta = nI / nO;
             float firstFresnel = clamp(fresnel(-fb.rd_i, fb.geometry_n,
                 firstEta), 0.0, 1.0);

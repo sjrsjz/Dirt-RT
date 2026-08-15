@@ -1,1 +1,1 @@
-#include "/post/relax_endpoint_spatial.glsl"
+#include "/post/maxent_specular_input.glsl"

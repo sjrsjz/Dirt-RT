@@ -20,7 +20,8 @@ const int WORLD_OVERWORLD_CAVE = 3;
 
 // Block IDs — synchronized with shaders/block.properties
 #define BLOCK_WATER  1000 // water
-#define BLOCK_GLASS  1001 // ice, stained glass (all colors + panes), blue_ice, packed_ice
+#define BLOCK_GLASS  1001 // glass, tinted/stained glass and panes
 #define BLOCK_PORTAL 1002 // nether_portal (frosted / translucent emissive)
+#define BLOCK_ICE    1003 // ice, packed_ice, blue_ice
 
 #endif // CONSTANTS_GLSL

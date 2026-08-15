@@ -42,9 +42,7 @@ void main() {
     }
 
     // --- Read RT linear depth (world-space hit distance from camera) ---
-    vec3 rtWorldPos_rel;
-    float rtDist;
-    readGeo0(GEO_N_GEO, xy, rtWorldPos_rel, rtDist);
+    float rtDist = readPrimaryDistance(xy);
 
     // --- Entity (marker > 0): linear depth comparison ---
     float entityDist = marker; // already world-space linear distance

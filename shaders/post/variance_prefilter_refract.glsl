@@ -21,10 +21,10 @@ const uint TILE_AREA = TILE * TILE;
 const float hw[3] = float[](1.0, 0.66667, 0.44444);
 
 #ifndef VAR_FILTER_NORMAL_POWER
-#define VAR_FILTER_NORMAL_POWER ATROUS_NORMAL_POWER
+#define VAR_FILTER_NORMAL_POWER MAXENT_SPATIAL_NORMAL_SENSITIVITY
 #endif
 #ifndef VAR_FILTER_POSITION_PARAM
-#define VAR_FILTER_POSITION_PARAM ATROUS_POSITION_PARAM
+#define VAR_FILTER_POSITION_PARAM MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE
 #endif
 
 // Refraction geometry is already 16-byte packed, while light is four FP16
@@ -39,8 +39,7 @@ float luma(vec3 c) {
 }
 
 uvec2 loadTileSample(uint index, uvec2 xy) {
-    float primaryDistance = uintBitsToFloat(
-        geomBuffer.data[addr(GEO_N_GEO, xy)].w);
+    float primaryDistance = readPrimaryDistance(xy);
 
     sm_refr_geo[index] = uvec4(0u);
     sm_luma[index] = 0.0;
@@ -49,9 +48,9 @@ uvec2 loadTileSample(uint index, uvec2 xy) {
 
     uvec2 packedLight = uvec2(0u);
     if (primaryDistance > -0.5) {
-        uvec4 surface = geomBuffer.data[addr(GEO_N_NORMALS, xy)];
-        uvec4 refrGeo = refractBuffer.data[addr(SPEC_N_GEO, xy)];
-        uvec4 refrLight = refractBuffer.data[addr(SPEC_N_LIGHT, xy)];
+        uvec4 surface = geomBuffer.data[addr(GEO_N_GEOMETRY, xy)];
+        uvec4 refrGeo = refractBuffer.data[addr(REFR_N_ENDPOINT, xy)];
+        uvec4 refrLight = refractBuffer.data[addr(REFR_N_SURFACE, xy)];
         packedLight = refrLight.xy;
         vec2 rg = unpackHalf2x16(packedLight.x);
         vec2 bv = unpackHalf2x16(packedLight.y);
@@ -65,7 +64,7 @@ uvec2 loadTileSample(uint index, uvec2 xy) {
         sm_refr_geo[index] = refrGeo;
         sm_luma[index] = luma(color);
         sm_surface_packed[index] = uvec2(surface.x,
-            floatBitsToUint(max(uintBitsToFloat(surface.w), 0.0)));
+            floatBitsToUint(max(unpackHalf2x16(surface.y).x, 0.0)));
     }
     return packedLight;
 }

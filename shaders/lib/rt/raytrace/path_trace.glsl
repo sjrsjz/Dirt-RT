@@ -6,12 +6,30 @@
 // -----------------------------------------------------------------------------------
 // Core: Forward Path Tracing
 // -----------------------------------------------------------------------------------
+void updatePathMedium(material boundarySurface, bool nowInside,
+        inout int mediumBlockID, inout vec3 mediumTint,
+        inout float mediumExtinctionWeight) {
+    if (nowInside) {
+        mediumBlockID = transportBlockFromMaterial(boundarySurface);
+        mediumTint = boundarySurface.Cd;
+        mediumExtinctionWeight =
+            transportExtinctionWeightFromMaterial(boundarySurface);
+    } else {
+        mediumBlockID = 0;
+        mediumTint = vec3(1.0);
+        mediumExtinctionWeight = 0.0;
+    }
+}
+
 void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     // === SETUP ===
     uint isEyeInWater = cam.flags & 3u;
     uvec2 xy = coord;
     bool originalInside = isEyeInWater != 0;
     bool inside = originalInside;
+    int activeMediumBlockID = isEyeInWater == 1u ? BLOCK_WATER : 0;
+    vec3 activeMediumTint = vec3(1.0);
+    float activeMediumExtinctionWeight = 0.0;
 
     vec3 ro_i = ro;
     vec3 rd_i = rd;
@@ -49,7 +67,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
     #if defined(FIRST_LOBE_DIFFUSE)
     // The denoised diffuse domain represents the opaque scene behind primary
-    // water/glass. PSR can therefore reproject its terminal hit directly into
+    // water/glass/ice. PSR can therefore reproject its terminal hit directly into
     // this buffer without running a separate refraction denoiser.
     if (fb.t > -0.5 && surf.S.y > 1e-4) {
         vec3 backgroundRay = fb.rd_i;
@@ -73,15 +91,16 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             int backgroundBlockID;
             payload_unpackShadow(tmp_Payload.data, backgroundBlockID);
             surf = materialFromEvaluated(backgroundMat, backgroundBlockID);
-            int backgroundMaterialID = getRelaxMaterialID(tmp_Payload,
+            int backgroundMaterialID = getMaxEntMaterialID(tmp_Payload,
                 backgroundBlockID);
             markRadianceCacheGeometryHit(xy, backgroundHit,
                 backgroundGeometryNormal);
 
             float backgroundNI = originalInside ? REFRACTIVE_INDEX : 1.0;
             MediumResult backgroundMedium = evalMedium(backgroundT,
-                backgroundRay, ro.y, originalInside, fogColor,
-                globalEmission);
+                backgroundRay, ro.y, originalInside,
+                activeMediumBlockID, activeMediumTint,
+                activeMediumExtinctionWeight, fogColor, globalEmission);
             recordFirstBounceGBuffer(backgroundHit, ro,
                 backgroundMat.macroNormal, backgroundGeometryNormal,
                 backgroundMat.macroNormal, surf, backgroundMaterialID,
@@ -103,8 +122,9 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     } else {
         vec3 geometryNormal = fb.geometry_n;
         vec3 macroNormal = fb.macro_n;
-        float n_i = inside ? REFRACTIVE_INDEX : 1.0;
-        float n_o = inside ? 1.0 : REFRACTIVE_INDEX;
+        float surfaceIor = transportIorFromMaterial(surf);
+        float n_i = inside ? surfaceIor : 1.0;
+        float n_o = inside ? 1.0 : surfaceIor;
         float rs = n_i / n_o;
         LobeProbs lobes = computeLobeProbs(surf, fb.rd_i, macroNormal, rs);
         #if defined(FIRST_LOBE_DIFFUSE)
@@ -125,6 +145,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         vec3 bsdf_weight = vec3(0.0);
         vec3 next_rd = fb.rd_i;
         int current_type = -1;
+        bool firstSurfaceInside = inside;
         PSRResult psr;
         psr.virtualDist = 0.0;
         psr.pathRoughness = 0.0;
@@ -230,6 +251,10 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         cascadedRoughness2 = current_type == DIFFUSION
             ? 1.0 : surf.R.x * surf.R.x;
         throughput *= bsdf_weight;
+        if (current_type == REFRACTION && inside != firstSurfaceInside) {
+            updatePathMedium(surf, inside, activeMediumBlockID,
+                activeMediumTint, activeMediumExtinctionWeight);
+        }
         ro_i = ro_o + geometryNormal
                     * (current_type == REFRACTION ? -0.001 : 0.001);
         rd_i = next_rd;
@@ -264,8 +289,8 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         // tmp_Payload is shared by every trace issued by this invocation.
         // Freeze the primary-surface signature before PSR or sun NEE can
         // replace it with a secondary/shadow-hit payload. Otherwise material
-        // continuity follows sun visibility and RELAX rejects valid history.
-        int relaxMaterialID = getRelaxMaterialID(tmp_Payload, blockID);
+        // continuity follows sun visibility and MaxEnt rejects valid history.
+        int maxentMaterialID = getMaxEntMaterialID(tmp_Payload, blockID);
         #if defined(FIRST_LOBE_DIFFUSE)
         vec3 microNormal = macroNormal;
         #else
@@ -273,12 +298,15 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             : GGXVNDFNormal(macroNormal, -rd_i, surf.R.x,
                 rtBlueNoise2D(xy, 0u));
         #endif
-        float n_i = inside ? REFRACTIVE_INDEX : 1.0;
-        float n_o = inside ? 1.0 : REFRACTIVE_INDEX;
+        float surfaceIor = transportIorFromMaterial(surf);
+        float n_i = inside ? surfaceIor : 1.0;
+        float n_o = inside ? 1.0 : surfaceIor;
         float rs = n_i / n_o;
 
         // --- Medium absorption ---
-        MediumResult medium = evalMedium(t, rd_i, ro_i.y, inside, fogColor, globalEmission);
+        MediumResult medium = evalMedium(t, rd_i, ro_i.y, inside,
+            activeMediumBlockID, activeMediumTint,
+            activeMediumExtinctionWeight, fogColor, globalEmission);
 
         // --- Lobe probabilities ---
         LobeProbs lobes = computeLobeProbs(surf, rd_i, macroNormal, rs);
@@ -287,6 +315,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         vec3 bsdf_weight = vec3(0.0);
         vec3 next_rd = rd_i;
         int current_type = -1;
+        bool firstSurfaceInside = inside;
         PSRResult psr;
         psr.virtualDist = 0.0;
         psr.pathRoughness = 0.0;
@@ -391,7 +420,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
         // --- Record G-Buffer ---
         recordFirstBounceGBuffer(ro_o, ro, macroNormal, geometryNormal, microNormal,
-            surf, relaxMaterialID, rd_i, next_rd, t, n_i,
+            surf, maxentMaterialID, rd_i, next_rd, t, n_i,
             (current_type == REFRACTION) ? n_o : n_i,
             current_type, medium.emission,
             medium.absorption, fb);
@@ -402,6 +431,10 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
         // --- Update throughput ---
         throughput *= bsdf_weight;
+        if (current_type == REFRACTION && inside != firstSurfaceInside) {
+            updatePathMedium(surf, inside, activeMediumBlockID,
+                activeMediumTint, activeMediumExtinctionWeight);
+        }
 
         // --- Advance ray ---
         ro_i = ro_o + geometryNormal * ((current_type == REFRACTION) ? -0.001 : 0.001);
@@ -484,13 +517,16 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             material surf = materialFromEvaluated(surfaceMat, blockID);
             vec3 microNormal = isDeltaSpecular(surf.R.x) ? macroNormal
                 : GGXVNDFNormal(macroNormal, -rd_i, surf.R.x, ro_o);
-            float n_i2 = inside ? REFRACTIVE_INDEX : 1.0;
-            float n_o2 = inside ? 1.0 : REFRACTIVE_INDEX;
+            float surfaceIor2 = transportIorFromMaterial(surf);
+            float n_i2 = inside ? surfaceIor2 : 1.0;
+            float n_o2 = inside ? 1.0 : surfaceIor2;
             float rs2 = n_i2 / n_o2;
             bool surfaceInside = inside;
 
             // --- Medium ---
-            MediumResult medium = evalMedium(t2, rd_i, ro_i.y, inside, fogColor, globalEmission);
+            MediumResult medium = evalMedium(t2, rd_i, ro_i.y, inside,
+                activeMediumBlockID, activeMediumTint,
+                activeMediumExtinctionWeight, fogColor, globalEmission);
             // Segment emission is accumulated before applying this segment's
             // transmittance.  Surface terms and all following bounces use the
             // attenuated throughput.
@@ -518,6 +554,10 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                 surf, lobes, bsdf_weight, next_rd,
                 current_type, sampledSpecularLobe, sampledStrategyPdf,
                 sampledDeltaLobe, neeCompatible, inside);
+            if (current_type == REFRACTION && inside != surfaceInside) {
+                updatePathMedium(surf, inside, activeMediumBlockID,
+                    activeMediumTint, activeMediumExtinctionWeight);
+            }
 
             float nextCascadedRoughness2 = current_type == DIFFUSION
                 ? 1.0 : cascadedRoughness2 + surf.R.x * surf.R.x;

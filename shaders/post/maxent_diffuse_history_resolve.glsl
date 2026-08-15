@@ -1,6 +1,6 @@
 #version 430 core
 // ===========================================================================
-// Pass: swap3 + 蓄水池 SSBO 回写 (composite59)
+// MaxEnt diffuse history resolve and path-guide SSBO publication.
 // ===========================================================================
 layout(local_size_x = 16, local_size_y = 16) in;
 #define DIFFUSE_BUFFER
@@ -9,20 +9,12 @@ layout(local_size_x = 16, local_size_y = 16) in;
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/buffer_io.glsl"
 
-uniform sampler2D colortex3;
 uniform usampler2D colortex4;
-uniform usampler2D colortex5;
 uniform usampler2D colortex6;
 
-void unpackLightSample(ivec2 coord, vec4 d0, uvec4 d1, out vec3 pos,
-        out MaxEntEncoding encoded,
-        out MaxEntEncoding blurred_maxent) {
-    uvec4 d2 = texelFetch(colortex5, coord, 0);
-    pos = d0.xyz;
+void unpackLightSample(uvec4 d1, out MaxEntEncoding encoded) {
     encoded.maxEntY       = vec4(unpackHalf2x16(d1.x), unpackHalf2x16(d1.y));
     encoded.CoCg         =       unpackHalf2x16(d1.z);
-    blurred_maxent.maxEntY = vec4(unpackHalf2x16(d2.x), unpackHalf2x16(d2.y));
-    blurred_maxent.CoCg   =       unpackHalf2x16(d2.z);
 }
 
 void main() {
@@ -41,8 +33,6 @@ void main() {
         diffuseBuffer.data[addr(DIF_N_PATHGUIDE, gxy)] = uvec4(0u);
         return;
     }
-    vec4 packedGeometry = texelFetch(colortex3, pix, 0);
-
     // Phase 1: swap3
     diffuseIlluminationData tmp = fetchDiffuse(pix);
     if (any(isnan(tmp.data_swap.maxEntY))) tmp.data_swap.maxEntY = vec4(0.0);
@@ -51,17 +41,16 @@ void main() {
     tmp.prev_meanY2 = tmp.meanY2;
     tmp.data = tmp.data_swap;
 
-    MaxEntEncoding blurred_maxent, encoded;
-    vec3 pos;
-    unpackLightSample(pix, packedGeometry, packedLight, pos, encoded,
-        blurred_maxent);
-    tmp.pos = pos;
-    tmp.histNormal = readDiffuseGeometryNormal(gxy);
+    MaxEntEncoding encoded;
+    unpackLightSample(packedLight, encoded);
+    float primaryDistance;
+    readDiffusePrimaryGeometry(gxy, tmp.pos, primaryDistance);
+    tmp.histNormal = readPrimaryGeometryNormal(gxy);
     tmp.data_swap = encoded;
-    tmp.data = mix_maxent(tmp.data, blurred_maxent,
-            clamp(NRD_BLEND_STRENGTH * exp(-NRD_BLEND_STRENGTH * clamp(tmp.weight, 0.0, 100.0)), 0.0, 1.0));
+    tmp.data = mix_maxent(tmp.data, encoded,
+            clamp(MAXENT_SPATIAL_DIFFUSE_LOW_CONFIDENCE_BLEND * exp(-MAXENT_SPATIAL_DIFFUSE_LOW_CONFIDENCE_BLEND * clamp(tmp.weight, 0.0, 100.0)), 0.0, 1.0));
     writeDiffuse(tmp, pix);
 
-    // Phase 2: colortex6 → N=5 (both RGBA32UI, raw copy)
+    // Phase 2: publish the path-guide reservoir from temporal scratch.
     diffuseBuffer.data[addr(DIF_N_PATHGUIDE, gxy)] = texelFetch(colortex6, pix, 0);
 }

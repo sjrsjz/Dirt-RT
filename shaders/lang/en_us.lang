@@ -7,11 +7,12 @@ screen.RAY_TRACING = Ray Tracing
 screen.MATERIAL = Material
 screen.POM = Parallax Occlusion Mapping
 screen.RADIANCE_CACHE = Sparse Radiance Cache
-screen.TEMPORAL_FILTER = Temporal Filter
-screen.TEMPORAL_ACCUMULATION = Diffuse Temporal Accumulation
-screen.RELAX_DENOISER = RELAX Specular Denoiser
-screen.VARIANCE_PREFILTER = Variance Prefilter
-screen.ATROUS_DENOISER = À-Trous Denoiser
+screen.MAXENT_DENOISER = MaxEnt Denoiser
+screen.MAXENT_TEMPORAL = Temporal Accumulation
+screen.MAXENT_DIFFUSE_TEMPORAL = Diffuse Temporal
+screen.MAXENT_SPECULAR_TEMPORAL = Specular Temporal
+screen.MAXENT_VARIANCE = Variance Preparation
+screen.MAXENT_SPATIAL = Spatial Filter
 screen.BLOOM = Bloom
 screen.EXPOSURE_DISPLAY = Exposure & Display
 screen.ADVANCED = Advanced
@@ -21,7 +22,7 @@ screen.DEBUG = Debug
 # Ray Tracing
 # ===========================================================================
 option.ACCUMULATION_LENGTH = Refraction History Frames
-option.ACCUMULATION_LENGTH.comment = Maximum reprojected history used by the refraction denoiser. ReLAX reflection history is controlled separately below.
+option.ACCUMULATION_LENGTH.comment = Maximum reprojected history used by the refraction denoiser. MaxEnt reflection history is controlled separately below.
 
 option.RAY_BOUNCES = Ray Bounces
 option.RAY_BOUNCES.comment = Maximum surfaces visited by each camera path. More bounces preserve deep indirect light and transmission at a direct GPU cost.
@@ -84,10 +85,13 @@ value.EON_ENABLED.1 = Enabled
 value.EON_ENABLED.0 = Disabled (Legacy)
 
 option.REFRACTIVE_INDEX = Water IOR
-option.REFRACTIVE_INDEX.comment = Index of refraction used by water and the current dielectric transmission model. Higher values bend transmitted rays more strongly and increase grazing reflection.
+option.REFRACTIVE_INDEX.comment = Index of refraction used only by water. Higher values bend transmitted rays more strongly and increase grazing reflection.
+
+option.GLASS_REFRACTIVE_INDEX = Glass IOR
+option.GLASS_REFRACTIVE_INDEX.comment = Index of refraction used by glass and glass panes. It is evaluated independently from water throughout the path; ice uses its physical 1.31 value.
 
 option.MAX_WETNESS = Max Wetness
-option.MAX_WETNESS.comment = Maximum rain-induced wetness applied to materials. Higher values produce darker, smoother and more reflective wet surfaces.
+option.MAX_WETNESS.comment = Maximum rain-induced wetness applied to materials. Higher values make porous surfaces darker and all wet surfaces smoother without changing substrate F0.
 
 # ===========================================================================
 # Parallax Occlusion Mapping
@@ -146,150 +150,123 @@ option.RADIANCE_CACHE_RIS_GUIDING_KAPPA = Cache RIS Guide Sharpness
 option.RADIANCE_CACHE_RIS_GUIDING_KAPPA.comment = Concentration of the continuous sampling lobe around the RIS-selected direction. Higher values can find compact lights faster but are more sensitive to stale or imprecise directions; lower values are more robust.
 
 # ===========================================================================
-# Temporal Filter
+# MaxEnt Diffuse Temporal
 # ===========================================================================
-option.NRD_BLEND_STRENGTH = Low-Confidence Blend
-option.NRD_BLEND_STRENGTH.comment = Blends a wide spatial result into diffuse pixels with little valid history. Higher values hide disocclusion noise faster but can temporarily blur detail.
+option.MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY = Max History Samples
+option.MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY.comment = Maximum effective diffuse history sample count. Higher values are smoother but react more slowly to lighting changes and disocclusion.
 
-# ===========================================================================
-# Diffuse Temporal Accumulation
-# ===========================================================================
-option.TEMPORAL_MAX_HISTORY = Max History Frames
-option.TEMPORAL_MAX_HISTORY.comment = Maximum effective diffuse history sample count. Higher values are smoother but react more slowly to lighting changes and disocclusion.
+option.MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT = Min History Weight
+option.MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT.comment = History below this confidence is discarded. Raise it to reset weak history sooner; lower it to preserve sparse history longer.
 
-option.TEMPORAL_HISTORY_MIN_WEIGHT = Min History Weight
-option.TEMPORAL_HISTORY_MIN_WEIGHT.comment = History below this confidence is discarded. Raise it to reset weak history sooner; lower it to preserve sparse history longer.
+option.MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE = AABB Clamp
+option.MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE.comment = Clamps reprojected diffuse MaxEnt history to the current neighborhood, reducing trails and stale lighting. Disabling it uses an unclamped temporal blend.
+value.MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE.1 = On
+value.MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE.0 = Off
 
-option.TEMPORAL_AABB_ENABLE = AABB Clamp
-option.TEMPORAL_AABB_ENABLE.comment = Clamps reprojected diffuse MaxEnt history to the current neighborhood, reducing trails and stale lighting. Disabling it uses an unclamped temporal blend.
-value.TEMPORAL_AABB_ENABLE.1 = On
-value.TEMPORAL_AABB_ENABLE.0 = Off
+option.MAXENT_DIFFUSE_TEMPORAL_AABB_RADIUS = AABB Radius
+option.MAXENT_DIFFUSE_TEMPORAL_AABB_RADIUS.comment = Radius used to build the current-frame clamp box. One means 3x3, two means 5x5; larger neighborhoods cost more and preserve broader lighting variation.
 
-option.TEMPORAL_AABB_NEIGHBOR_RADIUS = AABB Neighbor Radius
-option.TEMPORAL_AABB_NEIGHBOR_RADIUS.comment = Radius used to build the current-frame clamp box. One means 3x3, two means 5x5; larger neighborhoods cost more and preserve broader lighting variation.
+option.MAXENT_DIFFUSE_TEMPORAL_AABB_EXPANSION = AABB Expansion
+option.MAXENT_DIFFUSE_TEMPORAL_AABB_EXPANSION.comment = Expands the sampled neighborhood range before clamping. Higher values preserve more history but allow more ghosting.
 
-option.TEMPORAL_AABB_EXPAND = AABB Expand
-option.TEMPORAL_AABB_EXPAND.comment = Expands the sampled neighborhood range before clamping. Higher values preserve more history but allow more ghosting.
+option.MAXENT_DIFFUSE_TEMPORAL_AABB_SIGMA_SCALE = AABB Sigma Scale
+option.MAXENT_DIFFUSE_TEMPORAL_AABB_SIGMA_SCALE.comment = Variance-based expansion of the clamp box. Larger values tolerate noisy samples and retain more history.
 
-option.TEMPORAL_AABB_SIGMA_SCALE = AABB Sigma Scale
-option.TEMPORAL_AABB_SIGMA_SCALE.comment = Variance-based expansion of the clamp box. Larger values tolerate noisy samples and retain more history.
+option.MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_EXTENT = AABB Min Extent
+option.MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_EXTENT.comment = Minimum absolute clamp range, preventing dark or nearly constant regions from collapsing to zero width.
 
-option.TEMPORAL_AABB_MIN_EXTENT = AABB Min Extent
-option.TEMPORAL_AABB_MIN_EXTENT.comment = Minimum absolute clamp range, preventing dark or nearly constant regions from collapsing to zero width.
+option.MAXENT_DIFFUSE_TEMPORAL_AABB_SCALE = AABB Box Scale
+option.MAXENT_DIFFUSE_TEMPORAL_AABB_SCALE.comment = Global multiplier for clamp-box width. Lower values reject history more aggressively; higher values favor stability.
 
-option.TEMPORAL_AABB_BOX_SCALE = AABB Box Scale
-option.TEMPORAL_AABB_BOX_SCALE.comment = Global multiplier for clamp-box width. Lower values reject history more aggressively; higher values favor stability.
+option.MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_SAMPLES = AABB Min Samples
+option.MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_SAMPLES.comment = Minimum valid current-frame samples required to clamp history. If fewer samples exist, clamping is skipped to avoid unstable bounds.
 
-option.TEMPORAL_AABB_MIN_VALID_NEIGHBORS = AABB Min Valid Neighbors
-option.TEMPORAL_AABB_MIN_VALID_NEIGHBORS.comment = Minimum valid current-frame samples required to clamp history. If fewer samples exist, clamping is skipped to avoid unstable bounds.
+option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE = Reprojection Depth Scale
+option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE.comment = Scales the depth half-extent of the temporal reprojection footprint trapezoid. Higher values accept history samples that are farther off the reconstructed surface plane, reducing resets but potentially leaking across thin geometry.
 
-option.TEMPORAL_DEPTH_FOOTPRINT_SCALE = Temporal Footprint Scale
-option.TEMPORAL_DEPTH_FOOTPRINT_SCALE.comment = Scales the depth half-extent of the temporal reprojection footprint trapezoid. Higher values accept history samples that are farther off the reconstructed surface plane, reducing resets but potentially leaking across thin geometry.
-
-option.TEMPORAL_CLIP_PIXEL_RADIUS = Temporal Clip Radius
-option.TEMPORAL_CLIP_PIXEL_RADIUS.comment = Pixel footprint radius used for temporal reprojection corner calculation. Larger values widen the acceptance region, trading precision for fewer disocclusion resets.
+option.MAXENT_TEMPORAL_REPROJECTION_RADIUS = Reprojection Radius
+option.MAXENT_TEMPORAL_REPROJECTION_RADIUS.comment = Pixel footprint radius used for temporal reprojection corner calculation. Larger values widen the acceptance region, trading precision for fewer disocclusion resets.
 
 # ===========================================================================
-# RELAX Specular Denoiser
+# MaxEnt Specular Temporal
 # ===========================================================================
-option.RELAX_SPEC_MAX_HISTORY = Slow History Frames
-option.RELAX_SPEC_MAX_HISTORY.comment = Maximum length of stable reflection history. Higher values reduce stationary noise but react more slowly to changing reflections.
+option.MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY = Slow History Samples
+option.MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY.comment = Maximum Kish effective sample count of stable reflection history. Higher values reduce stationary noise but react more slowly to changing reflections.
 
-option.RELAX_SPEC_MAX_FAST_HISTORY = Responsive History Frames
-option.RELAX_SPEC_MAX_FAST_HISTORY.comment = Length of the fast history used by anti-lag and history clamping. Lower values respond faster; higher values make the clamp less noisy.
+option.MAXENT_SPECULAR_TEMPORAL_MAX_FAST_HISTORY = Fast History Samples
+option.MAXENT_SPECULAR_TEMPORAL_MAX_FAST_HISTORY.comment = Maximum Kish effective sample count of the responsive history used by anti-lag and history clamping.
 
-option.RELAX_PREPASS_RADIUS = Pre-pass Radius
-option.RELAX_PREPASS_RADIUS.comment = Radius of the geometry-aware filter applied to the raw 1 spp reflection before reprojection. Zero disables it; large values can soften sharp reflections.
+option.MAXENT_SPECULAR_PREPASS_RADIUS = Pre-pass Radius
+option.MAXENT_SPECULAR_PREPASS_RADIUS.comment = Radius of the geometry-aware filter applied to the raw 1 spp reflection before reprojection. Zero disables it; large values can soften sharp reflections.
 
-option.RELAX_DISOCCLUSION_THRESHOLD = Disocclusion Threshold
-option.RELAX_DISOCCLUSION_THRESHOLD.comment = Relative plane-distance tolerance for reprojected surfaces. Lower values reject more history; higher values can leak history across thin geometry.
+option.MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD = Disocclusion Threshold
+option.MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD.comment = Relative plane-distance tolerance for reprojected surfaces. Lower values reject more history; higher values can leak history across thin geometry.
 
-option.RELAX_ROUGHNESS_FRACTION = Roughness Tolerance
-option.RELAX_ROUGHNESS_FRACTION.comment = Roughness difference accepted by spatial filtering. Lower values preserve material boundaries; higher values remove more noise across gradual roughness changes.
+option.MAXENT_SPECULAR_PREPASS_ROUGHNESS_TOLERANCE = Pre-pass Roughness Tolerance
+option.MAXENT_SPECULAR_PREPASS_ROUGHNESS_TOLERANCE.comment = Roughness difference accepted by the reflection prefilter. Lower values preserve roughness boundaries; higher values share more noisy samples across gradual roughness changes.
 
-option.RELAX_LOBE_ANGLE_FRACTION = Specular Lobe Fraction
-option.RELAX_LOBE_ANGLE_FRACTION.comment = Portion of the GGX lobe accepted by normal edge stopping. Lower values preserve sharp reflection boundaries but leave more noise.
-
-option.RELAX_LOBE_ANGLE_SLACK = Lobe Angle Slack
-option.RELAX_LOBE_ANGLE_SLACK.comment = Small angular tolerance added to the GGX lobe test. Raise only if quantized normals cause speckling or broken history.
+option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION = Lobe Fraction
+option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION.comment = Portion of the GGX lobe accepted during temporal reprojection. Lower values reject more history around view-dependent reflection changes.
 
 
-option.RELAX_MIN_HIT_DISTANCE_WEIGHT = Minimum Hit-distance Weight
-option.RELAX_MIN_HIT_DISTANCE_WEIGHT.comment = Lower bound for reflection hit-distance similarity in the pre-pass. Raise it for more smoothing; lower it to preserve separated reflection depths.
 
-option.RELAX_ANTIFIREFLY_ENABLE = RELAX Anti-firefly
-option.RELAX_ANTIFIREFLY_ENABLE.comment = Enables the official rank-conditioned 3x3 anti-firefly stage after temporal accumulation. It preserves the temporal second moment.
-value.RELAX_ANTIFIREFLY_ENABLE.1 = On
-value.RELAX_ANTIFIREFLY_ENABLE.0 = Off
 
-option.RELAX_HISTORY_FIX_FRAMES = History-fix Frames
-option.RELAX_HISTORY_FIX_FRAMES.comment = Pixels with no more than this many history frames receive sparse cross-bilateral disocclusion repair.
+option.MAXENT_SPECULAR_TEMPORAL_HISTORY_FIX_THRESHOLD = History-fix Threshold
+option.MAXENT_SPECULAR_TEMPORAL_HISTORY_FIX_THRESHOLD.comment = At or below this effective sample count, slow history is replaced by the responsive history to repair newly revealed pixels.
 
-option.RELAX_HISTORY_FIX_BASE_STRIDE = History-fix Radius
-option.RELAX_HISTORY_FIX_BASE_STRIDE.comment = Maximum sampling stride of disocclusion repair. Larger values fill wider holes but can import less local lighting.
 
-option.RELAX_COLOR_BOX_SIGMA = History Clamp Sigma
-option.RELAX_COLOR_BOX_SIGMA.comment = Width of the responsive-history YCoCg color box. Lower values remove trails more aggressively; higher values retain stable highlights.
+option.MAXENT_SPECULAR_TEMPORAL_CLAMP_SIGMA = History Clamp Sigma
+option.MAXENT_SPECULAR_TEMPORAL_CLAMP_SIGMA.comment = Width of the responsive-history YCoCg color box. Lower values remove trails more aggressively; higher values retain stable highlights.
 
-option.RELAX_HISTORY_ACCELERATION = Anti-lag Acceleration
-option.RELAX_HISTORY_ACCELERATION.comment = Moves slow history toward responsive history when the clamp detects a lighting change. Excessive values can amplify residual noise.
+option.MAXENT_SPECULAR_TEMPORAL_ANTI_LAG = Anti-lag
+option.MAXENT_SPECULAR_TEMPORAL_ANTI_LAG.comment = Moves slow history toward responsive history when the clamp detects a lighting change. Excessive values can amplify residual noise.
 
-option.RELAX_HISTORY_RESET_TEMPORAL_SIGMA = Reset Temporal Sigma
-option.RELAX_HISTORY_RESET_TEMPORAL_SIGMA.comment = Temporal noisy-signal deviation tolerated before history reset. Higher values retain history longer during lighting changes.
+option.MAXENT_SPECULAR_TEMPORAL_RESET_TEMPORAL_SIGMA = Reset Temporal Sigma
+option.MAXENT_SPECULAR_TEMPORAL_RESET_TEMPORAL_SIGMA.comment = Temporal noisy-signal deviation tolerated before history reset. Higher values retain history longer during lighting changes.
 
-option.RELAX_HISTORY_RESET_SPATIAL_SIGMA = Reset Spatial Sigma
-option.RELAX_HISTORY_RESET_SPATIAL_SIGMA.comment = Responsive-neighborhood deviation tolerated before history reset. Higher values reduce resets in noisy areas.
+option.MAXENT_SPECULAR_TEMPORAL_RESET_SPATIAL_SIGMA = Reset Spatial Sigma
+option.MAXENT_SPECULAR_TEMPORAL_RESET_SPATIAL_SIGMA.comment = Responsive-neighborhood deviation tolerated before history reset. Higher values reduce resets in noisy areas.
 
-option.RELAX_HISTORY_RESET_AMOUNT = History Reset Amount
-option.RELAX_HISTORY_RESET_AMOUNT.comment = Maximum fraction of history replaced by the current sample in one frame when reset detection triggers.
+option.MAXENT_SPECULAR_TEMPORAL_RESET_AMOUNT = Reset Amount
+option.MAXENT_SPECULAR_TEMPORAL_RESET_AMOUNT.comment = Maximum fraction of history replaced by the current sample in one frame when reset detection triggers.
 
-option.RELAX_HISTORY_THRESHOLD = Variance Trust Frames
-option.RELAX_HISTORY_THRESHOLD.comment = Required history length before temporal second moments are trusted without spatial stabilization.
 
-option.RELAX_SPEC_VARIANCE_BOOST = Empty-sample Variance
-option.RELAX_SPEC_VARIANCE_BOOST.comment = Variance injected when a zero reflection sample has weak reprojection confidence. It prevents the spatial filter from locking onto false certainty.
 
-option.RELAX_ROUGHNESS_EDGE_RELAXATION = Roughness-edge View Relaxation
-option.RELAX_ROUGHNESS_EDGE_RELAXATION.comment = Relaxes view-vector rejection around roughness edges. Higher values denoise more but may soften view-dependent boundaries.
 
-option.RELAX_NORMAL_RELAXATION = Low-confidence Normal Relaxation
-option.RELAX_NORMAL_RELAXATION.comment = Relaxes normal edge stopping when reprojection confidence is low, helping newly revealed pixels converge.
 
-option.RELAX_LUMINANCE_RELAXATION = Low-confidence Luma Relaxation
-option.RELAX_LUMINANCE_RELAXATION.comment = Relaxes luminance edge stopping when reprojection confidence is low. Higher values hide noise faster but can blur highlights.
-
-option.RELAX_SPEC_PHI_LUMINANCE = Specular Light-Field Tolerance
-option.RELAX_SPEC_PHI_LUMINANCE.comment = Scales variance-normalized MaxEnt light-field tolerance in A-Trous passes. Higher values permit more smoothing across lighting differences.
-
-option.RELAX_MAX_LUMINANCE_DIFFERENCE = Maximum Luma Rejection
-option.RELAX_MAX_LUMINANCE_DIFFERENCE.comment = Caps the luminance penalty so extreme 1 spp differences cannot completely isolate a pixel from spatial filtering.
 
 # ===========================================================================
-# Variance Prefilter
+# MaxEnt Variance Preparation
 # ===========================================================================
-option.VAR_FILTER_KERNEL_SIGMA = Variance Kernel Sigma
-option.VAR_FILTER_KERNEL_SIGMA.comment = Gaussian kernel standard deviation (pixels) for the spatial variance pooling pass. Higher values smooth variance estimates over wider neighborhoods, trading precision for stability.
+option.MAXENT_VARIANCE_KERNEL_SIGMA = Kernel Sigma
+option.MAXENT_VARIANCE_KERNEL_SIGMA.comment = Shared diffuse/specular Gaussian kernel width for short-history MaxEnt variance pooling. Higher values trade edge precision for a more stable estimate.
 
-option.VAR_FILTER_HISTORY_BEGIN = Variance Begin Frames
-option.VAR_FILTER_HISTORY_BEGIN.comment = History frame count at which the spatial→temporal variance transition begins. Below this, variance is dominated by the spatial neighborhood estimate to handle cold starts.
+option.MAXENT_VARIANCE_HISTORY_BEGIN = Transition Begin Samples
+option.MAXENT_VARIANCE_HISTORY_BEGIN.comment = Shared diffuse/specular effective sample count at which the spatial-to-temporal estimator-variance transition begins.
 
-option.VAR_FILTER_HISTORY_END = Variance End Frames
-option.VAR_FILTER_HISTORY_END.comment = History frame count at which the spatial→temporal variance transition completes. At or above this, the purely temporal variance estimate is fully trusted.
+option.MAXENT_VARIANCE_HISTORY_END = Transition End Samples
+option.MAXENT_VARIANCE_HISTORY_END.comment = Shared diffuse/specular effective sample count at which temporal estimator variance is fully trusted and large-kernel pooling is skipped.
 
 # ===========================================================================
-# À-Trous Denoiser
+# MaxEnt Spatial Filter
 # ===========================================================================
-option.ATROUS_NORMAL_POWER = À-Trous Normal Sensitivity
-option.ATROUS_NORMAL_POWER.comment = Strength of normal-based edge stopping in spatial filters. Higher values preserve normal-map and silhouette edges but leave more noise.
+option.MAXENT_SPATIAL_NORMAL_SENSITIVITY = Texture-normal Sensitivity
+option.MAXENT_SPATIAL_NORMAL_SENSITIVITY.comment = Texture-normal rejection strength. Higher values preserve normal-map detail but leave more noise; unit roughness disables this term.
 
-option.ATROUS_PHI_L = À-Trous Luma Sensitivity
-option.ATROUS_PHI_L.comment = Luminance tolerance of the diffuse spatial filter. Higher values blur across larger lighting differences; lower values preserve contrast.
+option.MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE = Plane-distance Tolerance
+option.MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE.comment = Projected plane-distance tolerance shared by temporal, variance and spatial geometry tests. Higher values accept more cross-surface support.
 
-option.ATROUS_POSITION_PARAM = À-Trous Depth Sensitivity
-option.ATROUS_POSITION_PARAM.comment = World-position edge sensitivity used by spatial and variance filters. Higher values reject cross-surface samples more strongly.
+option.MAXENT_SPATIAL_VARIANCE_ADAPTATION = Variance Adaptation
+option.MAXENT_SPATIAL_VARIANCE_ADAPTATION.comment = Controls how conservatively variance is propagated through successive spatial levels. Higher values retain more variance and sustain stronger later filtering.
 
-option.ATROUS_GAMMA = À-Trous Roughness Adaptation
-option.ATROUS_GAMMA.comment = Controls roughness-dependent widening of the diffuse filter. Zero keeps a fixed width; higher values blur rough surfaces more aggressively.
+option.MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY = Diffuse Light-field Sensitivity
+option.MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY.comment = Variance-normalized diffuse MaxEnt rejection strength. Higher values preserve more light-field contrast; lower values smooth more.
+
+option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY = Specular Light-field Sensitivity
+option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY.comment = Variance-normalized specular MaxEnt rejection strength. Higher values preserve more reflection contrast; lower values smooth more.
+
+option.MAXENT_SPATIAL_DIFFUSE_LOW_CONFIDENCE_BLEND = Diffuse Low-confidence Blend
+option.MAXENT_SPATIAL_DIFFUSE_LOW_CONFIDENCE_BLEND.comment = Blends the wide spatial result into diffuse pixels with little valid history. Higher values hide disocclusion noise faster but can temporarily blur detail.
 
 # ===========================================================================
 # Bloom
@@ -360,7 +337,7 @@ value.DEBUG_VIEW.20 = Path Guide
 value.DEBUG_VIEW.21 = Temporal Raw
 value.DEBUG_VIEW.22 = Radiance Cache
 value.DEBUG_VIEW.23 = Refl. History Clamp
-value.DEBUG_VIEW.24 = Refl. Anti-firefly
+value.DEBUG_VIEW.24 = Refl. Packed History
 value.DEBUG_VIEW.25 = Refl. Spatial Prep
 value.DEBUG_VIEW.26 = Refl. A-trous 1
 value.DEBUG_VIEW.27 = Refl. A-trous 2

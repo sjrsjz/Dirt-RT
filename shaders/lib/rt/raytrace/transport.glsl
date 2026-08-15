@@ -294,11 +294,16 @@ LobeProbs computeLobeProbs(material surf, vec3 rd_i, vec3 macroNormal, float rs)
     // absorption probabilities. In particular, a metal has Cd == 0 and must
     // never spend samples on a zero-valued diffuse branch.
     float interfaceEnergy = clamp(luma(interfaceF), 0.0, 1.0);
-    float baseEnergy = max(luma(max(surf.Cd, vec3(0.0))), 0.0);
+    float diffuseBaseEnergy = max(luma(max(surf.Cd, vec3(0.0))), 0.0);
+    vec3 transmissionColor = evaluateTransmissionAlbedo(surf);
+    float transmissionEnergy = max(luma(max(transmissionColor,
+        vec3(0.0))), 0.0);
     float remainingEnergy = max(1.0 - interfaceEnergy, 0.0);
     float specImportance = interfaceEnergy;
-    float refrImportance = remainingEnergy * transmissionSelector * baseEnergy;
-    float diffImportance = remainingEnergy * diffuseSelector * baseEnergy;
+    float refrImportance = remainingEnergy * transmissionSelector
+        * transmissionEnergy;
+    float diffImportance = remainingEnergy * diffuseSelector
+        * diffuseBaseEnergy;
     float importanceSum = specImportance + refrImportance + diffImportance;
 
     if (importanceSum > 1e-8) {
@@ -313,7 +318,8 @@ LobeProbs computeLobeProbs(material surf, vec3 rd_i, vec3 macroNormal, float rs)
 
     vec3 nonSpecColor = surf.Cd;
     p.specWeight = interfaceF / max(p.P_spec, 1e-5);
-    p.refrWeight = surf.Cd * transmissionSelector / max(p.P_refr, 1e-5);
+    p.refrWeight = transmissionColor * transmissionSelector
+        / max(p.P_refr, 1e-5);
     p.diffWeight = nonSpecColor * diffuseSelector / max(p.P_diff, 1e-5);
 
     return p;
@@ -324,11 +330,23 @@ LobeProbs computeLobeProbs(material surf, vec3 rd_i, vec3 macroNormal, float rs)
 // ===========================================================================
 
 MediumResult evalMedium(float t, vec3 rd_i, float ro_i_y, bool inside,
+    int mediumBlockID, vec3 mediumTint, float mediumExtinctionWeight,
     vec4 fogColor, vec3 globalEmission) {
     MediumResult m;
     if (inside) {
-        m.absorption = exp2(-t * fogColor.yzw * LOG2_E);
-        m.emission = (1.0 - m.absorption) / (fogColor.yzw + 1e-5) * globalEmission;
+        if (mediumBlockID == BLOCK_WATER
+                || mediumBlockID == BLOCK_GLASS
+                || mediumBlockID == BLOCK_ICE) {
+            m.absorption = mediumVolumeTransmittance(t, mediumBlockID,
+                mediumTint, mediumExtinctionWeight);
+            m.emission = vec3(0.0);
+        } else {
+            // Non-block camera media (currently lava) retain their emissive
+            // fog model.
+            m.absorption = exp2(-t * fogColor.yzw * LOG2_E);
+            m.emission = (1.0 - m.absorption)
+                / (fogColor.yzw + 1e-5) * globalEmission;
+        }
     } else {
         m.absorption = exp2(-max(b_Q * (b_P.x - ro_i_y) * t
                         - 0.5 * b_Q * t * t * rd_i.y, 0.0) * LOG2_E);
@@ -401,8 +419,9 @@ vec3 sampleDiffuseWithGuide(vec3 geometryNormal, vec3 shadingNormal,
 // PSR (Primary Surface Replacement) Refractive Chain
 // ===========================================================================
 
-PSRResult tracePSRChain(vec3 ro, vec3 rd, vec3 geometryNormal, float firstRoughness,
-    bool wasInside, int firstMediumBlockID, int baseDepth) {
+PSRResult tracePSRChain(vec3 ro, vec3 rd, vec3 geometryNormal,
+    float firstRoughness, bool wasInside, int firstMediumBlockID,
+    vec3 firstMediumTint, float firstMediumExtinctionWeight, int baseDepth) {
     PSRResult result;
     result.virtualDist = 0.0;
     result.pathRoughness = 0.0;
@@ -418,15 +437,18 @@ PSRResult tracePSRChain(vec3 ro, vec3 rd, vec3 geometryNormal, float firstRoughn
     result.environment = false;
 
     float r_accum2 = firstRoughness * firstRoughness;
-    float n_camera = wasInside ? REFRACTIVE_INDEX : 1.0;
+    float firstMediumIor = transportIorFromBlock(firstMediumBlockID);
+    float n_camera = wasInside ? firstMediumIor : 1.0;
 
     vec3 ro_chain = ro;
     vec3 rd_chain = rd;
     bool inside_chain = !wasInside;
     // This is the medium occupied by the segment about to be traced, not the
-    // material at its terminal hit. Camera-originated water/glass rays have
+    // material at its terminal hit. Camera-originated dielectric rays have
     // already crossed the primary interface before entering this function.
     int mediumBlockID = inside_chain ? firstMediumBlockID : 0;
+    vec3 mediumTint = firstMediumTint;
+    float mediumExtinctionWeight = firstMediumExtinctionWeight;
     vec3 departN = geometryNormal;
 
     for (int i = 0; i < MAX_REFRACTIVE_BOUNCES; i++) {
@@ -447,17 +469,16 @@ PSRResult tracePSRChain(vec3 ro, vec3 rd, vec3 geometryNormal, float firstRoughn
         int hitBlockID;
         payload_unpackShadow(tmp_Payload.data, hitBlockID);
 
-        // The shadow payload's RGB was accumulated using the terminal hit's
-        // texture. It is valid for its NEE boundary-walking contract, but a
-        // PSR segment ending on sand/stone must not treat that opaque texture
-        // as the volume it travelled through. Apply extinction from the
-        // explicitly tracked current medium instead.
-        if (inside_chain && mediumBlockID == BLOCK_WATER) {
-            result.transmittance *= waterVolumeTransmittance(t_next);
+        // Extinction belongs to the medium occupied by this segment, never to
+        // the material at its terminal hit.
+        if (inside_chain) {
+            result.transmittance *= mediumVolumeTransmittance(t_next,
+                mediumBlockID, mediumTint, mediumExtinctionWeight);
         }
         material hitSurf = materialFromEvaluated(hitMat, hitBlockID);
 
-        float n_segment = inside_chain ? REFRACTIVE_INDEX : 1.0;
+        float n_segment = inside_chain
+            ? transportIorFromBlock(mediumBlockID) : 1.0;
         result.virtualDist += t_next * n_camera / n_segment;
 
         vec3 hitGeomN = payload_unpackGeomNormal(tmp_Payload.data);
@@ -480,8 +501,10 @@ PSRResult tracePSRChain(vec3 ro, vec3 rd, vec3 geometryNormal, float firstRoughn
         // surface's BRDF roughness belongs to diffuse projection, not PSR.
         r_accum2 += hitSurf.R.x * hitSurf.R.x;
 
-        float n_from = inside_chain ? REFRACTIVE_INDEX : 1.0;
-        float n_to = inside_chain ? 1.0 : REFRACTIVE_INDEX;
+        float n_from = inside_chain
+            ? transportIorFromBlock(mediumBlockID) : 1.0;
+        float n_to = inside_chain
+            ? 1.0 : transportIorFromBlock(hitBlockID);
         float interfaceEta = n_from / n_to;
         vec3 next_refract = refract(rd_chain, hitGeomN, interfaceEta);
 
@@ -489,7 +512,7 @@ PSRResult tracePSRChain(vec3 ro, vec3 rd, vec3 geometryNormal, float firstRoughn
 
         float interfaceFresnel = clamp(fresnel(-rd_chain, hitGeomN,
             interfaceEta), 0.0, 1.0);
-        vec3 interfaceColor = max(hitSurf.Cd, vec3(0.0))
+        vec3 interfaceColor = evaluateTransmissionAlbedo(hitSurf)
             * clamp(hitSurf.S.y, 0.0, 1.0);
         result.transmittance *= interfaceColor
             * ((1.0 - interfaceFresnel) * interfaceEta * interfaceEta);
@@ -499,6 +522,14 @@ PSRResult tracePSRChain(vec3 ro, vec3 rd, vec3 geometryNormal, float firstRoughn
         ro_chain = ro_next;
         inside_chain = !inside_chain;
         mediumBlockID = inside_chain ? hitBlockID : 0;
+        if (inside_chain) {
+            mediumTint = hitSurf.Cd;
+            mediumExtinctionWeight =
+                transportExtinctionWeightFromMaterial(hitSurf);
+        } else {
+            mediumTint = vec3(1.0);
+            mediumExtinctionWeight = 0.0;
+        }
         departN = hitGeomN;
     }
 

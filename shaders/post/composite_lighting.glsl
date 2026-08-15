@@ -67,6 +67,15 @@ vec3 projectDiffuseLighting(MaxEntEncoding encoded, vec3 normal,
     #endif
 }
 
+float primaryTransmissionIor(float transmissionCode) {
+    if (transmissionCode < 0.999) return 1.0;
+    int mediumClass = int(transmissionCode + 0.5);
+    if (mediumClass == 1) return REFRACTIVE_INDEX;
+    if (mediumClass == 2) return GLASS_REFRACTIVE_INDEX;
+    if (mediumClass == 3) return 1.31;
+    return 1.0;
+}
+
 vec3 resolvePSRRefraction(uvec2 xy) {
     PSRResolveData psr = readPSRResolve(xy);
 
@@ -91,17 +100,17 @@ vec3 resolvePSRRefraction(uvec2 xy) {
                     ivec2(floor(samplePixel + 0.5)), ivec2(0),
                     ivec2(resolution_global) - 1);
                 vec3 backgroundPosition;
-                float backgroundMask;
-                readDiffuseGeo(uvec2(nearestPixel), backgroundPosition,
-                    backgroundMask);
+                float backgroundDistance;
+                readDiffusePrimaryGeometry(uvec2(nearestPixel),
+                    backgroundPosition, backgroundDistance);
                 vec3 backgroundGeometryNormal =
-                    readDiffuseGeometryNormal(uvec2(nearestPixel));
+                    readPrimaryGeometryNormal(uvec2(nearestPixel));
 
                 float pixelFootprint = max(length(psr.endpointRelative)
                     / max(float(resolution_global.y), 1.0), 0.025);
                 float positionTolerance = max(0.12,
                     6.0 * pixelFootprint);
-                bool geometryMatches = backgroundMask > 0.5
+                bool geometryMatches = backgroundDistance >= 0.0
                     && length(backgroundPosition - psr.endpointRelative)
                         <= positionTolerance
                     && dot(backgroundGeometryNormal,
@@ -138,10 +147,9 @@ void main() {
 
     // Primary visibility remains authoritative. The diffuse domain may be sky
     // behind water/glass even though the primary pixel itself is a surface.
-    vec3 primaryPosition;
-    float primaryDistance;
-    readGeo0(GEO_N_GEO, xy, primaryPosition, primaryDistance);
-    float surfaceMask = primaryDistance > -0.5 ? 1.0 : 0.0;
+    uvec4 primaryGeometryWords = readPrimaryGeometryWords(xy);
+    float primaryDistance = uintBitsToFloat(primaryGeometryWords.w);
+    float surfaceMask = primaryDistance >= 0.0 ? 1.0 : 0.0;
 
     #if DEBUG_VIEW >= 35 && DEBUG_VIEW <= 37
     // Sky pixels do not contain a surface motion record.
@@ -155,13 +163,10 @@ void main() {
     // 分支 1: 天空像素 — 读 Geo0 + N=3 + N=4
     // =========================================================================
     if (surfaceMask < 0.5) {
-        vec3 worldPos;
-        float dist;
-        readGeo0(GEO_N_GEO, xy, worldPos, dist);
-
         vec3 emisVal, rdVal, absorptionVal;
         vec3 transAlbedo_unused, lightVal_unused;
-        readMisc(GEO_N_MISC, xy, transAlbedo_unused, emisVal, rdVal);
+        readMiscTransport(GEO_N_MISC, xy, transAlbedo_unused, emisVal);
+        rdVal = reconstructPrimaryRay(xy);
         readLightAbs(GEO_N_LIGHTABS, xy, lightVal_unused, absorptionVal);
 
         setSkyVars();
@@ -188,11 +193,14 @@ void main() {
     vec3 geometryNormal, specAlbedo, diffAlbedo, transAlbedo, emisVal, lightVal, absorptionVal, rdVal;
     float rough, pathR;
     int illumType;
-    readGeo1(GEO_N_NORMALS, xy, geometryNormal, rough, illumType, pathR);
-    vec3 microN;
-    readAlbedosPathMicroNormal(GEO_N_ALBEDOS, xy, specAlbedo,
-        diffAlbedo, microN);
-    readMisc(GEO_N_MISC, xy, transAlbedo, emisVal, rdVal);
+    geometryNormal = decodeNormalU(primaryGeometryWords.x);
+    rough = unpackHalf2x16(primaryGeometryWords.y).x;
+    pathR = rough;
+    illumType = int(primaryGeometryWords.y >> 16u);
+    vec3 textureNormal = decodeNormalU(primaryGeometryWords.z);
+    readAlbedosPath(GEO_N_ALBEDOS, xy, specAlbedo, diffAlbedo);
+    readMiscTransport(GEO_N_MISC, xy, transAlbedo, emisVal);
+    rdVal = reconstructPrimaryRay(xy);
     readLightAbs(GEO_N_LIGHTABS, xy, lightVal, absorptionVal);
     vec3 primaryCs, primaryCd;
     vec2 primaryS;
@@ -207,13 +215,14 @@ void main() {
         reflectionDebugWeight);
 
 
+    float primaryIor = primaryTransmissionIor(primaryS.y);
     float primaryEtaRatio = eye_medium_global != 0u
-        ? REFRACTIVE_INDEX : (1.0 / REFRACTIVE_INDEX);
+        ? primaryIor : (1.0 / primaryIor);
     vec3 specularLighting = projectSpecularMaxEnt(reflectionMaxEnt,
-        rdVal, microN, geometryNormal, rough,
+        rdVal, textureNormal, geometryNormal, rough,
         primaryCs, primaryS, primaryEtaRatio);
     vec3 diffuseLighting = projectDiffuseLighting(
-        tmp.data_swap, microN, rdVal, rough, diffAlbedo);
+        tmp.data_swap, textureNormal, rdVal, rough, diffAlbedo);
 
     // MaxEnt 漫反射投影使用微法线；EON 开启时同时恢复粗糙漫反射响应。
 
@@ -240,7 +249,7 @@ void main() {
     #elif DEBUG_VIEW == 4
     // White model: diffuse irradiance only, no albedo
     fragColor.xyz = projectDiffuseLighting(
-        tmp.data_swap, microN, rdVal, rough, vec3(1.0));
+        tmp.data_swap, textureNormal, rdVal, rough, vec3(1.0));
 
     #elif DEBUG_VIEW == 5
     // Light field: MaxEnt normalized dominant direction × energy
@@ -248,24 +257,22 @@ void main() {
 
     #elif DEBUG_VIEW == 6
     // Normals: world-space geometryNormal as RGB
-    fragColor.xyz = microN * 0.5 + 0.5;
+    fragColor.xyz = textureNormal * 0.5 + 0.5;
 
     #elif DEBUG_VIEW == 7
     // Absorption / atmospheric transmission
     fragColor.xyz = absorptionVal;
 
     #elif DEBUG_VIEW == 8
-    // Actually sampled GGX reflection direction as RGB (oct-decoded)
-    {
-        vec3 Rpos, R;
-        readReflGeo(xy, Rpos, R);
-        fragColor.xyz = R * 0.5 + 0.5;
-    }
+    // Actually sampled GGX direction, conditionally preserved in the otherwise
+    // unused upper half of the reflection hit-distance word.
+    fragColor.xyz = readReflSampleDirection(xy) * 0.5 + 0.5;
 
     #elif DEBUG_VIEW == 9
-    // Classic reflection hitDistance used by virtual reprojection.
+    // Temporal virtual-reprojection hit distance. Spatial stages deliberately
+    // no longer carry this descriptor in their filtered signal.
     {
-        float d = reflectionHitDistance;
+        float d = readMaxEntSpecularHistory(xy).hitDistance;
         fragColor.xyz = (d >= VPROJDIST_SKY * 0.99) ? vec3(1.0) : jetColormap(logDistNorm(d));
     }
 
@@ -283,8 +290,8 @@ void main() {
     fragColor.xyz = tmp2.data_swap;
 
     #elif DEBUG_VIEW == 13
-    // Diffuse temporal accumulation weight (heatmap) — N_eff / TEMPORAL_MAX_HISTORY
-    fragColor.xyz = jetColormap(clamp(tmp.weight / TEMPORAL_MAX_HISTORY, 0.0, 1.0));
+    // Diffuse temporal accumulation weight (heatmap) — N_eff / MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY
+    fragColor.xyz = jetColormap(clamp(tmp.weight / MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY, 0.0, 1.0));
 
     #elif DEBUG_VIEW == 14
     // Actual temporal history contribution to the reflection radiance.
@@ -351,7 +358,7 @@ void main() {
     {
         vec3 relativePos;
         float distance;
-        readGeo0(GEO_N_GEO, xy, relativePos, distance);
+        readPrimaryPosition(xy, relativePos, distance);
         vec3 surfaceWorldPos = camPos + relativePos;
         vec3 cacheSamplePos = surfaceWorldPos
                 + geometryNormal * RADIANCE_CACHE_SURFACE_EPSILON;
@@ -359,7 +366,7 @@ void main() {
         if (isRadianceCacheSampleInBounds(cacheCoord)) {
             RadianceCache cache = sampleRadianceCacheHist(cacheCoord, camPos);
             fragColor.xyz = radianceCacheValueValid(cache)
-                ? radianceCacheDiffuseIncident(cache, microN) : vec3(0.0);
+                ? radianceCacheDiffuseIncident(cache, textureNormal) : vec3(0.0);
         } else {
             fragColor.xyz = vec3(0.0);
         }
@@ -374,7 +381,7 @@ void main() {
     {
         vec3 relativePos;
         float distance;
-        readGeo0(GEO_N_GEO, xy, relativePos, distance);
+        readPrimaryPosition(xy, relativePos, distance);
         vec3 worldPos = camPos + relativePos
             + geometryNormal * RADIANCE_CACHE_SURFACE_EPSILON;
         RadianceCacheAddress address = findRadianceCacheAddress(worldPos);
@@ -385,12 +392,12 @@ void main() {
                 RadianceCache cache = loadRadianceCachePlanes(address,
                     RC_PLANE_CURRENT_0, RC_PLANE_CURRENT_1);
                 fragColor.xyz = radianceCacheValueValid(cache)
-                    ? radianceCacheDiffuseIncident(cache, microN) : vec3(0.0);
+                    ? radianceCacheDiffuseIncident(cache, textureNormal) : vec3(0.0);
             #elif DEBUG_VIEW == 32
                 RadianceCache cache = loadRadianceCachePlanes(address,
                     RC_PLANE_HISTORY_0, RC_PLANE_HISTORY_1);
                 fragColor.xyz = radianceCacheValueValid(cache)
-                    ? radianceCacheDiffuseIncident(cache, microN) : vec3(0.0);
+                    ? radianceCacheDiffuseIncident(cache, textureNormal) : vec3(0.0);
             #elif DEBUG_VIEW == 33
                 RadianceCache cache = loadRadianceCachePlanes(address,
                     RC_PLANE_HISTORY_0, RC_PLANE_HISTORY_1);
@@ -400,7 +407,7 @@ void main() {
                 RadianceCache cache = loadRadianceCachePlanes(address,
                     RC_PLANE_FILTERED_0, RC_PLANE_FILTERED_1);
                 fragColor.xyz = radianceCacheValueValid(cache)
-                    ? radianceCacheDiffuseIncident(cache, microN) : vec3(0.0);
+                    ? radianceCacheDiffuseIncident(cache, textureNormal) : vec3(0.0);
             #endif
         }
     }
@@ -456,7 +463,7 @@ void main() {
         } else {
             vec3 relativePos;
             float distance;
-            readGeo0(GEO_N_GEO, xy, relativePos, distance);
+            readPrimaryPosition(xy, relativePos, distance);
             vec3 previousRelativePos = relativePos
                 + camPos - prevRaytracingCamPos - surfaceMotion;
             vec4 previousClip = rtPrevViewProjection

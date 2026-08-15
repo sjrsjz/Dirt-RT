@@ -41,9 +41,9 @@ DiffuseIlluminationWriteData loadDiffuseInput(ivec2 p) {
     readDiffuseLightRT(xy, maxent, meanY2);
     t.data_swap = maxent;
     t.meanY2 = meanY2;
-    float mask;
-    readDiffuseGeo(xy, t.pos, mask);
-    t.surfaceMask = mask;
+    float distance;
+    readDiffusePrimaryGeometry(xy, t.pos, distance);
+    t.surfaceMask = distance >= 0.0 ? 1.0 : 0.0;
     t.weight = 1.0;
     return t;
 }
@@ -68,7 +68,7 @@ diffuseIlluminationData fetchDiffuse(ivec2 p) {
     tmp.prev_weight = weight;
     tmp.prev_meanY2 = meanY2;
 
-    // History geometry (N=3): world position plus oct-encoded geometry normal.
+    // History geometry reconstructs position from F32 distance + oct ray.
     readDiffuseHistGeo(xy, tmp.pos, tmp.histNormal);
 #endif
     return tmp;
@@ -142,9 +142,9 @@ DiffuseIlluminationWriteData fetchPrevDiffuse(ivec2 p) {
     t.meanY2 = meanY2;
 
     // Read position+mask from the primary G-buffer published by ray0.
-    float mask;
-    readDiffuseGeo(xy, t.pos, mask);
-    t.surfaceMask = mask;
+    float distance;
+    readDiffusePrimaryGeometry(xy, t.pos, distance);
+    t.surfaceMask = distance >= 0.0 ? 1.0 : 0.0;
 
     return t;
 }

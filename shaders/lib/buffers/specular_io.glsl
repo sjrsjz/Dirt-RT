@@ -55,8 +55,8 @@ void unpackSpecularSample(PackedLightSample s,
     H = decodeNormalU(s.data1.w);
 }
 
-// A-trous only filters radiance/variance. Avoid decoding the stored ray
-// direction and avoid constructing data0 again when the pass writes data1.
+// A-trous only filters radiance/variance and avoids constructing data0 again
+// when the pass writes data1.
 void unpackSpecularFilterSample(vec4 geometry, uvec4 light,
     out vec3 pos, out vec3 radiance, out float roughness,
     out float variance, out float virtualProjDist, out vec3 H) {
@@ -101,7 +101,9 @@ SpecularRTWriteData packSpecularRT(vec3 pos, vec3 R, float virtualProjDist, vec3
 }
 
 void unpackSpecularRT_Refl(uvec2 xy, out vec3 pos, out vec3 R, out vec3 color, out float virtualProjDist) {
-    readReflGeo (xy, pos, R);
+    float distance = readPrimaryDistance(xy);
+    pos = reconstructPrimaryRelativePosition(xy, distance);
+    R = readReflSampleDirection(xy);
     float accumW;
     readReflLight(xy, color, virtualProjDist, accumW);
 }
@@ -127,11 +129,11 @@ vec3IlluminationData fetchReflect(ivec2 p) {
     readReflLight(xy, tmp.data_swap, vproj, tmp.weight);
 
 #ifndef REFLECT_BUFFER_MIN2
-    // History (N=3 + N=2)
-    readReflHistLight(xy, tmp.data, vproj, tmp.prev_weight);
-    vec3 R;
-    readReflHistGeo(xy, tmp.pos, R);
-    tmp.normal = R * vproj;
+    MaxEntSpecularHistory history = readMaxEntSpecularHistory(xy);
+    tmp.data = specularMaxEntTotalRgb(history.slowSignal);
+    tmp.prev_weight = history.historyLength;
+    tmp.pos = history.surfacePosition;
+    tmp.normal = history.geometryNormal * history.hitDistance;
 #endif
     return tmp;
 }
@@ -151,14 +153,10 @@ vec3IlluminationData blendReflect(vec3IlluminationData A, vec3IlluminationData B
 
 bool fetchReflectHistoryGeometry(ivec2 p, out vec3 pos, out vec3 normal) {
     uvec2 xy = uvec2(clamp(p, ivec2(0), ivec2(resolution_global) - 1));
-    float dist;
-    readGeo0(GEO_N_GEO, xy, pos, dist);
-    if (dist < -0.5) return false;
-    vec3 R; float vproj;
-    readReflHistGeo(xy, pos, R);
-    readReflHistLight(xy, normal, vproj, dist); // dist reused as discard
-    normal = R * vproj;
-    return true;
+    MaxEntSpecularHistory history = readMaxEntSpecularHistory(xy);
+    pos = history.surfacePosition;
+    normal = history.geometryNormal;
+    return history.historyLength >= 0.5;
 }
 
 vec3IlluminationData sampleReflect(vec2 p) {
@@ -179,11 +177,6 @@ void writeReflect(vec3IlluminationData data, ivec2 p) {
     writeReflLight(xy, data.data_swap, vproj, data.weight);
 }
 
-void writeReflectHistory(vec3 preDenoiseColor, float prevWeight, vec3 pos, vec3 R, float virtualProjDist, ivec2 p) {
-    uvec2 xy = uvec2(p);
-    writeReflHistGeo(xy, pos, R);
-    writeReflHistLight(xy, preDenoiseColor, virtualProjDist, prevWeight);
-}
 #endif
 
 // ===========================================================================

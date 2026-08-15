@@ -182,8 +182,8 @@ Material evaluateMaterial(Payload pld, vec3 rayOrigin, vec3 rd_i,
 
         albedoTex = rtSampleAnisotropic(blockTex, sampleUV, atlas,
             textureResolution, footprint, true);
-        specularTex = rtSampleAnisotropic(blockTexSpecular, sampleUV, atlas,
-            textureResolution, footprint, true);
+        specularTex = rtSampleLabPbrSpecular(blockTexSpecular, sampleUV,
+            atlas, textureResolution, footprint);
         normalTex = rtSampleAnisotropic(blockTexNormal, sampleUV, atlas,
             textureResolution, footprint, true);
     }
@@ -198,12 +198,13 @@ Material evaluateMaterial(Payload pld, vec3 rayOrigin, vec3 rd_i,
     return evaluated;
 }
 
-// Check if a block is a transmissive/refractive surface (water, glass).
+// Check if a block is a transmissive/refractive surface.
 // LabPBR standard: translucent blocks are identified by the rendering layer,
 // not by any material channel. In our ray-tracing pipeline we conservatively
-// treat only water and glass as transmissive for the PSR chain.
+// classify water, glass and ice explicitly for the PSR chain.
 bool isTransmissiveBlock(int blockID) {
-    return blockID == BLOCK_WATER || blockID == BLOCK_GLASS;
+    return blockID == BLOCK_WATER || blockID == BLOCK_GLASS
+        || blockID == BLOCK_ICE;
 }
 
 // Convert Material (from getMaterial) to BSDF material struct
@@ -211,7 +212,9 @@ material materialFromEvaluated(Material mat, int blockID) {
     // Precompute block-type flags once (each was compared 3-5× before)
     bool isWater = blockID == BLOCK_WATER;
     bool isGlass = blockID == BLOCK_GLASS;
+    bool isIce = blockID == BLOCK_ICE;
     bool isPortal = blockID == BLOCK_PORTAL;
+    bool isTransmissive = isWater || isGlass || isIce;
 
     float metallic = mat.metallic;
 
@@ -219,26 +222,72 @@ material materialFromEvaluated(Material mat, int blockID) {
     // already rejected uncovered texels, so using the remaining filtered alpha
     // as physical transmission turns leaf/vine/lily-pad edges into glass.
     // Only explicitly classified blocks may enter the transmission branch.
-    float opaqueFraction = (isWater || isGlass) ? 0.0 : 1.0;
+    float opaqueFraction = isTransmissive ? 0.0 : 1.0;
     opaqueFraction = isPortal ? 0.25 : opaqueFraction;
     float roughness = (isWater || isPortal) ? 0.0 : mat.roughness;
+    // For glass/ice this color is volume data, not an interface multiplier.
+    // Transmission helpers below keep the dielectric boundary color-neutral
+    // and Beer-Lambert applies the tint according to travelled distance.
     vec3 albedo = isWater ? vec3(1.0) : mat.albedo;
     vec3 emission = isPortal ? albedo * (1.0 - opaqueFraction) : mat.emission;
-    float specSelector = (isWater || isGlass)
+    float specSelector = isTransmissive
         ? 1.0 : mix(opaqueFraction, 1.0, metallic);
+    float mediumClass = isWater ? 1.0 : (isGlass ? 2.0 : (isIce ? 3.0 : 0.0));
+    // Values >= 1 carry the transmissive medium class. Every BSDF consumer
+    // clamps S.y to [0,1], so this reuses the existing FP16 material word
+    // without changing the physical transmission selector or adding a read.
+    // Preserve the coverage/translucency weight in the otherwise-unused
+    // fractional quarter of the FP16 medium code. Rounding still recovers the
+    // integer class, while all BSDF selectors clamp the value to one.
+    float extinctionWeight = (isGlass || isIce)
+        ? clamp(mat.translucent, 0.0, 1.0) : 0.0;
+    float transmissionCode = isTransmissive
+        ? mediumClass + 0.25 * extinctionWeight
+        : (1.0 - opaqueFraction);
 
     return newMaterial(clamp(mat.F0, 0.0, 1.0), albedo,
-        vec2(specSelector, 1.0 - opaqueFraction),
+        vec2(specSelector, transmissionCode),
         vec4(roughness, opaqueFraction,
-            isWater, mat.subsurface_scattering),
+            mediumClass, mat.subsurface_scattering),
         emission);
 }
 
-// The compact shadow payload reserves its block-ID byte for three special
-// transport classes, so ordinary blocks arrive as ID 0. ReLAX still needs a
+int transportBlockFromMaterial(material surf) {
+    if (surf.S.y < 0.999) return 0;
+    int mediumClass = int(surf.S.y + 0.5);
+    return mediumClass == 1 ? BLOCK_WATER
+        : (mediumClass == 2 ? BLOCK_GLASS
+        : (mediumClass == 3 ? BLOCK_ICE : 0));
+}
+
+float transportIorFromBlock(int blockID) {
+    if (blockID == BLOCK_WATER) return REFRACTIVE_INDEX;
+    if (blockID == BLOCK_ICE) return 1.31;
+    if (blockID == BLOCK_GLASS) return GLASS_REFRACTIVE_INDEX;
+    return 1.0;
+}
+
+float transportIorFromMaterial(material surf) {
+    return transportIorFromBlock(transportBlockFromMaterial(surf));
+}
+
+float transportExtinctionWeightFromMaterial(material surf) {
+    int mediumClass = int(surf.S.y + 0.5);
+    return transportBlockFromMaterial(surf) == 0 ? 0.0
+        : clamp((surf.S.y - float(mediumClass)) * 4.0, 0.0, 1.0);
+}
+
+vec3 evaluateTransmissionAlbedo(material surf) {
+    // Explicit dielectric media acquire their color in the volume. Portal's
+    // partial transmission is a surface effect and retains its authored tint.
+    return transportBlockFromMaterial(surf) != 0 ? vec3(1.0) : surf.Cd;
+}
+
+// The compact shadow payload reserves its block-ID byte for four special
+// transport classes, so ordinary blocks arrive as ID 0. MaxEnt still needs a
 // stable discriminator. The atlas rectangle identifies the sampled sprite
 // without another payload slot, SSBO, or image.
-uint hashRelaxMaterialWord(uint x) {
+uint hashMaxEntMaterialWord(uint x) {
     x ^= x >> 16u;
     x *= 0x7feb352du;
     x ^= x >> 15u;
@@ -246,14 +295,17 @@ uint hashRelaxMaterialWord(uint x) {
     return x ^ (x >> 16u);
 }
 
-int getRelaxMaterialID(Payload pld, int transportBlockID) {
+int getMaxEntMaterialID(Payload pld, int transportBlockID) {
     vec4 atlas = payload_unpackAtlasBox(pld.data);
     uvec4 a = floatBitsToUint(atlas);
-    uint h = hashRelaxMaterialWord(a.x ^ (a.y * 0x9e3779b9u));
-    h = hashRelaxMaterialWord(h ^ a.z ^ (a.w * 0x85ebca6bu));
+    uint h = hashMaxEntMaterialWord(a.x ^ (a.y * 0x9e3779b9u));
+    h = hashMaxEntMaterialWord(h ^ a.z ^ (a.w * 0x85ebca6bu));
 
-    uint transportClass = transportBlockID == BLOCK_WATER ? 1u : (transportBlockID == BLOCK_GLASS ? 2u : (transportBlockID == BLOCK_PORTAL ? 3u : 0u));
-    h = hashRelaxMaterialWord(h ^ (transportClass * 0x27d4eb2du));
+    uint transportClass = transportBlockID == BLOCK_WATER ? 1u
+        : (transportBlockID == BLOCK_GLASS ? 2u
+        : (transportBlockID == BLOCK_PORTAL ? 3u
+        : (transportBlockID == BLOCK_ICE ? 4u : 0u)));
+    h = hashMaxEntMaterialWord(h ^ (transportClass * 0x27d4eb2du));
     return int(h & 0xffffu);
 }
 
@@ -268,14 +320,14 @@ vec3 evaluateDiffuseAlbedo(material surf, vec3 rd_i, vec3 macroNormal) {
         * (1.0 - clamp(surf.S.y, 0.0, 1.0));
 }
 
-// Exact GLSL port of NRD.hlsli's material-factor front end. ReLAX consumes
+// Exact GLSL port of NRD.hlsli's material-factor front end. The specular path consumes
 // demodulated specular radiance, so both the fit and its deliberately biased
 // stability floors are part of the denoiser contract, not optional tuning.
-const float RELAX_NRD_EPS = 1e-6;
-const float RELAX_NRD_MATERIAL_FACTOR_MIN_SCALE = 0.02;
-const float RELAX_NRD_ROUGHNESS_FACTOR_MIN_SCALE = 0.1;
+const float MAXENT_SPEC_NRD_EPS = 1e-6;
+const float MAXENT_SPEC_NRD_MATERIAL_FACTOR_MIN_SCALE = 0.02;
+const float MAXENT_SPEC_NRD_ROUGHNESS_FACTOR_MIN_SCALE = 0.1;
 
-vec3 relaxNrdEnvironmentTermRtg(vec3 Rf0, float NoV,
+vec3 maxentNrdEnvironmentTermRtg(vec3 Rf0, float NoV,
     float perceptualRoughness) {
     // Ray Tracing Gems, Chapter 32, Equation 4. The official fit consumes
     // perceptual roughness and squares it internally to obtain GGX alpha.
@@ -302,9 +354,9 @@ vec3 relaxNrdEnvironmentTermRtg(vec3 Rf0, float NoV,
             5.56589 * X.x + 19.7886 * X.z - 20.2123 * X.w);
 
     float bias = dot(m1x, Y.xy)
-            / max(dot(m2x, Y.xyw), RELAX_NRD_EPS);
+            / max(dot(m2x, Y.xyw), MAXENT_SPEC_NRD_EPS);
     float scale = dot(m3x, Y.xy)
-            / max(dot(m4x, Y.xyw), RELAX_NRD_EPS);
+            / max(dot(m4x, Y.xyw), MAXENT_SPEC_NRD_EPS);
     return clamp(Rf0 * scale + vec3(bias), vec3(0.0), vec3(1.0));
 }
 
@@ -324,20 +376,20 @@ vec3 evaluateSpecularAlbedo(
 
     // Dirt RT stores GGX alpha; NRD_MaterialFactors takes perceptual roughness.
     float perceptualRoughness = sqrt(clamp(surf.R.x, 0.0, 1.0));
-    vec3 specFactor = relaxNrdEnvironmentTermRtg(
+    vec3 specFactor = maxentNrdEnvironmentTermRtg(
             clamp(Rf0, vec3(0.0), vec3(1.0)), NoV, perceptualRoughness);
 
     // These two lines intentionally reproduce NRD_MaterialFactors exactly.
     // They bias very dark/rough reflectors, preventing unstable demodulation.
-    specFactor *= mix(RELAX_NRD_ROUGHNESS_FACTOR_MIN_SCALE,
+    specFactor *= mix(MAXENT_SPEC_NRD_ROUGHNESS_FACTOR_MIN_SCALE,
             1.0, perceptualRoughness);
-    specFactor = mix(vec3(RELAX_NRD_MATERIAL_FACTOR_MIN_SCALE),
+    specFactor = mix(vec3(MAXENT_SPEC_NRD_MATERIAL_FACTOR_MIN_SCALE),
             vec3(1.0), specFactor);
 
     if (any(isnan(specFactor)) || any(isinf(specFactor)))
-        return vec3(RELAX_NRD_MATERIAL_FACTOR_MIN_SCALE);
+        return vec3(MAXENT_SPEC_NRD_MATERIAL_FACTOR_MIN_SCALE);
     return clamp(specFactor,
-        vec3(RELAX_NRD_MATERIAL_FACTOR_MIN_SCALE), vec3(1.0));
+        vec3(MAXENT_SPEC_NRD_MATERIAL_FACTOR_MIN_SCALE), vec3(1.0));
 }
 
 vec3 reproject(vec3 worldPos) {

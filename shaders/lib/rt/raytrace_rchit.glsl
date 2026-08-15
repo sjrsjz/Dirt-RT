@@ -26,9 +26,6 @@ layout(std430, binding = 0) uniform CameraInfo {
     vec3 sunAngle;
 } cam;
 
-layout(binding = 3) uniform sampler2D blockTex;
-layout(binding = 6) uniform sampler2D entityTextures[256];
-
 layout(set = 1, binding = 0) buffer Quads {
     Quad quads[];
 } geometryBuffers[];
@@ -42,11 +39,7 @@ Quad getRayQuad() {
 }
 
 void main() {
-    vec3 worldPos = gl_WorldRayOriginEXT + gl_HitTEXT * gl_WorldRayDirectionEXT;
     Quad quad = getRayQuad();
-    float coneWidth, coneSpread;
-    payload_unpackRayCone(payload.data, coneWidth, coneSpread);
-    coneWidth += gl_HitTEXT * coneSpread;
     bool sideB = getTriangleSide();
     bool isSideA = !sideB;
 
@@ -116,32 +109,9 @@ void main() {
     bool inside, handedness, isNEE, ignoreTransmissive;
     float prevDist = payload_unpackFlags(payload.data, inside, handedness,
         isNEE, ignoreTransmissive);
+    // Any-hit has already accumulated the segment's volume extinction before
+    // accepting this closest hit. Reapplying it here would square absorption.
     vec3 shadowTrans = payload_unpackShadow(payload.data);
-    if (inside) {
-        vec3 texturePlaneNormal = normalize(cross(gradientU, gradientV));
-        vec4 albedo;
-        if (entityTextureIndex >= 0) {
-            ivec2 textureResolution = textureSize(
-                entityTextures[nonuniformEXT(entityTextureIndex)], 0);
-            RtTextureFootprint footprint = rtSecondaryTextureFootprint(
-                textureResolution, atlas, coneWidth,
-                gl_WorldRayDirectionEXT, texturePlaneNormal, tangent,
-                gradientU, gradientV);
-            albedo = rtSampleAnisotropic(
-                entityTextures[nonuniformEXT(entityTextureIndex)], uv,
-                atlas, textureResolution, footprint, false);
-        } else {
-            ivec2 textureResolution = textureSize(blockTex, 0);
-            RtTextureFootprint footprint = rtSecondaryTextureFootprint(
-                textureResolution, atlas, coneWidth,
-                gl_WorldRayDirectionEXT, texturePlaneNormal, tangent,
-                gradientU, gradientV);
-            albedo = rtSampleAnisotropic(blockTex, uv, atlas,
-                textureResolution, footprint, true);
-        }
-        float segDist = clamp(gl_HitTEXT - prevDist, 0.0, 100.0);
-        shadowTrans = applyVolumeExtinction(shadowTrans, segDist, albedo, blockID);
-    }
 
     payload_packShadow(payload.data, shadowTrans, blockID);
     payload_packFlags(payload.data, prevDist, inside, bitangentSign > 0.0,

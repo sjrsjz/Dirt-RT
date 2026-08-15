@@ -112,6 +112,34 @@ vec4 rtSampleAnisotropic(sampler2D textureSampler, vec2 uv, vec4 atlas,
     return result / float(tapCount);
 }
 
+// LabPBR's G/B/A channels do not form one continuously filterable color:
+// G contains conductor IDs, B switches between porosity and SSS at 64/65,
+// and A=255 is a no-emission sentinel. Mip generation and bilinear filtering
+// can turn two valid endpoint values into a third, unrelated material. Keep
+// roughness (R) anisotropically filtered, but select the remaining semantic
+// channels from one exact base-level texel. Camera jitter then resolves a
+// sub-pixel material boundary stochastically instead of inventing a closure.
+vec4 rtFetchAtlasSemanticTexel(sampler2D textureSampler, vec2 uv,
+        vec4 atlas, ivec2 baseTextureSize) {
+    ivec2 spriteOrigin = ivec2(round(atlas.xy * vec2(baseTextureSize)));
+    ivec2 spriteSize = max(ivec2(round(atlas.zw
+        * vec2(baseTextureSize))), ivec2(1));
+    vec2 safeExtent = max(atlas.zw, vec2(1e-12));
+    vec2 local = fract((uv - atlas.xy) / safeExtent);
+    ivec2 localTexel = min(ivec2(floor(local * vec2(spriteSize))),
+        spriteSize - ivec2(1));
+    return texelFetch(textureSampler, spriteOrigin + localTexel, 0);
+}
+
+vec4 rtSampleLabPbrSpecular(sampler2D textureSampler, vec2 uv,
+        vec4 atlas, ivec2 baseTextureSize, RtTextureFootprint footprint) {
+    vec4 filtered = rtSampleAnisotropic(textureSampler, uv, atlas,
+        baseTextureSize, footprint, true);
+    vec4 semantic = rtFetchAtlasSemanticTexel(
+        textureSampler, uv, atlas, baseTextureSize);
+    return vec4(filtered.r, semantic.gba);
+}
+
 vec3 rtCameraRayDirection(vec2 pixel, vec2 launchSize,
         vec3 corner0, vec3 corner1, vec3 corner2, vec3 corner3,
         mat4 viewInverse) {

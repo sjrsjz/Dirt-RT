@@ -144,7 +144,7 @@ Reservoir spatialReservoir(uvec2 gid, vec3 centerNormal, vec3 centerPos, inout u
     float pixelFootprint = max(centerDistance /
         max(float(resolution_global.y), 1.0), 1e-4);
     float invGeometryScale = 1.0 / max(
-        float(ATROUS_POSITION_PARAM) * pixelFootprint, 1e-6);
+        float(MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE) * pixelFootprint, 1e-6);
     float centerPlaneDistance = dot(centerPos, centerNormal);
 
     float theta = 2.0 * PI * nextFloat(seed);
@@ -165,10 +165,10 @@ Reservoir spatialReservoir(uvec2 gid, vec3 centerNormal, vec3 centerPos, inout u
 
         // 深度不连续拒绝
         vec3 pos;
-        float surfaceMask;
-        readDiffuseGeo(xy, pos, surfaceMask);
+        float sampleDistance;
+        readDiffusePrimaryGeometry(xy, pos, sampleDistance);
         // Plane distance in units of the center pixel's world-space footprint.
-        // ATROUS_POSITION_PARAM is a scale, so it belongs in the denominator;
+        // MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE is a scale, so it belongs in the denominator;
         // multiplying by its small value would make almost every edge weight 1.
         float planeDistance = abs(dot(pos, centerNormal) -
             centerPlaneDistance);
@@ -289,11 +289,7 @@ void main() {
     // 中心像素数据
     vec3 centerNormal, centerPos;
     float centerDist;
-    {
-        float centerMask;
-        readDiffuseGeo(gxy, centerPos, centerMask);
-        centerDist = centerMask > 0.5 ? length(centerPos) : -1.0;
-    }
+    readDiffusePrimaryGeometry(gxy, centerPos, centerDist);
 
     // Guiding is consumed only by surface rays. Skip eight scattered probes,
     // random rotation and history reprojection for sky pixels.
@@ -301,7 +297,7 @@ void main() {
         imageStore(colorimg6, pix, uvec4(0u));
         return;
     }
-    centerNormal = readDiffuseGeometryNormal(gxy);
+    centerNormal = readPrimaryGeometryNormal(gxy);
 
     // Phase 2: Poisson 盘空间蓄水池
     Reservoir r = spatialReservoir(gid, centerNormal, centerPos, seed);
