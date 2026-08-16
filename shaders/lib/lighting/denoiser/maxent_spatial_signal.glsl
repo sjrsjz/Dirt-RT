@@ -7,26 +7,26 @@
 //   x = packHalf2x16(maxEntY.xy)
 //   y = packHalf2x16(maxEntY.zw)
 //   z = packHalf2x16(CoCg.xy)
-//   w = floatBitsToUint(variance)
+//   w = packHalf2x16(sqrt(variance), hitDistance)
 //
 // maxEntY.xyz is the directional first moment, maxEntY.w is total luminance,
-// and CoCg carries chroma. Variance is a native, non-negative F32 estimator
-// variance; it is never packed as FP16. Input and output use the same layout,
-// so every spatial pass may ping-pong the same RGBA32UI resources.
+// and CoCg carries chroma. Variance is evaluated in F32 but stored as an FP16
+// standard deviation and squared after load. The reflection hit distance is
+// propagated independently in the upper FP16 lane. Input and output use the
+// same layout, so every spatial pass may ping-pong the same RGBA32UI resources.
 //
-// A negative F32 variance is reserved as the invalid/no-surface sentinel.
-// Geometry is supplied separately by the signal policy and must provide a
-// camera-relative position, geometry normal, texture normal, GGX roughness,
-// material ID, and validity bit. Sky may therefore be rejected either by its
-// geometry distance or by this signal sentinel without a separate mask.
+// A negative FP16 standard deviation is the invalid/no-surface sentinel.
+// Geometry is supplied separately by the signal policy.
 
 const float DENOISER_SPATIAL_FP16_MAX = 65504.0;
-const float DENOISER_SPATIAL_VARIANCE_MAX = 1e30;
+const float DENOISER_SPATIAL_VARIANCE_MAX =
+    DENOISER_SPATIAL_FP16_MAX * DENOISER_SPATIAL_FP16_MAX;
 
 struct DenoiserMaxEntSignal {
     vec4 maxEntY;
     vec2 CoCg;
     float variance;
+    float hitDistance;
 };
 
 DenoiserMaxEntSignal denoiserEmptyMaxEntSignal() {
@@ -34,16 +34,18 @@ DenoiserMaxEntSignal denoiserEmptyMaxEntSignal() {
     signal.maxEntY = vec4(0.0);
     signal.CoCg = vec2(0.0);
     signal.variance = 0.0;
+    signal.hitDistance = 0.0;
     return signal;
 }
 
 bool denoiserSpatialSignalWordsValid(uvec4 words) {
-    float variance = uintBitsToFloat(words.w);
-    return variance >= 0.0 && !isnan(variance) && !isinf(variance);
+    float standardDeviation = unpackHalf2x16(words.w).x;
+    return standardDeviation >= 0.0
+        && !isnan(standardDeviation) && !isinf(standardDeviation);
 }
 
 uvec4 denoiserInvalidMaxEntSignalWords() {
-    return uvec4(0u, 0u, 0u, floatBitsToUint(-1.0));
+    return uvec4(0u, 0u, 0u, packHalf2x16(vec2(-1.0, 0.0)));
 }
 
 DenoiserMaxEntSignal denoiserSanitizeMaxEntSignal(
@@ -54,6 +56,8 @@ DenoiserMaxEntSignal denoiserSanitizeMaxEntSignal(
         signal.CoCg = vec2(0.0);
     if (isnan(signal.variance) || isinf(signal.variance))
         signal.variance = 0.0;
+    if (isnan(signal.hitDistance) || isinf(signal.hitDistance))
+        signal.hitDistance = 0.0;
 
     signal.maxEntY.w = max(signal.maxEntY.w, 0.0);
     float meanLength2 = dot(signal.maxEntY.xyz, signal.maxEntY.xyz);
@@ -67,6 +71,8 @@ DenoiserMaxEntSignal denoiserSanitizeMaxEntSignal(
     }
     signal.variance = clamp(signal.variance, 0.0,
         DENOISER_SPATIAL_VARIANCE_MAX);
+    signal.hitDistance = clamp(signal.hitDistance, 0.0,
+        DENOISER_SPATIAL_FP16_MAX);
     return signal;
 }
 
@@ -75,7 +81,10 @@ DenoiserMaxEntSignal denoiserUnpackMaxEntSignal(uvec4 words) {
     signal.maxEntY = vec4(unpackHalf2x16(words.x),
         unpackHalf2x16(words.y));
     signal.CoCg = unpackHalf2x16(words.z);
-    signal.variance = uintBitsToFloat(words.w);
+    vec2 standardDeviationHitDistance = unpackHalf2x16(words.w);
+    float standardDeviation = max(standardDeviationHitDistance.x, 0.0);
+    signal.variance = standardDeviation * standardDeviation;
+    signal.hitDistance = max(standardDeviationHitDistance.y, 0.0);
     return denoiserSanitizeMaxEntSignal(signal);
 }
 
@@ -91,7 +100,8 @@ uvec4 denoiserPackMaxEntSignal(DenoiserMaxEntSignal signal) {
         packHalf2x16(clamp(signal.CoCg,
             vec2(-DENOISER_SPATIAL_FP16_MAX),
             vec2(DENOISER_SPATIAL_FP16_MAX))),
-        floatBitsToUint(signal.variance));
+        packHalf2x16(vec2(min(sqrt(signal.variance),
+            DENOISER_SPATIAL_FP16_MAX), signal.hitDistance)));
 }
 
 #endif // MAXENT_SPATIAL_SIGNAL_GLSL

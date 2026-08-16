@@ -5,8 +5,8 @@
 //
 // colortex3 RGBA32UI ABI, produced by maxent_variance_prepare.glsl:
 //   x = floatBitsToUint(primary ray distance), negative means invalid/sky
-//   y = oct32 geometry normal
-//   z = oct32 texture/macro normal
+//   y = oct32 sampling-PDF dominant outgoing direction
+//   z = half(specular virtual scale) | half(GGX alpha)
 //   w = half(perceptual roughness) | materialID16
 //
 // The variance-preparation policy owns the signal roughness: diffuse writes
@@ -15,10 +15,6 @@
 #include "/lib/lighting/denoiser/maxent_spatial_common.glsl"
 
 uniform usampler2D colortex3;
-
-#ifndef DENOISER_SPATIAL_REQUIRE_MATERIAL_MATCH
-#define DENOISER_SPATIAL_REQUIRE_MATERIAL_MATCH 0
-#endif
 
 ivec2 denoiserSpatialImageSize() {
     return textureSize(colortex3, 0);
@@ -29,27 +25,18 @@ uvec4 denoiserSpatialLoadGeometryWords(ivec2 pixel) {
 }
 
 DenoiserSpatialGeometry denoiserSpatialDecodeGeometry(
-        uvec4 words, ivec2 pixel) {
+    uvec4 words, ivec2 pixel) {
     DenoiserSpatialGeometry geometry;
     float distance = uintBitsToFloat(words.x);
-    geometry.position = distance >= 0.0
-        ? reconstructPrimaryRay(uvec2(pixel)) * distance : vec3(0.0);
-    geometry.normal = decodeNormalU(words.y);
-    geometry.textureNormal = decodeNormalU(words.z);
+    geometry.pdfDirection = decodeNormalU(words.y);
+    vec2 virtualAlpha = unpackHalf2x16(words.z);
+    geometry.surfaceDistance = max(distance, 0.0);
+    geometry.virtualScale = clamp(virtualAlpha.x, 0.0, 1.0);
+    geometry.ggxAlpha = clamp(virtualAlpha.y, 0.0, 1.0);
     geometry.roughness = clamp(unpackHalf2x16(words.w).x, 0.0, 1.0);
-    geometry.materialID = words.w >> 16u;
     geometry.valid = distance >= 0.0
-        && !isnan(distance) && !isinf(distance);
+            && !isnan(distance) && !isinf(distance);
     return geometry;
-}
-
-bool denoiserSpatialGeometryCompatible(DenoiserSpatialGeometry center,
-        DenoiserSpatialGeometry neighbor) {
-#if DENOISER_SPATIAL_REQUIRE_MATERIAL_MATCH
-    return center.materialID == neighbor.materialID;
-#else
-    return true;
-#endif
 }
 
 #endif // MAXENT_SPATIAL_GEOMETRY_GLSL

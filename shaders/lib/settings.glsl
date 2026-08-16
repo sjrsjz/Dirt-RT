@@ -83,12 +83,16 @@
 #define MAXENT_VARIANCE_HISTORY_END 12.0 // N_eff at which temporal estimator variance becomes fully trusted. [4.0 6.0 8.0 12.0 16.0 24.0 32.0]
 
 // -- Unified MaxEnt spatial filter --
-#define MAXENT_SPATIAL_NORMAL_SENSITIVITY 32.0 // Texture-normal rejection strength; unit roughness disables this term. [1 2 4 8 16 32 64 128]
-#define MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE 0.1 // Projected plane-distance tolerance. Higher = more permissive geometry support. [0.005 0.01 0.02 0.03 0.04 0.05 0.06 0.07 0.08 0.09 0.1 0.2 0.3 0.4 0.5]
+#define MAXENT_SPATIAL_PDF_DIRECTION_SENSITIVITY 32.0 // Sampling-PDF dominant-direction rejection strength. [1 2 4 8 16 32 64 128]
 #define MAXENT_SPATIAL_VARIANCE_ADAPTATION 1.0 // Conservativeness of variance propagation across spatial levels. Higher retains more variance. [0.0 0.25 0.5 0.75 1.0 1.5 2.0]
 #define MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY 0.35 // Diffuse variance-normalized MaxEnt rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5]
 #define MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY 0.35 // Specular variance-normalized MaxEnt rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.5]
+#define MAXENT_SPATIAL_SPECULAR_VIRTUAL_POSITION_SENSITIVITY 20.0 // Specular light-field rejection strength for virtual-position disagreement. [0.0 2.0 4.0 8.0 12.0 16.0 20.0 24.0 32.0 48.0 64.0]
 #define MAXENT_SPATIAL_DIFFUSE_LOW_CONFIDENCE_BLEND 1.0 // Wide-filter blend applied to low-confidence diffuse history. [0.0 0.1 0.25 0.5 0.75 1.0 1.25 1.5 2.0 3.0 4.0 5.0]
+
+// -- Refraction/path-guide spatial compatibility (not MaxEnt filtering) --
+#define MAXENT_SPATIAL_NORMAL_SENSITIVITY 32.0 // Refraction variance-filter texture-normal rejection strength. [1 2 4 8 16 32 64 128]
+#define MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE 0.1 // Refraction/path-guide projected plane-distance tolerance. [0.005 0.01 0.02 0.03 0.04 0.05 0.06 0.07 0.08 0.09 0.1 0.2 0.3 0.4 0.5]
 
 // -- Bloom --
 #define CAMERA_VIGNETTE_STRENGTH 0.5 // Mix weight of the RT-projection/FOV-aware cos^4 lens falloff. 0 = off, 1 = ideal cos^4 falloff. [0.0 0.1 0.2 0.25 0.3 0.4 0.5 0.6 0.75 1.0]
@@ -110,7 +114,7 @@
 #define VPROJDIST_SKY 60000.0 // Virtual projected distance assigned to sky hits (m). Used by specular/refraction denoiser to tag infinity. [5000.0 10000.0 25000.0 50000.0 60000.0 100000.0 250000.0]
 
 // -- Debug view --
-#define DEBUG_VIEW 0 // Debug output mode. [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37]
+#define DEBUG_VIEW 0 // Debug output mode. [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38]
 
 /*
 const int depthtex0Format = RGBA32F;

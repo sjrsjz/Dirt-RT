@@ -269,8 +269,8 @@ void main() {
     fragColor.xyz = readReflSampleDirection(xy) * 0.5 + 0.5;
 
     #elif DEBUG_VIEW == 9
-    // Temporal virtual-reprojection hit distance. Spatial stages deliberately
-    // no longer carry this descriptor in their filtered signal.
+    // Temporal virtual-reprojection hit distance before spatial filtering.
+    // Compare with DEBUG_VIEW 38 to inspect the final propagated result.
     {
         float d = readMaxEntSpecularHistory(xy).hitDistance;
         fragColor.xyz = (d >= VPROJDIST_SKY * 0.99) ? vec3(1.0) : jetColormap(logDistNorm(d));
@@ -482,6 +482,15 @@ void main() {
                     clamp(length(velocityPixels) / 16.0, 0.0, 1.0));
             }
         }
+    }
+
+    #elif DEBUG_VIEW == 38
+    {
+        // Final six-level spatial hit distance. White is the environment;
+        // finite virtual-projection distances use the existing log heatmap.
+        float storedSkyDistance = min(VPROJDIST_SKY, 65504.0);
+        fragColor.xyz = reflectionHitDistance >= 0.99 * storedSkyDistance
+            ? vec3(1.0) : jetColormap(logDistNorm(reflectionHitDistance));
     }
 
     #endif

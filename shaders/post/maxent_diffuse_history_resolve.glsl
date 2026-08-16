@@ -24,7 +24,7 @@ void main() {
     uvec2 gxy = uvec2(pix);
 
     uvec4 packedLight = texelFetch(colortex4, pix, 0);
-    if (uintBitsToFloat(packedLight.w) < 0.0) {
+    if (unpackHalf2x16(packedLight.w).x < 0.0) {
         // No surface: invalidate every temporal consumer with four raw stores
         // instead of decoding two light textures and previous histories.
         diffuseBuffer.data[addr(DIF_N_HIST, gxy)] = uvec4(0u);
