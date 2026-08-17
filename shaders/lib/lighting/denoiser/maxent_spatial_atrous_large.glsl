@@ -109,27 +109,22 @@ bool denoiserSpatialFilterLarge(ivec2 pixel,
         denoiserSpatialMakeBuresData(centerSignal.maxEntY);
     float lightSourceToleranceScale =
         denoiserSpatialLightSourceToleranceScale(centerGeometry.roughness);
-    float hitDistanceAlpha =
-        denoiserSpatialHitDistanceAlpha(centerGeometry.ggxAlpha);
+    float hitDistanceAlpha = centerGeometry.ggxAlpha;
     vec3 centerVirtualPosition = denoiserSpatialVirtualWorldPosition(
         centerGeometry, centerSignal.hitDistance);
     float virtualRejectionScale = denoiserSpatialVirtualRejectionScale(
         centerGeometry, centerSignal.hitDistance);
-    vec3 centerVirtualNormal = centerGeometry.pdfDirection;
-    if (virtualRejectionScale > 0.0) {
-        uint rowStride = uint(DENOISER_SPATIAL_LARGE_TILE_SIZE);
-        vec3 leftVirtualPosition = denoiserSpatialLargeReadVirtualPosition(
-            centerIndex - 1u, centerVirtualPosition);
-        vec3 rightVirtualPosition = denoiserSpatialLargeReadVirtualPosition(
-            centerIndex + 1u, centerVirtualPosition);
-        vec3 upVirtualPosition = denoiserSpatialLargeReadVirtualPosition(
-            centerIndex - rowStride, centerVirtualPosition);
-        vec3 downVirtualPosition = denoiserSpatialLargeReadVirtualPosition(
-            centerIndex + rowStride, centerVirtualPosition);
-        centerVirtualNormal = denoiserSpatialVirtualNormal(
-            leftVirtualPosition, rightVirtualPosition, upVirtualPosition,
-            downVirtualPosition, centerGeometry.pdfDirection);
-    }
+    uint rowStride = uint(DENOISER_SPATIAL_LARGE_TILE_SIZE);
+    vec3 virtualTangentX = -denoiserSpatialLargeReadVirtualPosition(
+        centerIndex - 1u, centerVirtualPosition);
+    virtualTangentX += denoiserSpatialLargeReadVirtualPosition(
+        centerIndex + 1u, centerVirtualPosition);
+    vec3 virtualTangentY = -denoiserSpatialLargeReadVirtualPosition(
+        centerIndex - rowStride, centerVirtualPosition);
+    virtualTangentY += denoiserSpatialLargeReadVirtualPosition(
+        centerIndex + rowStride, centerVirtualPosition);
+    vec3 centerVirtualNormal = denoiserSpatialVirtualNormal(
+        virtualTangentX, virtualTangentY, centerGeometry.pdfDirection);
     DenoiserSpatialAccumulator accum =
         denoiserSpatialBeginAccumulation(centerSignal);
 

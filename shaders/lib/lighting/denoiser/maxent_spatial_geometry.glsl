@@ -36,9 +36,11 @@ DenoiserSpatialGeometry denoiserSpatialDecodeGeometry(
     geometry.pdfDirection = decodeNormalU(words.y);
     geometry.primaryRay = decodeNormalU(words.z);
     vec2 roughnessVirtual = unpackHalf2x16(words.w);
-    geometry.surfaceDistance = max(distance, 0.0);
-    geometry.roughness = clamp(roughnessVirtual.x, 0.0, 1.0);
-    geometry.virtualScale = clamp(roughnessVirtual.y, 0.0, 1.0);
+    // Validity and the [0, 1] ranges are owned by the variance-preparation
+    // producer. Spatial consumers reject invalid geometry before use.
+    geometry.surfaceDistance = distance;
+    geometry.roughness = roughnessVirtual.x;
+    geometry.virtualScale = roughnessVirtual.y;
     geometry.ggxAlpha = geometry.roughness * geometry.roughness;
     geometry.valid = denoiserSpatialGeometryWordsValid(words);
     return geometry;
@@ -52,9 +54,8 @@ bool denoiserSpatialTryVirtualWorldPositionFromWords(
         position = vec3(0.0);
         return false;
     }
-    float virtualScale = clamp(unpackHalf2x16(geometryWords.w).y,
-        0.0, 1.0);
-    float hitDistance = max(unpackHalf2x16(signalWords.w).y, 0.0);
+    float virtualScale = unpackHalf2x16(geometryWords.w).y;
+    float hitDistance = unpackHalf2x16(signalWords.w).y;
     position = decodeNormalU(geometryWords.z)
         * (distance + virtualScale * hitDistance);
     return true;

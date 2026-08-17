@@ -34,11 +34,16 @@ struct DenoiserSpatialAccumulator {
 DenoiserSpatialBuresData denoiserSpatialMakeBuresData(vec4 maxEntY) {
     DenoiserSpatialBuresData data;
     float meanLength2 = dot(maxEntY.xyz, maxEntY.xyz);
-    float energy = max(maxEntY.w, 0.0);
+    // Spatial inputs have crossed the sanitizing pack boundary, which owns
+    // the nonnegative total-energy invariant.
+    float energy = maxEntY.w;
     float energy2 = energy * energy;
     // Eliminate the intermediate rho/kappa reconstruction. Substituting
     // rho=4*kappa/(3+kappa^2) into maxent_eigen_std gives the covariance
     // trace directly from the stored first moment and total energy.
+    // Independent FP16 rounding can move an otherwise valid moment just
+    // outside its cone (and subnormals can violate it substantially), so this
+    // is a real sqrt-domain guard rather than a redundant nonnegative clamp.
     float traceRoot = sqrt(max(4.0 * energy2
             - 3.0 * meanLength2, 0.0));
     float analyticTrace = (2.0 * energy2 + energy * traceRoot)
@@ -77,17 +82,18 @@ float denoiserSpatialBuresDistanceSq(vec4 centerMaxEntY,
     float meanDot = dot(centerMaxEntY.xyz, sampleMaxEntY.xyz);
     float crossAxes = centerData.stddev.x * sampleData.stddev.y
             + centerData.stddev.y * sampleData.stddev.x;
-    float cross2d = sqrt(max(crossAxes * crossAxes
-                    + 0.25 * meanDot * meanDot, 0.0));
+    float cross2d = sqrt(crossAxes * crossAxes + 0.25 * meanDot * meanDot);
     float crossTrace = centerData.stddev.x * sampleData.stddev.x
             + cross2d;
     vec3 meanDelta = centerMaxEntY.xyz - sampleMaxEntY.xyz;
+    // Cancellation can make an exactly-zero metric slightly negative. It must
+    // not enter the variance-normalized exponent as a negative distance.
     return max(dot(meanDelta, meanDelta) + centerData.trace
             + sampleData.trace - 2.0 * crossTrace, 0.0);
 }
 
 float denoiserSpatialLightSourceToleranceScale(float roughness) {
-    return 1.0; //0.5 + 0.5 * sqrt(clamp(roughness, 0.0, 1.0));
+    return 1.0;
 }
 
 vec3 denoiserSpatialVirtualWorldPosition(
@@ -100,16 +106,13 @@ vec3 denoiserSpatialVirtualWorldPosition(
 float denoiserSpatialVirtualRejectionScale(
         DenoiserSpatialGeometry centerGeometry, float centerHitDistance) {
     if (centerHitDistance <= 0.0) return 0.0;
-    float planeTolerance = max(
-        float(MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE), 1e-5);
-    return max(1.0 - centerGeometry.ggxAlpha, 0.0)
+    float planeTolerance = float(MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE);
+    return (1.0 - centerGeometry.ggxAlpha)
         / max(planeTolerance * centerHitDistance, 1e-5);
 }
 
-vec3 denoiserSpatialVirtualNormal(vec3 leftPosition, vec3 rightPosition,
-        vec3 upPosition, vec3 downPosition, vec3 fallback) {
-    vec3 tangentX = rightPosition - leftPosition;
-    vec3 tangentY = downPosition - upPosition;
+vec3 denoiserSpatialVirtualNormal(vec3 tangentX, vec3 tangentY,
+        vec3 fallback) {
     return denoiserSpatialSafeDirection(cross(tangentX, tangentY), fallback);
 }
 
@@ -122,14 +125,6 @@ float denoiserSpatialVirtualPlaneDepthExponent(
     vec3 virtualDelta = sampleVirtualPosition - centerVirtualPosition;
     float planeDepth = abs(dot(centerVirtualNormal, virtualDelta));
     return virtualRejectionScale * planeDepth;
-}
-
-// This is the only non-geometric control applied to hit-distance filtering:
-// alpha=0 preserves the center, alpha=1 applies the full spatial kernel. Pass
-// alpha itself instead of -log(alpha), since exp(-(E - log(alpha))) is exactly
-// alpha * exp(-E). The clamp retains the old negligible delta-lobe tap.
-float denoiserSpatialHitDistanceAlpha(float ggxAlpha) {
-    return max(clamp(ggxAlpha, 0.0, 1.0), 1e-8);
 }
 
 float denoiserSpatialWeight(DenoiserMaxEntSignal centerSignal,
@@ -152,6 +147,8 @@ float denoiserSpatialWeight(DenoiserMaxEntSignal centerSignal,
             centerSignal.maxEntY, centerBures,
             sampleSignal.maxEntY, sampleBures);
     float variance = centerSignal.variance + sampleSignal.variance;
+    // Both variances may be exactly zero; without the floor, identical
+    // signals produce 0/0 and poison the exponential with NaN.
     signalExponent += phiLuminance * distanceSq
             / max(lightSourceToleranceScale * variance, 1e-12);
     return kernelWeight * exp(-signalExponent);
@@ -165,7 +162,9 @@ float denoiserSpatialVariancePower(int stepRadius) {
     else if (stepRadius <= 8) coefficient = 0.4644479501;
     else if (stepRadius <= 16) coefficient = 0.4657344365;
     else coefficient = 0.4660551979;
-    return max(1.0, 2.0 - MAXENT_SPATIAL_VARIANCE_ADAPTATION * coefficient);
+    // The exposed adaptation range is [0, 2], while coefficient <=
+    // 0.4660551979, so this expression is bounded below by 1.0678896042.
+    return 2.0 - MAXENT_SPATIAL_VARIANCE_ADAPTATION * coefficient;
 }
 
 DenoiserSpatialAccumulator denoiserSpatialBeginAccumulation(
@@ -173,8 +172,7 @@ DenoiserSpatialAccumulator denoiserSpatialBeginAccumulation(
     DenoiserSpatialAccumulator accum;
     accum.maxEntY = center.maxEntY;
     accum.CoCg = center.CoCg;
-    float centerVariance = max(center.variance, 1e-16);
-    accum.varianceEnergy = vec2(centerVariance);
+    accum.varianceEnergy = vec2(center.variance);
     accum.weight = 1.0;
     accum.hitDistance = center.hitDistance;
     accum.hitWeight = 1.0;
@@ -196,7 +194,8 @@ void denoiserSpatialAccumulate(inout DenoiserSpatialAccumulator accum,
 
 DenoiserMaxEntSignal denoiserSpatialResolve(
     DenoiserSpatialAccumulator accum, int stepRadius) {
-    float invWeight = 1.0 / max(accum.weight, 1e-6);
+    // Both sums start at one and only receive nonnegative exponential weights.
+    float invWeight = 1.0 / accum.weight;
     DenoiserMaxEntSignal outputSignal;
     outputSignal.maxEntY = accum.maxEntY * invWeight;
     outputSignal.CoCg = accum.CoCg * invWeight;
@@ -205,7 +204,7 @@ DenoiserMaxEntSignal denoiserSpatialResolve(
     outputSignal.variance = mix(accum.varianceEnergy.x,
             accum.varianceEnergy.y, varianceMix) * pow(invWeight, power);
     outputSignal.hitDistance = accum.hitDistance
-            / max(accum.hitWeight, 1e-6);
+            / accum.hitWeight;
     return denoiserSanitizeMaxEntSignal(outputSignal);
 }
 

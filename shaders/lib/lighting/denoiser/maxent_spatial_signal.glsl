@@ -82,9 +82,9 @@ DenoiserMaxEntSignal denoiserUnpackMaxEntSignalTrusted(uvec4 words) {
         unpackHalf2x16(words.y));
     signal.CoCg = unpackHalf2x16(words.z);
     vec2 standardDeviationHitDistance = unpackHalf2x16(words.w);
-    float standardDeviation = max(standardDeviationHitDistance.x, 0.0);
+    float standardDeviation = standardDeviationHitDistance.x;
     signal.variance = standardDeviation * standardDeviation;
-    signal.hitDistance = max(standardDeviationHitDistance.y, 0.0);
+    signal.hitDistance = standardDeviationHitDistance.y;
     return signal;
 }
 
@@ -92,8 +92,12 @@ DenoiserMaxEntSignal denoiserUnpackMaxEntSignalTrusted(uvec4 words) {
 // Keep the checked entry points for producers and diagnostics, while the hot
 // A-trous path avoids repeating the full finite/energy validation per tap.
 DenoiserMaxEntSignal denoiserUnpackMaxEntSignal(uvec4 words) {
-    return denoiserSanitizeMaxEntSignal(
-        denoiserUnpackMaxEntSignalTrusted(words));
+    DenoiserMaxEntSignal signal = denoiserUnpackMaxEntSignalTrusted(words);
+    vec2 standardDeviationHitDistance = unpackHalf2x16(words.w);
+    float standardDeviation = max(standardDeviationHitDistance.x, 0.0);
+    signal.variance = standardDeviation * standardDeviation;
+    signal.hitDistance = max(standardDeviationHitDistance.y, 0.0);
+    return denoiserSanitizeMaxEntSignal(signal);
 }
 
 uvec4 denoiserPackMaxEntSignalTrusted(DenoiserMaxEntSignal signal) {

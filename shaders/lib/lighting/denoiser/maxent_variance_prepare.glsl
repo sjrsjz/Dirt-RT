@@ -80,12 +80,13 @@ DenoiserVarianceGeometry denoiserVarianceDecodeGeometry(uvec4 words,
     geometry.ggxAlpha = 1.0;
     #else
     vec3 macroNormal = decodeNormalU(words.z);
-    float perceptualRoughness = sqrt(clamp(ggxAlpha, 0.0, 1.0));
+    ggxAlpha = clamp(ggxAlpha, 0.0, 1.0);
+    float perceptualRoughness = sqrt(ggxAlpha);
     geometry.pdfDirection = denoiserSpatialGgxVndfDominantDirection(
         geometry.primaryRay, macroNormal, ggxAlpha);
     geometry.virtualScale = denoiserSpatialSpecularVirtualScale(
         geometry.primaryRay, geometryNormal, perceptualRoughness);
-    geometry.ggxAlpha = clamp(ggxAlpha, 0.0, 1.0);
+    geometry.ggxAlpha = ggxAlpha;
     #endif
     geometry.materialID = uint(max(materialID, 0));
     geometry.valid = distance >= 0.0 && !isnan(distance)
@@ -100,15 +101,14 @@ DenoiserVarianceGeometry denoiserVarianceLoadGeometry(ivec2 pixel) {
 
 uvec4 denoiserVariancePackSpatialGeometry(uvec4 primaryWords,
     DenoiserVarianceGeometry geometry) {
-    float ggxAlpha = clamp(unpackHalf2x16(primaryWords.y).x, 0.0, 1.0);
+    float ggxAlpha = geometry.ggxAlpha;
     #if defined(MAXENT_VARIANCE_DIFFUSE)
     float signalRoughness = 1.0;
     #else
     float signalRoughness = sqrt(ggxAlpha);
     #endif
-    uint roughnessVirtual = packHalf2x16(clamp(
-        vec2(signalRoughness, geometry.virtualScale),
-        vec2(0.0), vec2(1.0)));
+    uint roughnessVirtual = packHalf2x16(
+        vec2(signalRoughness, geometry.virtualScale));
     return uvec4(primaryWords.w, encodeNormalU(geometry.pdfDirection),
         encodeNormalU(geometry.primaryRay), roughnessVirtual);
 }
@@ -232,8 +232,9 @@ shared float denoiserVarianceEstimateTile[
 MAXENT_VARIANCE_TILE_SIZE * MAXENT_VARIANCE_TILE_SIZE];
 shared uint denoiserVariancePoolRequired;
 
-const float MAXENT_VARIANCE_KERNEL_DENOM = max(
-        MAXENT_VARIANCE_KERNEL_SIGMA * MAXENT_VARIANCE_KERNEL_SIGMA, 1e-6);
+// The exposed sigma range starts at 0.5, so the denominator is >= 0.25.
+const float MAXENT_VARIANCE_KERNEL_DENOM =
+        MAXENT_VARIANCE_KERNEL_SIGMA * MAXENT_VARIANCE_KERNEL_SIGMA;
 const float MAXENT_VARIANCE_KERNEL_1D[4] = {
     1.0,
     exp(-0.5 / MAXENT_VARIANCE_KERNEL_DENOM),
@@ -256,7 +257,7 @@ void denoiserVarianceWriteTile(uint index,
                     vec2(65504.0))));
     denoiserVarianceMomentTile[index] = packHalf2x16(vec2(
                 source.historyLength,
-                min(sqrt(max(source.meanY2, 0.0)), 65504.0)));
+                min(sqrt(source.meanY2), 65504.0)));
 }
 
 void denoiserVarianceLoadTile(uint index, ivec2 pixel, ivec2 imageMax) {
@@ -300,7 +301,9 @@ void main() {
     uint lane = gl_LocalInvocationIndex;
     ivec2 imageSize = ivec2(resolution_global);
     ivec2 imageMax = imageSize - 1;
-    float varianceHistoryBegin = max(MAXENT_VARIANCE_HISTORY_BEGIN, 0.0);
+    // Begin is nonnegative by its setting range. End is an independent
+    // setting, so preserve an ordered smoothstep interval.
+    float varianceHistoryBegin = MAXENT_VARIANCE_HISTORY_BEGIN;
     float varianceHistoryEnd = max(MAXENT_VARIANCE_HISTORY_END,
             varianceHistoryBegin + 1e-3);
 
@@ -406,15 +409,17 @@ void main() {
                 float pooledPopulationVariance =
                     denoiserVariancePopulation(pooledMean, pooledMeanY2);
                 spatialVariance = pooledPopulationVariance
-                        / max(centerHistory, 1.0);
+                        / centerHistory;
             }
         }
 
         float temporalTrust = smoothstep(varianceHistoryBegin,
                 varianceHistoryEnd, centerHistory);
         if (centerHistory <= 1.5) temporalTrust = 0.0;
-        float estimatorSigma = mix(sqrt(max(spatialVariance, 0.0)),
-                sqrt(max(temporalVariance, 0.0)), temporalTrust);
+        // Both paths originate from denoiserVariancePopulation, whose final
+        // PSD projection establishes the nonnegative sqrt-domain invariant.
+        float estimatorSigma = mix(sqrt(spatialVariance),
+                sqrt(temporalVariance), temporalTrust);
         estimatorVariance = denoiserVarianceSanitizeNonnegative(
                 estimatorSigma * estimatorSigma);
     }
@@ -465,8 +470,9 @@ void main() {
     DenoiserMaxEntSignal outputSignal;
     outputSignal.maxEntY = centerSource.maxEntY;
     outputSignal.CoCg = centerSource.CoCg;
+    // The valid center contributes weight one, so blurWeight >= 1.
     outputSignal.variance = denoiserVarianceSanitizeNonnegative(
-            blurredVariance / max(blurWeight, 1e-8));
+            blurredVariance / blurWeight);
     outputSignal.hitDistance = centerSource.hitDistance;
     denoiserVarianceStore(centerPixel, outputSignal, centerGeometryWords,
         centerGeometry);

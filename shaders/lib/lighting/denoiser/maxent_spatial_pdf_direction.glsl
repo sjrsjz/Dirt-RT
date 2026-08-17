@@ -19,9 +19,10 @@ vec3 denoiserSpatialGgxVndfDominantDirection(vec3 primaryRay,
     // GGXVNDFNormal applies the same face-forward convention to the macro
     // normal before sampling the visible-normal distribution.
     if (dot(normal, -incident) < 0.0) normal = -normal;
-    float perceptualRoughness = sqrt(clamp(ggxAlpha, 0.0, 1.0));
+    // ggxAlpha is clamped once by the variance-preparation input adapter.
+    float perceptualRoughness = sqrt(ggxAlpha);
     float dominantFactor = (1.0 - perceptualRoughness)
-        * (sqrt(max(1.0 - perceptualRoughness, 0.0))
+        * (sqrt(1.0 - perceptualRoughness)
             + perceptualRoughness);
     vec3 mirrorDirection = reflect(incident, normal);
     return denoiserSpatialSafeDirection(
@@ -32,7 +33,7 @@ float denoiserSpatialPdfDirectionExponent(vec3 centerDirection,
         vec3 sampleDirection) {
     float directionCosine = clamp(dot(centerDirection, sampleDirection),
         -1.0, 1.0);
-    return max(MAXENT_SPATIAL_PDF_DIRECTION_SENSITIVITY, 0.0)
+    return MAXENT_SPATIAL_PDF_DIRECTION_SENSITIVITY
         * (1.0 - directionCosine);
 }
 
@@ -46,8 +47,8 @@ float denoiserSpatialSpecularVirtualScale(vec3 primaryRay,
     vec3 normal = denoiserSpatialSafeDirection(
         geometryNormal, vec3(0.0, 1.0, 0.0));
     float NoV = abs(dot(normal, -ray));
-    float roughness = clamp(perceptualRoughness, 0.0, 1.0);
-    float a = 0.298475 * log(max(39.4115 - 39.0029 * roughness, 1e-5));
+    float roughness = perceptualRoughness;
+    float a = 0.298475 * log(39.4115 - 39.0029 * roughness);
     return clamp(pow(clamp(1.0 - NoV, 0.0, 1.0), 10.8649)
         * (1.0 - a) + a, 0.0, 1.0);
 }
