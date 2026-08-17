@@ -39,12 +39,16 @@ SpecularMaxEnt maxentAtrousSpecularSignal(DenoiserMaxEntSignal signal) {
     SpecularMaxEnt result;
     result.maxEntY = signal.maxEntY;
     result.CoCg = signal.CoCg;
-    return sanitizeSpecularMaxEnt(result);
+    // The spatial resolve already sanitized this signal. The eventual
+    // SpecularMaxEnt pack/RGB conversion remains the owning safety boundary.
+    return result;
 }
 #endif
 
 void denoiserSpatialStore(ivec2 pixel, DenoiserMaxEntSignal signal) {
-    uvec4 packedSignal = denoiserPackMaxEntSignal(signal);
+    // denoiserSpatialResolve() has already sanitized the signal once. Avoid a
+    // second identical validation on the hot ping-pong store path.
+    uvec4 packedSignal = denoiserPackMaxEntSignalTrusted(signal);
     imageStore(colorimg4, pixel, packedSignal);
 
 #if defined(MAXENT_ATROUS_REFLECTION_OUTPUT)
@@ -93,11 +97,11 @@ void denoiserSpatialStoreInvalid(ivec2 pixel) {
 
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-    if (any(greaterThanEqual(gl_GlobalInvocationID.xy,
-            resolution_global))) return;
 
     DenoiserMaxEntSignal signal;
     if (!denoiserSpatialFilterLarge(pixel, signal)) {
+        if (any(greaterThanEqual(gl_GlobalInvocationID.xy,
+                resolution_global))) return;
         denoiserSpatialStoreInvalid(pixel);
         return;
     }

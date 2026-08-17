@@ -359,7 +359,9 @@ void main() {
     imageStore(colorimg5, ivec2(pixel), maxentPackFast(fast));
 
 #if DEBUG_VIEW == 12
-    writeReflLight(pixel, specularMaxEntTotalRgb(slow.signal),
+    // Preserve the directional MaxEnt moments so composite_lighting can apply
+    // the exact same GGX/Fresnel projection as the final reflection path.
+    writeReflMaxEnt(pixel, slow.signal,
         fast.hitDistance, 1.0 - mix(smbSlowAlpha, vmbSlowAlpha,
             virtualAmount));
 #elif DEBUG_VIEW == 14

@@ -285,9 +285,9 @@ void main() {
     fragColor.xyz = vec3(rough);
 
     #elif DEBUG_VIEW == 12
-    // Temporally accumulated reflection incident, before every spatial stage
-    // and before specularAlbedo modulation.
-    fragColor.xyz = tmp2.data_swap;
+    // Temporally accumulated reflection before every spatial stage, projected
+    // through the same GGX/Fresnel BRDF used by the final reflection output.
+    fragColor.xyz = specularLighting;
 
     #elif DEBUG_VIEW == 13
     // Diffuse temporal accumulation weight (heatmap) — N_eff / MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY

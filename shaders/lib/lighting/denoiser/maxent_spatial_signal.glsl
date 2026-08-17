@@ -76,7 +76,7 @@ DenoiserMaxEntSignal denoiserSanitizeMaxEntSignal(
     return signal;
 }
 
-DenoiserMaxEntSignal denoiserUnpackMaxEntSignal(uvec4 words) {
+DenoiserMaxEntSignal denoiserUnpackMaxEntSignalTrusted(uvec4 words) {
     DenoiserMaxEntSignal signal;
     signal.maxEntY = vec4(unpackHalf2x16(words.x),
         unpackHalf2x16(words.y));
@@ -85,11 +85,18 @@ DenoiserMaxEntSignal denoiserUnpackMaxEntSignal(uvec4 words) {
     float standardDeviation = max(standardDeviationHitDistance.x, 0.0);
     signal.variance = standardDeviation * standardDeviation;
     signal.hitDistance = max(standardDeviationHitDistance.y, 0.0);
-    return denoiserSanitizeMaxEntSignal(signal);
+    return signal;
 }
 
-uvec4 denoiserPackMaxEntSignal(DenoiserMaxEntSignal signal) {
-    signal = denoiserSanitizeMaxEntSignal(signal);
+// Spatial ping-pong inputs have already crossed a sanitizing pack boundary.
+// Keep the checked entry points for producers and diagnostics, while the hot
+// A-trous path avoids repeating the full finite/energy validation per tap.
+DenoiserMaxEntSignal denoiserUnpackMaxEntSignal(uvec4 words) {
+    return denoiserSanitizeMaxEntSignal(
+        denoiserUnpackMaxEntSignalTrusted(words));
+}
+
+uvec4 denoiserPackMaxEntSignalTrusted(DenoiserMaxEntSignal signal) {
     return uvec4(
         packHalf2x16(clamp(signal.maxEntY.xy,
             vec2(-DENOISER_SPATIAL_FP16_MAX),
@@ -102,6 +109,11 @@ uvec4 denoiserPackMaxEntSignal(DenoiserMaxEntSignal signal) {
             vec2(DENOISER_SPATIAL_FP16_MAX))),
         packHalf2x16(vec2(min(sqrt(signal.variance),
             DENOISER_SPATIAL_FP16_MAX), signal.hitDistance)));
+}
+
+uvec4 denoiserPackMaxEntSignal(DenoiserMaxEntSignal signal) {
+    return denoiserPackMaxEntSignalTrusted(
+        denoiserSanitizeMaxEntSignal(signal));
 }
 
 #endif // MAXENT_SPATIAL_SIGNAL_GLSL

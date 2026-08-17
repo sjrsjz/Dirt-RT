@@ -250,7 +250,7 @@ option.MAXENT_SPATIAL_NORMAL_SENSITIVITY = 纹理法线灵敏度
 option.MAXENT_SPATIAL_NORMAL_SENSITIVITY.comment = 仅供折射方差滤波使用的纹理法线拒绝强度；不再影响 MaxEnt 空域滤波。
 
 option.MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE = 平面距离容差
-option.MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE.comment = 仅供折射与路径引导空域测试使用的投影平面距离容差；不再影响 MaxEnt 空域滤波。
+option.MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE.comment = MaxEnt 虚像拒绝、折射和路径引导空域测试共用的相对投影平面深度容差。数值越大，越允许跨平面滤波。
 
 option.MAXENT_SPATIAL_VARIANCE_ADAPTATION = 方差适配
 option.MAXENT_SPATIAL_VARIANCE_ADAPTATION.comment = 控制连续空域层级传播方差时的保守程度。提高会保留更多方差，使后续层级持续进行更强滤波。
@@ -260,9 +260,6 @@ option.MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY.comment = 按方差归一�
 
 option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY = 镜面光场灵敏度
 option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY.comment = 按方差归一化的镜面 MaxEnt 拒绝强度。提高会保留更多反射对比，降低则会进行更多平滑。
-
-option.MAXENT_SPATIAL_SPECULAR_VIRTUAL_POSITION_SENSITIVITY = 镜面虚像位置灵敏度
-option.MAXENT_SPATIAL_SPECULAR_VIRTUAL_POSITION_SENSITIVITY.comment = 虚像位置不一致时的光场拒绝强度。它不影响命中距离滤波；后者仅由 GGX alpha 控制模糊。
 
 option.MAXENT_SPATIAL_DIFFUSE_LOW_CONFIDENCE_BLEND = 漫反射低置信度混合
 option.MAXENT_SPATIAL_DIFFUSE_LOW_CONFIDENCE_BLEND.comment = 在漫反射历史不足时混入大范围空域滤波结果。提高可更快隐藏解遮挡噪点，但细节可能暂时变软。

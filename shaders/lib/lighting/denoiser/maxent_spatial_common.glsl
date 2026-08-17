@@ -9,6 +9,7 @@
 // descriptor; material IDs do not participate in A-trous filtering.
 struct DenoiserSpatialGeometry {
     vec3 pdfDirection;
+    vec3 primaryRay;
     float roughness;
     float surfaceDistance;
     float virtualScale;
@@ -19,8 +20,6 @@ struct DenoiserSpatialGeometry {
 struct DenoiserSpatialBuresData {
     vec2 stddev;
     float trace;
-    float anisotropy;
-    float invMeanLength2;
 };
 
 struct DenoiserSpatialAccumulator {
@@ -35,48 +34,51 @@ struct DenoiserSpatialAccumulator {
 DenoiserSpatialBuresData denoiserSpatialMakeBuresData(vec4 maxEntY) {
     DenoiserSpatialBuresData data;
     float meanLength2 = dot(maxEntY.xyz, maxEntY.xyz);
-    float rho = sqrt(meanLength2) / max(maxEntY.w, 1e-8);
-    rho = clamp(rho, 0.0, 1.0 - 1e-6);
-    float kappa = 3.0 * rho /
-            (2.0 + sqrt(max(4.0 - 3.0 * rho * rho, 1e-12)));
-    data.stddev = maxent_eigen_std(max(maxEntY.w, 0.0), kappa);
-    vec2 axisVariance = data.stddev * data.stddev;
-    data.trace = 2.0 * axisVariance.x + axisVariance.y;
-    data.anisotropy = axisVariance.y - axisVariance.x;
-    data.invMeanLength2 = meanLength2 > 1e-16
-        ? 1.0 / meanLength2 : 0.0;
+    float energy = max(maxEntY.w, 0.0);
+    float energy2 = energy * energy;
+    // Eliminate the intermediate rho/kappa reconstruction. Substituting
+    // rho=4*kappa/(3+kappa^2) into maxent_eigen_std gives the covariance
+    // trace directly from the stored first moment and total energy.
+    float traceRoot = sqrt(max(4.0 * energy2
+            - 3.0 * meanLength2, 0.0));
+    float analyticTrace = (2.0 * energy2 + energy * traceRoot)
+            * (1.0 / 3.0) - 0.5 * meanLength2;
+    float parallelExcess = 0.5 * meanLength2;
+    float perpendicularVariance = max(
+        (analyticTrace - parallelExcess) * (1.0 / 3.0), 0.0);
+    vec2 axisVariance = vec2(perpendicularVariance,
+        perpendicularVariance + parallelExcess);
+    data.stddev = sqrt(axisVariance);
+    // Reconstruct the trace from the clamped PSD axes. This only differs from
+    // analyticTrace if independent FP16 rounding made |mean| slightly exceed
+    // total energy at an earlier pack boundary.
+    data.trace = 3.0 * perpendicularVariance + parallelExcess;
     return data;
 }
 
-DenoiserSpatialBuresData denoiserSpatialMakeBuresDataFromStddev(
-    vec4 maxEntY, vec2 stddev) {
+DenoiserSpatialBuresData denoiserSpatialMakeBuresDataFromStddev(vec2 stddev) {
     DenoiserSpatialBuresData data;
     data.stddev = stddev;
     vec2 axisVariance = stddev * stddev;
     data.trace = 2.0 * axisVariance.x + axisVariance.y;
-    data.anisotropy = axisVariance.y - axisVariance.x;
-    float meanLength2 = dot(maxEntY.xyz, maxEntY.xyz);
-    data.invMeanLength2 = meanLength2 > 1e-16
-        ? 1.0 / meanLength2 : 0.0;
     return data;
 }
 
 float denoiserSpatialBuresDistanceSq(vec4 centerMaxEntY,
     DenoiserSpatialBuresData centerData, vec4 sampleMaxEntY,
     DenoiserSpatialBuresData sampleData) {
-    float directionCosine2 = 0.0;
-    if (centerData.invMeanLength2 > 0.0
-            && sampleData.invMeanLength2 > 0.0) {
-        float meanDot = dot(centerMaxEntY.xyz, sampleMaxEntY.xyz);
-        directionCosine2 = min(1.0, meanDot * meanDot
-                    * centerData.invMeanLength2 * sampleData.invMeanLength2);
-    }
-
+    // For this MaxEnt model rho = 4*kappa/(3+kappa^2), while
+    // sigma_parallel^2 - sigma_perpendicular^2
+    //     = 8*omega^2*kappa^2/(3+kappa^2)^2
+    //     = 0.5*|mean|^2.
+    // Hence cos(theta)^2*A_center*A_sample is exactly
+    // 0.25*dot(mean_center, mean_sample)^2. No normalized mean length or
+    // separately retained anisotropy is required.
+    float meanDot = dot(centerMaxEntY.xyz, sampleMaxEntY.xyz);
     float crossAxes = centerData.stddev.x * sampleData.stddev.y
             + centerData.stddev.y * sampleData.stddev.x;
     float cross2d = sqrt(max(crossAxes * crossAxes
-                    + directionCosine2 * centerData.anisotropy
-                        * sampleData.anisotropy, 0.0));
+                    + 0.25 * meanDot * meanDot, 0.0));
     float crossTrace = centerData.stddev.x * sampleData.stddev.x
             + cross2d;
     vec3 meanDelta = centerMaxEntY.xyz - sampleMaxEntY.xyz;
@@ -88,68 +90,64 @@ float denoiserSpatialLightSourceToleranceScale(float roughness) {
     return 1.0; //0.5 + 0.5 * sqrt(clamp(roughness, 0.0, 1.0));
 }
 
-bool denoiserSpatialSkyHit(float hitDistance) {
-    float storedSkyDistance = min(max(VPROJDIST_SKY, 0.0),
-            DENOISER_SPATIAL_FP16_MAX);
-    return hitDistance >= 0.99 * storedSkyDistance;
+vec3 denoiserSpatialVirtualWorldPosition(
+        DenoiserSpatialGeometry geometry, float hitDistance) {
+    float virtualWorldDistance = geometry.surfaceDistance
+        + geometry.virtualScale * hitDistance;
+    return geometry.primaryRay * virtualWorldDistance;
 }
 
-float denoiserSpatialVirtualHitExponent(
-    DenoiserSpatialGeometry centerGeometry, float centerHitDistance,
-    DenoiserSpatialGeometry sampleGeometry, float sampleHitDistance) {
-    // This term belongs to the light-field signal only. Rough GGX proposals
-    // make virtual position increasingly irrelevant.
-    float constraint = exp2(-200.0 * max(centerGeometry.ggxAlpha,
-                    sampleGeometry.ggxAlpha));
-    if (constraint <= 0.0) return 0.0;
-
-    bool centerSky = denoiserSpatialSkyHit(centerHitDistance);
-    bool sampleSky = denoiserSpatialSkyHit(sampleHitDistance);
-    if (centerSky && sampleSky) return 0.0;
-    if (centerSky != sampleSky)
-        return max(MAXENT_SPATIAL_SPECULAR_VIRTUAL_POSITION_SENSITIVITY, 0.0)
-            * constraint;
-
-    float centerExtension = centerGeometry.virtualScale
-            * centerHitDistance;
-    float sampleExtension = sampleGeometry.virtualScale
-            * sampleHitDistance;
-    // Primary distance only sets the scale of the comparison. Its difference
-    // is deliberately absent: PDF direction remains the surface-domain test.
-    float normalization = max(max(centerGeometry.surfaceDistance,
-                sampleGeometry.surfaceDistance) + max(centerHitDistance,
-                    sampleHitDistance), 1e-5);
-    float relativeVirtualError = abs(centerExtension - sampleExtension)
-            / normalization;
-    return max(MAXENT_SPATIAL_SPECULAR_VIRTUAL_POSITION_SENSITIVITY, 0.0)
-        * constraint * relativeVirtualError;
+float denoiserSpatialVirtualRejectionScale(
+        DenoiserSpatialGeometry centerGeometry, float centerHitDistance) {
+    if (centerHitDistance <= 0.0) return 0.0;
+    float planeTolerance = max(
+        float(MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE), 1e-5);
+    return max(1.0 - centerGeometry.ggxAlpha, 0.0)
+        / max(planeTolerance * centerHitDistance, 1e-5);
 }
 
-// exp(-E_alpha) = alpha. This is the only non-geometric control applied to
-// hit-distance filtering: alpha=0 preserves the center, alpha=1 applies the
-// full spatial kernel. The clamp turns an exact delta into a negligible tap.
-float denoiserSpatialHitDistanceAlphaExponent(float ggxAlpha) {
-    return -log(max(clamp(ggxAlpha, 0.0, 1.0), 1e-8));
+vec3 denoiserSpatialVirtualNormal(vec3 leftPosition, vec3 rightPosition,
+        vec3 upPosition, vec3 downPosition, vec3 fallback) {
+    vec3 tangentX = rightPosition - leftPosition;
+    vec3 tangentY = downPosition - upPosition;
+    return denoiserSpatialSafeDirection(cross(tangentX, tangentY), fallback);
+}
+
+float denoiserSpatialVirtualPlaneDepthExponent(
+        vec3 centerVirtualPosition, vec3 centerVirtualNormal,
+        DenoiserSpatialGeometry sampleGeometry, float sampleHitDistance,
+        float virtualRejectionScale) {
+    vec3 sampleVirtualPosition = denoiserSpatialVirtualWorldPosition(
+        sampleGeometry, sampleHitDistance);
+    vec3 virtualDelta = sampleVirtualPosition - centerVirtualPosition;
+    float planeDepth = abs(dot(centerVirtualNormal, virtualDelta));
+    return virtualRejectionScale * planeDepth;
+}
+
+// This is the only non-geometric control applied to hit-distance filtering:
+// alpha=0 preserves the center, alpha=1 applies the full spatial kernel. Pass
+// alpha itself instead of -log(alpha), since exp(-(E - log(alpha))) is exactly
+// alpha * exp(-E). The clamp retains the old negligible delta-lobe tap.
+float denoiserSpatialHitDistanceAlpha(float ggxAlpha) {
+    return max(clamp(ggxAlpha, 0.0, 1.0), 1e-8);
 }
 
 float denoiserSpatialWeight(DenoiserMaxEntSignal centerSignal,
     DenoiserSpatialBuresData centerBures,
-    DenoiserSpatialGeometry centerGeometry,
     DenoiserMaxEntSignal sampleSignal,
     DenoiserSpatialBuresData sampleBures,
-    DenoiserSpatialGeometry sampleGeometry, float kernelWeight,
+    DenoiserSpatialGeometry sampleGeometry, float geometryExponent,
+    float kernelWeight,
     float lightSourceToleranceScale, float phiLuminance,
-    float hitDistanceAlphaExponent,
+    float hitDistanceAlpha, vec3 centerVirtualPosition,
+    vec3 centerVirtualNormal, float virtualRejectionScale,
     out float hitDistanceWeight) {
-    float geometryExponent = denoiserSpatialPdfDirectionExponent(
-            centerGeometry.pdfDirection, sampleGeometry.pdfDirection);
-    float hitDistanceExponent = geometryExponent
-            + hitDistanceAlphaExponent;
-    hitDistanceWeight = kernelWeight * exp(-hitDistanceExponent);
+    hitDistanceWeight = kernelWeight * hitDistanceAlpha
+        * exp(-geometryExponent);
     float signalExponent = geometryExponent
-            + denoiserSpatialVirtualHitExponent(centerGeometry,
-                centerSignal.hitDistance, sampleGeometry,
-                sampleSignal.hitDistance);
+        + denoiserSpatialVirtualPlaneDepthExponent(
+            centerVirtualPosition, centerVirtualNormal, sampleGeometry,
+            sampleSignal.hitDistance, virtualRejectionScale);
     float distanceSq = denoiserSpatialBuresDistanceSq(
             centerSignal.maxEntY, centerBures,
             sampleSignal.maxEntY, sampleBures);
@@ -186,18 +184,14 @@ DenoiserSpatialAccumulator denoiserSpatialBeginAccumulation(
 void denoiserSpatialAccumulate(inout DenoiserSpatialAccumulator accum,
     DenoiserMaxEntSignal neighbor, float weight,
     float hitDistanceWeight) {
-    if (weight > 1e-6) {
-        accum.maxEntY += neighbor.maxEntY * weight;
-        accum.CoCg += neighbor.CoCg * weight;
-        float weightedVariance = weight * neighbor.variance;
-        accum.varianceEnergy += vec2(weightedVariance,
-                weight * weightedVariance);
-        accum.weight += weight;
-    }
-    if (hitDistanceWeight > 1e-6) {
-        accum.hitDistance += neighbor.hitDistance * hitDistanceWeight;
-        accum.hitWeight += hitDistanceWeight;
-    }
+    accum.maxEntY += neighbor.maxEntY * weight;
+    accum.CoCg += neighbor.CoCg * weight;
+    float weightedVariance = weight * neighbor.variance;
+    accum.varianceEnergy += vec2(weightedVariance,
+            weight * weightedVariance);
+    accum.weight += weight;
+    accum.hitDistance += neighbor.hitDistance * hitDistanceWeight;
+    accum.hitWeight += hitDistanceWeight;
 }
 
 DenoiserMaxEntSignal denoiserSpatialResolve(

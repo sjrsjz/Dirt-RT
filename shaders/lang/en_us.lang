@@ -250,7 +250,7 @@ option.MAXENT_SPATIAL_NORMAL_SENSITIVITY = Texture-normal Sensitivity
 option.MAXENT_SPATIAL_NORMAL_SENSITIVITY.comment = Texture-normal rejection strength used only by the refraction variance filter; it no longer affects MaxEnt spatial filtering.
 
 option.MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE = Plane-distance Tolerance
-option.MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE.comment = Projected plane-distance tolerance used by refraction and path-guide spatial tests; it no longer affects MaxEnt spatial filtering.
+option.MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE.comment = Relative projected plane-depth tolerance used by MaxEnt virtual-image rejection, refraction, and path-guide spatial tests. Higher values permit more cross-plane filtering.
 
 option.MAXENT_SPATIAL_VARIANCE_ADAPTATION = Variance Adaptation
 option.MAXENT_SPATIAL_VARIANCE_ADAPTATION.comment = Controls how conservatively variance is propagated through successive spatial levels. Higher values retain more variance and sustain stronger later filtering.
@@ -260,9 +260,6 @@ option.MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY.comment = Variance-normali
 
 option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY = Specular Light-field Sensitivity
 option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY.comment = Variance-normalized specular MaxEnt rejection strength. Higher values preserve more reflection contrast; lower values smooth more.
-
-option.MAXENT_SPATIAL_SPECULAR_VIRTUAL_POSITION_SENSITIVITY = Specular Virtual-position Sensitivity
-option.MAXENT_SPATIAL_SPECULAR_VIRTUAL_POSITION_SENSITIVITY.comment = Light-field rejection strength for virtual-position disagreement. It does not affect hit-distance filtering; GGX alpha alone controls that blur.
 
 option.MAXENT_SPATIAL_DIFFUSE_LOW_CONFIDENCE_BLEND = Diffuse Low-confidence Blend
 option.MAXENT_SPATIAL_DIFFUSE_LOW_CONFIDENCE_BLEND.comment = Blends the wide spatial result into diffuse pixels with little valid history. Higher values hide disocclusion noise faster but can temporarily blur detail.

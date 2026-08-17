@@ -44,6 +44,7 @@ struct DenoiserVarianceSource {
 
 struct DenoiserVarianceGeometry {
     vec3 pdfDirection;
+    vec3 primaryRay;
     float virtualScale;
     float ggxAlpha;
     uint materialID;
@@ -72,18 +73,18 @@ DenoiserVarianceGeometry denoiserVarianceDecodeGeometry(uvec4 words,
     unpackPrimaryGeometry(words, uvec2(pixel), positionUnused, distance,
         geometryNormal, ggxAlpha, materialID,
         pathRoughnessUnused);
-    #if defined(MAXENT_VARIANCE_DIFFUSE)
+    geometry.primaryRay = reconstructPrimaryRay(uvec2(pixel));
+#if defined(MAXENT_VARIANCE_DIFFUSE)
     geometry.pdfDirection = geometryNormal;
     geometry.virtualScale = 0.0;
     geometry.ggxAlpha = 1.0;
     #else
     vec3 macroNormal = decodeNormalU(words.z);
-    vec3 primaryRay = reconstructPrimaryRay(uvec2(pixel));
     float perceptualRoughness = sqrt(clamp(ggxAlpha, 0.0, 1.0));
     geometry.pdfDirection = denoiserSpatialGgxVndfDominantDirection(
-            primaryRay, macroNormal, ggxAlpha);
+        geometry.primaryRay, macroNormal, ggxAlpha);
     geometry.virtualScale = denoiserSpatialSpecularVirtualScale(
-            primaryRay, geometryNormal, perceptualRoughness);
+        geometry.primaryRay, geometryNormal, perceptualRoughness);
     geometry.ggxAlpha = clamp(ggxAlpha, 0.0, 1.0);
     #endif
     geometry.materialID = uint(max(materialID, 0));
@@ -105,13 +106,11 @@ uvec4 denoiserVariancePackSpatialGeometry(uvec4 primaryWords,
     #else
     float signalRoughness = sqrt(ggxAlpha);
     #endif
-    uint roughnessMaterial = (primaryWords.y & 0xffff0000u)
-            | (packHalf2x16(vec2(signalRoughness, 0.0)) & 0xffffu);
-    uint virtualAlpha = packHalf2x16(clamp(
-                vec2(geometry.virtualScale, geometry.ggxAlpha),
-                vec2(0.0), vec2(1.0)));
+    uint roughnessVirtual = packHalf2x16(clamp(
+        vec2(signalRoughness, geometry.virtualScale),
+        vec2(0.0), vec2(1.0)));
     return uvec4(primaryWords.w, encodeNormalU(geometry.pdfDirection),
-        virtualAlpha, roughnessMaterial);
+        encodeNormalU(geometry.primaryRay), roughnessVirtual);
 }
 
 DenoiserVarianceSource denoiserVarianceLoadSource(ivec2 pixel) {
