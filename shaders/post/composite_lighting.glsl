@@ -210,8 +210,8 @@ void main() {
     vec3IlluminationData tmp2 = fetchReflect(pix);
     vec3 refractionLighting = resolvePSRRefraction(xy);
     SpecularMaxEnt reflectionMaxEnt;
-    float reflectionHitDistance, reflectionDebugWeight;
-    readReflMaxEnt(xy, reflectionMaxEnt, reflectionHitDistance,
+    float reflectionVirtualDistance, reflectionDebugWeight;
+    readReflMaxEnt(xy, reflectionMaxEnt, reflectionVirtualDistance,
         reflectionDebugWeight);
 
 
@@ -486,11 +486,11 @@ void main() {
 
     #elif DEBUG_VIEW == 38
     {
-        // Final six-level spatial hit distance. White is the environment;
-        // finite virtual-projection distances use the existing log heatmap.
-        float storedSkyDistance = min(VPROJDIST_SKY, 65504.0);
-        fragColor.xyz = reflectionHitDistance >= 0.99 * storedSkyDistance
-            ? vec3(1.0) : jetColormap(logDistNorm(reflectionHitDistance));
+        // Final six-level spatial virtual distance. Unlike raw hit distance,
+        // this already contains surface distance and the GGX virtual scale,
+        // so the environment has no single scalar sentinel here.
+        fragColor.xyz = jetColormap(logDistNorm(
+            reflectionVirtualDistance));
     }
 
     #endif

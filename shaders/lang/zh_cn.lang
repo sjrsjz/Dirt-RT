@@ -158,29 +158,6 @@ option.MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY.comment = 漫反射历史的最大有
 option.MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT = 最小历史权重
 option.MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT.comment = 低于此置信度的历史会被丢弃。提高可更早重置弱历史，降低则会更久保留稀疏历史。
 
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE = AABB 钳制
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE.comment = 将重投影的漫反射 MaxEnt 历史限制在当前邻域范围内，以减少拖影和陈旧光照。关闭后使用不钳制的时域混合。
-value.MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE.1 = 开启
-value.MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE.0 = 关闭
-
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_RADIUS = AABB 半径
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_RADIUS.comment = 构建当前帧钳制范围时使用的邻域半径。1 表示 3x3，2 表示 5x5；更大邻域开销更高，但可容纳更宽的光照变化。
-
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_EXPANSION = AABB 扩展系数
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_EXPANSION.comment = 钳制前扩展邻域取值范围。提高后可保留更多历史，但也更容易留下拖影。
-
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_SIGMA_SCALE = AABB Sigma 缩放
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_SIGMA_SCALE.comment = 根据方差扩展钳制范围。数值越大，对噪声样本越宽容，并会保留更多历史。
-
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_EXTENT = AABB 最小范围
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_EXTENT.comment = 钳制范围的最小绝对宽度，防止暗部或近似恒定区域的范围收缩为零。
-
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_SCALE = AABB 全局缩放
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_SCALE.comment = 钳制范围宽度的全局倍率。降低会更积极地拒绝历史，提高则更偏向稳定性。
-
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_SAMPLES = AABB 最小样本数
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_SAMPLES.comment = 执行历史钳制所需的最少当前帧有效样本数。样本不足时会跳过钳制，避免使用不稳定边界。
-
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE = 重投影深度缩放
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE.comment = 缩放时域重投影足迹梯形的深度半范围。提高可接受离重建表面平面更远的历史样本，减少重置但可能跨薄几何体泄漏。
 
@@ -244,8 +221,6 @@ option.MAXENT_VARIANCE_HISTORY_END.comment = 漫反射与镜面共用的过渡�
 # ===========================================================================
 # MaxEnt 空域滤波
 # ===========================================================================
-option.MAXENT_SPATIAL_PDF_DIRECTION_SENSITIVITY = PDF主方向灵敏度
-option.MAXENT_SPATIAL_PDF_DIRECTION_SENSITIVITY.comment = 采样PDF主方向变化的拒绝强度。漫反射使用几何法线，镜面使用视角相关的GGX VNDF主方向。
 option.MAXENT_SPATIAL_NORMAL_SENSITIVITY = 纹理法线灵敏度
 option.MAXENT_SPATIAL_NORMAL_SENSITIVITY.comment = 仅供折射方差滤波使用的纹理法线拒绝强度；不再影响 MaxEnt 空域滤波。
 
@@ -347,4 +322,4 @@ value.DEBUG_VIEW.34 = 缓存最终时域值
 value.DEBUG_VIEW.35 = 运动匹配状态
 value.DEBUG_VIEW.36 = 实体世界运动
 value.DEBUG_VIEW.37 = 屏幕运动
-value.DEBUG_VIEW.38 = 滤波后反射命中距离
+value.DEBUG_VIEW.38 = 滤波后反射虚像距离

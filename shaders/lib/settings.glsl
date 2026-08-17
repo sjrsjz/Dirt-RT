@@ -65,13 +65,6 @@
 // -- MaxEnt diffuse temporal accumulation --
 #define MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY 32 // Maximum Kish effective sample count. Higher = smoother but slower response. [1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384]
 #define MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT 0.0001 // History confidence below which reprojection is discarded. [0.000001 0.00001 0.0001 0.001 0.01]
-#define MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE 1 // Clamp reprojected MaxEnt history to the current neighborhood. [0 1]
-#define MAXENT_DIFFUSE_TEMPORAL_AABB_RADIUS 2 // Current-frame clamp radius. 1 = 3×3, 2 = 5×5. [1 2 3]
-#define MAXENT_DIFFUSE_TEMPORAL_AABB_EXPANSION 2.0 // Expands sampled AABB extents before clamping. [0.5 1.0 1.5 2.0 3.0 4.0]
-#define MAXENT_DIFFUSE_TEMPORAL_AABB_SIGMA_SCALE 3.0 // Variance-guided AABB expansion. [0.5 1.0 1.5 2.0 3.0 4.0 5.0]
-#define MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_EXTENT 1.0 // Minimum absolute clamp extent. [0.01 0.1 0.5 1.0 2.0 5.0]
-#define MAXENT_DIFFUSE_TEMPORAL_AABB_SCALE 1.0 // Global clamp-box width multiplier. [0.25 0.5 0.75 1.0 1.5 2.0]
-#define MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_SAMPLES 2 // Minimum valid current samples required to clamp. [1 2 3 4 5 6 7 8]
 #define MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE 1.0 // Reprojection footprint depth tolerance. [0.25 0.5 0.75 1.0 1.5 2.0 3.0 4.0]
 #define MAXENT_TEMPORAL_REPROJECTION_RADIUS 1.0 // Shared reprojection footprint radius in pixels. [0.5 1.0 1.5 2.0 3.0]
 
@@ -92,10 +85,9 @@
 // -- Shared MaxEnt variance preparation (diffuse + specular) --
 #define MAXENT_VARIANCE_KERNEL_SIGMA 1.0 // Gaussian kernel sigma (pixels) for short-history spatial variance pooling. Higher = wider support. [0.5 0.75 1.0 1.25 1.5 2.0 2.5]
 #define MAXENT_VARIANCE_HISTORY_BEGIN 2.0 // N_eff at which spatial→temporal variance transition begins. [1.0 2.0 4.0 6.0 8.0]
-#define MAXENT_VARIANCE_HISTORY_END 12.0 // N_eff at which temporal estimator variance becomes fully trusted. [4.0 6.0 8.0 12.0 16.0 24.0 32.0]
+#define MAXENT_VARIANCE_HISTORY_END 4.0 // N_eff at which temporal estimator variance becomes fully trusted. [4.0 6.0 8.0 12.0 16.0 24.0 32.0]
 
 // -- Unified MaxEnt spatial filter --
-#define MAXENT_SPATIAL_PDF_DIRECTION_SENSITIVITY 32.0 // Sampling-PDF dominant-direction rejection strength. [1 2 4 8 16 32 64 128]
 #define MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE 0.1 // Relative projected plane-depth tolerance, including MaxEnt virtual-image planes. [0.005 0.01 0.02 0.03 0.04 0.05 0.06 0.07 0.08 0.09 0.1 0.2 0.3 0.4 0.5]
 #define MAXENT_SPATIAL_VARIANCE_ADAPTATION 1.0 // Conservativeness of variance propagation across spatial levels. Higher retains more variance. [0.0 0.25 0.5 0.75 1.0 1.5 2.0]
 #define MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY 0.35 // Diffuse variance-normalized MaxEnt rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5]

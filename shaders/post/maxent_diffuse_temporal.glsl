@@ -4,7 +4,9 @@
 // MaxEnt diffuse temporal accumulation.
 // ===========================================================================
 
-layout(local_size_x = 16, local_size_y = 16) in;
+// A 128-thread group admits another resident block when registers are the
+// limiting launch resource, while preserving 16-wide horizontal coherence.
+layout(local_size_x = 16, local_size_y = 8) in;
 layout(rgba32ui) uniform writeonly uimage2D colorimg6;
 
 #define DIFFUSE_BUFFER_MIN
@@ -31,44 +33,6 @@ uniform vec2 resolution;
 #endif
 
 // ===========================================================================
-// 共享内存 AABB tile
-// ===========================================================================
-
-#define TILE_SIZE 16u
-
-#if MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE
-#define AABB_HALO uint(MAXENT_DIFFUSE_TEMPORAL_AABB_RADIUS)
-#define AABB_SM_W (TILE_SIZE + 2u * AABB_HALO)
-#define AABB_SM_H (TILE_SIZE + 2u * AABB_HALO)
-
-// Keep the source FP16 encoding in LDS and decode only when a tap is consumed.
-// N=0.w's unused low half carries validity; its high half remains sqrt(meanY2).
-// At the default 20x20 tile this uses 6.4 KiB instead of 12.8 KiB.
-shared uvec4 sm_aabbPacked[AABB_SM_H * AABB_SM_W];
-
-bool aabbPackedValid(uvec4 packedLight) {
-    return (packedLight.w & 0xffffu) != 0u;
-}
-
-void unpackAABBLight(uvec4 packedLight, out vec4 maxEntY, out vec2 CoCg) {
-    maxEntY = vec4(unpackHalf2x16(packedLight.x),
-        unpackHalf2x16(packedLight.y));
-    CoCg = unpackHalf2x16(packedLight.z);
-}
-
-void loadAABBTileSample(uint index, uvec2 xy) {
-    if (readDiffuseSurfaceMask(xy) > 0.5) {
-        uvec4 packedLight = readDiffuseLightRTRaw(xy);
-        // Low half was written as zero by writeDiffuseLightRT.
-        packedLight.w = (packedLight.w & 0xffff0000u) | 1u;
-        sm_aabbPacked[index] = packedLight;
-    } else {
-        sm_aabbPacked[index] = uvec4(0u);
-    }
-}
-#endif
-
-// ===========================================================================
 // 局部数据结构 & 全局变量
 // ===========================================================================
 
@@ -90,12 +54,25 @@ struct TemporalFootprintFast {
 
 vec3 prevScreenPos;
 vec3 cameraDelta;
-float info_distance;
 vec3 geometryNormal; // from Geo1, for buildTemporalFootprint tangent frame
+vec3 currentPosition;
 
-DiffuseIlluminationWriteData current_data;
-diffuseIlluminationData out_data;
+MaxEntEncoding outputMaxEnt;
+float outputMeanY2;
 float output_weight = 0.0;
+
+uvec4 currentLightPacked() {
+    return readDiffuseLightRTRaw(uvec2(gl_GlobalInvocationID.xy));
+}
+
+void unpackCurrentLight(out MaxEntEncoding maxEnt, out float meanY2) {
+    uvec4 packedLight = currentLightPacked();
+    maxEnt.maxEntY = vec4(unpackHalf2x16(packedLight.x),
+        unpackHalf2x16(packedLight.y));
+    maxEnt.CoCg = unpackHalf2x16(packedLight.z);
+    float sqrtMeanY2 = unpackHalf2x16(packedLight.w).y;
+    meanY2 = sqrtMeanY2 * sqrtMeanY2;
+}
 
 // ===========================================================================
 // 基础数学与几何工具
@@ -218,7 +195,10 @@ bool strictHistoryGeometryTestFast(
 
     vec3 historyCurrentSpace = historyPosition - camDelta;
     vec4 clip = rtViewProjection * vec4(historyCurrentSpace, 1.0);
-    if (clip.w <= 1e-7 || any(isnan(clip)) || any(isinf(clip))) return false;
+    // Only xy/w participates in the footprint test. An unordered comparison
+    // rejects NaN w; the final ordered bounds test rejects non-finite xy/w.
+    // Do not keep the unused clip.z row and four-component class tests live.
+    if (!(clip.w > 1e-7) || isinf(clip.w)) return false;
     vec2 projectedPixel = (clip.xy / clip.w * 0.5 + 0.5) *
         vec2(resolution_global);
     vec2 extent = vec2(MAXENT_TEMPORAL_REPROJECTION_RADIUS +
@@ -227,96 +207,12 @@ bool strictHistoryGeometryTestFast(
 }
 
 // ===========================================================================
-// AABB 邻域钳制
-// ===========================================================================
-
-#if MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE
-void computeAABB_CS(out vec4 minAY, out vec4 maxAY, out vec2 minCC, out vec2 maxCC, out int validCnt) {
-    int cx = int(gl_LocalInvocationID.x + AABB_HALO);
-    int cy = int(gl_LocalInvocationID.y + AABB_HALO);
-
-    vec4 cenAY = current_data.data_swap.maxEntY;
-    vec2 cenCC = current_data.data_swap.CoCg;
-
-    minAY = maxAY = cenAY;
-    minCC = maxCC = cenCC;
-    validCnt = 1;
-
-    vec4 sumAY = cenAY;
-    vec4 sumSqAY = cenAY * cenAY;
-
-    for (int dy = -MAXENT_DIFFUSE_TEMPORAL_AABB_RADIUS; dy <= MAXENT_DIFFUSE_TEMPORAL_AABB_RADIUS; dy++) {
-        for (int dx = -MAXENT_DIFFUSE_TEMPORAL_AABB_RADIUS; dx <= MAXENT_DIFFUSE_TEMPORAL_AABB_RADIUS; dx++) {
-            if (dx == 0 && dy == 0) continue;
-
-            uint sampleIndex = uint(cy + dy) * AABB_SM_W + uint(cx + dx);
-            uvec4 samplePacked = sm_aabbPacked[sampleIndex];
-            if (!aabbPackedValid(samplePacked)) continue;
-            vec4 sampleMaxEntY;
-            vec2 sampleCoCg;
-            unpackAABBLight(samplePacked, sampleMaxEntY, sampleCoCg);
-
-            minAY = min(minAY, sampleMaxEntY);
-            maxAY = max(maxAY, sampleMaxEntY);
-            minCC = min(minCC, sampleCoCg);
-            maxCC = max(maxCC, sampleCoCg);
-
-            sumAY += sampleMaxEntY;
-            sumSqAY += sampleMaxEntY * sampleMaxEntY;
-            validCnt++;
-        }
-    }
-
-    vec4 extAY = maxAY - minAY;
-    vec2 extCC = maxCC - minCC;
-
-    float sigmaA = sqrt(max(0.0, maxent_variance(cenAY)));
-    float invN = 1.0 / float(validCnt);
-    vec4 meanAY = sumAY * invN;
-    vec4 nbVar = max(vec4(0.0), sumSqAY * invN - meanAY * meanAY);
-    float sigmaN = sqrt(max(0.0, max(max(nbVar.x, nbVar.y), max(nbVar.z, nbVar.w))));
-
-    float sigCombined = max(sigmaA, sigmaN);
-    float sigExp = sigCombined * MAXENT_DIFFUSE_TEMPORAL_AABB_SIGMA_SCALE;
-
-    vec4 expAY = (extAY * MAXENT_DIFFUSE_TEMPORAL_AABB_EXPANSION + sigExp + MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_EXTENT) * MAXENT_DIFFUSE_TEMPORAL_AABB_SCALE;
-    vec2 expCC = (extCC * MAXENT_DIFFUSE_TEMPORAL_AABB_EXPANSION + sigExp * 0.5 + MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_EXTENT) * MAXENT_DIFFUSE_TEMPORAL_AABB_SCALE;
-
-    minAY -= expAY;
-    maxAY += expAY;
-    minCC -= expCC;
-    maxCC += expCC;
-}
-#endif
-
-float updateAABBScale(float scale, float val, float lo, float hi) {
-    if (val > hi) return (val > 0.0 && hi >= 0.0) ? min(scale, hi / val) : 0.0;
-    if (val < lo) return (val < 0.0 && lo <= 0.0) ? min(scale, lo / val) : 0.0;
-    return scale;
-}
-
-void clampHistoryToAABB(inout MaxEntEncoding hist, vec4 minAY, vec4 maxAY, vec2 minCC, vec2 maxCC) {
-    float s = 1.0;
-    s = updateAABBScale(s, hist.maxEntY.x, minAY.x, maxAY.x);
-    s = updateAABBScale(s, hist.maxEntY.y, minAY.y, maxAY.y);
-    s = updateAABBScale(s, hist.maxEntY.z, minAY.z, maxAY.z);
-    s = updateAABBScale(s, hist.maxEntY.w, minAY.w, maxAY.w);
-    s = updateAABBScale(s, hist.CoCg.x, minCC.x, maxCC.x);
-    s = updateAABBScale(s, hist.CoCg.y, minCC.y, maxCC.y);
-    s = clamp(s, 0.0, 1.0);
-
-    hist.maxEntY *= s;
-    hist.CoCg *= s;
-}
-
-// ===========================================================================
 // 时域累积核心
 // ===========================================================================
 
 void resetToCurrentSample() {
     output_weight = 1.0;
-    out_data.data_swap = current_data.data_swap;
-    out_data.meanY2 = current_data.meanY2;
+    unpackCurrentLight(outputMaxEnt, outputMeanY2);
 }
 
 void MixDiffuse() {
@@ -326,7 +222,7 @@ void MixDiffuse() {
     }
 
     TemporalFootprintFast fp;
-    if (!buildTemporalFootprintFast(current_data.pos, geometryNormal,
+    if (!buildTemporalFootprintFast(currentPosition, geometryNormal,
             cameraDelta, fp)) {
         resetToCurrentSample();
         return;
@@ -342,41 +238,55 @@ void MixDiffuse() {
     float sumWeightOverSamples = 0.0;
     float accumulatedHistoryEvidence = 0.0;
 
-    float w[4] = {
-        (1.0 - prevFrac.x) * (1.0 - prevFrac.y),
-        prevFrac.x * (1.0 - prevFrac.y),
-        (1.0 - prevFrac.x) * prevFrac.y,
-        prevFrac.x * prevFrac.y
-        };
-
-    float currVoN = dot(normalize(current_data.pos), geometryNormal);
+    float currVoN = dot(normalize(currentPosition), geometryNormal);
 
     for (int i = 0; i < 4; i++) {
         ivec2 sampleTexel = prevBase + ivec2(i & 1, i >> 1);
 
         if (any(lessThan(sampleTexel, ivec2(0))) || any(greaterThanEqual(sampleTexel, ivec2(resolution_global)))) continue;
 
-        diffuseIlluminationData tap = fetchDiffuse(sampleTexel);
-        if (tap.prev_weight < MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT) continue;
+        uvec2 historyTexel = uvec2(sampleTexel);
+        vec2 historyMeta = unpackHalf2x16(
+            diffuseBuffer.data[addr(DIF_N_HIST, historyTexel)].w);
+        if (historyMeta.x < MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT) continue;
+
+        // Decode geometry before the six-component light signal. Rejected
+        // taps therefore never make history light live across reprojection.
+        uvec4 packedGeometry = diffuseBuffer.data[
+            addr(DIF_N_HISTGEO, historyTexel)];
+        float historyDistance = uintBitsToFloat(packedGeometry.x);
+        vec3 historyPosition = decodeDiffuseHistoryNormalU(
+            packedGeometry.y) * historyDistance;
         // 几何一致性测试（纯位置，MaxEnt 方向编码隐式保证法线一致性）
-        if (!strictHistoryGeometryTestFast(tap.pos, fp,
+        if (!strictHistoryGeometryTestFast(historyPosition, fp,
                 uvec2(gl_GlobalInvocationID.xy), cameraDelta)) continue;
 
-        float normalWeight = max(dot(fp.geometryNormal, tap.histNormal), 0.0);
+        vec3 historyNormal = decodeDiffuseHistoryNormalU(packedGeometry.z);
+        float normalWeight = max(dot(fp.geometryNormal, historyNormal), 0.0);
         if (normalWeight <= 0.0) continue;
 
-        float d1_sq = dot(tap.pos, tap.pos);
-        vec3 histPosCur = tap.pos - cameraDelta;
+        float d1_sq = dot(historyPosition, historyPosition);
+        vec3 histPosCur = historyPosition - cameraDelta;
         float d2_sq = dot(histPosCur, histPosCur);
         float histVoN = dot(normalize(histPosCur), geometryNormal);
 
         float scale = clamp(d2_sq * abs(histVoN) / max(d1_sq * abs(currVoN), 1e-3), 0.0, 1.0);
-        float tapSamples = clamp(tap.prev_weight, 1.0,
+        float tapSamples = clamp(historyMeta.x, 1.0,
             float(MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY));
 
-        float tapWeight = w[i] * normalWeight;
-        accumulate_maxent(accumMaxEnt, tap.data, tapWeight);
-        accumMeanY2 += tapWeight * tap.prev_meanY2;
+        float bilinearX = (i & 1) == 0 ? 1.0 - prevFrac.x : prevFrac.x;
+        float bilinearY = (i & 2) == 0 ? 1.0 - prevFrac.y : prevFrac.y;
+        float tapWeight = bilinearX * bilinearY * normalWeight;
+
+        uvec4 packedHistory = diffuseBuffer.data[
+            addr(DIF_N_HIST, historyTexel)];
+        MaxEntEncoding tapMaxEnt;
+        tapMaxEnt.maxEntY = clamp(vec4(unpackHalf2x16(packedHistory.x),
+            unpackHalf2x16(packedHistory.y)), vec4(-65504.0),
+            vec4(65504.0));
+        tapMaxEnt.CoCg = unpackHalf2x16(packedHistory.z);
+        accumulate_maxent(accumMaxEnt, tapMaxEnt, tapWeight);
+        accumMeanY2 += tapWeight * historyMeta.y * historyMeta.y;
         validKernelWeight += tapWeight;
         sumWeightOverSamples += tapWeight / tapSamples;
         accumulatedHistoryEvidence += tapWeight * tapSamples * scale;
@@ -404,17 +314,6 @@ void MixDiffuse() {
         return;
     }
 
-    #if MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE
-    vec4 minAY, maxAY;
-    vec2 minCC, maxCC;
-    int validCnt;
-
-    computeAABB_CS(minAY, maxAY, minCC, maxCC, validCnt);
-    if (validCnt >= MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_SAMPLES) {
-        clampHistoryToAABB(histMaxEnt, minAY, maxAY, minCC, maxCC);
-    }
-    #endif
-
     // Geometry confidence controls how much history is reused, while N_eff
     // describes the noise of the history estimator itself. Keeping these
     // quantities separate avoids inventing sub-unity Kish sample counts.
@@ -423,10 +322,12 @@ void MixDiffuse() {
         curAlpha, float(MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY));
 
     // Blend second moment: M₂,n = (1-α)·M₂,h + α·Y²_c
-    float newMeanY2 = mix(histMeanY2, current_data.meanY2, curAlpha);
-
-    out_data.data_swap = curAlpha >= 0.9999 ? current_data.data_swap : mix_maxent(histMaxEnt, current_data.data_swap, curAlpha);
-    out_data.meanY2 = newMeanY2;
+    MaxEntEncoding currentMaxEnt;
+    float currentMeanY2;
+    unpackCurrentLight(currentMaxEnt, currentMeanY2);
+    outputMeanY2 = mix(histMeanY2, currentMeanY2, curAlpha);
+    outputMaxEnt = curAlpha >= 0.9999
+        ? currentMaxEnt : mix_maxent(histMaxEnt, currentMaxEnt, curAlpha);
     imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), uvec4(floatBitsToUint(validKernelWeight), 0u, 0u, 0u));
 }
 
@@ -437,77 +338,20 @@ void MixDiffuse() {
 void main() {
     uvec2 pix = gl_GlobalInvocationID.xy;
 
-    #if MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE
-    {
-        uint tid = gl_LocalInvocationID.y * TILE_SIZE + gl_LocalInvocationID.x;
-        uint totalSamples = AABB_SM_W * AABB_SM_H;
-
-        uint centerCol = gl_LocalInvocationID.x + AABB_HALO;
-        uint centerRow = gl_LocalInvocationID.y + AABB_HALO;
-        uint centerIndex = centerRow * AABB_SM_W + centerCol;
-        ivec2 centerCoord = clamp(ivec2(pix), ivec2(0),
-            ivec2(resolution) - 1);
-        loadAABBTileSample(centerIndex, uvec2(centerCoord));
-
-        for (uint i = tid; i < totalSamples; i += TILE_SIZE * TILE_SIZE) {
-            uint row = i / AABB_SM_W;
-            uint col = i % AABB_SM_W;
-
-            bool interior = col >= AABB_HALO &&
-                col < AABB_HALO + TILE_SIZE && row >= AABB_HALO &&
-                row < AABB_HALO + TILE_SIZE;
-            if (interior) continue;
-
-            ivec2 gc = ivec2(gl_WorkGroupID.xy * TILE_SIZE) - ivec2(AABB_HALO) + ivec2(col, row);
-            ivec2 clamped = clamp(gc, ivec2(0), ivec2(resolution) - 1);
-            loadAABBTileSample(i, uvec2(clamped));
-        }
-    }
-    barrier();
-    #endif
-
     if (any(greaterThanEqual(pix, uvec2(resolution)))) return;
 
-    readDiffusePrimaryGeometry(pix, current_data.pos, info_distance);
-    current_data.surfaceMask = info_distance >= 0.0 ? 1.0 : 0.0;
+    float infoDistance;
+    readDiffusePrimaryGeometry(pix, currentPosition, infoDistance);
 
-    if (info_distance < -0.5) {
-        // All AABB entries for a sky center are invalid. Clear only the two
-        // outputs consumed downstream and skip center light/normal decoding.
+    if (infoDistance < -0.5) {
+        // Clear the two outputs consumed downstream and skip light/normal
+        // decoding for sky pixels.
         diffuseBuffer.data[addr(DIF_N_SWAP, pix)] = uvec4(0u);
         imageStore(colorimg6, ivec2(pix), uvec4(0u));
         return;
     }
 
-    {
-        // 从 DiffuseBuffer N=0 读 MaxEnt + meanY2，surfaceMask 从 N=1 读
-        #if MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE
-        uint outputCenterCol = gl_LocalInvocationID.x + AABB_HALO;
-        uint outputCenterRow = gl_LocalInvocationID.y + AABB_HALO;
-        uint outputCenterIndex = outputCenterRow * AABB_SM_W + outputCenterCol;
-        uvec4 centerPacked = sm_aabbPacked[outputCenterIndex];
-        unpackAABBLight(centerPacked, current_data.data_swap.maxEntY,
-            current_data.data_swap.CoCg);
-        float centerSqrtM2 = unpackHalf2x16(centerPacked.w).y;
-        current_data.meanY2 = centerSqrtM2 * centerSqrtM2;
-        current_data.surfaceMask = aabbPackedValid(centerPacked) ? 1.0 : 0.0;
-        #else
-        MaxEntEncoding centerMaxEnt;
-        readDiffuseLightRT(pix, centerMaxEnt, current_data.meanY2);
-        current_data.data_swap = centerMaxEnt;
-        current_data.surfaceMask = readDiffuseSurfaceMask(pix);
-        #endif
-        current_data.weight = 1.0;
-        // 从 Geo1 取 geometryNormal（仅用于 buildTemporalFootprint 切空间）
-        geometryNormal = readPrimaryGeometryNormal(pix);
-    }
-
-    out_data.data_swap = current_data.data_swap;
-    out_data.meanY2 = current_data.meanY2;
-    out_data.data = init_maxent();
-    out_data.surfaceMask = current_data.surfaceMask;
-    out_data.pos = current_data.pos;
-    output_weight = 1.0;
+    geometryNormal = readPrimaryGeometryNormal(pix);
 
     cameraDelta = camPos - prevRaytracingCamPos;
 
@@ -516,18 +360,16 @@ void main() {
     readDiffuseMotion(pix, surfaceMotion, motionValid);
     if (motionValid < 0.5) {
         resetToCurrentSample();
-        out_data.weight = output_weight;
-        writeDiffuse(out_data, ivec2(pix));
+        writeDiffuseSwap(pix, outputMaxEnt, output_weight, outputMeanY2);
         imageStore(colorimg6, ivec2(pix), uvec4(0u));
         return;
     }
     cameraDelta -= surfaceMotion;
 
-    vec4 clipPos = rtPrevViewProjection * vec4(current_data.pos + cameraDelta, 1.0);
+    vec4 clipPos = rtPrevViewProjection * vec4(currentPosition + cameraDelta, 1.0);
     prevScreenPos = abs(clipPos.w) > 1e-6 ? (clipPos.xyz / clipPos.w) * 0.5 + 0.5 : vec3(-1.0);
 
     MixDiffuse();
 
-    out_data.weight = output_weight;
-    writeDiffuse(out_data, ivec2(pix));
+    writeDiffuseSwap(pix, outputMaxEnt, output_weight, outputMeanY2);
 }

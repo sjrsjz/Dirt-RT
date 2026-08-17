@@ -56,14 +56,15 @@ void denoiserSpatialStore(ivec2 pixel, DenoiserMaxEntSignal signal) {
     #if defined(MAXENT_ATROUS_DEBUG_VIEW) && \
             DEBUG_VIEW == MAXENT_ATROUS_DEBUG_VIEW
     writeReflLight(uvec2(pixel), specularMaxEntTotalRgb(specular),
-        signal.hitDistance, 1.0);
+        signal.virtualDistance, 1.0);
     #endif
     #if defined(MAXENT_ATROUS_FINAL_RESOLVE)
         #if DEBUG_VIEW == 9 || DEBUG_VIEW == 12 || DEBUG_VIEW == 14 || \
                 (DEBUG_VIEW >= 23 && DEBUG_VIEW <= 30)
         // Preserve the diagnostic value written by its owning pass.
         #else
-        writeReflMaxEnt(uvec2(pixel), specular, signal.hitDistance, 1.0);
+        writeReflMaxEnt(uvec2(pixel), specular,
+            signal.virtualDistance, 1.0);
         #endif
     #endif
 #endif

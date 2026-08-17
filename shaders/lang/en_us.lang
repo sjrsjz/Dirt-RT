@@ -158,29 +158,6 @@ option.MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY.comment = Maximum effective diffuse h
 option.MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT = Min History Weight
 option.MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT.comment = History below this confidence is discarded. Raise it to reset weak history sooner; lower it to preserve sparse history longer.
 
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE = AABB Clamp
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE.comment = Clamps reprojected diffuse MaxEnt history to the current neighborhood, reducing trails and stale lighting. Disabling it uses an unclamped temporal blend.
-value.MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE.1 = On
-value.MAXENT_DIFFUSE_TEMPORAL_AABB_ENABLE.0 = Off
-
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_RADIUS = AABB Radius
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_RADIUS.comment = Radius used to build the current-frame clamp box. One means 3x3, two means 5x5; larger neighborhoods cost more and preserve broader lighting variation.
-
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_EXPANSION = AABB Expansion
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_EXPANSION.comment = Expands the sampled neighborhood range before clamping. Higher values preserve more history but allow more ghosting.
-
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_SIGMA_SCALE = AABB Sigma Scale
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_SIGMA_SCALE.comment = Variance-based expansion of the clamp box. Larger values tolerate noisy samples and retain more history.
-
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_EXTENT = AABB Min Extent
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_EXTENT.comment = Minimum absolute clamp range, preventing dark or nearly constant regions from collapsing to zero width.
-
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_SCALE = AABB Box Scale
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_SCALE.comment = Global multiplier for clamp-box width. Lower values reject history more aggressively; higher values favor stability.
-
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_SAMPLES = AABB Min Samples
-option.MAXENT_DIFFUSE_TEMPORAL_AABB_MIN_SAMPLES.comment = Minimum valid current-frame samples required to clamp history. If fewer samples exist, clamping is skipped to avoid unstable bounds.
-
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE = Reprojection Depth Scale
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE.comment = Scales the depth half-extent of the temporal reprojection footprint trapezoid. Higher values accept history samples that are farther off the reconstructed surface plane, reducing resets but potentially leaking across thin geometry.
 
@@ -244,8 +221,6 @@ option.MAXENT_VARIANCE_HISTORY_END.comment = Shared diffuse/specular effective s
 # ===========================================================================
 # MaxEnt Spatial Filter
 # ===========================================================================
-option.MAXENT_SPATIAL_PDF_DIRECTION_SENSITIVITY = PDF-direction Sensitivity
-option.MAXENT_SPATIAL_PDF_DIRECTION_SENSITIVITY.comment = Rejection strength for changes in the sampling PDF's dominant direction. Diffuse uses the geometry normal; specular uses the view-conditioned GGX VNDF direction.
 option.MAXENT_SPATIAL_NORMAL_SENSITIVITY = Texture-normal Sensitivity
 option.MAXENT_SPATIAL_NORMAL_SENSITIVITY.comment = Texture-normal rejection strength used only by the refraction variance filter; it no longer affects MaxEnt spatial filtering.
 
@@ -347,4 +322,4 @@ value.DEBUG_VIEW.34 = Cache Final Temporal
 value.DEBUG_VIEW.35 = Motion Match Status
 value.DEBUG_VIEW.36 = Entity World Motion
 value.DEBUG_VIEW.37 = Screen Motion
-value.DEBUG_VIEW.38 = Filtered Reflection Hit Distance
+value.DEBUG_VIEW.38 = Filtered Reflection Virtual Distance

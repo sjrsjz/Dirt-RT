@@ -219,9 +219,11 @@ void readRefrGeo(uvec2 xy, out vec3 pos, out vec3 T) {
     T = decodeNormalU(v.w);
 }
 
-// N=0 is MaxEnt-4 Y, CoCg and hit distance. DEBUG_VIEW 8 conditionally uses
-// the otherwise dead upper half of the last word for the sampled GGX ray;
-// normal rendering pays no preservation read.
+// N=0 is MaxEnt-4 Y, CoCg and radial metadata. Before temporal/spatial
+// processing the lower half is ray hit distance; the final spatial resolve
+// replaces it with filtered virtual distance. DEBUG_VIEW 8 conditionally uses
+// the otherwise dead upper half for the sampled GGX ray; normal rendering
+// pays no preservation read.
 void writeReflMaxEnt(uvec2 xy, SpecularMaxEnt signal,
         float hitDistance, float debugWeight) {
     uvec3 p = packSpecularMaxEnt(signal);

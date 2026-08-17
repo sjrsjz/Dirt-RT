@@ -5,7 +5,7 @@
 //   ivec2 denoiserSpatialImageSize()
 //   uvec4 denoiserSpatialLoadGeometryWords(ivec2 pixel)
 //   uvec4 denoiserSpatialLoadSignalWords(ivec2 pixel)
-//   DenoiserSpatialGeometry denoiserSpatialDecodeGeometry(words, pixel)
+//   DenoiserSpatialCenterGeometry denoiserSpatialDecodeCenterGeometry(words)
 //   void denoiserSpatialStore(ivec2 pixel, DenoiserMaxEntSignal signal)
 //   void denoiserSpatialStoreInvalid(ivec2 pixel)
 // Required macros:
@@ -15,8 +15,10 @@
 #define DENOISER_SPATIAL_TILE_AREA (DENOISER_SPATIAL_TILE_SIZE * DENOISER_SPATIAL_TILE_SIZE)
 
 // Geometry stays on its native cached path. Share the expensive Bures
-// eigendecomposition across overlapping taps.
-shared vec2 denoiserSpatialTileStddev[DENOISER_SPATIAL_TILE_AREA];
+// eigendecomposition across overlapping taps. Packing both standard
+// deviations into one uint halves the LDS footprint; the signal itself has
+// already crossed an FP16 storage boundary before this pass.
+shared uint denoiserSpatialTileStddev[DENOISER_SPATIAL_TILE_AREA];
 
 const ivec2 DENOISER_SPATIAL_GRID_8[8] = ivec2[](
         ivec2(-1, -1), ivec2(0, -1), ivec2(1, -1), ivec2(-1, 0),
@@ -30,15 +32,11 @@ bool denoiserSpatialInBounds(ivec2 pixel, ivec2 size) {
         && all(lessThan(pixel, size));
 }
 
-vec3 denoiserSpatialLoadVirtualPosition(ivec2 pixel, ivec2 size, uvec4 signalWords, vec3 fallback) {
+vec3 denoiserSpatialLoadVirtualPosition(
+    ivec2 pixel, ivec2 size, vec3 fallback) {
     if (!denoiserSpatialInBounds(pixel, size)) return fallback;
     return denoiserSpatialVirtualWorldPositionFromWords(
-        denoiserSpatialLoadGeometryWords(pixel), signalWords, fallback);
-}
-
-uvec4 denoiserSpatialLoadVirtualSignalWords(ivec2 pixel, ivec2 size) {
-    return denoiserSpatialInBounds(pixel, size)
-    ? denoiserSpatialLoadSignalWords(pixel) : denoiserInvalidMaxEntSignalWords();
+        pixel, denoiserSpatialLoadSignalWords(pixel), fallback);
 }
 
 void main() {
@@ -51,21 +49,18 @@ void main() {
         tileIndex < uint(DENOISER_SPATIAL_TILE_AREA);
         tileIndex += 256u) {
         uint tileY = tileIndex / uint(DENOISER_SPATIAL_TILE_SIZE);
-        uint tileX = tileIndex
-                - tileY * uint(DENOISER_SPATIAL_TILE_SIZE);
+        uint tileX = tileIndex - tileY * uint(DENOISER_SPATIAL_TILE_SIZE);
         ivec2 sourcePixel = tileOrigin + ivec2(tileX, tileY);
         uvec4 signalWords = denoiserInvalidMaxEntSignalWords();
         vec2 stddev = vec2(0.0);
         if (denoiserSpatialInBounds(sourcePixel, size)) {
             signalWords = denoiserSpatialLoadSignalWords(sourcePixel);
             if (denoiserSpatialSignalWordsValid(signalWords)) {
-                DenoiserMaxEntSignal signal =
-                    denoiserUnpackMaxEntSignalTrusted(signalWords);
-                stddev = denoiserSpatialMakeBuresData(
-                        signal.maxEntY).stddev;
+                DenoiserMaxEntSignal signal = denoiserUnpackMaxEntSignalTrusted(signalWords);
+                stddev = denoiserSpatialMakeBuresData(signal.maxEntY).stddev;
             }
         }
-        denoiserSpatialTileStddev[tileIndex] = stddev;
+        denoiserSpatialTileStddev[tileIndex] = packHalf2x16(min(stddev, vec2(DENOISER_SPATIAL_FP16_MAX)));
     }
 
     barrier();
@@ -73,46 +68,40 @@ void main() {
 
     uint centerX = localID.x + uint(DENOISER_SPATIAL_STEP);
     uint centerY = localID.y + uint(DENOISER_SPATIAL_STEP);
-    uint centerIndex = centerY * uint(DENOISER_SPATIAL_TILE_SIZE)
-            + centerX;
-    uvec4 centerGeometryWords = denoiserSpatialLoadGeometryWords(pixel);
+    uint centerIndex = centerY * uint(DENOISER_SPATIAL_TILE_SIZE) + centerX;
     uvec4 centerSignalWords = denoiserSpatialLoadSignalWords(pixel);
-    if (!denoiserSpatialGeometryWordsValid(centerGeometryWords)
-            || !denoiserSpatialSignalWordsValid(centerSignalWords)) {
+    if (!denoiserSpatialSignalWordsValid(centerSignalWords)) {
         denoiserSpatialStoreInvalid(pixel);
         return;
     }
 
-    DenoiserSpatialGeometry centerGeometry = denoiserSpatialDecodeGeometry(centerGeometryWords, pixel);
+    uvec4 centerGeometryWords = denoiserSpatialLoadGeometryWords(pixel);
+    if (!denoiserSpatialGeometryWordsValid(centerGeometryWords)) {
+        denoiserSpatialStoreInvalid(pixel);
+        return;
+    }
+    DenoiserSpatialCenterGeometry centerGeometry =
+        denoiserSpatialDecodeCenterGeometry(centerGeometryWords);
     DenoiserMaxEntSignal centerSignal = denoiserUnpackMaxEntSignalTrusted(centerSignalWords);
-    DenoiserSpatialBuresData centerBures = denoiserSpatialMakeBuresDataFromStddev(denoiserSpatialTileStddev[centerIndex]);
+    DenoiserSpatialBuresData centerBures =
+        denoiserSpatialMakeBuresDataFromStddev(unpackHalf2x16(denoiserSpatialTileStddev[centerIndex]));
 
-    float lightSourceToleranceScale = denoiserSpatialLightSourceToleranceScale(centerGeometry.roughness);
-    float hitDistanceAlpha = centerGeometry.ggxAlpha;
-    vec3 centerVirtualPosition = denoiserSpatialVirtualWorldPosition(centerGeometry, centerSignal.hitDistance);
-    float virtualRejectionScale = denoiserSpatialVirtualRejectionScale(centerGeometry, centerSignal.hitDistance);
+    float surfaceRejectionScale = denoiserSpatialSurfaceRejectionScale(
+            centerGeometry.surfaceDistance, float(size.y));
+    float virtualDistanceAlpha = centerGeometry.ggxAlpha;
+    vec3 centerVirtualPosition = denoiserSpatialVirtualWorldPosition(
+            centerGeometry.primaryRay, centerSignal.virtualDistance);
+    float virtualRejectionScale = denoiserSpatialVirtualRejectionScale(
+            centerGeometry.ggxAlpha, centerSignal.virtualDistance);
     // Accumulate tangents in place so four decoded positions do not have to
     // remain live across the last neighbor fetch.
-    vec3 virtualTangentX = -denoiserSpatialLoadVirtualPosition(
-            pixel + ivec2(-1, 0), size,
-            denoiserSpatialLoadVirtualSignalWords(pixel + ivec2(-1, 0), size),
-            centerVirtualPosition);
-    virtualTangentX += denoiserSpatialLoadVirtualPosition(
-            pixel + ivec2(1, 0), size,
-            denoiserSpatialLoadVirtualSignalWords(pixel + ivec2(1, 0), size),
-            centerVirtualPosition);
-    vec3 virtualTangentY = -denoiserSpatialLoadVirtualPosition(
-            pixel + ivec2(0, -1), size,
-            denoiserSpatialLoadVirtualSignalWords(pixel + ivec2(0, -1), size),
-            centerVirtualPosition);
-    virtualTangentY += denoiserSpatialLoadVirtualPosition(
-            pixel + ivec2(0, 1), size,
-            denoiserSpatialLoadVirtualSignalWords(pixel + ivec2(0, 1), size),
-            centerVirtualPosition);
+    vec3 virtualTangentX = -denoiserSpatialLoadVirtualPosition(pixel + ivec2(-1, 0), size, centerVirtualPosition);
+    virtualTangentX += denoiserSpatialLoadVirtualPosition(pixel + ivec2(1, 0), size, centerVirtualPosition);
+    vec3 virtualTangentY = -denoiserSpatialLoadVirtualPosition(pixel + ivec2(0, -1), size, centerVirtualPosition);
+    virtualTangentY += denoiserSpatialLoadVirtualPosition(pixel + ivec2(0, 1), size, centerVirtualPosition);
     vec3 centerVirtualNormal = denoiserSpatialVirtualNormal(
-            virtualTangentX, virtualTangentY, centerGeometry.pdfDirection);
-    DenoiserSpatialAccumulator accum =
-        denoiserSpatialBeginAccumulation(centerSignal);
+            virtualTangentX, virtualTangentY, centerGeometry.primaryRay);
+    DenoiserSpatialAccumulator accum = denoiserSpatialBeginAccumulation(centerSignal);
 
     for (int i = 0; i < 8; ++i) {
         int sampleX = int(centerX) + DENOISER_SPATIAL_GRID_8[i].x * DENOISER_SPATIAL_STEP;
@@ -123,24 +112,35 @@ void main() {
 
         uvec4 sampleGeometryWords = denoiserSpatialLoadGeometryWords(samplePixel);
         uvec4 sampleSignalWords = denoiserSpatialLoadSignalWords(samplePixel);
-        if (!denoiserSpatialGeometryWordsValid(sampleGeometryWords) || !denoiserSpatialSignalWordsValid(sampleSignalWords))
+        if (!denoiserSpatialGeometryWordsValid(sampleGeometryWords)
+                || !denoiserSpatialSignalWordsValid(sampleSignalWords))
             continue;
 
-        DenoiserSpatialGeometry sampleGeometry = denoiserSpatialDecodeGeometry(sampleGeometryWords, samplePixel);
-        float geometryExponent = denoiserSpatialPdfDirectionExponent(centerGeometry.pdfDirection, sampleGeometry.pdfDirection);
+        vec3 samplePrimaryRay;
+        float sampleSurfaceDistance;
+        denoiserSpatialDecodeSampleGeometry(sampleGeometryWords,
+            samplePrimaryRay, sampleSurfaceDistance);
+        vec3 sampleSurfacePosition = samplePrimaryRay
+                * sampleSurfaceDistance;
+        float surfaceGeometryExponent = surfaceRejectionScale
+                * abs(dot(centerGeometry.surfaceNormal, sampleSurfacePosition)
+                        - centerGeometry.surfacePlaneOffset);
 
         DenoiserMaxEntSignal sampleSignal = denoiserUnpackMaxEntSignalTrusted(sampleSignalWords);
-        DenoiserSpatialBuresData sampleBures = denoiserSpatialMakeBuresDataFromStddev(denoiserSpatialTileStddev[sampleIndex]);
-        float hitDistanceWeight;
+        DenoiserSpatialBuresData sampleBures =
+            denoiserSpatialMakeBuresDataFromStddev(unpackHalf2x16(
+                    denoiserSpatialTileStddev[sampleIndex]));
+        float virtualDistanceWeight;
         float weight = denoiserSpatialWeight(centerSignal, centerBures,
-                sampleSignal, sampleBures, sampleGeometry, geometryExponent,
+                sampleSignal, sampleBures, samplePrimaryRay,
+                surfaceGeometryExponent,
                 DENOISER_SPATIAL_GRID_WEIGHT[i],
-                lightSourceToleranceScale,
                 DENOISER_SPATIAL_PHI_LUMINANCE,
-                hitDistanceAlpha, centerVirtualPosition,
+                virtualDistanceAlpha, centerVirtualPosition,
                 centerVirtualNormal, virtualRejectionScale,
-                hitDistanceWeight);
-        denoiserSpatialAccumulate(accum, sampleSignal, weight, hitDistanceWeight);
+                virtualDistanceWeight);
+        denoiserSpatialAccumulate(accum, sampleSignal, weight,
+            virtualDistanceWeight);
     }
 
     denoiserSpatialStore(pixel, denoiserSpatialResolve(accum, DENOISER_SPATIAL_STEP));

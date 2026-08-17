@@ -3,18 +3,7 @@
 
 #include "/lib/lighting/maxent.glsl"
 #include "/lib/lighting/denoiser/maxent_spatial_signal.glsl"
-#include "/lib/lighting/denoiser/maxent_spatial_pdf_direction.glsl"
-
-// Geometry-side contract. PDF direction is the sole spatial-domain geometry
-// descriptor; material IDs do not participate in A-trous filtering.
-struct DenoiserSpatialGeometry {
-    vec3 pdfDirection;
-    vec3 primaryRay;
-    float roughness;
-    float surfaceDistance;
-    float virtualScale;
-    float ggxAlpha;
-};
+#include "/lib/lighting/denoiser/maxent_spatial_virtual_projection.glsl"
 
 struct DenoiserSpatialBuresData {
     vec2 stddev;
@@ -26,8 +15,8 @@ struct DenoiserSpatialAccumulator {
     f16vec2 CoCg;
     vec2 varianceEnergy;
     float weight;
-    float hitDistance;
-    float hitWeight;
+    float virtualDistance;
+    float virtualWeight;
 };
 
 DenoiserSpatialBuresData denoiserSpatialMakeBuresData(vec4 maxEntY) {
@@ -83,21 +72,17 @@ float denoiserSpatialBuresDistanceSq(vec4 centerMaxEntY,
     return max(dot(meanDelta, meanDelta) + centerData.trace + sampleData.trace - 2.0 * crossTrace, 0.0);
 }
 
-float denoiserSpatialLightSourceToleranceScale(float roughness) {
-    return 1.0;
-}
-
 vec3 denoiserSpatialVirtualWorldPosition(
-    DenoiserSpatialGeometry geometry, float hitDistance) {
-    float virtualWorldDistance = geometry.surfaceDistance + geometry.virtualScale * hitDistance;
-    return geometry.primaryRay * virtualWorldDistance;
+    vec3 primaryRay, float virtualDistance) {
+    return primaryRay * virtualDistance;
 }
 
 float denoiserSpatialVirtualRejectionScale(
-    DenoiserSpatialGeometry centerGeometry, float centerHitDistance) {
-    if (centerHitDistance <= 0.0) return 0.0;
+    float centerGgxAlpha, float centerVirtualDistance) {
+    if (centerVirtualDistance <= 0.0) return 0.0;
     float planeTolerance = float(MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE);
-    return (1.0 - centerGeometry.ggxAlpha) / max(planeTolerance * centerHitDistance, 1e-5);
+    return (1.0 - centerGgxAlpha)
+        / max(planeTolerance * centerVirtualDistance, 1e-5);
 }
 
 vec3 denoiserSpatialVirtualNormal(vec3 tangentX, vec3 tangentY, vec3 fallback) {
@@ -106,10 +91,10 @@ vec3 denoiserSpatialVirtualNormal(vec3 tangentX, vec3 tangentY, vec3 fallback) {
 
 float denoiserSpatialVirtualPlaneDepthExponent(
     vec3 centerVirtualPosition, vec3 centerVirtualNormal,
-    DenoiserSpatialGeometry sampleGeometry, float sampleHitDistance,
+    vec3 samplePrimaryRay, float sampleVirtualDistance,
     float virtualRejectionScale) {
     vec3 sampleVirtualPosition = denoiserSpatialVirtualWorldPosition(
-            sampleGeometry, sampleHitDistance);
+            samplePrimaryRay, sampleVirtualDistance);
     vec3 virtualDelta = sampleVirtualPosition - centerVirtualPosition;
     float planeDepth = abs(dot(centerVirtualNormal, virtualDelta));
     return virtualRejectionScale * planeDepth;
@@ -119,24 +104,25 @@ float denoiserSpatialWeight(DenoiserMaxEntSignal centerSignal,
     DenoiserSpatialBuresData centerBures,
     DenoiserMaxEntSignal sampleSignal,
     DenoiserSpatialBuresData sampleBures,
-    DenoiserSpatialGeometry sampleGeometry, float geometryExponent,
+    vec3 samplePrimaryRay, float surfaceGeometryExponent,
     float kernelWeight,
-    float lightSourceToleranceScale, float phiLuminance,
-    float hitDistanceAlpha, vec3 centerVirtualPosition,
+    float phiLuminance,
+    float virtualDistanceAlpha, vec3 centerVirtualPosition,
     vec3 centerVirtualNormal, float virtualRejectionScale,
-    out float hitDistanceWeight) {
-    hitDistanceWeight = kernelWeight * hitDistanceAlpha * exp(-geometryExponent);
-    float signalExponent = geometryExponent
-            + denoiserSpatialVirtualPlaneDepthExponent(
-                centerVirtualPosition, centerVirtualNormal, sampleGeometry,
-                sampleSignal.hitDistance, virtualRejectionScale);
+    out float virtualDistanceWeight) {
+    virtualDistanceWeight = kernelWeight * virtualDistanceAlpha
+        * exp(-surfaceGeometryExponent);
+    float signalExponent = surfaceGeometryExponent
+        + denoiserSpatialVirtualPlaneDepthExponent(
+            centerVirtualPosition, centerVirtualNormal, samplePrimaryRay,
+            sampleSignal.virtualDistance, virtualRejectionScale);
     float distanceSq = denoiserSpatialBuresDistanceSq(
             centerSignal.maxEntY, centerBures,
             sampleSignal.maxEntY, sampleBures);
     float variance = centerSignal.variance + sampleSignal.variance;
     // Both variances may be exactly zero; without the floor, identical
     // signals produce 0/0 and poison the exponential with NaN.
-    signalExponent += phiLuminance * distanceSq / max(lightSourceToleranceScale * variance, 1e-12);
+    signalExponent += phiLuminance * distanceSq / max(variance, 1e-12);
     return kernelWeight * exp(-signalExponent);
 }
 
@@ -163,14 +149,14 @@ DenoiserSpatialAccumulator denoiserSpatialBeginAccumulation(
     accum.CoCg = f16vec2(center.CoCg * 0.125);
     accum.varianceEnergy = vec2(center.variance);
     accum.weight = 1.0;
-    accum.hitDistance = center.hitDistance;
-    accum.hitWeight = 1.0;
+    accum.virtualDistance = center.virtualDistance;
+    accum.virtualWeight = 1.0;
     return accum;
 }
 
 void denoiserSpatialAccumulate(inout DenoiserSpatialAccumulator accum,
     DenoiserMaxEntSignal neighbor, float weight,
-    float hitDistanceWeight) {
+    float virtualDistanceWeight) {
     float scaledWeight = weight * 0.125;
     accum.maxEntY += f16vec4(neighbor.maxEntY * scaledWeight);
     accum.CoCg += f16vec2(neighbor.CoCg * scaledWeight);
@@ -178,8 +164,9 @@ void denoiserSpatialAccumulate(inout DenoiserSpatialAccumulator accum,
     accum.varianceEnergy += vec2(weightedVariance,
             weight * weightedVariance);
     accum.weight += weight;
-    accum.hitDistance += neighbor.hitDistance * hitDistanceWeight;
-    accum.hitWeight += hitDistanceWeight;
+    accum.virtualDistance += neighbor.virtualDistance
+        * virtualDistanceWeight;
+    accum.virtualWeight += virtualDistanceWeight;
 }
 
 DenoiserMaxEntSignal denoiserSpatialResolve(
@@ -193,7 +180,8 @@ DenoiserMaxEntSignal denoiserSpatialResolve(
     float power = denoiserSpatialVariancePower(stepRadius);
     float varianceMix = 2.0 - exp2(2.0 - power);
     outputSignal.variance = mix(accum.varianceEnergy.x, accum.varianceEnergy.y, varianceMix) * pow(invWeight, power);
-    outputSignal.hitDistance = accum.hitDistance / accum.hitWeight;
+    outputSignal.virtualDistance = accum.virtualDistance
+        / accum.virtualWeight;
     return denoiserSanitizeMaxEntSignal(outputSignal);
 }
 

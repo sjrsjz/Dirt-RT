@@ -4,10 +4,10 @@
 // Canonical denoiser-geometry adapter shared by all spatial signals.
 //
 // colortex3 RGBA32UI ABI, produced by maxent_variance_prepare.glsl:
-//   x = floatBitsToUint(primary ray distance), negative means invalid/sky
-//   y = oct32 sampling-PDF dominant outgoing direction
+//   x = floatBitsToUint(first-surface distance), negative means invalid/sky
+//   y = oct32 first-surface geometry normal
 //   z = oct32 primary ray direction
-//   w = half(perceptual roughness) | half(specular virtual scale)
+//   w = half(perceptual roughness) | unused half
 //
 // The variance-preparation policy owns the signal roughness: diffuse writes
 // exactly 1.0, while specular writes sqrt(primary GGX alpha).
@@ -25,47 +25,52 @@ uvec4 denoiserSpatialLoadGeometryWords(ivec2 pixel) {
 }
 
 bool denoiserSpatialGeometryWordsValid(uvec4 words) {
-    // Variance preparation only emits finite nonnegative distances or -1.
-    // >= rejects both the sentinel and NaN; +Inf cannot cross that producer.
     return uintBitsToFloat(words.x) >= 0.0;
 }
 
-DenoiserSpatialGeometry denoiserSpatialDecodeGeometry(
-        uvec4 words, ivec2 pixel) {
-    DenoiserSpatialGeometry geometry;
-    float distance = uintBitsToFloat(words.x);
-    geometry.pdfDirection = decodeNormalU(words.y);
+struct DenoiserSpatialCenterGeometry {
+    vec3 surfaceNormal;
+    vec3 primaryRay;
+    float surfaceDistance;
+    float surfacePlaneOffset;
+    float ggxAlpha;
+};
+
+DenoiserSpatialCenterGeometry denoiserSpatialDecodeCenterGeometry(
+        uvec4 words) {
+    DenoiserSpatialCenterGeometry geometry;
+    geometry.surfaceDistance = uintBitsToFloat(words.x);
+    geometry.surfaceNormal = decodeNormalU(words.y);
     geometry.primaryRay = decodeNormalU(words.z);
-    vec2 roughnessVirtual = unpackHalf2x16(words.w);
-    // Validity and the [0, 1] ranges are owned by the variance-preparation
-    // producer. Spatial consumers reject invalid geometry before use.
-    geometry.surfaceDistance = distance;
-    geometry.roughness = roughnessVirtual.x;
-    geometry.virtualScale = roughnessVirtual.y;
-    geometry.ggxAlpha = geometry.roughness * geometry.roughness;
+    geometry.surfacePlaneOffset = geometry.surfaceDistance
+        * dot(geometry.surfaceNormal, geometry.primaryRay);
+    float roughness = unpackHalf2x16(words.w).x;
+    geometry.ggxAlpha = roughness * roughness;
     return geometry;
 }
 
+void denoiserSpatialDecodeSampleGeometry(uvec4 words,
+        out vec3 primaryRay, out float surfaceDistance) {
+    primaryRay = decodeNormalU(words.z);
+    surfaceDistance = uintBitsToFloat(words.x);
+}
+
 bool denoiserSpatialTryVirtualWorldPositionFromWords(
-        uvec4 geometryWords, uvec4 signalWords, out vec3 position) {
-    float distance = uintBitsToFloat(geometryWords.x);
-    if (!denoiserSpatialGeometryWordsValid(geometryWords)
-            || !denoiserSpatialSignalWordsValid(signalWords)) {
+        ivec2 pixel, uvec4 signalWords, out vec3 position) {
+    if (!denoiserSpatialSignalWordsValid(signalWords)) {
         position = vec3(0.0);
         return false;
     }
-    float virtualScale = unpackHalf2x16(geometryWords.w).y;
-    float hitDistance = unpackHalf2x16(signalWords.w).y;
-    position = decodeNormalU(geometryWords.z)
-        * (distance + virtualScale * hitDistance);
+    float virtualDistance = unpackHalf2x16(signalWords.w).y;
+    position = reconstructPrimaryRay(uvec2(pixel)) * virtualDistance;
     return true;
 }
 
 vec3 denoiserSpatialVirtualWorldPositionFromWords(
-        uvec4 geometryWords, uvec4 signalWords, vec3 fallback) {
+        ivec2 pixel, uvec4 signalWords, vec3 fallback) {
     vec3 position;
     return denoiserSpatialTryVirtualWorldPositionFromWords(
-        geometryWords, signalWords, position) ? position : fallback;
+        pixel, signalWords, position) ? position : fallback;
 }
 
 #endif // MAXENT_SPATIAL_GEOMETRY_GLSL
