@@ -25,8 +25,9 @@ uvec4 denoiserSpatialLoadGeometryWords(ivec2 pixel) {
 }
 
 bool denoiserSpatialGeometryWordsValid(uvec4 words) {
-    float distance = uintBitsToFloat(words.x);
-    return distance >= 0.0 && !isnan(distance) && !isinf(distance);
+    // Variance preparation only emits finite nonnegative distances or -1.
+    // >= rejects both the sentinel and NaN; +Inf cannot cross that producer.
+    return uintBitsToFloat(words.x) >= 0.0;
 }
 
 DenoiserSpatialGeometry denoiserSpatialDecodeGeometry(
@@ -42,7 +43,6 @@ DenoiserSpatialGeometry denoiserSpatialDecodeGeometry(
     geometry.roughness = roughnessVirtual.x;
     geometry.virtualScale = roughnessVirtual.y;
     geometry.ggxAlpha = geometry.roughness * geometry.roughness;
-    geometry.valid = denoiserSpatialGeometryWordsValid(words);
     return geometry;
 }
 

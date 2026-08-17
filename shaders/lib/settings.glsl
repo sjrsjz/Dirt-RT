@@ -1,6 +1,18 @@
 #ifndef SETTINGS_GLSL
 #define SETTINGS_GLSL
 
+
+#if defined(MC_GL_NV_gpu_shader5)
+    #extension GL_NV_gpu_shader5 : require
+    #define HAS_NATIVE_FP16 1
+#elif defined(MC_GL_AMD_gpu_shader_half_float)
+    #extension GL_AMD_gpu_shader_half_float : require
+    #define HAS_NATIVE_FP16 1
+#else
+    #error "Dirt RT requires either GL_NV_gpu_shader5 or GL_AMD_gpu_shader_half_float."
+#endif
+
+
 // ===========================================================================
 // Dirt RT — Shader Settings
 // ===========================================================================
