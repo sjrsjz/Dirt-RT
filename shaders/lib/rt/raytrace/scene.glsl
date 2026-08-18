@@ -139,7 +139,7 @@ Material evaluateMaterial(Payload pld, vec3 rayOrigin, vec3 rd_i,
                 gradientU, gradientV,
                 vec2(gl_LaunchIDEXT.xy), vec2(gl_LaunchSizeEXT.xy),
                 cam.corners[0], cam.corners[1], cam.corners[2],
-                cam.corners[3], cam.viewInverse);
+                cam.corners[3], cam.viewInverse, rtTaaJitter(cam.frameId));
         } else {
             footprint = rtSecondaryTextureFootprint(textureResolution,
                 entityAtlas, rtCurrentConeWidth, rd_i,
@@ -161,7 +161,7 @@ Material evaluateMaterial(Payload pld, vec3 rayOrigin, vec3 rd_i,
                 atlas, hitPosition, texturePlaneNormal, gradientU, gradientV,
                 vec2(gl_LaunchIDEXT.xy), vec2(gl_LaunchSizeEXT.xy),
                 cam.corners[0], cam.corners[1], cam.corners[2],
-                cam.corners[3], cam.viewInverse);
+                cam.corners[3], cam.viewInverse, rtTaaJitter(cam.frameId));
         } else {
             footprint = rtSecondaryTextureFootprint(textureResolution,
                 atlas, rtCurrentConeWidth, rd_i,

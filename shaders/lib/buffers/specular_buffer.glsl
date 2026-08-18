@@ -28,13 +28,11 @@ struct SpecularMaxEnt {
 struct MaxEntSpecularHistory {
     vec3 surfacePosition;
     vec3 geometryNormal;
-    SpecularMaxEnt slowSignal;
+    SpecularMaxEnt signal;
     float secondMoment;
-    SpecularMaxEnt responsiveSignal;
     float hitDistance;
     float roughness;
     float historyLength;
-    float responsiveHistoryLength;
     uint materialID;
 };
 
@@ -316,33 +314,66 @@ void readRefrHistLight(uvec2 xy, out vec3 color, out float vprojDist,
     weight = uintBitsToFloat(v.z);
 }
 
-// N2: slow MaxEnt6 + sqrt(E[Y^2]) + slow Kish effective sample count.
-// N3: responsive MaxEnt6 + hit distance + roughness.
-// N1 contains only scalar distance, octahedral surface direction and packed
-// normal/material. Its formerly unused .w stores the responsive Kish effective
-// sample count as F32; the old vec3 history position is reconstructed on load.
-void writeMaxEntSpecularHistory(uvec2 xy, MaxEntSpecularHistory h) {
-    h.slowSignal = sanitizeSpecularMaxEnt(h.slowSignal);
-    h.responsiveSignal = sanitizeSpecularMaxEnt(h.responsiveSignal);
+// N1: primary surface geometry plus FP16 hit distance and roughness.
+// N2: the sole temporal MaxEnt6 history, sqrt(E[Y^2]) and Kish N_eff.
+// N3: previous final denoised MaxEnt6 plus filtered standard deviation and a
+// negative layout stamp. It replaces the former secondary history in place.
+void writeMaxEntSpecularTemporalHistory(uvec2 xy, MaxEntSpecularHistory h) {
+    h.signal = sanitizeSpecularMaxEnt(h.signal);
     h.historyLength = isnan(h.historyLength) || isinf(h.historyLength)
         ? 1.0 : clamp(h.historyLength, 1.0, 65504.0);
-    h.responsiveHistoryLength = isnan(h.responsiveHistoryLength)
-            || isinf(h.responsiveHistoryLength)
-        ? 1.0 : clamp(h.responsiveHistoryLength, 1.0, 65504.0);
     float surfaceDistance = length(h.surfacePosition);
     vec3 surfaceDirection = surfaceDistance > 1e-8
         ? h.surfacePosition / surfaceDistance : vec3(0.0, 0.0, -1.0);
     reflectBuffer.data[addr(SPEC_N_HISTGEO, xy)] = uvec4(
         floatBitsToUint(surfaceDistance), encodeNormalU(surfaceDirection),
         packMaxEntHistoryNormalMaterial(h.geometryNormal, h.materialID),
-        floatBitsToUint(h.responsiveHistoryLength));
-    uvec3 slow = packSpecularMaxEnt(h.slowSignal);
-    reflectBuffer.data[addr(SPEC_N_HISTLIGHT, xy)] = uvec4(slow,
+        packHalf2x16(clamp(vec2(h.hitDistance, h.roughness), vec2(0.0), vec2(65504.0, 1.0))));
+    uvec3 temporal = packSpecularMaxEnt(h.signal);
+    reflectBuffer.data[addr(SPEC_N_HISTLIGHT, xy)] = uvec4(temporal,
         pack2HalfClampedU(encodeSqrtMomentFP16(h.secondMoment),
             h.historyLength));
-    uvec3 responsive = packSpecularMaxEnt(h.responsiveSignal);
-    reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)] = uvec4(responsive,
-        pack2HalfClampedU(h.hitDistance, h.roughness));
+}
+
+void writeMaxEntSpecularDenoisedHistory(uvec2 xy, SpecularMaxEnt signal, float stddev) {
+    signal = sanitizeSpecularMaxEnt(signal);
+    if (!(stddev >= 0.0) || isnan(stddev) || isinf(stddev)) {
+        reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)] = uvec4(0u, 0u, 0u,
+            packHalf2x16(vec2(-1.0, 0.0)));
+        return;
+    }
+    uvec3 denoised = packSpecularMaxEnt(signal);
+    reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)] = uvec4(denoised,
+        packHalf2x16(vec2(min(stddev, 65504.0), -2.0)));
+}
+
+void writeMaxEntSpecularDenoisedHistoryInvalid(uvec2 xy) {
+    reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)] = uvec4(0u, 0u, 0u,
+        packHalf2x16(vec2(-1.0, 0.0)));
+}
+
+void writeMaxEntSpecularDenoisedReprojection(uvec2 xy, SpecularMaxEnt signal,
+        float variance, float temporalCurrentWeight) {
+    uvec3 denoised = packSpecularMaxEnt(signal);
+    reflectBuffer.data[addr(SPEC_N_LIGHT, xy)] = uvec4(denoised,
+        packHalf2x16(vec2(min(sqrt(max(variance, 0.0)), 65504.0),
+            -clamp(temporalCurrentWeight, 0.0, 1.0))));
+}
+
+void writeMaxEntSpecularDenoisedReprojectionInvalid(uvec2 xy) {
+    reflectBuffer.data[addr(SPEC_N_LIGHT, xy)] = uvec4(0u, 0u, 0u,
+        packHalf2x16(vec2(-1.0, 0.0)));
+}
+
+bool readMaxEntSpecularDenoisedReprojection(uvec2 xy, out SpecularMaxEnt signal,
+        out float stddev, out float temporalCurrentWeight) {
+    uvec4 words = reflectBuffer.data[addr(SPEC_N_LIGHT, xy)];
+    vec2 metadata = unpackHalf2x16(words.w);
+    stddev = metadata.x;
+    temporalCurrentWeight = -metadata.y;
+    bool valid = stddev >= 0.0 && metadata.y < 0.0 && !any(isnan(metadata)) && !any(isinf(metadata));
+    signal = valid ? unpackSpecularMaxEnt(words.xyz) : emptySpecularMaxEnt();
+    return valid;
 }
 
 MaxEntSpecularHistory readMaxEntSpecularHistory(uvec2 xy) {
@@ -351,36 +382,30 @@ MaxEntSpecularHistory readMaxEntSpecularHistory(uvec2 xy) {
     uvec4 s = reflectBuffer.data[addr(SPEC_N_HISTLIGHT, xy)];
     uvec4 m = reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)];
     vec2 m2History = unpackHalf2x16(s.w);
-    vec2 hitRoughness = unpackHalf2x16(m.w);
+    vec2 hitRoughness = unpackHalf2x16(g.w);
+    vec2 denoisedMetadata = unpackHalf2x16(m.w);
     float surfaceDistance = uintBitsToFloat(g.x);
     h.surfacePosition = decodeNormalU(g.y) * surfaceDistance;
     unpackMaxEntHistoryNormalMaterial(g.z, h.geometryNormal, h.materialID);
-    h.slowSignal = unpackSpecularMaxEnt(s.xyz);
+    h.signal = unpackSpecularMaxEnt(s.xyz);
     h.secondMoment = decodeSqrtMomentFP16(m2History.x);
     h.historyLength = max(m2History.y, 0.0);
-    h.responsiveHistoryLength = uintBitsToFloat(g.w);
-    // Old histories wrote zero to this word. Fall back to slow N_eff for a
-    // seamless shader reload instead of invalidating otherwise usable data.
-    if (!(h.responsiveHistoryLength >= 1.0)
-            || isnan(h.responsiveHistoryLength)
-            || isinf(h.responsiveHistoryLength))
-        h.responsiveHistoryLength = max(h.historyLength, 1.0);
-    h.responsiveSignal = unpackSpecularMaxEnt(m.xyz);
+    bool denoisedValid = denoisedMetadata.x >= 0.0 && denoisedMetadata.y == -2.0
+        && !any(isnan(denoisedMetadata)) && !any(isinf(denoisedMetadata));
     h.hitDistance = max(hitRoughness.x, 0.0);
     h.roughness = clamp(hitRoughness.y, 0.0, 1.0);
     bool valid = surfaceDistance >= 0.0 && !isnan(surfaceDistance) &&
         !isinf(surfaceDistance) &&
-        h.historyLength <= 255.0 && h.materialID != 0xffffffffu;
+        h.historyLength >= 1.0 && h.historyLength <= 65504.0 &&
+        h.materialID != 0xffffffffu && denoisedValid;
     if (!valid) {
         h.surfacePosition = vec3(0.0);
         h.geometryNormal = vec3(0.0, 1.0, 0.0);
-        h.slowSignal = emptySpecularMaxEnt();
+        h.signal = emptySpecularMaxEnt();
         h.secondMoment = 0.0;
-        h.responsiveSignal = emptySpecularMaxEnt();
         h.hitDistance = 0.0;
         h.roughness = 1.0;
         h.historyLength = 0.0;
-        h.responsiveHistoryLength = 0.0;
         h.materialID = 0u;
     }
     return h;

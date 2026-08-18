@@ -93,20 +93,6 @@ SpecularMaxEnt maxentScaleMaxEnt(SpecularMaxEnt s, float scale) {
     return sanitizeSpecularMaxEnt(s);
 }
 
-vec3 maxentMaxEntYCoCg(SpecularMaxEnt s) {
-    s = sanitizeSpecularMaxEnt(s);
-    return vec3(s.maxEntY.w, s.CoCg);
-}
-
-SpecularMaxEnt maxentSetMaxEntYCoCg(SpecularMaxEnt s, vec3 ycocg) {
-    ycocg.x = max(ycocg.x, 0.0);
-    float scale = ycocg.x / max(s.maxEntY.w, 1e-8);
-    s.maxEntY.xyz *= scale;
-    s.maxEntY.w = ycocg.x;
-    s.CoCg = ycocg.yz;
-    return sanitizeSpecularMaxEnt(s);
-}
-
 // Raw temporal input: MaxEnt6 plus the reflection hit distance.
 struct MaxEntSpecularInput {
     SpecularMaxEnt signal;
@@ -125,20 +111,20 @@ MaxEntSpecularInput maxentUnpackSpecularInput(uvec4 p) {
     return s;
 }
 
-struct MaxEntSlowSignal {
+struct MaxEntTemporalSignal {
     SpecularMaxEnt signal;
     float secondMoment;
-    float historyLength; // slow-history Kish N_eff
+    float historyLength;
 };
 
-uvec4 maxentPackSlow(MaxEntSlowSignal s) {
+uvec4 maxentPackTemporal(MaxEntTemporalSignal s) {
     uvec3 p = packSpecularMaxEnt(s.signal);
     return uvec4(p, maxentPackHalf2(
         encodeSqrtMomentFP16(s.secondMoment), s.historyLength));
 }
 
-MaxEntSlowSignal maxentUnpackSlow(uvec4 p) {
-    MaxEntSlowSignal s;
+MaxEntTemporalSignal maxentUnpackTemporal(uvec4 p) {
+    MaxEntTemporalSignal s;
     s.signal = unpackSpecularMaxEnt(p.xyz);
     vec2 momentHistory = unpackHalf2x16(p.w);
     s.secondMoment = decodeSqrtMomentFP16(momentHistory.x);
@@ -146,24 +132,12 @@ MaxEntSlowSignal maxentUnpackSlow(uvec4 p) {
     return s;
 }
 
-struct MaxEntFastSignal {
-    SpecularMaxEnt signal;
-    float hitDistance;
-    float historyLength; // responsive-history Kish N_eff
-};
-
-uvec4 maxentPackFast(MaxEntFastSignal s) {
-    uvec3 p = packSpecularMaxEnt(s.signal);
-    return uvec4(p, maxentPackHalf2(s.hitDistance, s.historyLength));
+uvec4 maxentPackTemporalAux(float hitDistance) {
+    return uvec4(maxentPackHalf2(hitDistance, 0.0), 0u, 0u, 0u);
 }
 
-MaxEntFastSignal maxentUnpackFast(uvec4 p) {
-    MaxEntFastSignal s;
-    s.signal = unpackSpecularMaxEnt(p.xyz);
-    vec2 hn = unpackHalf2x16(p.w);
-    s.hitDistance = max(hn.x, 0.0);
-    s.historyLength = max(hn.y, 0.0);
-    return s;
+float maxentUnpackTemporalHitDistance(uvec4 p) {
+    return max(unpackHalf2x16(p.x).x, 0.0);
 }
 
 float maxentSpecLobeTanHalfAngle(float roughness, float volumeFraction) {

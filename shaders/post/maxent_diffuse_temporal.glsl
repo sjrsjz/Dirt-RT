@@ -25,8 +25,8 @@ uniform vec2 resolution;
 #define MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE 1.0
 #endif
 
-#ifndef MAXENT_TEMPORAL_REPROJECTION_RADIUS
-#define MAXENT_TEMPORAL_REPROJECTION_RADIUS 1.0
+#ifndef MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS
+#define MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS 1.5
 #endif
 
 #ifndef MAXENT_TEMPORAL_GEOMETRY_EPSILON
@@ -112,8 +112,8 @@ bool buildTemporalFootprint(uvec2 pix, vec3 currentPos, vec3 geometryNormal, vec
 
     mat4 invVP = rtInverseViewProjection;
     vec2 curRes = vec2(resolution);
-    vec2 uvMin = (vec2(pix) - MAXENT_TEMPORAL_REPROJECTION_RADIUS) / curRes * 2.0 - 1.0;
-    vec2 uvMax = (vec2(pix) + MAXENT_TEMPORAL_REPROJECTION_RADIUS) / curRes * 2.0 - 1.0;
+    vec2 uvMin = (vec2(pix) - MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS) / curRes * 2.0 - 1.0;
+    vec2 uvMax = (vec2(pix) + MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS) / curRes * 2.0 - 1.0;
 
     bool v0, v1, v2, v3;
     fp.origin = currentPos + camDelta;
@@ -178,7 +178,7 @@ bool buildTemporalFootprintFast(
     // A two-pixel diagonal at unit aspect is approximately 4*d/resY in
     // world space. Division by NoV reproduces the ray/plane expansion at
     // grazing angles without reconstructing four near/far ray pairs.
-    fp.depthHalfExtent = max(4.0 * MAXENT_TEMPORAL_REPROJECTION_RADIUS *
+    fp.depthHalfExtent = max(4.0 * MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS *
         pixelWorldSize * MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE / max(noV, 0.05),
         1e-5);
     return true;
@@ -202,7 +202,7 @@ bool strictHistoryGeometryTestFast(
     if (!(clip.w > 1e-7) || isinf(clip.w)) return false;
     vec2 projectedPixel = (clip.xy / clip.w * 0.5 + 0.5) *
         vec2(resolution_global);
-    vec2 extent = vec2(MAXENT_TEMPORAL_REPROJECTION_RADIUS +
+    vec2 extent = vec2(MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS +
         MAXENT_TEMPORAL_GEOMETRY_EPSILON);
     return all(lessThanEqual(abs(projectedPixel - vec2(currentPixel)), extent));
 }

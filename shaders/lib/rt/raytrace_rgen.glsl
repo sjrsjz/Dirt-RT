@@ -159,7 +159,11 @@ void main() {
     ResolveFirstBounceRestirGI(pixel, cam.viewInverse[3].xyz);
     #else
     vec2 px = vec2(gl_LaunchIDEXT.xy);
-    vec2 p = px / vec2(gl_LaunchSizeEXT.xy);
+    vec2 taaJitter = vec2(0.0);
+    #if defined(PRIMARY_GBUFFER_PASS)
+    taaJitter = rtTaaJitter(cam.frameId);
+    #endif
+    vec2 p = (px + taaJitter) / vec2(gl_LaunchSizeEXT.xy);
 
     vec3 origin = cam.viewInverse[3].xyz;
     vec3 target = mix(mix(cam.corners[0], cam.corners[2], p.y), mix(cam.corners[1], cam.corners[3], p.y), p.x);
@@ -210,16 +214,18 @@ void main() {
         // ModelView: pure rotation (transpose of viewInverse), no translation
         rtModelView = mat4(transpose(mat3(cam.viewInverse)));
 
-        // Projection: asymmetric frustum (with TAA jitter offset)
+        // The projection carries the same sub-pixel phase as the traced ray,
+        // so distance-only G-buffer reconstruction remains exact.
         float zNear = -cam.corners[0].z;
         float w = cam.corners[1].x - cam.corners[0].x;
         float h = cam.corners[2].y - cam.corners[0].y;
+        vec2 jitterNdc = 2.0 * taaJitter / vec2(gl_LaunchSizeEXT.xy);
         float farD = 2048.0;
         mat4 projection = mat4(0.0);
         projection[0][0] = (2.0 * zNear) / w;
         projection[1][1] = (2.0 * zNear) / h;
-        projection[2][0] = (cam.corners[1].x + cam.corners[0].x) / w;
-        projection[2][1] = (cam.corners[2].y + cam.corners[0].y) / h;
+        projection[2][0] = (cam.corners[1].x + cam.corners[0].x) / w + jitterNdc.x;
+        projection[2][1] = (cam.corners[2].y + cam.corners[0].y) / h + jitterNdc.y;
         projection[2][2] = -(farD + zNear) / (farD - zNear);
         projection[2][3] = -1.0;
         projection[3][2] = -(2.0 * farD * zNear) / (farD - zNear);

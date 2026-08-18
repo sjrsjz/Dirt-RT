@@ -25,6 +25,7 @@ float clampDiffuseHistoryWeightByDenoisedDifference(float historyWeight, uvec4 c
     uvec4 reprojectedWords, out float normalizedDistance) {
     normalizedDistance = -1.0;
     historyWeight = isnan(historyWeight) || isinf(historyWeight) ? 1.0 : max(historyWeight, 1.0);
+    if (historyWeight <= MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY) return historyWeight;
     if (!denoiserSpatialSignalWordsValid(currentWords)
             || !denoiserSpatialSignalWordsValid(reprojectedWords)) return historyWeight;
 
@@ -55,7 +56,8 @@ float clampDiffuseHistoryWeightByDenoisedDifference(float historyWeight, uvec4 c
     // Convert statistical agreement into an upper bound on reusable history.
     // One effective sample is always retained, so a large change responds in
     // the next frame without turning the estimator into an invalid N_eff < 1.
-    float agreement = exp(-min(normalizedDistance, 80.0) * (1.0 / MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE));
+    float k = min(normalizedDistance, 80.0) * (1.0 / MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE);
+    float agreement = (1 + k) * exp(-k);
     float maximumHistory = max(float(MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY), 1.0);
     float historyCap = 1.0 + (maximumHistory - 1.0) * agreement;
     return min(historyWeight, historyCap);

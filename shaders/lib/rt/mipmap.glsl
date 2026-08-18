@@ -13,6 +13,11 @@ struct RtTextureEllipse {
     float minorTexels;
 };
 
+vec2 rtTaaJitter(uint frameId) {
+    float phase = float((frameId & 0xffffu) + 1u);
+    return fract(phase * vec2(0.754877666, 0.569840291)) - 0.5;
+}
+
 float rtPixelConeSpread(vec3 corner0, vec3 corner1, vec3 corner2,
         vec2 resolution) {
     vec2 safeResolution = max(resolution, vec2(1.0));
@@ -167,11 +172,11 @@ RtTextureFootprint rtPrimaryTextureFootprint(ivec2 baseTextureSize,
         vec4 atlas, vec3 hitPosition, vec3 geometryNormal,
         vec3 gradientU, vec3 gradientV, vec2 pixel, vec2 launchSize,
         vec3 corner0, vec3 corner1, vec3 corner2, vec3 corner3,
-        mat4 viewInverse) {
+        mat4 viewInverse, vec2 jitter) {
     vec3 rayOrigin = viewInverse[3].xyz;
-    vec3 directionX = rtCameraRayDirection(pixel + vec2(1.0, 0.0),
+    vec3 directionX = rtCameraRayDirection(pixel + jitter + vec2(1.0, 0.0),
         launchSize, corner0, corner1, corner2, corner3, viewInverse);
-    vec3 directionY = rtCameraRayDirection(pixel + vec2(0.0, 1.0),
+    vec3 directionY = rtCameraRayDirection(pixel + jitter + vec2(0.0, 1.0),
         launchSize, corner0, corner1, corner2, corner3, viewInverse);
     vec3 deltaX = rtIntersectDifferentialPlane(rayOrigin, directionX,
         hitPosition, geometryNormal) - hitPosition;

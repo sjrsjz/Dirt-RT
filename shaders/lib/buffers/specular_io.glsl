@@ -130,7 +130,7 @@ vec3IlluminationData fetchReflect(ivec2 p) {
 
 #ifndef REFLECT_BUFFER_MIN2
     MaxEntSpecularHistory history = readMaxEntSpecularHistory(xy);
-    tmp.data = specularMaxEntTotalRgb(history.slowSignal);
+    tmp.data = specularMaxEntTotalRgb(history.signal);
     tmp.prev_weight = history.historyLength;
     tmp.pos = history.surfacePosition;
     tmp.normal = history.geometryNormal * history.hitDistance;

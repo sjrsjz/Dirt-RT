@@ -14,8 +14,8 @@
 // N=1: vec4(packHalf(spR,spG), packHalf(spB,dfR), packHalf(dfG,dfB), pad)
 // N=2: vec4(packHalf(trR,trG), packHalf(trB,emR), packHalf(emG,emB), pad)
 // N=3: vec4(packHalf(ltR,ltG), packHalf(ltB,abR), packHalf(abG,abB), pad)
-// The deterministic primary ray is reconstructed from the native RT pixel
-// grid and the cached asymmetric RT projection; it is not stored per pixel.
+// The per-frame jittered primary ray is reconstructed from the native RT
+// pixel grid and cached asymmetric projection; it is not stored per pixel.
 // A negative distance is the sole sky/invalid-surface marker.
 
 // N=0..5 layer constants (semantic)
@@ -43,8 +43,8 @@ vec3 readPrimaryGeometryNormal(uvec2 xy) {
 
 vec3 reconstructPrimaryRay(uvec2 xy, uvec2 rayResolution) {
     vec2 safeResolution = max(vec2(rayResolution), vec2(1.0));
-    // Match raytrace_rgen exactly: the native RT grid uses pixel/resolution,
-    // not the conventional (pixel + 0.5)/resolution texel-centre UV.
+    // Match raytrace_rgen exactly: the native RT grid uses pixel/resolution.
+    // rtProjectionParams already contains this frame's TAA phase.
     vec2 ndc = vec2(xy) / safeResolution * 2.0 - 1.0;
     vec2 projectionScale = rtProjectionParams.xy;
     vec2 inverseScale = vec2(

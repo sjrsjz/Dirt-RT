@@ -11,32 +11,28 @@ layout(rgba32ui) uniform writeonly uimage2D colorimg4;
 layout(rgba32ui) uniform writeonly uimage2D colorimg5;
 
 struct MaxEntReprojectedHistory {
-    SpecularMaxEnt slowSignal;
+    uvec3 signalWords;
     float secondMoment;
-    SpecularMaxEnt responsiveSignal;
+    uvec4 denoisedWords;
     float hitDistance;
-    vec3 normal;
+    uint normalWord;
     float roughness;
     float historyLength;
-    float responsiveHistoryLength;
     float historyEvidence;
-    float responsiveHistoryEvidence;
     float footprintQuality;
     bool found;
 };
 
 MaxEntReprojectedHistory maxentEmptyHistory() {
     MaxEntReprojectedHistory h;
-    h.slowSignal = emptySpecularMaxEnt();
+    h.signalWords = uvec3(0u);
     h.secondMoment = 0.0;
-    h.responsiveSignal = emptySpecularMaxEnt();
+    h.denoisedWords = uvec4(0u);
     h.hitDistance = 0.0;
-    h.normal = vec3(0.0, 1.0, 0.0);
+    h.normalWord = encodeNormalU(vec3(0.0, 1.0, 0.0));
     h.roughness = 1.0;
     h.historyLength = 0.0;
-    h.responsiveHistoryLength = 0.0;
     h.historyEvidence = 0.0;
-    h.responsiveHistoryEvidence = 0.0;
     h.footprintQuality = 0.0;
     h.found = false;
     return h;
@@ -49,7 +45,7 @@ bool maxentSurfaceFootprintContains(uvec2 currentPixel,
     vec2 projectedPixel = (clip.xy / clip.w * 0.5 + 0.5) *
         vec2(resolution_global);
     return all(lessThanEqual(abs(projectedPixel - vec2(currentPixel)),
-        vec2(MAXENT_TEMPORAL_REPROJECTION_RADIUS + 1e-5)));
+        vec2(MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS + 1e-5)));
 }
 
 MaxEntReprojectedHistory maxentLoadHistory(
@@ -73,12 +69,13 @@ MaxEntReprojectedHistory maxentLoadHistory(
     vec4 bilinear = vec4((1.0 - f.x) * (1.0 - f.y),
         f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
     float sumWeight = 0.0;
-    float slowWeightOverSamples = 0.0;
-    float responsiveWeightOverSamples = 0.0;
-    float slowSampleMass = 0.0;
-    float responsiveSampleMass = 0.0;
+    float weightOverSamples = 0.0;
+    float sampleMass = 0.0;
     float validBilinearWeight = 0.0;
     int validTapCount = 0;
+    SpecularMaxEnt signalSum = emptySpecularMaxEnt();
+    SpecularMaxEnt denoisedSum = emptySpecularMaxEnt();
+    float denoisedVariance = 0.0;
     vec3 normalSum = vec3(0.0);
     float depthThreshold = MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD *
         max(length(currentSurfacePosition), 1.0);
@@ -86,16 +83,31 @@ MaxEntReprojectedHistory maxentLoadHistory(
     for (int i = 0; i < 4; ++i) {
         ivec2 p = origin + ivec2(i & 1, i >> 1);
         if (!maxentInBounds(p, size)) continue;
-        MaxEntSpecularHistory h = readMaxEntSpecularHistory(uvec2(p));
-        if (h.historyLength < 0.5 || h.materialID != currentMaterial) continue;
+        uvec2 historyPixel = uvec2(p);
+        uvec4 geometryWords = reflectBuffer.data[addr(SPEC_N_HISTGEO, historyPixel)];
+        uvec4 signalWords = reflectBuffer.data[addr(SPEC_N_HISTLIGHT, historyPixel)];
+        uvec4 denoisedWords = reflectBuffer.data[addr(SPEC_N_HISTMETA, historyPixel)];
+        float surfaceDistance = uintBitsToFloat(geometryWords.x);
+        vec2 momentHistory = unpackHalf2x16(signalWords.w);
+        vec2 denoisedMetadata = unpackHalf2x16(denoisedWords.w);
+        if (!(surfaceDistance >= 0.0) || isnan(surfaceDistance) || isinf(surfaceDistance)
+                || !(momentHistory.y >= 1.0) || denoisedMetadata.y != -2.0
+                || !(denoisedMetadata.x >= 0.0) || any(isnan(momentHistory))
+                || any(isinf(momentHistory)) || any(isnan(denoisedMetadata))
+                || any(isinf(denoisedMetadata))) continue;
 
-        vec3 previousSurfaceCurrent = h.surfacePosition - cameraDelta;
+        vec3 historyNormal;
+        uint historyMaterial;
+        unpackMaxEntHistoryNormalMaterial(geometryWords.z, historyNormal, historyMaterial);
+        if (historyMaterial != currentMaterial) continue;
+
+        vec3 previousSurfaceCurrent = decodeNormalU(geometryWords.y) * surfaceDistance - cameraDelta;
         if (abs(dot(previousSurfaceCurrent - currentSurfacePosition,
                 currentNormal)) > depthThreshold)
             continue;
         // Geometry normals only provide a hard topology/silhouette guard.
         // They never attenuate a valid history sample.
-        if (dot(currentNormal, h.geometryNormal) <= 0.0) continue;
+        if (dot(currentNormal, historyNormal) <= 0.0) continue;
         if (requireSurfaceFootprint && !maxentSurfaceFootprintContains(
                 currentPixel, previousSurfaceCurrent))
             continue;
@@ -104,22 +116,19 @@ MaxEntReprojectedHistory maxentLoadHistory(
         validBilinearWeight += w;
         ++validTapCount;
         if (w <= 0.0) continue;
-        outHistory.slowSignal.maxEntY += h.slowSignal.maxEntY * w;
-        outHistory.slowSignal.CoCg += h.slowSignal.CoCg * w;
-        outHistory.secondMoment += h.secondMoment * w;
-        outHistory.responsiveSignal.maxEntY +=
-            h.responsiveSignal.maxEntY * w;
-        outHistory.responsiveSignal.CoCg +=
-            h.responsiveSignal.CoCg * w;
-        outHistory.hitDistance += h.hitDistance * w;
-        outHistory.roughness += (h.roughness - 1.0) * w;
-        float slowSamples = max(h.historyLength, 1.0);
-        float responsiveSamples = max(h.responsiveHistoryLength, 1.0);
-        slowWeightOverSamples += w / slowSamples;
-        responsiveWeightOverSamples += w / responsiveSamples;
-        slowSampleMass += w * slowSamples;
-        responsiveSampleMass += w * responsiveSamples;
-        normalSum += h.geometryNormal * w;
+        signalSum.maxEntY += vec4(unpackHalf2x16(signalWords.x), unpackHalf2x16(signalWords.y)) * w;
+        signalSum.CoCg += unpackHalf2x16(signalWords.z) * w;
+        outHistory.secondMoment += decodeSqrtMomentFP16(momentHistory.x) * w;
+        denoisedSum.maxEntY += vec4(unpackHalf2x16(denoisedWords.x), unpackHalf2x16(denoisedWords.y)) * w;
+        denoisedSum.CoCg += unpackHalf2x16(denoisedWords.z) * w;
+        denoisedVariance += denoisedMetadata.x * denoisedMetadata.x * w;
+        vec2 hitRoughness = unpackHalf2x16(geometryWords.w);
+        outHistory.hitDistance += hitRoughness.x * w;
+        outHistory.roughness += (hitRoughness.y - 1.0) * w;
+        float samples = momentHistory.y;
+        weightOverSamples += w / samples;
+        sampleMass += w * samples;
+        normalSum += historyNormal * w;
         sumWeight += w;
     }
 
@@ -129,33 +138,24 @@ MaxEntReprojectedHistory maxentLoadHistory(
     if (!accepted || sumWeight <= 1e-5) return maxentEmptyHistory();
 
     float invWeight = 1.0 / sumWeight;
-    outHistory.slowSignal.maxEntY *= invWeight;
-    outHistory.slowSignal.CoCg *= invWeight;
-    outHistory.slowSignal = sanitizeSpecularMaxEnt(outHistory.slowSignal);
+    signalSum = maxentScaleMaxEnt(signalSum, invWeight);
+    outHistory.signalWords = packSpecularMaxEnt(signalSum);
     outHistory.secondMoment *= invWeight;
-    outHistory.responsiveSignal.maxEntY *= invWeight;
-    outHistory.responsiveSignal.CoCg *= invWeight;
-    outHistory.responsiveSignal = sanitizeSpecularMaxEnt(
-        outHistory.responsiveSignal);
+    denoisedSum = maxentScaleMaxEnt(denoisedSum, invWeight);
+    outHistory.denoisedWords = uvec4(packSpecularMaxEnt(denoisedSum),
+        floatBitsToUint(denoisedVariance * invWeight));
     outHistory.hitDistance *= invWeight;
     outHistory.roughness = clamp(1.0 +
         (outHistory.roughness - 1.0) * invWeight, 0.0, 1.0);
     outHistory.historyLength = maxentTemporalReprojectedEffectiveSamples(
-        sumWeight, slowWeightOverSamples,
+        sumWeight, weightOverSamples,
         float(MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY));
-    outHistory.responsiveHistoryLength =
-        maxentTemporalReprojectedEffectiveSamples(sumWeight,
-            responsiveWeightOverSamples,
-            float(MAXENT_SPECULAR_TEMPORAL_MAX_FAST_HISTORY));
     // History evidence controls temporal reuse.  Unlike the statistical ESS,
     // it is an arithmetic reconstruction of the contributing histories and
     // therefore cannot acquire a texel-phase-dependent 2x/4x gain.
-    outHistory.historyEvidence = clamp(slowSampleMass * invWeight,
+    outHistory.historyEvidence = clamp(sampleMass * invWeight,
         0.0, float(MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY));
-    outHistory.responsiveHistoryEvidence = clamp(
-        responsiveSampleMass * invWeight,
-        0.0, float(MAXENT_SPECULAR_TEMPORAL_MAX_FAST_HISTORY));
-    outHistory.normal = maxentSafeNormalize(normalSum * invWeight, currentNormal);
+    outHistory.normalWord = encodeNormalU(maxentSafeNormalize(normalSum * invWeight, currentNormal));
     outHistory.footprintQuality = clamp(validBilinearWeight, 0.0, 1.0);
     outHistory.found = true;
     return outHistory;
@@ -181,6 +181,28 @@ float maxentSpecMagicCurve(float roughness) {
     return 1.0 - exp2(-200.0 * roughness * roughness);
 }
 
+void maxentPublishDenoisedReprojection(MaxEntReprojectedHistory surface,
+        MaxEntReprojectedHistory virtualHistory, float surfaceAlpha,
+        float virtualAlpha, float virtualAmount) {
+    float surfaceWeight = (1.0 - virtualAmount) * (1.0 - surfaceAlpha);
+    float virtualWeight = virtualAmount * (1.0 - virtualAlpha);
+    float historyWeight = surfaceWeight + virtualWeight;
+    if (historyWeight <= 1e-5) {
+        writeMaxEntSpecularDenoisedReprojectionInvalid(gl_GlobalInvocationID.xy);
+        return;
+    }
+    float inverseHistoryWeight = 1.0 / historyWeight;
+    SpecularMaxEnt surfaceDenoised = unpackSpecularMaxEnt(surface.denoisedWords.xyz);
+    SpecularMaxEnt virtualDenoised = unpackSpecularMaxEnt(virtualHistory.denoisedWords.xyz);
+    SpecularMaxEnt denoised = maxentWeightedMaxEnt(surfaceDenoised,
+        surfaceWeight, virtualDenoised, virtualWeight);
+    denoised = maxentScaleMaxEnt(denoised, inverseHistoryWeight);
+    float variance = (surfaceWeight * uintBitsToFloat(surface.denoisedWords.w)
+        + virtualWeight * uintBitsToFloat(virtualHistory.denoisedWords.w)) * inverseHistoryWeight;
+    writeMaxEntSpecularDenoisedReprojection(gl_GlobalInvocationID.xy,
+        denoised, variance, 1.0 - historyWeight);
+}
+
 void main() {
     uvec2 pixel = gl_GlobalInvocationID.xy;
     if (any(greaterThanEqual(pixel, resolution_global))) return;
@@ -194,6 +216,9 @@ void main() {
     if (!currentGeometry.valid) {
         imageStore(colorimg4, ivec2(pixel), uvec4(0u));
         imageStore(colorimg5, ivec2(pixel), uvec4(0u));
+        #if DEBUG_VIEW != 8
+        writeMaxEntSpecularDenoisedReprojectionInvalid(pixel);
+        #endif
         return;
     }
 
@@ -238,22 +263,15 @@ void main() {
     MaxEntReprojectedHistory virtualHistory = maxentLoadHistory(virtualUv,
         pixel, currentPos, currentNormal, currentMaterial, cameraDelta,
         true, false);
-
     if (motionValid < 0.5) {
         surface.found = false;
         virtualHistory.found = false;
     }
 
-    float surfaceSlowEvidence = min(surface.historyEvidence,
+    float surfaceEvidence = min(surface.historyEvidence,
         float(MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY));
-    float virtualSlowEvidence = min(virtualHistory.historyEvidence,
+    float virtualEvidence = min(virtualHistory.historyEvidence,
         float(MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY));
-    float surfaceResponsiveEvidence = min(
-        surface.responsiveHistoryEvidence,
-        float(MAXENT_SPECULAR_TEMPORAL_MAX_FAST_HISTORY));
-    float virtualResponsiveEvidence = min(
-        virtualHistory.responsiveHistoryEvidence,
-        float(MAXENT_SPECULAR_TEMPORAL_MAX_FAST_HISTORY));
 
     float lobeHalfAngle = max(atan(maxentSpecLobeTanHalfAngle(
         currentRoughness, MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION)), 1.5 / 255.0);
@@ -267,7 +285,7 @@ void main() {
     float vmbConfidence = virtualHistory.found
         ? 0.1 + 0.9 * virtualRoughnessWeight : 0.0;
     if (virtualHistory.found)
-        vmbConfidence *= float(dot(virtualHistory.normal, currentNormal) > 0.0);
+        vmbConfidence *= float(dot(decodeNormalU(virtualHistory.normalWord), currentNormal) > 0.0);
 
     float magicCurve = maxentSpecMagicCurve(currentRoughness);
     float hitDistanceCenter = mix(noisy.hitDistance,
@@ -295,40 +313,28 @@ void main() {
             lobeRadiusPixels + 0.25, uvErrorPixels);
     }
 
-    float smbSlowAlpha = surface.found
+    float smbAlpha = surface.found
         ? max(1.0 - smbConfidence,
-            1.0 / (1.0 + surfaceSlowEvidence)) : 1.0;
-    float smbFastAlpha = surface.found
-        ? max(smbSlowAlpha,
-            1.0 / (1.0 + surfaceResponsiveEvidence)) : 1.0;
-    float vmbSlowAlpha = virtualHistory.found
+            1.0 / (1.0 + surfaceEvidence)) : 1.0;
+    float vmbAlpha = virtualHistory.found
         ? max(1.0 - vmbConfidence,
-            1.0 / (1.0 + virtualSlowEvidence)) : 1.0;
-    float vmbFastAlpha = virtualHistory.found
-        ? max(1.0 - vmbConfidence * hitConfidence,
-            1.0 / (1.0 + virtualResponsiveEvidence)) : 1.0;
+            1.0 / (1.0 + virtualEvidence)) : 1.0;
     float vmbHitAlpha = virtualHistory.found
         ? max(1.0 - vmbConfidence * hitConfidence,
-            max(0.1, 1.0 / (1.0 + virtualSlowEvidence))) : 1.0;
+            max(0.1, 1.0 / (1.0 + virtualEvidence))) : 1.0;
 
-    SpecularMaxEnt slowSMB = surface.found
-        ? maxentMixMaxEnt(surface.slowSignal, noisy.signal, smbSlowAlpha)
+    SpecularMaxEnt temporalSMB = surface.found
+        ? maxentMixMaxEnt(unpackSpecularMaxEnt(surface.signalWords), noisy.signal, smbAlpha)
         : noisy.signal;
-    SpecularMaxEnt slowVMB = virtualHistory.found
-        ? maxentMixMaxEnt(virtualHistory.slowSignal, noisy.signal, vmbSlowAlpha)
+    SpecularMaxEnt temporalVMB = virtualHistory.found
+        ? maxentMixMaxEnt(unpackSpecularMaxEnt(virtualHistory.signalWords), noisy.signal, vmbAlpha)
         : noisy.signal;
-    SpecularMaxEnt fastSMB = surface.found
-        ? maxentMixMaxEnt(surface.responsiveSignal, noisy.signal, smbFastAlpha)
-        : noisy.signal;
-    SpecularMaxEnt fastVMB = virtualHistory.found
-        ? maxentMixMaxEnt(virtualHistory.responsiveSignal, noisy.signal,
-            vmbFastAlpha) : noisy.signal;
     float m2SMB = surface.found ? mix(surface.secondMoment,
-        noisyM2, smbSlowAlpha) : noisyM2;
+        noisyM2, smbAlpha) : noisyM2;
     float m2VMB = virtualHistory.found ? mix(virtualHistory.secondMoment,
-        noisyM2, vmbSlowAlpha) : noisyM2;
+        noisyM2, vmbAlpha) : noisyM2;
     float hitSMB = surface.found ? mix(surface.hitDistance,
-        noisy.hitDistance, max(smbSlowAlpha, 0.1)) : noisy.hitDistance;
+        noisy.hitDistance, max(smbAlpha, 0.1)) : noisy.hitDistance;
     float hitVMB = virtualHistory.found ? mix(virtualHistory.hitDistance,
         noisy.hitDistance, vmbHitAlpha) : noisy.hitDistance;
 
@@ -337,36 +343,33 @@ void main() {
     virtualAmount *= clamp(vmbConfidence / max(smbConfidence, 1e-6), 0.0, 1.0);
     virtualAmount = clamp(virtualAmount, 0.0, 1.0);
 
-    MaxEntSlowSignal slow;
-    slow.signal = maxentMixMaxEnt(slowSMB, slowVMB, virtualAmount);
-    slow.secondMoment = mix(m2SMB, m2VMB, virtualAmount);
-    slow.historyLength = maxentTemporalSharedCurrentEffectiveSamples(
-        surface.historyLength, smbSlowAlpha, surface.found,
-        virtualHistory.historyLength, vmbSlowAlpha,
+    MaxEntTemporalSignal temporal;
+    temporal.signal = maxentMixMaxEnt(temporalSMB, temporalVMB, virtualAmount);
+    temporal.secondMoment = mix(m2SMB, m2VMB, virtualAmount);
+    temporal.historyLength = maxentTemporalSharedCurrentEffectiveSamples(
+        surface.historyLength, smbAlpha, surface.found,
+        virtualHistory.historyLength, vmbAlpha,
         virtualHistory.found, virtualAmount,
         float(MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY));
 
-    MaxEntFastSignal fast;
-    fast.signal = maxentMixMaxEnt(fastSMB, fastVMB, virtualAmount);
-    fast.hitDistance = mix(hitSMB, hitVMB, virtualAmount);
-    fast.historyLength = maxentTemporalSharedCurrentEffectiveSamples(
-        surface.responsiveHistoryLength, smbFastAlpha, surface.found,
-        virtualHistory.responsiveHistoryLength, vmbFastAlpha,
-        virtualHistory.found, virtualAmount,
-        float(MAXENT_SPECULAR_TEMPORAL_MAX_FAST_HISTORY));
+    float hitDistance = mix(hitSMB, hitVMB, virtualAmount);
+    #if DEBUG_VIEW != 8
+    maxentPublishDenoisedReprojection(surface, virtualHistory,
+        smbAlpha, vmbAlpha, virtualAmount);
+    #endif
 
-    imageStore(colorimg4, ivec2(pixel), maxentPackSlow(slow));
-    imageStore(colorimg5, ivec2(pixel), maxentPackFast(fast));
+    imageStore(colorimg4, ivec2(pixel), maxentPackTemporal(temporal));
+    imageStore(colorimg5, ivec2(pixel), maxentPackTemporalAux(hitDistance));
 
 #if DEBUG_VIEW == 12
     // Preserve the directional MaxEnt moments so composite_lighting can apply
     // the exact same GGX/Fresnel projection as the final reflection path.
-    writeReflMaxEnt(pixel, slow.signal,
-        fast.hitDistance, 1.0 - mix(smbSlowAlpha, vmbSlowAlpha,
+    writeReflMaxEnt(pixel, temporal.signal,
+        hitDistance, 1.0 - mix(smbAlpha, vmbAlpha,
             virtualAmount));
 #elif DEBUG_VIEW == 14
-    writeReflLight(pixel, vec3(1.0 - mix(smbSlowAlpha, vmbSlowAlpha,
-        virtualAmount)),
-        fast.hitDistance, 0.0);
+    writeReflLight(pixel, vec3(1.0 - mix(smbAlpha, vmbAlpha,
+            virtualAmount)),
+        hitDistance, 0.0);
 #endif
 }

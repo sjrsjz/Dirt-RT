@@ -120,7 +120,7 @@ DenoiserVarianceSource denoiserVarianceLoadSource(ivec2 pixel) {
     vec2 rootM2History = unpackHalf2x16(words.w);
     source.meanY2 = rootM2History.x * rootM2History.x;
     source.historyLength = rootM2History.y;
-    source.hitDistance = unpackHalf2x16(reflectBuffer.data[addr(SPEC_N_HISTMETA, uvec2(pixel))].w).x;
+    source.hitDistance = unpackHalf2x16(reflectBuffer.data[addr(SPEC_N_HISTGEO, uvec2(pixel))].w).x;
     #endif
     return source;
 }

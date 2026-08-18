@@ -152,6 +152,9 @@ option.RADIANCE_CACHE_RIS_GUIDING_KAPPA.comment = RIS 选中方向周围连续�
 # ===========================================================================
 # MaxEnt 漫反射时域
 # ===========================================================================
+option.MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY = Bures 冷启动历史阈值
+option.MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY.comment = 当前有效历史数量小于等于该值时停用 Bures 历史钳制。
+
 option.MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY = 最大有效样本数
 option.MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY.comment = 漫反射历史的最大有效样本数。提高后更平滑，但对光照变化和解遮挡的响应更慢。
 
@@ -164,17 +167,14 @@ option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE.comment = 缩放时域重投影足迹
 option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE = 历史差异容差
 option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE.comment = 漫反射历史权重钳制所允许的标准化 Bures 距离。提高会保留更多历史，降低则会更快响应真实光照变化。
 
-option.MAXENT_TEMPORAL_REPROJECTION_RADIUS = 重投影半径
-option.MAXENT_TEMPORAL_REPROJECTION_RADIUS.comment = 用于时域重投影角点计算的像素足迹半径。提高会扩宽接受范围，以精度换取更少的解遮挡重置。
+option.MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS = 漫反射重投影半径
+option.MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS.comment = 漫反射时域路径足迹的像素半径。提高会允许更宽的路径重投影运动。
 
 # ===========================================================================
 # MaxEnt 镜面时域
 # ===========================================================================
-option.MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY = 慢速历史有效样本数
-option.MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY.comment = 稳定反射历史的最大 Kish 有效样本数。提高可减少静止噪点，但反射变化后的响应会更慢。
-
-option.MAXENT_SPECULAR_TEMPORAL_MAX_FAST_HISTORY = 响应历史有效样本数
-option.MAXENT_SPECULAR_TEMPORAL_MAX_FAST_HISTORY.comment = 抗延迟与历史钳制使用的响应历史最大 Kish 有效样本数。
+option.MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY = 最大有效样本数
+option.MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY.comment = 镜面反射历史的最大 Kish 有效样本数。统计差异拒绝会在真实变化时自动缩短历史。
 
 option.MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD = 解遮挡阈值
 option.MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD.comment = 重投影表面的相对平面距离容差。降低会拒绝更多历史，提高则可能使历史越过薄小几何体。
@@ -182,27 +182,11 @@ option.MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD.comment = 重投影表面
 option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION = 镜面波瓣比例
 option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION.comment = 时域重投影允许的 GGX 波瓣比例。降低会在视角相关的反射变化处拒绝更多历史。
 
+option.MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE = 历史差异容差
+option.MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE.comment = 镜面历史权重钳制所允许的标准化 Bures 距离。提高会保留更多历史，降低则会更快响应真实反射变化。
 
-
-
-option.MAXENT_SPECULAR_TEMPORAL_HISTORY_FIX_THRESHOLD = 历史修复阈值
-option.MAXENT_SPECULAR_TEMPORAL_HISTORY_FIX_THRESHOLD.comment = 有效样本数不超过该值时，以响应历史替换慢速历史来修复新显露像素。
-
-
-option.MAXENT_SPECULAR_TEMPORAL_CLAMP_SIGMA = 历史钳制 Sigma
-option.MAXENT_SPECULAR_TEMPORAL_CLAMP_SIGMA.comment = 响应历史 YCoCg 颜色盒的宽度。降低可更积极清除拖影，提高可保留稳定高光。
-
-option.MAXENT_SPECULAR_TEMPORAL_ANTI_LAG = 抗延迟加速
-option.MAXENT_SPECULAR_TEMPORAL_ANTI_LAG.comment = 检测到光照变化时让慢速历史向响应历史靠近。过高可能放大残余噪声。
-
-option.MAXENT_SPECULAR_TEMPORAL_RESET_TEMPORAL_SIGMA = 重置时域 Sigma
-option.MAXENT_SPECULAR_TEMPORAL_RESET_TEMPORAL_SIGMA.comment = 触发历史重置前允许的时域噪声偏差。提高会在光照变化时更久保留历史。
-
-option.MAXENT_SPECULAR_TEMPORAL_RESET_SPATIAL_SIGMA = 重置空间 Sigma
-option.MAXENT_SPECULAR_TEMPORAL_RESET_SPATIAL_SIGMA.comment = 触发历史重置前允许的响应邻域偏差。提高可减少高噪声区域的重置。
-
-option.MAXENT_SPECULAR_TEMPORAL_RESET_AMOUNT = 历史重置幅度
-option.MAXENT_SPECULAR_TEMPORAL_RESET_AMOUNT.comment = 检测到重置时，单帧内最多由当前样本替换的历史比例。
+option.MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS = 镜面重投影半径
+option.MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS.comment = 镜面时域足迹的像素半径。提高会允许更宽的反射重投影运动。
 
 
 
