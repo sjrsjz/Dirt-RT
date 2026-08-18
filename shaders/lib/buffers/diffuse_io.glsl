@@ -117,9 +117,9 @@ void writeDiffuse(diffuseIlluminationData data, ivec2 p) {
     writeDiffuseSwap(xy, data.data_swap, data.weight, data.meanY2);
 
 #if !defined(DIFFUSE_BUFFER_MIN) && !defined(DIFFUSE_BUFFER_MIN2)
-    // Full write: also update hist (N=2) + hist geometry (N=3)
+    // Full write: also update history N=1 and current history-geometry parity.
     writeDiffuseHist(xy, data.data, data.prev_weight, data.prev_meanY2);
-    writeDiffuseHistGeo(xy, data.pos, data.histNormal);
+    writeDiffuseHistGeo(xy, data.pos, data.histNormal, data.prev_weight);
 #endif
 }
 

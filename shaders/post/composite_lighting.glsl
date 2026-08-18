@@ -53,6 +53,15 @@ float logDistNorm(float d) {
     return clamp(log2(max(d, 0.01) * 100.0 + 1.0) / 14.0, 0.0, 1.0);
 }
 
+#if DEBUG_VIEW == 23
+vec3 debugDiffuseDenoisedTemporalDifference(uvec2 pixel) {
+    float normalizedDistance = readDiffuseDenoisedDifference(pixel);
+    if (!(normalizedDistance >= 0.0) || isnan(normalizedDistance) || isinf(normalizedDistance))
+        return vec3(1.0, 0.0, 1.0);
+    return jetColormap(1.0 - exp2(-0.5 * min(normalizedDistance, 32.0)));
+}
+#endif
+
 vec3 projectDiffuseLighting(MaxEntEncoding encoded, vec3 normal,
         vec3 primaryRay, float ggxAlpha, vec3 diffuseAlbedo) {
     #if EON_ENABLED
@@ -150,6 +159,11 @@ void main() {
     uvec4 primaryGeometryWords = readPrimaryGeometryWords(xy);
     float primaryDistance = uintBitsToFloat(primaryGeometryWords.w);
     float surfaceMask = primaryDistance >= 0.0 ? 1.0 : 0.0;
+
+    #if DEBUG_VIEW == 23
+    fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0) : debugDiffuseDenoisedTemporalDifference(xy);
+    return;
+    #endif
 
     #if DEBUG_VIEW >= 35 && DEBUG_VIEW <= 37
     // Sky pixels do not contain a surface motion record.
@@ -270,7 +284,6 @@ void main() {
 
     #elif DEBUG_VIEW == 9
     // Temporal virtual-reprojection hit distance before spatial filtering.
-    // Compare with DEBUG_VIEW 38 to inspect the final propagated result.
     {
         float d = readMaxEntSpecularHistory(xy).hitDistance;
         fragColor.xyz = (d >= VPROJDIST_SKY * 0.99) ? vec3(1.0) : jetColormap(logDistNorm(d));
@@ -372,10 +385,6 @@ void main() {
         }
         fragColor.xyz += lightVal;
     }
-
-    #elif DEBUG_VIEW >= 23 && DEBUG_VIEW <= 30
-    // Reflection spatial-pipeline stage selected by the corresponding pass.
-    fragColor.xyz = tmp2.data_swap;
 
     #elif DEBUG_VIEW >= 31 && DEBUG_VIEW <= 34
     {
@@ -482,15 +491,6 @@ void main() {
                     clamp(length(velocityPixels) / 16.0, 0.0, 1.0));
             }
         }
-    }
-
-    #elif DEBUG_VIEW == 38
-    {
-        // Final six-level spatial virtual distance. Unlike raw hit distance,
-        // this already contains surface distance and the GGX virtual scale,
-        // so the environment has no single scalar sentinel here.
-        fragColor.xyz = jetColormap(logDistNorm(
-            reflectionVirtualDistance));
     }
 
     #endif

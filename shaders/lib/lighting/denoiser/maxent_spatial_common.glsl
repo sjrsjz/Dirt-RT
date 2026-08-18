@@ -4,11 +4,7 @@
 #include "/lib/lighting/maxent.glsl"
 #include "/lib/lighting/denoiser/maxent_spatial_signal.glsl"
 #include "/lib/lighting/denoiser/maxent_spatial_virtual_projection.glsl"
-
-struct DenoiserSpatialBuresData {
-    vec2 stddev;
-    float trace;
-};
+#include "/lib/lighting/denoiser/maxent_bures.glsl"
 
 struct DenoiserSpatialAccumulator {
     f16vec4 maxEntY;
@@ -18,59 +14,6 @@ struct DenoiserSpatialAccumulator {
     float virtualDistance;
     float virtualWeight;
 };
-
-DenoiserSpatialBuresData denoiserSpatialMakeBuresData(vec4 maxEntY) {
-    DenoiserSpatialBuresData data;
-    float parallelExcess = 0.5 * dot(maxEntY.xyz, maxEntY.xyz);
-    // Spatial inputs have crossed the sanitizing pack boundary, which owns
-    // the nonnegative total-energy invariant.
-    float energy = maxEntY.w;
-    float energy2 = energy * energy;
-    // Eliminate the intermediate rho/kappa reconstruction. Substituting
-    // rho=4*kappa/(3+kappa^2) into maxent_eigen_std gives the covariance
-    // trace directly from the stored first moment and total energy.
-    // Independent FP16 rounding can move an otherwise valid moment just
-    // outside its cone (and subnormals can violate it substantially), so this
-    // is a real sqrt-domain guard rather than a redundant nonnegative clamp.
-    float traceRoot = sqrt(max(4.0 * energy2 - 1.5 * parallelExcess, 0.0));
-    float analyticTrace = (2.0 * energy2 + energy * traceRoot) * (1.0 / 3.0) - parallelExcess;
-    float perpendicularVariance = max((analyticTrace - parallelExcess) * (1.0 / 3.0), 0.0);
-    // Reconstruct the trace from the clamped PSD axes. This only differs from
-    // analyticTrace if independent FP16 rounding made |mean| slightly exceed
-    // total energy at an earlier pack boundary.
-    data.trace = 3.0 * perpendicularVariance + parallelExcess;
-    vec2 axisVariance = vec2(perpendicularVariance, perpendicularVariance + parallelExcess);
-    data.stddev = sqrt(axisVariance);
-    return data;
-}
-
-DenoiserSpatialBuresData denoiserSpatialMakeBuresDataFromStddev(vec2 stddev) {
-    DenoiserSpatialBuresData data;
-    data.stddev = stddev;
-    vec2 axisVariance = stddev * stddev;
-    data.trace = 2.0 * axisVariance.x + axisVariance.y;
-    return data;
-}
-
-float denoiserSpatialBuresDistanceSq(vec4 centerMaxEntY,
-    DenoiserSpatialBuresData centerData, vec4 sampleMaxEntY,
-    DenoiserSpatialBuresData sampleData) {
-    // For this MaxEnt model rho = 4*kappa/(3+kappa^2), while
-    // sigma_parallel^2 - sigma_perpendicular^2
-    //     = 8*omega^2*kappa^2/(3+kappa^2)^2
-    //     = 0.5*|mean|^2.
-    // Hence cos(theta)^2*A_center*A_sample is exactly
-    // 0.25*dot(mean_center, mean_sample)^2. No normalized mean length or
-    // separately retained anisotropy is required.
-    float meanDot = dot(centerMaxEntY.xyz, sampleMaxEntY.xyz);
-    float crossAxes = centerData.stddev.x * sampleData.stddev.y + centerData.stddev.y * sampleData.stddev.x;
-    float cross2d = sqrt(crossAxes * crossAxes + 0.25 * meanDot * meanDot);
-    float crossTrace = centerData.stddev.x * sampleData.stddev.x + cross2d;
-    vec3 meanDelta = centerMaxEntY.xyz - sampleMaxEntY.xyz;
-    // Cancellation can make an exactly-zero metric slightly negative. It must
-    // not enter the variance-normalized exponent as a negative distance.
-    return max(dot(meanDelta, meanDelta) + centerData.trace + sampleData.trace - 2.0 * crossTrace, 0.0);
-}
 
 vec3 denoiserSpatialVirtualWorldPosition(
     vec3 primaryRay, float virtualDistance) {

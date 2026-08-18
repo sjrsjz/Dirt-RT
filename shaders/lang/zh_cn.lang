@@ -161,6 +161,9 @@ option.MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT.comment = 低于此置信度�
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE = 重投影深度缩放
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE.comment = 缩放时域重投影足迹梯形的深度半范围。提高可接受离重建表面平面更远的历史样本，减少重置但可能跨薄几何体泄漏。
 
+option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE = 历史差异容差
+option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE.comment = 漫反射历史权重钳制所允许的标准化 Bures 距离。提高会保留更多历史，降低则会更快响应真实光照变化。
+
 option.MAXENT_TEMPORAL_REPROJECTION_RADIUS = 重投影半径
 option.MAXENT_TEMPORAL_REPROJECTION_RADIUS.comment = 用于时域重投影角点计算的像素足迹半径。提高会扩宽接受范围，以精度换取更少的解遮挡重置。
 
@@ -236,9 +239,6 @@ option.MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY.comment = 按方差归一�
 option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY = 镜面光场灵敏度
 option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY.comment = 按方差归一化的镜面 MaxEnt 拒绝强度。提高会保留更多反射对比，降低则会进行更多平滑。
 
-option.MAXENT_SPATIAL_DIFFUSE_LOW_CONFIDENCE_BLEND = 漫反射低置信度混合
-option.MAXENT_SPATIAL_DIFFUSE_LOW_CONFIDENCE_BLEND.comment = 在漫反射历史不足时混入大范围空域滤波结果。提高可更快隐藏解遮挡噪点，但细节可能暂时变软。
-
 # ===========================================================================
 # 泛光
 # ===========================================================================
@@ -307,14 +307,7 @@ value.DEBUG_VIEW.19 = 折射虚拟距离
 value.DEBUG_VIEW.20 = 路径引导
 value.DEBUG_VIEW.21 = 时域累积原始
 value.DEBUG_VIEW.22 = 辐射率缓存
-value.DEBUG_VIEW.23 = 反射历史钳制
-value.DEBUG_VIEW.24 = 反射压缩历史
-value.DEBUG_VIEW.25 = 反射空间准备
-value.DEBUG_VIEW.26 = 反射 A-trous 1
-value.DEBUG_VIEW.27 = 反射 A-trous 2
-value.DEBUG_VIEW.28 = 反射 A-trous 4
-value.DEBUG_VIEW.29 = 反射 A-trous 8
-value.DEBUG_VIEW.30 = 反射 A-trous 16
+value.DEBUG_VIEW.23 = 漫反射降噪时域差异
 value.DEBUG_VIEW.31 = 缓存最近一次原始值
 value.DEBUG_VIEW.32 = 缓存 RIS Reservoir
 value.DEBUG_VIEW.33 = 缓存 RIS 样本数 M
@@ -322,4 +315,3 @@ value.DEBUG_VIEW.34 = 缓存最终时域值
 value.DEBUG_VIEW.35 = 运动匹配状态
 value.DEBUG_VIEW.36 = 实体世界运动
 value.DEBUG_VIEW.37 = 屏幕运动
-value.DEBUG_VIEW.38 = 滤波后反射虚像距离

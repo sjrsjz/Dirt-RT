@@ -6,7 +6,6 @@
 //   DENOISER_SPATIAL_PHI_LUMINANCE
 // Optional macros:
 //   MAXENT_ATROUS_SMALL_KERNEL
-//   MAXENT_ATROUS_DEBUG_VIEW (reflection output hook)
 //   MAXENT_ATROUS_FINAL_RESOLVE (reflection output hook)
 
 #ifndef DENOISER_SPATIAL_PHI_LUMINANCE
@@ -21,9 +20,7 @@ layout(local_size_x = 8, local_size_y = 8) in;
 #include "/lib/common.glsl"
 #include "/lib/lighting/denoiser/maxent_spatial_geometry.glsl"
 
-#if defined(MAXENT_ATROUS_DEBUG_VIEW) || \
-        defined(MAXENT_ATROUS_FINAL_RESOLVE)
-#define MAXENT_ATROUS_REFLECTION_OUTPUT
+#if defined(MAXENT_ATROUS_FINAL_RESOLVE)
 #include "/lib/buffers/specular_buffer.glsl"
 #endif
 
@@ -34,7 +31,7 @@ uvec4 denoiserSpatialLoadSignalWords(ivec2 pixel) {
     return texelFetch(colortex4, pixel, 0);
 }
 
-#if defined(MAXENT_ATROUS_REFLECTION_OUTPUT)
+#if defined(MAXENT_ATROUS_FINAL_RESOLVE)
 SpecularMaxEnt maxentAtrousSpecularSignal(DenoiserMaxEntSignal signal) {
     SpecularMaxEnt result;
     result.maxEntY = signal.maxEntY;
@@ -51,21 +48,12 @@ void denoiserSpatialStore(ivec2 pixel, DenoiserMaxEntSignal signal) {
     uvec4 packedSignal = denoiserPackMaxEntSignalTrusted(signal);
     imageStore(colorimg4, pixel, packedSignal);
 
-#if defined(MAXENT_ATROUS_REFLECTION_OUTPUT)
+#if defined(MAXENT_ATROUS_FINAL_RESOLVE)
     SpecularMaxEnt specular = maxentAtrousSpecularSignal(signal);
-    #if defined(MAXENT_ATROUS_DEBUG_VIEW) && \
-            DEBUG_VIEW == MAXENT_ATROUS_DEBUG_VIEW
-    writeReflLight(uvec2(pixel), specularMaxEntTotalRgb(specular),
-        signal.virtualDistance, 1.0);
-    #endif
-    #if defined(MAXENT_ATROUS_FINAL_RESOLVE)
-        #if DEBUG_VIEW == 9 || DEBUG_VIEW == 12 || DEBUG_VIEW == 14 || \
-                (DEBUG_VIEW >= 23 && DEBUG_VIEW <= 30)
-        // Preserve the diagnostic value written by its owning pass.
-        #else
-        writeReflMaxEnt(uvec2(pixel), specular,
-            signal.virtualDistance, 1.0);
-        #endif
+    #if DEBUG_VIEW == 9 || DEBUG_VIEW == 12 || DEBUG_VIEW == 14
+    // Preserve the diagnostic value written by its owning pass.
+    #else
+    writeReflMaxEnt(uvec2(pixel), specular, signal.virtualDistance, 1.0);
     #endif
 #endif
 }
@@ -74,17 +62,10 @@ void denoiserSpatialStoreInvalid(ivec2 pixel) {
     uvec4 invalidSignal = denoiserInvalidMaxEntSignalWords();
     imageStore(colorimg4, pixel, invalidSignal);
 
-#if defined(MAXENT_ATROUS_REFLECTION_OUTPUT)
-    #if defined(MAXENT_ATROUS_DEBUG_VIEW) && \
-            DEBUG_VIEW == MAXENT_ATROUS_DEBUG_VIEW
-    writeReflLight(uvec2(pixel), vec3(0.0), 0.0, 0.0);
-    #endif
-    #if defined(MAXENT_ATROUS_FINAL_RESOLVE)
-        #if DEBUG_VIEW == 9 || DEBUG_VIEW == 12 || DEBUG_VIEW == 14 || \
-                (DEBUG_VIEW >= 23 && DEBUG_VIEW <= 30)
-        #else
-        writeReflMaxEnt(uvec2(pixel), emptySpecularMaxEnt(), 0.0, 0.0);
-        #endif
+#if defined(MAXENT_ATROUS_FINAL_RESOLVE)
+    #if DEBUG_VIEW == 9 || DEBUG_VIEW == 12 || DEBUG_VIEW == 14
+    #else
+    writeReflMaxEnt(uvec2(pixel), emptySpecularMaxEnt(), 0.0, 0.0);
     #endif
 #endif
 }

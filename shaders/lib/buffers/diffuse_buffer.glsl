@@ -11,13 +11,15 @@
 // ===========================================================================
 // N=0: Current Light  — MaxEnt6 + current second moment.
 // N=1: History Light  — MaxEnt6 + history length/second moment.
-// N=2: History Geo    — F32 distance + oct ray + oct geometry normal.
+// N=2: History Geo A  — F32 distance + oct ray + oct normal + N_eff/frame stamp.
 // N=3: Swap Light     — MaxEnt6 + accumulated length/second moment.
 // N=4: Path Guide     — MaxEnt4 + F32 reservoir W/M.
 // N=5: ReSTIR GI first-hit direct-light MaxEnt atom.
 // N=6: ReSTIR GI endpoint distance/direction + signed first-direction PDF.
 // N=7: Current-frame biased ReSTIR GI path-guide prewarm MaxEnt atom.
-// N=8: Macro normal, diffuse material and motion.
+// N=8: Macro normal, diffuse material, motion and denoised-history difference.
+// N=9: Alternate history geometry for race-free frame ping-pong.
+// N=10..11: Exact previous/current denoiser RGBA32UI output ping-pong.
 //
 // .w lane uses packHalf2x16: Kish N_eff:f16 + sqrt(meanY2):f16.
 // sqrt compression keeps HDR second moments within f16 range (e.g. Y=1000 →
@@ -25,10 +27,10 @@
 // Current position, geometry normal and validity come from compact primary
 // geometry; a negative primary distance is the only sky/no-surface marker.
 
-// Active nine-plane layout. Current geometry is owned by geomBuffer and is
+// Active twelve-plane layout. Current geometry is owned by geomBuffer and is
 // reconstructed from pixel + RT projection and F32 distance; it is not
 // duplicated here.
-// DIF_N_HISTGEO = F32 distance + oct ray + oct geometry normal.
+// DIF_N_HISTGEO/ALT = F32 distance + oct ray + oct normal + N_eff/frame stamp.
 // DIF_N_RESTIR_ENDPOINT = F32 distance + oct direction + F32 signed PDF.
 #define DIF_N_LIGHT    0u
 #define DIF_N_HIST     1u
@@ -39,6 +41,75 @@
 #define DIF_N_RESTIR_ENDPOINT 6u
 #define DIF_N_RESTIR_PREWARM  7u
 #define DIF_N_SURFACE          8u
+#define DIF_N_HISTGEO_ALT      9u
+#define DIF_N_DENOISED_A      10u
+#define DIF_N_DENOISED_B      11u
+
+uint diffuseHistoryGeometryWritePlane() {
+    return (uint(frame_id) & 1u) == 0u ? DIF_N_HISTGEO : DIF_N_HISTGEO_ALT;
+}
+
+uint diffuseHistoryGeometryReadPlane() {
+    return (uint(frame_id) & 1u) == 0u ? DIF_N_HISTGEO_ALT : DIF_N_HISTGEO;
+}
+
+uint diffuseDenoisedWritePlane() {
+    return (uint(frame_id) & 1u) == 0u ? DIF_N_DENOISED_A : DIF_N_DENOISED_B;
+}
+
+uint diffuseDenoisedReadPlane() {
+    return (uint(frame_id) & 1u) == 0u ? DIF_N_DENOISED_B : DIF_N_DENOISED_A;
+}
+
+uint packDiffuseHistoryWeightStamp(float historyWeight) {
+    if (!(historyWeight >= 0.0) || isinf(historyWeight)) historyWeight = 0.0;
+    uint packedWeight = packHalf2x16(vec2(min(historyWeight, 65504.0), 0.0)) & 0xffffu;
+    return packedWeight | ((uint(frame_id) & 0xffffu) << 16u);
+}
+
+bool unpackDiffusePreviousHistoryWeight(uint packed_, out float historyWeight) {
+    historyWeight = unpackHalf2x16(packed_).x;
+    uint expectedStamp = (uint(frame_id) - 1u) & 0xffffu;
+    return (packed_ >> 16u) == expectedStamp && historyWeight > 0.0 && !isnan(historyWeight) && !isinf(historyWeight);
+}
+
+void writeDiffuseDenoisedCurrentRaw(uvec2 xy, uvec4 words) {
+    diffuseBuffer.data[addr(diffuseDenoisedWritePlane(), xy)] = words;
+}
+
+uvec4 readDiffuseDenoisedCurrentRaw(uvec2 xy) {
+    return diffuseBuffer.data[addr(diffuseDenoisedWritePlane(), xy)];
+}
+
+uvec4 readDiffuseDenoisedPreviousRaw(uvec2 xy) {
+    return diffuseBuffer.data[addr(diffuseDenoisedReadPlane(), xy)];
+}
+
+// Before history resolve, the current parity is scratch for the previous
+// denoised signal reprojected by the real diffuse temporal pass. Resolve reads
+// it once, then replaces it with the exact current colortex4 words. Scratch z
+// stores (history N_eff, valid mass), while w stores (filtered stddev, current alpha).
+void writeDiffuseDenoisedReprojection(uvec2 xy, vec4 maxEntY, float variance,
+        float historySamples, float validWeight, float temporalCurrentWeight) {
+    diffuseBuffer.data[addr(diffuseDenoisedWritePlane(), xy)] = uvec4(
+        packHalf2x16(clamp(maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(vec2(min(historySamples, 65504.0), clamp(validWeight, 0.0, 1.0))),
+        packHalf2x16(vec2(min(sqrt(max(variance, 0.0)), 65504.0), clamp(temporalCurrentWeight, 0.0, 1.0))));
+}
+
+void writeDiffuseDenoisedReprojectionInvalid(uvec2 xy) {
+    diffuseBuffer.data[addr(diffuseDenoisedWritePlane(), xy)] = uvec4(
+        0u, 0u, 0u, packHalf2x16(vec2(-1.0, 0.0)));
+}
+
+void writeDiffuseDenoisedDifference(uvec2 xy, float normalizedDistance) {
+    diffuseBuffer.data[addr(DIF_N_SURFACE, xy)].w = floatBitsToUint(normalizedDistance);
+}
+
+float readDiffuseDenoisedDifference(uvec2 xy) {
+    return uintBitsToFloat(diffuseBuffer.data[addr(DIF_N_SURFACE, xy)].w);
+}
 
 // ===========================================================================
 // N=0 — Current RT Light
@@ -179,19 +250,34 @@ vec3 decodeDiffuseHistoryNormalU(uint packed_) {
     return normalize(n);
 }
 
-void writeDiffuseHistGeo(uvec2 xy, vec3 pos, vec3 geometryNormal) {
+void writeDiffuseHistGeo(uvec2 xy, vec3 pos, vec3 geometryNormal, float historyWeight) {
     float distance = length(pos);
-    vec3 primaryRay = distance > 1e-8
-        ? pos / distance : vec3(0.0, 0.0, -1.0);
-    diffuseBuffer.data[addr(DIF_N_HISTGEO, xy)] = uvec4(
+    vec3 primaryRay = distance > 1e-8 ? pos / distance : vec3(0.0, 0.0, -1.0);
+    diffuseBuffer.data[addr(diffuseHistoryGeometryWritePlane(), xy)] = uvec4(
         floatBitsToUint(distance),
         encodeDiffuseHistoryNormalU(primaryRay),
         encodeDiffuseHistoryNormalU(geometryNormal),
-        0u
+        packDiffuseHistoryWeightStamp(historyWeight)
     );
 }
+
+void writeDiffuseHistGeoInvalid(uvec2 xy) {
+    diffuseBuffer.data[addr(diffuseHistoryGeometryWritePlane(), xy)] = uvec4(
+        floatBitsToUint(-1.0), 0u, 0u, packDiffuseHistoryWeightStamp(0.0));
+}
+
+uvec4 readDiffuseHistGeoRaw(uvec2 xy) {
+    return diffuseBuffer.data[addr(diffuseHistoryGeometryReadPlane(), xy)];
+}
+
 void readDiffuseHistGeo(uvec2 xy, out vec3 pos, out vec3 geometryNormal) {
-    uvec4 v = diffuseBuffer.data[addr(DIF_N_HISTGEO, xy)];
+    uvec4 v = readDiffuseHistGeoRaw(xy);
+    float historyWeight;
+    if (!unpackDiffusePreviousHistoryWeight(v.w, historyWeight)) {
+        pos = vec3(0.0);
+        geometryNormal = vec3(0.0);
+        return;
+    }
     float distance = uintBitsToFloat(v.x);
     pos = decodeDiffuseHistoryNormalU(v.y) * distance;
     geometryNormal = decodeDiffuseHistoryNormalU(v.z);

@@ -129,16 +129,6 @@ void denoiserVarianceStore(ivec2 pixel, DenoiserMaxEntSignal signal,
     uvec4 primaryGeometryWords, DenoiserVarianceGeometry geometry) {
     imageStore(colorimg3, pixel, denoiserVariancePackSpatialGeometry(primaryGeometryWords, geometry));
     imageStore(colorimg4, pixel, denoiserPackMaxEntSignal(signal));
-    #if defined(MAXENT_VARIANCE_SPECULAR)
-    #if DEBUG_VIEW == 25
-    SpecularMaxEnt debugSignal;
-    debugSignal.maxEntY = signal.maxEntY;
-    debugSignal.CoCg = signal.CoCg;
-    uvec4 historyWords = reflectBuffer.data[addr(SPEC_N_HISTLIGHT, uvec2(pixel))];
-    float historyLength = unpackHalf2x16(historyWords.w).y;
-    writeReflLight(uvec2(pixel), specularMaxEntTotalRgb(debugSignal), signal.virtualDistance, max(historyLength, 0.0));
-    #endif
-    #endif
 }
 
 void denoiserVarianceStoreInvalid(ivec2 pixel) {

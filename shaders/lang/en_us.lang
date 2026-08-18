@@ -161,6 +161,9 @@ option.MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT.comment = History below this c
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE = Reprojection Depth Scale
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE.comment = Scales the depth half-extent of the temporal reprojection footprint trapezoid. Higher values accept history samples that are farther off the reconstructed surface plane, reducing resets but potentially leaking across thin geometry.
 
+option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE = History Difference Tolerance
+option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE.comment = Standardized Bures distance tolerated by diffuse history clamping. Higher values retain more history; lower values respond faster to real lighting changes.
+
 option.MAXENT_TEMPORAL_REPROJECTION_RADIUS = Reprojection Radius
 option.MAXENT_TEMPORAL_REPROJECTION_RADIUS.comment = Pixel footprint radius used for temporal reprojection corner calculation. Larger values widen the acceptance region, trading precision for fewer disocclusion resets.
 
@@ -236,9 +239,6 @@ option.MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY.comment = Variance-normali
 option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY = Specular Light-field Sensitivity
 option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY.comment = Variance-normalized specular MaxEnt rejection strength. Higher values preserve more reflection contrast; lower values smooth more.
 
-option.MAXENT_SPATIAL_DIFFUSE_LOW_CONFIDENCE_BLEND = Diffuse Low-confidence Blend
-option.MAXENT_SPATIAL_DIFFUSE_LOW_CONFIDENCE_BLEND.comment = Blends the wide spatial result into diffuse pixels with little valid history. Higher values hide disocclusion noise faster but can temporarily blur detail.
-
 # ===========================================================================
 # Bloom
 # ===========================================================================
@@ -307,14 +307,7 @@ value.DEBUG_VIEW.19 = Refr. VirtDist
 value.DEBUG_VIEW.20 = Path Guide
 value.DEBUG_VIEW.21 = Temporal Raw
 value.DEBUG_VIEW.22 = Radiance Cache
-value.DEBUG_VIEW.23 = Refl. History Clamp
-value.DEBUG_VIEW.24 = Refl. Packed History
-value.DEBUG_VIEW.25 = Refl. Spatial Prep
-value.DEBUG_VIEW.26 = Refl. A-trous 1
-value.DEBUG_VIEW.27 = Refl. A-trous 2
-value.DEBUG_VIEW.28 = Refl. A-trous 4
-value.DEBUG_VIEW.29 = Refl. A-trous 8
-value.DEBUG_VIEW.30 = Refl. A-trous 16
+value.DEBUG_VIEW.23 = Denoised Diffuse Temporal Difference
 value.DEBUG_VIEW.31 = Cache Latest Raw
 value.DEBUG_VIEW.32 = Cache RIS Reservoir
 value.DEBUG_VIEW.33 = Cache RIS Sample Count
@@ -322,4 +315,3 @@ value.DEBUG_VIEW.34 = Cache Final Temporal
 value.DEBUG_VIEW.35 = Motion Match Status
 value.DEBUG_VIEW.36 = Entity World Motion
 value.DEBUG_VIEW.37 = Screen Motion
-value.DEBUG_VIEW.38 = Filtered Reflection Virtual Distance

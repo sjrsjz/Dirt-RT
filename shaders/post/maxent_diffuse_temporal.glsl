@@ -16,6 +16,7 @@ layout(rgba32ui) uniform writeonly uimage2D colorimg6;
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/buffer_io.glsl"
 #include "/lib/lighting/maxent.glsl"
+#include "/lib/lighting/denoiser/maxent_spatial_signal.glsl"
 #include "/lib/lighting/denoiser/maxent_temporal_statistics.glsl"
 
 uniform vec2 resolution;
@@ -215,8 +216,16 @@ void resetToCurrentSample() {
     unpackCurrentLight(outputMaxEnt, outputMeanY2);
 }
 
+void publishDenoisedReprojection(vec4 weightedMaxEntY, float weightedVariance,
+        float validWeight, float historySamples, float temporalCurrentWeight) {
+    float inverseWeight = 1.0 / validWeight;
+    writeDiffuseDenoisedReprojection(gl_GlobalInvocationID.xy, weightedMaxEntY * inverseWeight,
+        weightedVariance * inverseWeight, historySamples, validWeight, temporalCurrentWeight);
+}
+
 void MixDiffuse() {
     if (any(lessThan(prevScreenPos, vec3(0.0))) || any(greaterThan(prevScreenPos, vec3(1.0)))) {
+        writeDiffuseDenoisedReprojectionInvalid(gl_GlobalInvocationID.xy);
         resetToCurrentSample();
         return;
     }
@@ -224,6 +233,7 @@ void MixDiffuse() {
     TemporalFootprintFast fp;
     if (!buildTemporalFootprintFast(currentPosition, geometryNormal,
             cameraDelta, fp)) {
+        writeDiffuseDenoisedReprojectionInvalid(gl_GlobalInvocationID.xy);
         resetToCurrentSample();
         return;
     }
@@ -237,6 +247,8 @@ void MixDiffuse() {
     float validKernelWeight = 0.0;
     float sumWeightOverSamples = 0.0;
     float accumulatedHistoryEvidence = 0.0;
+    vec4 denoisedMaxEntY = vec4(0.0);
+    float denoisedVariance = 0.0;
 
     float currVoN = dot(normalize(currentPosition), geometryNormal);
 
@@ -246,14 +258,15 @@ void MixDiffuse() {
         if (any(lessThan(sampleTexel, ivec2(0))) || any(greaterThanEqual(sampleTexel, ivec2(resolution_global)))) continue;
 
         uvec2 historyTexel = uvec2(sampleTexel);
-        vec2 historyMeta = unpackHalf2x16(
-            diffuseBuffer.data[addr(DIF_N_HIST, historyTexel)].w);
+        uvec4 packedHistory = diffuseBuffer.data[addr(DIF_N_HIST, historyTexel)];
+        vec2 historyMeta = unpackHalf2x16(packedHistory.w);
         if (historyMeta.x < MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT) continue;
 
         // Decode geometry before the six-component light signal. Rejected
         // taps therefore never make history light live across reprojection.
-        uvec4 packedGeometry = diffuseBuffer.data[
-            addr(DIF_N_HISTGEO, historyTexel)];
+        uvec4 packedGeometry = readDiffuseHistGeoRaw(historyTexel);
+        float geometryHistoryWeight;
+        if (!unpackDiffusePreviousHistoryWeight(packedGeometry.w, geometryHistoryWeight)) continue;
         float historyDistance = uintBitsToFloat(packedGeometry.x);
         vec3 historyPosition = decodeDiffuseHistoryNormalU(
             packedGeometry.y) * historyDistance;
@@ -265,21 +278,30 @@ void MixDiffuse() {
         float normalWeight = max(dot(fp.geometryNormal, historyNormal), 0.0);
         if (normalWeight <= 0.0) continue;
 
+        // Denoised and temporal histories are published with the same frame
+        // stamp. Rejecting the whole tap if either is absent keeps their
+        // normalization weights identical and avoids another three accumulators.
+        uvec4 denoisedWords = readDiffuseDenoisedPreviousRaw(historyTexel);
+        if (!denoiserSpatialSignalWordsValid(denoisedWords)) continue;
+
         float d1_sq = dot(historyPosition, historyPosition);
         vec3 histPosCur = historyPosition - cameraDelta;
         float d2_sq = dot(histPosCur, histPosCur);
         float histVoN = dot(normalize(histPosCur), geometryNormal);
 
         float scale = clamp(d2_sq * abs(histVoN) / max(d1_sq * abs(currVoN), 1e-3), 0.0, 1.0);
-        float tapSamples = clamp(historyMeta.x, 1.0,
+        float tapSamples = clamp(geometryHistoryWeight, 1.0,
             float(MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY));
 
         float bilinearX = (i & 1) == 0 ? 1.0 - prevFrac.x : prevFrac.x;
         float bilinearY = (i & 2) == 0 ? 1.0 - prevFrac.y : prevFrac.y;
         float tapWeight = bilinearX * bilinearY * normalWeight;
 
-        uvec4 packedHistory = diffuseBuffer.data[
-            addr(DIF_N_HIST, historyTexel)];
+        vec4 tapDenoisedMaxEntY = vec4(unpackHalf2x16(denoisedWords.x), unpackHalf2x16(denoisedWords.y));
+        float tapDenoisedStddev = unpackHalf2x16(denoisedWords.w).x;
+        denoisedMaxEntY += tapWeight * tapDenoisedMaxEntY;
+        denoisedVariance += tapWeight * tapDenoisedStddev * tapDenoisedStddev;
+
         MaxEntEncoding tapMaxEnt;
         tapMaxEnt.maxEntY = clamp(vec4(unpackHalf2x16(packedHistory.x),
             unpackHalf2x16(packedHistory.y)), vec4(-65504.0),
@@ -293,6 +315,7 @@ void MixDiffuse() {
     }
 
     if (validKernelWeight < 1e-5) {
+        writeDiffuseDenoisedReprojectionInvalid(gl_GlobalInvocationID.xy);
         resetToCurrentSample();
         imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), uvec4(0u));
         return;
@@ -309,6 +332,7 @@ void MixDiffuse() {
 
     if (historySamples < 1.0
             || historyEvidence <= MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT) {
+        writeDiffuseDenoisedReprojectionInvalid(gl_GlobalInvocationID.xy);
         resetToCurrentSample();
         imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), uvec4(0u));
         return;
@@ -318,6 +342,8 @@ void MixDiffuse() {
     // describes the noise of the history estimator itself. Keeping these
     // quantities separate avoids inventing sub-unity Kish sample counts.
     float curAlpha = 1.0 / (historyEvidence + 1.0);
+    publishDenoisedReprojection(denoisedMaxEntY, denoisedVariance,
+        validKernelWeight, historySamples, curAlpha);
     output_weight = maxentTemporalUpdatedEffectiveSamples(historySamples,
         curAlpha, float(MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY));
 
@@ -347,6 +373,7 @@ void main() {
         // Clear the two outputs consumed downstream and skip light/normal
         // decoding for sky pixels.
         diffuseBuffer.data[addr(DIF_N_SWAP, pix)] = uvec4(0u);
+        writeDiffuseDenoisedReprojectionInvalid(pix);
         imageStore(colorimg6, ivec2(pix), uvec4(0u));
         return;
     }
@@ -361,6 +388,7 @@ void main() {
     if (motionValid < 0.5) {
         resetToCurrentSample();
         writeDiffuseSwap(pix, outputMaxEnt, output_weight, outputMeanY2);
+        writeDiffuseDenoisedReprojectionInvalid(pix);
         imageStore(colorimg6, ivec2(pix), uvec4(0u));
         return;
     }

@@ -159,13 +159,4 @@ void main() {
     history.responsiveHistoryLength = fast.historyLength;
     history.materialID = geometry.materialID;
     writeMaxEntSpecularHistory(pixel, history);
-
-#if DEBUG_VIEW == 23
-    writeReflLight(pixel, specularMaxEntTotalRgb(slow.signal),
-        fast.hitDistance, slow.historyLength);
-#elif DEBUG_VIEW == 24
-    MaxEntSpecularHistory committed = readMaxEntSpecularHistory(pixel);
-    writeReflLight(pixel, specularMaxEntTotalRgb(committed.slowSignal),
-        committed.hitDistance, committed.historyLength);
-#endif
 }
