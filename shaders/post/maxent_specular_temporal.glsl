@@ -184,8 +184,8 @@ float maxentSpecMagicCurve(float roughness) {
 void maxentPublishDenoisedReprojection(MaxEntReprojectedHistory surface,
         MaxEntReprojectedHistory virtualHistory, float surfaceAlpha,
         float virtualAlpha, float virtualAmount) {
-    float surfaceWeight = (1.0 - virtualAmount) * (1.0 - surfaceAlpha);
-    float virtualWeight = virtualAmount * (1.0 - virtualAlpha);
+    float surfaceWeight = surface.found ? (1.0 - virtualAmount) * (1.0 - surfaceAlpha) : 0.0;
+    float virtualWeight = virtualHistory.found ? virtualAmount * (1.0 - virtualAlpha) : 0.0;
     float historyWeight = surfaceWeight + virtualWeight;
     if (historyWeight <= 1e-5) {
         writeMaxEntSpecularDenoisedReprojectionInvalid(gl_GlobalInvocationID.xy);
@@ -199,8 +199,14 @@ void maxentPublishDenoisedReprojection(MaxEntReprojectedHistory surface,
     denoised = maxentScaleMaxEnt(denoised, inverseHistoryWeight);
     float variance = (surfaceWeight * uintBitsToFloat(surface.denoisedWords.w)
         + virtualWeight * uintBitsToFloat(virtualHistory.denoisedWords.w)) * inverseHistoryWeight;
+    float weightOverSamples = surfaceWeight / max(surface.historyLength, 1.0)
+        + virtualWeight / max(virtualHistory.historyLength, 1.0);
+    float historySamples = maxentTemporalReprojectedEffectiveSamples(
+        historyWeight, weightOverSamples,
+        float(MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY));
     writeMaxEntSpecularDenoisedReprojection(gl_GlobalInvocationID.xy,
-        denoised, variance, 1.0 - historyWeight);
+        denoised.maxEntY, variance, historySamples, 1.0,
+        1.0 - historyWeight);
 }
 
 void main() {

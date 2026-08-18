@@ -42,30 +42,26 @@ SpecularMaxEnt maxentAtrousSpecularSignal(DenoiserMaxEntSignal signal) {
     return result;
 }
 
-void maxentClampSpecularHistoryByDenoisedDifference(uvec2 pixel,
-    SpecularMaxEnt currentSignal, float currentStddev) {
+void maxentApplySpecularHistoryDifferenceClamp(uvec2 pixel,
+        SpecularMaxEnt currentSignal) {
     uvec4 historyWords = reflectBuffer.data[addr(SPEC_N_HISTLIGHT, pixel)];
     vec2 momentHistory = unpackHalf2x16(historyWords.w);
-    if (!(momentHistory.y >= 1.0) || any(isnan(momentHistory)) || any(isinf(momentHistory))
-            || momentHistory.y <= MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY) return;
+    if (!(momentHistory.y >= 1.0) || any(isnan(momentHistory))
+            || any(isinf(momentHistory))) return;
 
-    SpecularMaxEnt historySignal;
-    float historyStddev, temporalCurrentWeight;
-    if (!readMaxEntSpecularDenoisedReprojection(pixel, historySignal,
-            historyStddev, temporalCurrentWeight)) return;
-
-    DenoiserSpatialBuresData currentBures = denoiserSpatialMakeBuresData(currentSignal.maxEntY);
-    DenoiserSpatialBuresData historyBures = denoiserSpatialMakeBuresData(historySignal.maxEntY);
-    float distanceSq = denoiserSpatialBuresDistanceSq(currentSignal.maxEntY,
-            currentBures, historySignal.maxEntY, historyBures);
-    float combinedStddev = sqrt(currentStddev * currentStddev + historyStddev * historyStddev);
-    float normalizedDistance = sqrt(distanceSq) / max(temporalCurrentWeight * combinedStddev, 1e-6);
-    if (isnan(normalizedDistance) || isinf(normalizedDistance)) return;
-
-    float k = min(normalizedDistance, 80.0) * (1.0 / MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE);
-    float agreement = (1 + k) * exp(-k);
-    float historyCap = 1.0 + (max(float(MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY), 1.0) - 1.0) * agreement;
-    historyWords.w = pack2HalfClampedU(momentHistory.x, min(momentHistory.y, historyCap));
+    vec4 historyMaxEntY;
+    float historyStddev, historySamples, validWeight, temporalCurrentWeight;
+    if (!readMaxEntSpecularDenoisedReprojection(pixel, historyMaxEntY,
+            historyStddev, historySamples, validWeight,
+            temporalCurrentWeight)) return;
+    float normalizedDistance;
+    momentHistory.y = maxentClampHistoryWeightByDenoisedDifference(
+            momentHistory.y, currentSignal.maxEntY, historyMaxEntY,
+            historyStddev, historySamples, validWeight,
+            temporalCurrentWeight, float(MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY),
+            MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE,
+            normalizedDistance);
+    historyWords.w = pack2HalfClampedU(momentHistory.x, momentHistory.y);
     reflectBuffer.data[addr(SPEC_N_HISTLIGHT, pixel)] = historyWords;
 }
 #endif
@@ -80,7 +76,7 @@ void denoiserSpatialStore(ivec2 pixel, DenoiserMaxEntSignal signal) {
     SpecularMaxEnt specular = maxentAtrousSpecularSignal(signal);
     float standardDeviation = sqrt(max(signal.variance, 0.0));
     #if DEBUG_VIEW != 8
-    maxentClampSpecularHistoryByDenoisedDifference(uvec2(pixel), specular, standardDeviation);
+    maxentApplySpecularHistoryDifferenceClamp(uvec2(pixel), specular);
     #endif
     writeMaxEntSpecularDenoisedHistory(uvec2(pixel), specular, standardDeviation);
     #if DEBUG_VIEW == 9 || DEBUG_VIEW == 12 || DEBUG_VIEW == 14

@@ -69,17 +69,17 @@
 #define MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY 256 // Maximum Kish effective sample count. Higher = smoother but slower response. [1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384]
 #define MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT 0.0001 // History confidence below which reprojection is discarded. [0.000001 0.00001 0.0001 0.001 0.01]
 #define MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE 1.0 // Reprojection footprint depth tolerance. [0.25 0.5 0.75 1.0 1.5 2.0 3.0 4.0]
-#define MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE 4.0 // Standardized Bures-distance tolerance for history clamping. Higher retains more history. [0.5 1.0 2.0 3.0 4.0 5.0 6.0 8.0 10.0 12.0 16.0 24.0 32.0]
-#define MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS 1.5 // Diffuse reprojection footprint radius in pixels. [0.5 1.0 1.5 2.0 3.0]
+#define MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE 2.0 // Standardized Bures-distance tolerance for history clamping. Higher retains more history. [0.5 1.0 2.0 3.0 4.0 5.0 6.0 8.0 10.0 12.0 16.0 24.0 32.0]
+#define MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS 1.0 // Diffuse reprojection footprint radius in pixels. [0.5 1.0 1.5 2.0 3.0]
 
 // -- MaxEnt specular temporal accumulation --
 // The G-buffer stores GGX alpha; the front end converts it to perceptual
 // roughness exactly once before these controls are evaluated.
-#define MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY 32 // Maximum Kish effective sample count. [1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384]
+#define MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY 64 // Maximum Kish effective sample count. [1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384]
 #define MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD 0.01 // Relative temporal plane threshold. [0.0025 0.005 0.0075 0.01 0.015 0.02 0.03 0.05]
 #define MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION 0.5 // Accepted GGX lobe fraction. [0.25 0.35 0.5 0.65 0.75 0.9]
-#define MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE 4.0 // Standardized Bures-distance tolerance for history clamping. Higher retains more history. [0.5 1.0 2.0 3.0 4.0 5.0 6.0 8.0 10.0 12.0 16.0 24.0 32.0]
-#define MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS 1.5 // Specular reprojection footprint radius in pixels. [0.5 1.0 1.5 2.0 3.0]
+#define MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE 1.0 // Standardized Bures-distance tolerance for history clamping. Higher retains more history. [0.5 1.0 2.0 3.0 4.0 5.0 6.0 8.0 10.0 12.0 16.0 24.0 32.0]
+#define MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS 1.0 // Specular reprojection footprint radius in pixels. [0.5 1.0 1.5 2.0 3.0]
 
 // -- Shared MaxEnt variance preparation (diffuse + specular) --
 #define MAXENT_VARIANCE_KERNEL_SIGMA 1.0 // Gaussian kernel sigma (pixels) for short-history spatial variance pooling. Higher = wider support. [0.5 0.75 1.0 1.25 1.5 2.0 2.5]
@@ -89,8 +89,8 @@
 // -- Unified MaxEnt spatial filter --
 #define MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE 0.1 // Relative projected plane-depth tolerance, including MaxEnt virtual-image planes. [0.005 0.01 0.02 0.03 0.04 0.05 0.06 0.07 0.08 0.09 0.1 0.2 0.3 0.4 0.5]
 #define MAXENT_SPATIAL_VARIANCE_ADAPTATION 1.0 // Conservativeness of variance propagation across spatial levels. Higher retains more variance. [0.0 0.25 0.5 0.75 1.0 1.5 2.0]
-#define MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY 0.35 // Diffuse variance-normalized MaxEnt rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
-#define MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY 0.35 // Specular variance-normalized MaxEnt rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
+#define MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY 0.8 // Diffuse variance-normalized MaxEnt rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
+#define MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY 0.8 // Specular variance-normalized MaxEnt rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
 
 // -- Refraction/path-guide spatial compatibility (not MaxEnt filtering) --
 #define MAXENT_SPATIAL_NORMAL_SENSITIVITY 32.0 // Refraction variance-filter texture-normal rejection strength. [1 2 4 8 16 32 64 128]

@@ -14,8 +14,9 @@ struct RtTextureEllipse {
 };
 
 vec2 rtTaaJitter(uint frameId) {
-    float phase = float((frameId & 0xffffu) + 1u);
-    return fract(phase * vec2(0.754877666, 0.569840291)) - 0.5;
+    // float phase = float((frameId & 0xffffu) + 1u);
+    // return fract(phase * vec2(0.754877666, 0.569840291)) - 0.5;
+    return vec2(0.0);
 }
 
 float rtPixelConeSpread(vec3 corner0, vec3 corner1, vec3 corner2,

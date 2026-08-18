@@ -352,10 +352,18 @@ void writeMaxEntSpecularDenoisedHistoryInvalid(uvec2 xy) {
         packHalf2x16(vec2(-1.0, 0.0)));
 }
 
-void writeMaxEntSpecularDenoisedReprojection(uvec2 xy, SpecularMaxEnt signal,
-        float variance, float temporalCurrentWeight) {
-    uvec3 denoised = packSpecularMaxEnt(signal);
-    reflectBuffer.data[addr(SPEC_N_LIGHT, xy)] = uvec4(denoised,
+// Transient N0 layout consumed by the final spatial pass:
+//   xy = reprojected previous denoised MaxEntY
+//   z  = previous N_eff, valid mass
+//   w  = filtered stddev, negative current-sample temporal weight
+// CoCg is unnecessary because temporal difference detection uses MaxEntY only.
+void writeMaxEntSpecularDenoisedReprojection(uvec2 xy, vec4 maxEntY,
+        float variance, float historySamples, float validWeight,
+        float temporalCurrentWeight) {
+    reflectBuffer.data[addr(SPEC_N_LIGHT, xy)] = uvec4(
+        packHalf2x16(clamp(maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(vec2(min(historySamples, 65504.0), clamp(validWeight, 0.0, 1.0))),
         packHalf2x16(vec2(min(sqrt(max(variance, 0.0)), 65504.0),
             -clamp(temporalCurrentWeight, 0.0, 1.0))));
 }
@@ -365,14 +373,20 @@ void writeMaxEntSpecularDenoisedReprojectionInvalid(uvec2 xy) {
         packHalf2x16(vec2(-1.0, 0.0)));
 }
 
-bool readMaxEntSpecularDenoisedReprojection(uvec2 xy, out SpecularMaxEnt signal,
-        out float stddev, out float temporalCurrentWeight) {
+bool readMaxEntSpecularDenoisedReprojection(uvec2 xy, out vec4 maxEntY,
+        out float stddev, out float historySamples, out float validWeight,
+        out float temporalCurrentWeight) {
     uvec4 words = reflectBuffer.data[addr(SPEC_N_LIGHT, xy)];
+    vec2 historyMeta = unpackHalf2x16(words.z);
     vec2 metadata = unpackHalf2x16(words.w);
     stddev = metadata.x;
+    historySamples = historyMeta.x;
+    validWeight = historyMeta.y;
     temporalCurrentWeight = -metadata.y;
-    bool valid = stddev >= 0.0 && metadata.y < 0.0 && !any(isnan(metadata)) && !any(isinf(metadata));
-    signal = valid ? unpackSpecularMaxEnt(words.xyz) : emptySpecularMaxEnt();
+    bool valid = stddev >= 0.0 && historySamples >= 1.0 && validWeight > 0.0
+        && metadata.y < 0.0 && !any(isnan(historyMeta)) && !any(isinf(historyMeta))
+        && !any(isnan(metadata)) && !any(isinf(metadata));
+    maxEntY = valid ? vec4(unpackHalf2x16(words.x), unpackHalf2x16(words.y)) : vec4(0.0);
     return valid;
 }
 
