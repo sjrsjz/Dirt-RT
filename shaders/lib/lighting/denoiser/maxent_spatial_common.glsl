@@ -65,7 +65,7 @@ float denoiserSpatialWeight(DenoiserMaxEntSignal centerSignal,
     float variance = centerSignal.variance + sampleSignal.variance;
     // Both variances may be exactly zero; without the floor, identical
     // signals produce 0/0 and poison the exponential with NaN.
-    signalExponent += phiLuminance * sqrt(distanceSq / max(variance, 1e-12));
+    signalExponent += phiLuminance * (distanceSq / max(variance, 1e-12));
     return kernelWeight * exp(-signalExponent);
 }
 

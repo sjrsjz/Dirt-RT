@@ -17,9 +17,11 @@
 //               maxent_spatial_geometry.glsl
 //   colortex4 = canonical RGBA32UI MaxEnt signal documented in
 //               maxent_spatial_signal.glsl
-// The variance carried by colortex4 is the estimator variance of the
-// temporally accumulated MaxEnt mean, never the population variance. It is
-// computed in F32 and stored as an FP16 square root. First-surface plane
+// The variance carried by colortex4 is a local squared-Bures uncertainty
+// estimate for the temporally accumulated MaxEnt state. It is obtained by
+// pulling the Gaussian Bures/W2 metric back to (v, omega), contracting that
+// metric with the covariance information recoverable from E[Y^2], and is
+// computed in F32 then stored as an FP16 square root. First-surface plane
 // consistency constrains both variance pooling stages. The signal's upper
 // metadata half contains the already constructed radial virtual distance, not
 // reflection hit distance.
@@ -157,16 +159,122 @@ float denoiserVarianceCanonicalMeanY2(vec4 meanState, float meanY2) {
     return max(meanY2, max(meanState.w * meanState.w, dot(meanState.xyz, meanState.xyz)));
 }
 
-float denoiserVariancePopulation(vec4 meanState, float meanY2) {
-    // z = (Y * direction, Y), hence E[|z|^2] = 2 E[Y^2].
-    return max(2.0 * meanY2 - dot(meanState, meanState), 0.0);
+// Local pullback of the Gaussian Bures/W2 metric to the 4-DOF
+// MaxEnt parameterization theta = (v, omega).
+//
+// The Gaussian proxy is axisymmetric around n = v / |v|:
+//   Sigma = p^2 (I - nn^T) + q^2 nn^T,
+// with the same p/q construction used by the spatial Bures distance.
+// For an infinitesimal perturbation dv = n dr + dv_perp and dOmega,
+//
+//   d_B^2 ~= Grr dr^2 + Gperp |dv_perp|^2
+//              + 2 GrOmega dr dOmega + GOmegaOmega dOmega^2.
+//
+// Only E[Y^2] is stored, so the full covariance of (v, omega) is not
+// identifiable. We therefore use the following closure:
+//   * the exact scalar magnitudes available from the stored moments,
+//       tr Cov[Y u] = E[Y^2] - |v|^2,
+//       Var[Y]      = E[Y^2] - omega^2;
+//   * the MaxEnt Gaussian proxy only to split tr Cov[Y u] into the radial
+//     and two perpendicular components;
+//   * Cov(dr, dOmega) = 0, because E[Y^2 u] is not stored.
+//
+// The returned value is in squared-Bures units.  It is the population-form
+// uncertainty proxy, i.e. it carries the same (N - 1) / N bias as the raw
+// second moments.  denoiserVarianceOfTemporalMean() converts it to the
+// uncertainty of the temporal mean by dividing by N - 1.
+float denoiserVarianceBuresPopulation(vec4 meanState, float meanY2) {
+    meanState = denoiserVarianceCanonicalMean(meanState);
+    meanY2 = denoiserVarianceCanonicalMeanY2(meanState, meanY2);
+
+    vec3 v = meanState.xyz;
+    float omega = meanState.w;
+    float r2 = dot(v, v);
+    float omega2 = omega * omega;
+
+    // These two scalar covariance magnitudes are determined exactly by the
+    // stored moments.  They are population-form (1/N-normalized) scatters.
+    float vectorPopulationTrace = max(meanY2 - r2, 0.0);
+    float energyPopulationVariance = max(meanY2 - omega2, 0.0);
+
+    if (vectorPopulationTrace <= 0.0 && energyPopulationVariance <= 0.0)
+        return 0.0;
+
+    // A nonnegative Y with E[Y] == 0 must be identically zero.  This branch
+    // is therefore only a numerical-degeneracy fallback.  At v -> 0 the
+    // exact pullback metric tends to G_v = 1 and G_omega = 4/3.
+    if (omega2 <= 1e-30)
+        return vectorPopulationTrace
+            + (4.0 / 3.0) * energyPopulationVariance;
+
+    // Same closed-form axisymmetric covariance as denoiserSpatialMakeBuresData:
+    //   s  = sqrt(4 omega^2 - 3/4 |v|^2)
+    //   p2 = (2 omega^2 + omega s) / 9 - |v|^2 / 3
+    //   q2 = p2 + |v|^2 / 2
+    float rootArgument = max(4.0 * omega2 - 0.75 * r2, 0.0);
+    float traceRoot = sqrt(rootArgument);
+    float common_ = (2.0 * omega2 + omega * traceRoot) / 9.0;
+    float p2 = max(common_ - r2 / 3.0, 0.0);
+    float q2 = max(common_ + r2 / 6.0, 0.0);
+    float shapeTrace = 2.0 * p2 + q2;
+
+    if (traceRoot <= 0.0 || p2 <= 0.0 || q2 <= 0.0 || shapeTrace <= 0.0)
+        return vectorPopulationTrace
+            + (4.0 / 3.0) * energyPopulationVariance;
+
+    // The true second directional moment E[Y^2 uu^T] is unavailable.  Use
+    // the MaxEnt proxy only for its axisymmetric shape, while preserving the
+    // observed total vector variance magnitude from E[Y^2].
+    float radialPopulationVariance = vectorPopulationTrace * q2 / shapeTrace;
+    float perpendicularPopulationTrace = max(
+            vectorPopulationTrace - radialPopulationVariance, 0.0);
+
+    float p = sqrt(p2);
+    float q = sqrt(q2);
+    float r = sqrt(r2);
+
+    // Derivatives of p^2 and q^2 with respect to r = |v| and omega.
+    // traceRoot is safely nonzero for realizable |v| <= omega, omega > 0.
+    float dp2Dr = -omega * r / (12.0 * traceRoot) - (2.0 / 3.0) * r;
+    float dq2Dr = -omega * r / (12.0 * traceRoot) + (1.0 / 3.0) * r;
+    float dCommonDOmega = (4.0 * omega + traceRoot
+            + 4.0 * omega2 / traceRoot) / 9.0;
+
+    float dpDr = dp2Dr / (2.0 * p);
+    float dqDr = dq2Dr / (2.0 * q);
+    float dpDOmega = dCommonDOmega / (2.0 * p);
+    float dqDOmega = dCommonDOmega / (2.0 * q);
+
+    // Local Bures metric coefficients.  The perpendicular term contains the
+    // covariance-orientation contribution in addition to the Euclidean mean
+    // displacement.  Since q^2 - p^2 = |v|^2 / 2, it simplifies to r^2 /
+    // (4 (p^2 + q^2)).
+    float Grr = 1.0 + 2.0 * dpDr * dpDr + dqDr * dqDr;
+    float Gperp = 1.0 + r2 / (4.0 * (p2 + q2));
+    float GOmegaOmega = 2.0 * dpDOmega * dpDOmega
+            + dqDOmega * dqDOmega;
+
+    // The pullback also has
+    //   GrOmega = 2 dp/dr dp/domega + dq/dr dq/domega,
+    // but its covariance contraction requires Cov(dr, domega), equivalently
+    // E[Y^2 u], which is not present in the compact signal.  The zero-cross
+    // closure avoids inventing an unobservable sign/correlation.
+
+    float buresPopulationVariance =
+          Grr * radialPopulationVariance
+        + Gperp * perpendicularPopulationTrace
+        + GOmegaOmega * energyPopulationVariance;
+
+    return denoiserVarianceSanitizeNonnegative(buresPopulationVariance);
 }
 
 float denoiserVarianceOfTemporalMean(vec4 meanState, float meanY2, float historyLength) {
-    // The stored population estimate is biased by (N - 1) / N. Dividing it
-    // by N - 1 therefore gives the variance of the temporal sample mean.
+    // Every population covariance term above carries the usual (N - 1) / N
+    // bias.  Dividing the contracted Bures population uncertainty by N - 1
+    // therefore gives the local squared-Bures uncertainty of the temporal
+    // sample mean, under the covariance-shape closure above.
     if (historyLength <= 1.5) return 0.0;
-    return denoiserVariancePopulation(meanState, meanY2)
+    return denoiserVarianceBuresPopulation(meanState, meanY2)
         / (historyLength - 1.0);
 }
 
@@ -356,7 +464,13 @@ void main() {
                 float inverseMass = 1.0 / sumMass;
                 vec4 pooledMean = denoiserVarianceCanonicalMean(sumMean * inverseMass);
                 float pooledMeanY2 = denoiserVarianceCanonicalMeanY2(pooledMean, sumMeanY2 * inverseMass);
-                float pooledPopulationVariance = denoiserVariancePopulation(pooledMean, pooledMeanY2);
+                float pooledPopulationVariance = denoiserVarianceBuresPopulation(
+                        pooledMean, pooledMeanY2);
+                // Preserve the legacy cold-start spatial treatment exactly:
+                // the neighborhood estimates a per-observation uncertainty
+                // scale, while only the center pixel's actual temporal history
+                // reduces the estimator variance.  No Kish/Bessel correction
+                // is introduced in this version.
                 spatialVariance = pooledPopulationVariance
                         / centerHistory;
             }
@@ -364,8 +478,9 @@ void main() {
 
         float temporalTrust = smoothstep(varianceHistoryBegin, varianceHistoryEnd, centerHistory);
         if (centerHistory <= 1.5) temporalTrust = 0.0;
-        // Both paths originate from denoiserVariancePopulation, whose final
-        // PSD projection establishes the nonnegative sqrt-domain invariant.
+        // Both paths are expressed in the same local squared-Bures units; the
+        // sigma-domain transition therefore keeps the existing cold-start
+        // behavior while changing only the uncertainty geometry.
         float estimatorSigma = mix(sqrt(spatialVariance), sqrt(temporalVariance), temporalTrust);
         estimatorVariance = denoiserVarianceSanitizeNonnegative(estimatorSigma * estimatorSigma);
     }

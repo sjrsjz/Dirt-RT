@@ -143,7 +143,7 @@ bool denoiserSpatialFilterLarge(ivec2 pixel, out DenoiserMaxEntSignal outputSign
         DenoiserSpatialBuresData sampleBures = denoiserSpatialMakeBuresData(sampleSignal.maxEntY);
 
         float virtualDistanceWeight;
-        float weight = denoiserSpatialWeight(centerSignal, centerBures,
+        float weight = 0.0*denoiserSpatialWeight(centerSignal, centerBures,
                 sampleSignal, sampleBures, samplePrimaryRay,
                 surfaceGeometryExponent,
                 DENOISER_SPATIAL_POISSON_8[i].w,

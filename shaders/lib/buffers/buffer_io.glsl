@@ -8,6 +8,7 @@
 // New module structure:
 //   lib/common/pack_half.glsl        — half-float pack/unpack utilities
 //   lib/buffers/addr.glsl            — SSBO tiled addressing + buffer declarations
+//   lib/buffers/debug_buffer.glsl    — isolated per-pixel diagnostic records
 //   lib/buffers/gbuffer.glsl         — GeometryMaterialBuffer read/write
 //   lib/buffers/diffuse_buffer.glsl  — DiffuseBuffer read/write + samplePathGuide
 //   lib/buffers/specular_buffer.glsl — Reflect/Refract buffer read/write
@@ -18,6 +19,7 @@
 
 #include "/lib/common/pack_half.glsl"
 #include "/lib/buffers/addr.glsl"
+#include "/lib/buffers/debug_buffer.glsl"
 #include "/lib/buffers/gbuffer.glsl"
 #include "/lib/buffers/diffuse_buffer.glsl"
 #include "/lib/buffers/specular_buffer.glsl"

@@ -17,7 +17,7 @@ layout(local_size_x = 16, local_size_y = 16) in;
 uniform usampler2D colortex4; // atrous 降噪 MaxEnt (packMaxEnt 格式, RGBA32UI)
 uniform usampler2D colortex6; // temporal_diffuse validKernelWeight
 
-layout(rgba32ui) uniform writeonly uimage2D colorimg6;
+layout(rgba32ui) uniform writeonly uimage2D colorimg5;
 
 const uint POISSON_N = 8u;
 #ifndef PATHGUIDE_SPATIAL_RADIUS
@@ -294,7 +294,7 @@ void main() {
     // Guiding is consumed only by surface rays. Skip eight scattered probes,
     // random rotation and history reprojection for sky pixels.
     if (centerDist <= -0.5) {
-        imageStore(colorimg6, pix, uvec4(0u));
+        imageStore(colorimg5, pix, uvec4(0u));
         return;
     }
     centerNormal = readPrimaryGeometryNormal(gxy);
@@ -319,5 +319,5 @@ void main() {
     float W = reservoirW(r);
 
     uvec2 halfY = packMaxEntHalf(r.y);
-    imageStore(colorimg6, pix, uvec4(halfY.x, halfY.y, floatBitsToUint(W), floatBitsToUint(r.M)));
+    imageStore(colorimg5, pix, uvec4(halfY.x, halfY.y, floatBitsToUint(W), floatBitsToUint(r.M)));
 }

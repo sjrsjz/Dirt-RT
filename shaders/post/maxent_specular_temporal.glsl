@@ -222,9 +222,8 @@ void main() {
     if (!currentGeometry.valid) {
         imageStore(colorimg4, ivec2(pixel), uvec4(0u));
         imageStore(colorimg5, ivec2(pixel), uvec4(0u));
-        #if DEBUG_VIEW != 8
         writeMaxEntSpecularDenoisedReprojectionInvalid(pixel);
-        #endif
+        debugWriteSpecularTemporalInvalid(pixel);
         return;
     }
 
@@ -359,23 +358,11 @@ void main() {
         float(MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY));
 
     float hitDistance = mix(hitSMB, hitVMB, virtualAmount);
-    #if DEBUG_VIEW != 8
     maxentPublishDenoisedReprojection(surface, virtualHistory,
         smbAlpha, vmbAlpha, virtualAmount);
-    #endif
 
     imageStore(colorimg4, ivec2(pixel), maxentPackTemporal(temporal));
     imageStore(colorimg5, ivec2(pixel), maxentPackTemporalAux(hitDistance));
-
-#if DEBUG_VIEW == 12
-    // Preserve the directional MaxEnt moments so composite_lighting can apply
-    // the exact same GGX/Fresnel projection as the final reflection path.
-    writeReflMaxEnt(pixel, temporal.signal,
-        hitDistance, 1.0 - mix(smbAlpha, vmbAlpha,
-            virtualAmount));
-#elif DEBUG_VIEW == 14
-    writeReflLight(pixel, vec3(1.0 - mix(smbAlpha, vmbAlpha,
-            virtualAmount)),
-        hitDistance, 0.0);
-#endif
+    debugWriteSpecularTemporal(pixel, packSpecularMaxEnt(temporal.signal),
+        hitDistance, 1.0 - mix(smbAlpha, vmbAlpha, virtualAmount));
 }

@@ -42,8 +42,8 @@ float maxentClampHistoryWeightByDenoisedDifference(float historyWeight,
     float historySamples, float validWeight, float temporalCurrentWeight,
     float maximumHistory, float tolerance, out float normalizedDistance) {
     normalizedDistance = -1.0;
-    historyWeight = isnan(historyWeight) || isinf(historyWeight) ? 1.0 : max(historyWeight, 1.0);
-    if (historyWeight <= MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY) return historyWeight;
+    historyWeight = isnan(historyWeight) || isinf(historyWeight) ? 0.0 : max(historyWeight, 0.0);
+    //if (historyWeight <= MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY) return historyWeight;
     if (any(isnan(currentMaxEntY)) || any(isinf(currentMaxEntY))
             || any(isnan(historyMaxEntY)) || any(isinf(historyMaxEntY))
             || !(historyStddev >= 0.0) || isnan(historyStddev) || isinf(historyStddev)
@@ -61,15 +61,14 @@ float maxentClampHistoryWeightByDenoisedDifference(float historyWeight,
     // as independent estimators.
     float innovationStddev = historyStddev * sqrt(historySamples + 1.0);
     normalizedDistance = sqrt(clamp(validWeight, 0.0, 1.0) * distanceSq)
-            / max(temporalCurrentWeight * innovationStddev, 1e-6);
+            / max(temporalCurrentWeight * innovationStddev, 1e-10);
     if (isnan(normalizedDistance) || isinf(normalizedDistance)) {
         normalizedDistance = -1.0;
         return historyWeight;
     }
 
-    float k = min(normalizedDistance, 80.0) / max(tolerance, 1e-6);
-    float agreement = exp(-k);
-    float historyCap = 1.0 + (max(maximumHistory, 1.0) - 1.0) * agreement;
+    float k = tolerance / max(normalizedDistance * normalizedDistance, 1e-10);
+    float historyCap = min(k, maximumHistory);
     return min(historyWeight, historyCap);
 }
 

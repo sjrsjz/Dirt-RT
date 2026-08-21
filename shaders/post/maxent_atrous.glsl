@@ -25,11 +25,28 @@ layout(local_size_x = 8, local_size_y = 8) in;
 #include "/lib/lighting/denoiser/maxent_bures.glsl"
 #endif
 
+#if defined(MAXENT_ATROUS_WRITE_ALTERNATE)
 uniform usampler2D colortex4;
+layout(rgba32ui) uniform writeonly uimage2D colorimg5;
+#else
+uniform usampler2D colortex5;
 layout(rgba32ui) uniform writeonly uimage2D colorimg4;
+#endif
 
 uvec4 denoiserSpatialLoadSignalWords(ivec2 pixel) {
+    #if defined(MAXENT_ATROUS_WRITE_ALTERNATE)
     return texelFetch(colortex4, pixel, 0);
+    #else
+    return texelFetch(colortex5, pixel, 0);
+    #endif
+}
+
+void maxentAtrousStoreSignalWords(ivec2 pixel, uvec4 words) {
+    #if defined(MAXENT_ATROUS_WRITE_ALTERNATE)
+    imageStore(colorimg5, pixel, words);
+    #else
+    imageStore(colorimg4, pixel, words);
+    #endif
 }
 
 #if defined(MAXENT_ATROUS_FINAL_RESOLVE)
@@ -44,17 +61,23 @@ SpecularMaxEnt maxentAtrousSpecularSignal(DenoiserMaxEntSignal signal) {
 
 void maxentApplySpecularHistoryDifferenceClamp(uvec2 pixel,
         SpecularMaxEnt currentSignal) {
+    float normalizedDistance = -1.0;
     uvec4 historyWords = reflectBuffer.data[addr(SPEC_N_HISTLIGHT, pixel)];
     vec2 momentHistory = unpackHalf2x16(historyWords.w);
     if (!(momentHistory.y >= 1.0) || any(isnan(momentHistory))
-            || any(isinf(momentHistory))) return;
+            || any(isinf(momentHistory))) {
+        debugWriteSpecularDenoisedDifference(pixel, normalizedDistance);
+        return;
+    }
 
     vec4 historyMaxEntY;
     float historyStddev, historySamples, validWeight, temporalCurrentWeight;
     if (!readMaxEntSpecularDenoisedReprojection(pixel, historyMaxEntY,
             historyStddev, historySamples, validWeight,
-            temporalCurrentWeight)) return;
-    float normalizedDistance;
+            temporalCurrentWeight)) {
+        debugWriteSpecularDenoisedDifference(pixel, normalizedDistance);
+        return;
+    }
     momentHistory.y = maxentClampHistoryWeightByDenoisedDifference(
             momentHistory.y, currentSignal.maxEntY, historyMaxEntY,
             historyStddev, historySamples, validWeight,
@@ -63,6 +86,7 @@ void maxentApplySpecularHistoryDifferenceClamp(uvec2 pixel,
             normalizedDistance);
     historyWords.w = pack2HalfClampedU(momentHistory.x, momentHistory.y);
     reflectBuffer.data[addr(SPEC_N_HISTLIGHT, pixel)] = historyWords;
+    debugWriteSpecularDenoisedDifference(pixel, normalizedDistance);
 }
 #endif
 
@@ -70,33 +94,25 @@ void denoiserSpatialStore(ivec2 pixel, DenoiserMaxEntSignal signal) {
     // denoiserSpatialResolve() has already sanitized the signal once. Avoid a
     // second identical validation on the hot ping-pong store path.
     uvec4 packedSignal = denoiserPackMaxEntSignalTrusted(signal);
-    imageStore(colorimg4, pixel, packedSignal);
+    maxentAtrousStoreSignalWords(pixel, packedSignal);
 
     #if defined(MAXENT_ATROUS_FINAL_RESOLVE)
     SpecularMaxEnt specular = maxentAtrousSpecularSignal(signal);
     float standardDeviation = sqrt(max(signal.variance, 0.0));
-    #if DEBUG_VIEW != 8
     maxentApplySpecularHistoryDifferenceClamp(uvec2(pixel), specular);
-    #endif
     writeMaxEntSpecularDenoisedHistory(uvec2(pixel), specular, standardDeviation);
-    #if DEBUG_VIEW == 9 || DEBUG_VIEW == 12 || DEBUG_VIEW == 14
-    // Preserve the diagnostic value written by its owning pass.
-    #else
     writeReflMaxEnt(uvec2(pixel), specular, signal.virtualDistance, 1.0);
-    #endif
     #endif
 }
 
 void denoiserSpatialStoreInvalid(ivec2 pixel) {
     uvec4 invalidSignal = denoiserInvalidMaxEntSignalWords();
-    imageStore(colorimg4, pixel, invalidSignal);
+    maxentAtrousStoreSignalWords(pixel, invalidSignal);
 
     #if defined(MAXENT_ATROUS_FINAL_RESOLVE)
     writeMaxEntSpecularDenoisedHistoryInvalid(uvec2(pixel));
-    #if DEBUG_VIEW == 9 || DEBUG_VIEW == 12 || DEBUG_VIEW == 14
-    #else
+    debugWriteSpecularDenoisedDifference(uvec2(pixel), -1.0);
     writeReflMaxEnt(uvec2(pixel), emptySpecularMaxEnt(), 0.0, 0.0);
-    #endif
     #endif
 }
 

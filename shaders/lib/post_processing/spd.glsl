@@ -1,17 +1,20 @@
 #version 430 core
 
-// One-dispatch 3x3 bloom pyramid. Each group builds an L0..L3 tile locally;
-// the last completed group builds the small L4..L8 tail.
+// Two-dispatch 3x3 bloom pyramid. The local pass builds L0..L3 without any
+// cross-workgroup reads; the tail pass consumes L3 after Iris' dispatch-level
+// image barrier and builds L4..L8 in one workgroup.
 layout(local_size_x = 16, local_size_y = 16) in;
-// L0 is half resolution and one 16x16 physical group owns a 32x32 L0 tile.
-// A quarter-resolution dispatch therefore launches only potentially useful
-// groups (the final partial group is rejected by groupCount when necessary).
+#if defined(BLOOM_SPD_LOCAL)
 const vec2 workGroupsRender = vec2(0.25, 0.25);
+#elif defined(BLOOM_SPD_TAIL)
+const ivec3 workGroups = ivec3(1, 1, 1);
+#else
+#error "Select one bloom SPD phase"
+#endif
 layout(rgba32f) uniform coherent image2D bloomAtlas;
 uniform sampler2D colortex0;
 
 #include "/lib/post_processing/bloom.glsl"
-#include "/lib/buffers/frame_data.glsl"
 
 const int BLOOM_TILE = 32;
 const int BLOOM_LOCAL_LEVELS = 4;
@@ -28,8 +31,6 @@ shared vec2 smL1RG[BLOOM_L1_W * BLOOM_L1_W];
 shared float smL1B[BLOOM_L1_W * BLOOM_L1_W];
 shared vec2 smL2RG[BLOOM_L2_W * BLOOM_L2_W];
 shared float smL2B[BLOOM_L2_W * BLOOM_L2_W];
-shared uint smTailOwner;
-
 bool rectEmpty(ivec4 r) { return r.x > r.z || r.y > r.w; }
 ivec4 emptyRect() { return ivec4(1, 1, 0, 0); }
 
@@ -177,6 +178,8 @@ vec3 sampleAtlas3x3(ivec2 dst, int srcLevel, int dstLevel, ivec2 atlasSize) {
 
 void main() {
     ivec2 atlasSize = imageSize(bloomAtlas);
+    uint lane = gl_LocalInvocationIndex;
+    #if defined(BLOOM_SPD_LOCAL)
     ivec2 levelSize[4] = ivec2[4](
         bloomSize(0, atlasSize), bloomSize(1, atlasSize),
         bloomSize(2, atlasSize), bloomSize(3, atlasSize));
@@ -189,10 +192,10 @@ void main() {
     ivec4 own[4], needed[4];
     for (int l = 0; l < 4; ++l) own[l] = ownedRect(l, group, levelSize[l]);
     needed[3] = own[3];
-    for (int l = 2; l >= 0; --l)
-        needed[l] = unionRect(own[l], sourceFootprint(needed[l + 1], levelSize[l], levelSize[l + 1]));
+    needed[2] = unionRect(own[2], sourceFootprint(needed[3], levelSize[2], levelSize[3]));
+    needed[1] = unionRect(own[1], sourceFootprint(needed[2], levelSize[1], levelSize[2]));
+    needed[0] = unionRect(own[0], sourceFootprint(needed[1], levelSize[0], levelSize[1]));
 
-    uint lane = gl_LocalInvocationIndex;
     ivec2 extent0 = needed[0].zw - needed[0].xy + 1;
     int count0 = rectEmpty(needed[0]) ? 0 : extent0.x * extent0.y;
     for (int i = int(lane); i < count0; i += 256) {
@@ -249,20 +252,7 @@ void main() {
         vec3 v; SAMPLE_SHARED(v, loadL2, p, levelSize[2], levelSize[3], needed[2]);
         imageStore(bloomAtlas, bloomOrigin(3, atlasSize) + p, vec4(bloomSafeFloat(v), 1.0));
     }
-
-    // Publish all image stores before the leader publishes group completion.
-    memoryBarrierImage();
-    barrier();
-    if (lane == 0u) {
-        uint before = atomicAdd(bloomCompletedGroups, 1u);
-        uint expected = uint(groupCount.x * groupCount.y);
-        smTailOwner = (before + 1u == expected) ? 1u : 0u;
-    }
-    barrier();
-    if (smTailOwner == 0u) return;
-
-    // The elected group acquires L3 and finishes only the small pyramid tail.
-    memoryBarrierImage();
+    #else
     for (int dstLevel = BLOOM_LOCAL_LEVELS; dstLevel <= 8; ++dstLevel) {
         ivec2 dstSize = bloomSize(dstLevel, atlasSize);
         int count = max(dstSize.x, 0) * max(dstSize.y, 0);
@@ -274,4 +264,5 @@ void main() {
         memoryBarrierImage();
         barrier();
     }
+    #endif
 }

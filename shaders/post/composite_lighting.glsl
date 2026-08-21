@@ -55,7 +55,7 @@ float logDistNorm(float d) {
 
 #if DEBUG_VIEW == 23
 vec3 debugDiffuseDenoisedTemporalDifference(uvec2 pixel) {
-    float normalizedDistance = readDiffuseDenoisedDifference(pixel);
+    float normalizedDistance = debugReadDiffuseDenoisedDifference(pixel);
     if (!(normalizedDistance >= 0.0) || isnan(normalizedDistance) || isinf(normalizedDistance))
         return vec3(1.0, 0.0, 1.0);
     return jetColormap(1.0 - exp2(-0.5 * min(normalizedDistance, 32.0)));
@@ -221,7 +221,6 @@ void main() {
     readPrimaryMaterial(xy, primaryCs, primaryCd, primaryS);
 
     diffuseIlluminationData tmp = fetchDiffuse(pix);
-    vec3IlluminationData tmp2 = fetchReflect(pix);
     vec3 refractionLighting = resolvePSRRefraction(xy);
     SpecularMaxEnt reflectionMaxEnt;
     float reflectionVirtualDistance, reflectionDebugWeight;
@@ -278,14 +277,15 @@ void main() {
     fragColor.xyz = absorptionVal;
 
     #elif DEBUG_VIEW == 8
-    // Actually sampled GGX direction, conditionally preserved in the otherwise
-    // unused upper half of the reflection hit-distance word.
-    fragColor.xyz = readReflSampleDirection(xy) * 0.5 + 0.5;
+    // Actually sampled GGX direction published by the reflection ray pass.
+    fragColor.xyz = debugReadReflectionSampleDirection(xy) * 0.5 + 0.5;
 
     #elif DEBUG_VIEW == 9
     // Temporal virtual-reprojection hit distance before spatial filtering.
     {
-        float d = readMaxEntSpecularHistory(xy).hitDistance;
+        uvec3 debugSignalWords;
+        float d, historyContribution;
+        debugReadSpecularTemporal(xy, debugSignalWords, d, historyContribution);
         fragColor.xyz = (d >= VPROJDIST_SKY * 0.99) ? vec3(1.0) : jetColormap(logDistNorm(d));
     }
 
@@ -300,7 +300,14 @@ void main() {
     #elif DEBUG_VIEW == 12
     // Temporally accumulated reflection before every spatial stage, projected
     // through the same GGX/Fresnel BRDF used by the final reflection output.
-    fragColor.xyz = specularLighting;
+    {
+        uvec3 debugSignalWords;
+        float debugHitDistance, historyContribution;
+        debugReadSpecularTemporal(xy, debugSignalWords, debugHitDistance, historyContribution);
+        fragColor.xyz = projectSpecularMaxEnt(
+            unpackSpecularMaxEnt(debugSignalWords), rdVal, textureNormal,
+            geometryNormal, rough, primaryCs, primaryS, primaryEtaRatio);
+    }
 
     #elif DEBUG_VIEW == 13
     // Diffuse temporal accumulation weight (heatmap) — N_eff / MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY
@@ -308,7 +315,12 @@ void main() {
 
     #elif DEBUG_VIEW == 14
     // Actual temporal history contribution to the reflection radiance.
-    fragColor.xyz = jetColormap(clamp(tmp2.data_swap.r, 0.0, 1.0));
+    {
+        uvec3 debugSignalWords;
+        float debugHitDistance, historyContribution;
+        debugReadSpecularTemporal(xy, debugSignalWords, debugHitDistance, historyContribution);
+        fragColor.xyz = jetColormap(clamp(historyContribution, 0.0, 1.0));
+    }
 
     #elif DEBUG_VIEW == 15
     // PSR route: green=screen reuse, blue=environment, orange=cache fallback.

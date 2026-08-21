@@ -12,7 +12,7 @@ layout(local_size_x = 16, local_size_y = 16) in;
 #include "/lib/lighting/denoiser/maxent_bures.glsl"
 
 uniform usampler2D colortex4;
-uniform usampler2D colortex6;
+uniform usampler2D colortex5;
 
 MaxEntEncoding unpackLightSample(uvec4 d1) {
     MaxEntEncoding encoded;
@@ -39,7 +39,7 @@ void main() {
         diffuseBuffer.data[addr(DIF_N_SWAP, gxy)] = uvec4(0u);
         diffuseBuffer.data[addr(DIF_N_PATHGUIDE, gxy)] = uvec4(0u);
         writeDiffuseHistGeoInvalid(gxy);
-        writeDiffuseDenoisedDifference(gxy, -1.0);
+        debugWriteDiffuseDenoisedDifference(gxy, -1.0);
         return;
     }
     // Phase 1: swap3
@@ -56,7 +56,7 @@ void main() {
             historyMeta.x, historyMeta.y, historyDeviationAlpha.y,
             float(MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY),
             MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE, normalizedDistance);
-    writeDiffuseDenoisedDifference(gxy, normalizedDistance);
+    debugWriteDiffuseDenoisedDifference(gxy, normalizedDistance);
     tmp.prev_weight = tmp.weight;
     tmp.data = tmp.data_swap;
     tmp.prev_meanY2 = tmp.meanY2;
@@ -70,5 +70,5 @@ void main() {
     writeDiffuse(tmp, pix);
 
     // Phase 2: publish the path-guide reservoir from temporal scratch.
-    diffuseBuffer.data[addr(DIF_N_PATHGUIDE, gxy)] = texelFetch(colortex6, pix, 0);
+    diffuseBuffer.data[addr(DIF_N_PATHGUIDE, gxy)] = texelFetch(colortex5, pix, 0);
 }

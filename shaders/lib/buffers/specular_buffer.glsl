@@ -2,6 +2,7 @@
 #define BUFFERS_SPECULAR_BUFFER_GLSL
 
 #include "/lib/buffers/addr.glsl"
+#include "/lib/buffers/debug_buffer.glsl"
 #include "/lib/common/pack_half.glsl"
 #include "/lib/common/oct_encode.glsl"
 
@@ -219,19 +220,13 @@ void readRefrGeo(uvec2 xy, out vec3 pos, out vec3 T) {
 
 // N=0 is MaxEnt-4 Y, CoCg and radial metadata. Before temporal/spatial
 // processing the lower half is ray hit distance; the final spatial resolve
-// replaces it with filtered virtual distance. DEBUG_VIEW 8 conditionally uses
-// the otherwise dead upper half for the sampled GGX ray; normal rendering
-// pays no preservation read.
+// replaces it with filtered virtual distance. Diagnostics live in DebugBuffer
+// and never change this production layout.
 void writeReflMaxEnt(uvec2 xy, SpecularMaxEnt signal,
         float hitDistance, float debugWeight) {
     uvec3 p = packSpecularMaxEnt(signal);
     uint metadata = packHalf2x16(clamp(vec2(hitDistance, debugWeight),
         vec2(-65504.0), vec2(65504.0)));
-#if DEBUG_VIEW == 8
-    uint oldDirection = reflectBuffer.data[addr(SPEC_N_LIGHT, xy)].w
-        & 0xffff0000u;
-    metadata = oldDirection | (metadata & 0xffffu);
-#endif
     reflectBuffer.data[addr(SPEC_N_LIGHT, xy)] = uvec4(p, metadata);
 }
 
@@ -240,16 +235,12 @@ void writeReflMaxEntSample(uvec2 xy, SpecularMaxEnt signal,
     uvec3 p = packSpecularMaxEnt(signal);
     uint metadata = packHalf2x16(clamp(vec2(hitDistance, 0.0),
         vec2(-65504.0), vec2(65504.0)));
-#if DEBUG_VIEW == 8
-    metadata = (metadata & 0xffffu)
-        | (packMaxEntOct16(sampledDirection) << 16u);
-#endif
     reflectBuffer.data[addr(SPEC_N_LIGHT, xy)] = uvec4(p, metadata);
+    debugWriteReflectionSampleDirection(xy, sampledDirection);
 }
 
 vec3 readReflSampleDirection(uvec2 xy) {
-    uint metadata = reflectBuffer.data[addr(SPEC_N_LIGHT, xy)].w;
-    return unpackMaxEntOct16(metadata >> 16u);
+    return debugReadReflectionSampleDirection(xy);
 }
 void readReflMaxEnt(uvec2 xy, out SpecularMaxEnt signal,
         out float hitDistance, out float debugWeight) {

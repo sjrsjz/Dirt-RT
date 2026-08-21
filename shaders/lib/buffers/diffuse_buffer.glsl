@@ -2,6 +2,7 @@
 #define BUFFERS_DIFFUSE_BUFFER_GLSL
 
 #include "/lib/buffers/addr.glsl"
+#include "/lib/buffers/debug_buffer.glsl"
 #include "/lib/buffers/gbuffer.glsl"
 #include "/lib/common/pack_half.glsl"
 #include "/lib/lighting/maxent_encode.glsl"
@@ -101,14 +102,6 @@ void writeDiffuseDenoisedReprojection(uvec2 xy, vec4 maxEntY, float variance,
 void writeDiffuseDenoisedReprojectionInvalid(uvec2 xy) {
     diffuseBuffer.data[addr(diffuseDenoisedWritePlane(), xy)] = uvec4(
         0u, 0u, 0u, packHalf2x16(vec2(-1.0, 0.0)));
-}
-
-void writeDiffuseDenoisedDifference(uvec2 xy, float normalizedDistance) {
-    diffuseBuffer.data[addr(DIF_N_SURFACE, xy)].w = floatBitsToUint(normalizedDistance);
-}
-
-float readDiffuseDenoisedDifference(uvec2 xy) {
-    return uintBitsToFloat(diffuseBuffer.data[addr(DIF_N_SURFACE, xy)].w);
 }
 
 // ===========================================================================
