@@ -7,8 +7,10 @@
 
 // Dedicated per-pixel diagnostic records. Debug producers never borrow a
 // production buffer, so changing DEBUG_VIEW cannot change renderer data flow.
-// COMMON: x=encoded reflection sample direction, y=diffuse Bures distance,
-// z=specular Bures distance. SPECULAR_TEMPORAL: xyz=packed MaxEnt, w=FP16x2
+// COMMON: x=encoded reflection sample direction, y=diffuse standardized
+// moment distance, z=specular standardized moment distance,
+// w=packHalf2x16(diffuse/specular variance-prepare stddev).
+// SPECULAR_TEMPORAL: xyz=packed MaxEnt, w=FP16x2
 // hit distance/history contribution.
 const uint DEBUG_N_COMMON = 0u;
 const uint DEBUG_N_SPECULAR_TEMPORAL = 1u;
@@ -50,6 +52,36 @@ void debugWriteSpecularDenoisedDifference(uvec2 xy, float normalizedDistance) {
 
 float debugReadSpecularDenoisedDifference(uvec2 xy) {
     return uintBitsToFloat(debugLoad(DEBUG_N_COMMON, xy).z);
+}
+
+void debugWriteDiffuseVariancePreparationStandardDeviation(
+        uvec2 xy, float standardDeviation) {
+    uint index = addr(DEBUG_N_COMMON, xy);
+    vec2 preparationStandardDeviations = unpackHalf2x16(
+        debugBuffer.data[index].w);
+    preparationStandardDeviations.x = clamp(
+        standardDeviation, -1.0, 65504.0);
+    debugBuffer.data[index].w = packHalf2x16(
+        preparationStandardDeviations);
+}
+
+void debugWriteSpecularVariancePreparationStandardDeviation(
+        uvec2 xy, float standardDeviation) {
+    uint index = addr(DEBUG_N_COMMON, xy);
+    vec2 preparationStandardDeviations = unpackHalf2x16(
+        debugBuffer.data[index].w);
+    preparationStandardDeviations.y = clamp(
+        standardDeviation, -1.0, 65504.0);
+    debugBuffer.data[index].w = packHalf2x16(
+        preparationStandardDeviations);
+}
+
+float debugReadDiffuseVariancePreparationStandardDeviation(uvec2 xy) {
+    return unpackHalf2x16(debugLoad(DEBUG_N_COMMON, xy).w).x;
+}
+
+float debugReadSpecularVariancePreparationStandardDeviation(uvec2 xy) {
+    return unpackHalf2x16(debugLoad(DEBUG_N_COMMON, xy).w).y;
 }
 
 void debugWriteSpecularTemporal(uvec2 xy, uvec3 signalWords, float hitDistance, float historyContribution) {

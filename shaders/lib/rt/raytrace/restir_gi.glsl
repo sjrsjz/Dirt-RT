@@ -230,8 +230,8 @@ bool restirGILoadCandidateAtTarget(RestirGIPrimaryDomain source,
 
 MaxEntEncoding restirGILoadCanonicalIndirect(uvec2 pixel) {
     MaxEntEncoding canonical;
-    float unusedMeanY2;
-    readDiffuseLightRT(pixel, canonical, unusedMeanY2);
+    float unusedRootMeanY2;
+    readDiffuseLightRT(pixel, canonical, unusedRootMeanY2);
     if (any(isnan(canonical.maxEntY)) || any(isinf(canonical.maxEntY))
             || any(isnan(canonical.CoCg)) || any(isinf(canonical.CoCg)))
         return init_maxent();
@@ -257,9 +257,9 @@ float restirGIReprojectedHistoryWeight(RestirGIPrimaryDomain target) {
         * vec2(resolution_global)), ivec2(0),
         ivec2(resolution_global) - 1);
     MaxEntEncoding unusedHistory;
-    float historyWeight, unusedMeanY2;
+    float historyWeight, unusedRootMeanY2;
     readDiffuseHist(uvec2(previousPixel), unusedHistory,
-        historyWeight, unusedMeanY2);
+        historyWeight, unusedRootMeanY2);
     if (historyWeight <= 0.0 || isnan(historyWeight)
             || isinf(historyWeight)) return 0.0;
 
@@ -399,8 +399,8 @@ void ResolveFirstBounceRestirGI(uvec2 coord, vec3 ro) {
 void FinalizeFirstBounceRestirGI(uvec2 coord) {
     #if RESTIR_GI_ENABLED && EON_ENABLED
     MaxEntEncoding canonicalIndirect;
-    float canonicalMeanY2;
-    readDiffuseLightRT(coord, canonicalIndirect, canonicalMeanY2);
+    float canonicalRootMeanY2;
+    readDiffuseLightRT(coord, canonicalIndirect, canonicalRootMeanY2);
 
     MaxEntEncoding prewarmIndirect;
     MaxEntEncoding direct;
@@ -417,8 +417,7 @@ void FinalizeFirstBounceRestirGI(uvec2 coord) {
         ? prewarmIndirect : canonicalIndirect;
     indirect.maxEntY += direct.maxEntY;
     indirect.CoCg += direct.CoCg;
-    float meanY2 = indirect.maxEntY.w * indirect.maxEntY.w;
-    writeDiffuseLightRT(coord, indirect, meanY2);
+    writeDiffuseLightRT(coord, indirect, max(indirect.maxEntY.w, 0.0));
     #endif
 }
 

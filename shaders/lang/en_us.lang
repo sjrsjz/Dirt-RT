@@ -152,8 +152,8 @@ option.RADIANCE_CACHE_RIS_GUIDING_KAPPA.comment = Concentration of the continuou
 # ===========================================================================
 # MaxEnt Diffuse Temporal
 # ===========================================================================
-option.MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY = Bures Cold-start History
-option.MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY.comment = Bures history clamping is disabled while the current effective history count is at or below this value.
+option.MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY = Moment Cold-start History
+option.MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY.comment = Moment-space history clamping is disabled while the reprojected effective sample count is at or below this value.
 
 option.MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY = Max History Samples
 option.MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY.comment = Maximum effective diffuse history sample count. Higher values are smoother but react more slowly to lighting changes and disocclusion.
@@ -165,7 +165,7 @@ option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE = Reprojection Depth Scale
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE.comment = Scales the depth half-extent of the temporal reprojection footprint trapezoid. Higher values accept history samples that are farther off the reconstructed surface plane, reducing resets but potentially leaking across thin geometry.
 
 option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE = History Difference Tolerance
-option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE.comment = Standardized Bures distance tolerated by diffuse history clamping. Higher values retain more history; lower values respond faster to real lighting changes.
+option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE.comment = Squared standardized moment-evidence budget used by diffuse history clamping. A value of 16 is the four-sigma-equivalent budget; higher values retain more history.
 
 option.MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS = Diffuse Reprojection Radius
 option.MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS.comment = Diffuse temporal footprint radius in pixels. Larger values accept wider path reprojection motion.
@@ -183,7 +183,7 @@ option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION = Lobe Fraction
 option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION.comment = Portion of the GGX lobe accepted during temporal reprojection. Lower values reject more history around view-dependent reflection changes.
 
 option.MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE = History Difference Tolerance
-option.MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE.comment = Standardized Bures distance tolerated by specular history clamping. Higher values retain more history; lower values respond faster to real reflection changes.
+option.MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE.comment = Squared standardized moment-evidence budget used by specular history clamping. A value of 16 is the four-sigma-equivalent budget; higher values retain more history.
 
 option.MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS = Specular Reprojection Radius
 option.MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS.comment = Specular temporal footprint radius in pixels. Larger values accept wider reflection reprojection motion.
@@ -214,14 +214,11 @@ option.MAXENT_SPATIAL_NORMAL_SENSITIVITY.comment = Texture-normal rejection stre
 option.MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE = Plane-distance Tolerance
 option.MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE.comment = Relative projected plane-depth tolerance used by MaxEnt virtual-image rejection, refraction, and path-guide spatial tests. Higher values permit more cross-plane filtering.
 
-option.MAXENT_SPATIAL_VARIANCE_ADAPTATION = Variance Adaptation
-option.MAXENT_SPATIAL_VARIANCE_ADAPTATION.comment = Controls how conservatively variance is propagated through successive spatial levels. Higher values retain more variance and sustain stronger later filtering.
-
 option.MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY = Diffuse Light-field Sensitivity
-option.MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY.comment = Variance-normalized diffuse MaxEnt rejection strength. Higher values preserve more light-field contrast; lower values smooth more.
+option.MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY.comment = Variance-normalized diffuse moment-space rejection strength. Higher values preserve more light-field contrast; lower values smooth more.
 
 option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY = Specular Light-field Sensitivity
-option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY.comment = Variance-normalized specular MaxEnt rejection strength. Higher values preserve more reflection contrast; lower values smooth more.
+option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY.comment = Variance-normalized specular moment-space rejection strength. Higher values preserve more reflection contrast; lower values smooth more.
 
 # ===========================================================================
 # Bloom
@@ -292,6 +289,10 @@ value.DEBUG_VIEW.20 = Path Guide
 value.DEBUG_VIEW.21 = Temporal Raw
 value.DEBUG_VIEW.22 = Radiance Cache
 value.DEBUG_VIEW.23 = Denoised Diffuse Temporal Difference
+value.DEBUG_VIEW.24 = Denoised Virtual Normal
+value.DEBUG_VIEW.25 = Denoised Specular Temporal Difference
+value.DEBUG_VIEW.26 = Diffuse Variance Preparation
+value.DEBUG_VIEW.27 = Specular Variance Preparation
 value.DEBUG_VIEW.31 = Cache Latest Raw
 value.DEBUG_VIEW.32 = Cache RIS Reservoir
 value.DEBUG_VIEW.33 = Cache RIS Sample Count

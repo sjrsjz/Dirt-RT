@@ -140,18 +140,6 @@ float maxent_radial_estimator_variance(vec4 encoded, float N) {
 }
 
 // ------------------------------------------------------------
-// 本征方向标准差 (n=3, 总体)
-// σ_⊥ = 2ω√(1-κ²)/(3+κ²),  σ_∥ = 2ω√(1+κ²)/(3+κ²)
-// 返回 vec2(σ_⊥, σ_∥)
-// ------------------------------------------------------------
-vec2 maxent_eigen_std(float omega, float kappa) {
-    float k2 = kappa * kappa;
-    float denom = 3.0 + k2;
-    float two_omega = 2.0 * omega;
-    return vec2(sqrt(max(0.0, 1.0 - k2)), sqrt(1.0 + k2)) * two_omega / denom;
-}
-
-// ------------------------------------------------------------
 // 从已存储的标量估计量方差提取径向估计量方差
 // stored_var 为 swap2 预滤波后的 Var_scalar/N_eff
 // Var(|X|)/N_eff = stored_var × [3+6κ²-κ⁴] / [4(3-κ²)]
@@ -161,112 +149,6 @@ float maxent_radial_est_var_from_scalar(float stored_scalar_var, float kappa) {
     float ratio = (3.0 + 6.0 * k2 - k2 * k2) / max(4.0 * (3.0 - k2), 1e-8);
     return stored_scalar_var * ratio;
 }
-
-// ------------------------------------------------------------
-// 精确 Bures-Wasserstein 距离平方 (完全解析解, n=3)
-//
-// 抛弃同轴近似，支持任意夹角状态。
-// d_B² = |Δv|² + Tr(Σ₁) + Tr(Σ₂) - 2 Tr( (Σ₁^1/2 Σ₂ Σ₁^1/2)^1/2 )
-// 
-// 解析降维原理：由于秩-1 摄动的协方差矩阵，开方迹操作在
-// v1 和 v2 张成的 2D 子空间内封闭，降维为关于夹角余弦 c 的代数式：
-// Tr(交叉) = σ_⊥,₁*σ_⊥,₂ + √((σ_⊥,₁*σ_∥,₂ + σ_⊥,₂*σ_∥,₁)² + c²(σ_∥,₁²-σ_⊥,₁²)(σ_∥,₂²-σ_⊥,₂²))
-//
-// 性能：无复杂的特征值分解，完全由多项式和单次 sqrt 构成。
-// ------------------------------------------------------------
-float maxent_bures_distance_sq(vec4 enc1, float kappa1, vec4 enc2, float kappa2) {
-    // 获取垂直与平行标准差 (x = σ_⊥, y = σ_∥)
-    vec2 std1 = maxent_eigen_std(enc1.w, kappa1);
-    vec2 std2 = maxent_eigen_std(enc2.w, kappa2);
-
-    vec3 v1 = enc1.xyz;
-    vec3 v2 = enc2.xyz;
-    vec3 delta_v = v1 - v2;
-
-    // 分别计算两分布协方差矩阵的迹: Tr(Σ) = 2σ_⊥² + σ_∥²
-    float tr1 = 2.0 * std1.x * std1.x + std1.y * std1.y;
-    float tr2 = 2.0 * std2.x * std2.x + std2.y * std2.y;
-
-    // 计算两分布均值方向的夹角余弦平方: c² = (v1·v2)² / (|v1|²|v2|²)
-    float len1_sq = dot(v1, v1);
-    float len2_sq = dot(v2, v2);
-    
-    float c_sq = 0.0;
-    // 保护除零，若极小则 c_sq 退化为 0 (正交)
-    if (len1_sq > 1e-16 && len2_sq > 1e-16) {
-        float dot_v = dot(v1, v2);
-        c_sq = min(1.0, (dot_v * dot_v) / (len1_sq * len2_sq));
-    }
-
-    // --- 开始 2x2 降维迹公式求值 ---
-    // 变量映射以对齐数学公式: a = σ_⊥, b = σ_∥
-    
-    // 交叉混合项: a1*b2 + a2*b1
-    float cross_ab = std1.x * std2.y + std2.x * std1.y;
-    
-    // 协方差各向异性强度: b² - a² (即 σ_∥² - σ_⊥²)
-    float diff1 = std1.y * std1.y - std1.x * std1.x;
-    float diff2 = std2.y * std2.y - std2.x * std2.x;
-
-    // 2D 子空间内的开方迹: T_2D = √((a1*b2 + a2*b1)² + c²(b1²-a1²)(b2²-a2²))
-    float T2D_sq = cross_ab * cross_ab + c_sq * diff1 * diff2;
-    float T2D = sqrt(max(0.0, T2D_sq)); // max(0.0) 防止浮点精度导致的负数
-
-    // 总体交叉迹: 三维空间的第三轴贡献了纯标量 a1*a2
-    float cross_trace = std1.x * std2.x + T2D;
-
-    // 最终 Bures 距离公式: d_B² = |μ1-μ2|² + Tr(Σ1) + Tr(Σ2) - 2 * Tr_cross
-    float bw_sq = dot(delta_v, delta_v) + tr1 + tr2 - 2.0 * cross_trace;
-    
-    // 保护截断输出
-    return max(0.0, bw_sq);
-}
-
-// ------------------------------------------------------------
-// 特化 Bures-Wasserstein 距离平方 (预计算 eigen_std)
-//
-// 与 maxent_bures_distance_sq 完全等价，但接收预计算的 eigen_std
-// (σ_⊥, σ_∥) = maxent_eigen_std(omega, kappa)，跳过 4 次 sqrt。
-// 调用方在共享内存加载阶段批量预计算 eigen_std，采样循环中直接
-// 查表使用，大幅降低 atrous 内核的 ALU 调度压力。
-// ------------------------------------------------------------
-float maxent_bures_distance_sq_precomputed(vec3 v1, vec2 std1, vec3 v2, vec2 std2) {
-    vec3 delta_v = v1 - v2;
-
-    // 分别计算两分布协方差矩阵的迹: Tr(Σ) = 2σ_⊥² + σ_∥²
-    float tr1 = 2.0 * std1.x * std1.x + std1.y * std1.y;
-    float tr2 = 2.0 * std2.x * std2.x + std2.y * std2.y;
-
-    // 计算两分布均值方向的夹角余弦平方: c² = (v1·v2)² / (|v1|²|v2|²)
-    float len1_sq = dot(v1, v1);
-    float len2_sq = dot(v2, v2);
-
-    float c_sq = 0.0;
-    if (len1_sq > 1e-16 && len2_sq > 1e-16) {
-        float dot_v = dot(v1, v2);
-        c_sq = min(1.0, (dot_v * dot_v) / (len1_sq * len2_sq));
-    }
-
-    // 交叉混合项: a1*b2 + a2*b1   (a = σ_⊥, b = σ_∥)
-    float cross_ab = std1.x * std2.y + std2.x * std1.y;
-
-    // 协方差各向异性强度: b² - a²
-    float diff1 = std1.y * std1.y - std1.x * std1.x;
-    float diff2 = std2.y * std2.y - std2.x * std2.x;
-
-    // 2D 子空间内的开方迹
-    float T2D_sq = cross_ab * cross_ab + c_sq * diff1 * diff2;
-    float T2D = sqrt(max(0.0, T2D_sq));
-
-    // 总体交叉迹
-    float cross_trace = std1.x * std2.x + T2D;
-
-    // 最终 Bures 距离公式
-    float bw_sq = dot(delta_v, delta_v) + tr1 + tr2 - 2.0 * cross_trace;
-
-    return max(0.0, bw_sq);
-}
-
 
 // 计算最大熵分布的自然参数 (θ, β) 用于散度计算
 // 返回 vec4(theta.xyz, beta), 其中 θ = ( (3+κ²)² / (4 ω² (1-κ²)) ) * v

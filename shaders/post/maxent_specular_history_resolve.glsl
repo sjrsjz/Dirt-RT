@@ -24,7 +24,7 @@ void main() {
     history.surfacePosition = geometry.position;
     history.geometryNormal = geometry.normal;
     history.signal = temporal.signal;
-    history.secondMoment = temporal.secondMoment;
+    history.rootMeanY2 = temporal.rootMeanY2;
     history.hitDistance = maxentUnpackTemporalHitDistance(texelFetch(colortex5, ivec2(pixel), 0));
     history.roughness = geometry.roughness;
     history.historyLength = temporal.historyLength;

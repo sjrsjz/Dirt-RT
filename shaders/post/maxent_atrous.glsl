@@ -22,7 +22,7 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 #if defined(MAXENT_ATROUS_FINAL_RESOLVE)
 #include "/lib/buffers/specular_buffer.glsl"
-#include "/lib/lighting/denoiser/maxent_bures.glsl"
+#include "/lib/lighting/denoiser/maxent_moment_statistics.glsl"
 #endif
 
 #if defined(MAXENT_ATROUS_WRITE_ALTERNATE)
@@ -78,7 +78,7 @@ void maxentApplySpecularHistoryDifferenceClamp(uvec2 pixel,
         debugWriteSpecularDenoisedDifference(pixel, normalizedDistance);
         return;
     }
-    momentHistory.y = maxentClampHistoryWeightByDenoisedDifference(
+    momentHistory.y = maxentClampHistoryWeightByMomentDifference(
             momentHistory.y, currentSignal.maxEntY, historyMaxEntY,
             historyStddev, historySamples, validWeight,
             temporalCurrentWeight, float(MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY),
@@ -98,9 +98,9 @@ void denoiserSpatialStore(ivec2 pixel, DenoiserMaxEntSignal signal) {
 
     #if defined(MAXENT_ATROUS_FINAL_RESOLVE)
     SpecularMaxEnt specular = maxentAtrousSpecularSignal(signal);
-    float standardDeviation = sqrt(max(signal.variance, 0.0));
     maxentApplySpecularHistoryDifferenceClamp(uvec2(pixel), specular);
-    writeMaxEntSpecularDenoisedHistory(uvec2(pixel), specular, standardDeviation);
+    writeMaxEntSpecularDenoisedHistory(uvec2(pixel), specular,
+        signal.standardDeviation);
     writeReflMaxEnt(uvec2(pixel), specular, signal.virtualDistance, 1.0);
     #endif
 }

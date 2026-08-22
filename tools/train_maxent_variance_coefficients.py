@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-"""Fit the MaxEnt A-Trous variance coefficients on synthetic flat fields.
+"""Heuristically tune pass-specific moment-correlation closures.
 
 Each training tile has one analytic, spatially constant MaxEnt target.  Its
 input pixels are independent N-spp importance-sampling estimates of the same
-discrete incident-radiance measure.  The model mirrors the shader's variance
-preparation, Bures light-field weights, six A-Trous levels, and fractional
-variance propagation.  Geometry weights are deliberately omitted.
+discrete incident-radiance measure.  The model mirrors the shader's exact
+moment-trace variance preparation, Euclidean moment-space weights, six A-Trous
+levels, and per-pass equicorrelation covariance expansion.  Geometry weights
+are deliberately omitted.
+
+The shader defaults are derived from fixed-kernel overlap by
+estimate_maxent_pass_correlations.py.  This script instead probes the actual
+data-dependent operator.  Its end-to-end objective contains filtering bias,
+so any trained value is an engineering tuning result, not an alternative
+statistical estimate of p_const.
 """
 
 from __future__ import annotations
@@ -23,13 +30,11 @@ import torch.nn.functional as F
 
 STEPS = (1, 2, 4, 8, 16, 32)
 HISTORIES = (1, 2, 4, 8, 12, 24, 32)
-ORIGINAL_COEFFICIENTS = (
-    0.3339015144,
-    0.4375201036,
-    0.4592464660,
-    0.4644479501,
-    0.4657344365,
-    0.4660551979,
+DEFAULT_DIFFERENCE_CORRELATIONS = (
+    0.0, 0.1633, 0.2171, 0.2508, 0.2585, 0.2665
+)
+DEFAULT_PROPAGATION_CORRELATIONS = (
+    0.0, 0.1060, 0.1412, 0.1394, 0.1471, 0.1525
 )
 GRID_OFFSETS = (
     (-1, -1),
@@ -69,10 +74,6 @@ class Batch:
     mean_y2: torch.Tensor
     target: torch.Tensor
     history: int
-
-
-def fract(value: torch.Tensor) -> torch.Tensor:
-    return value - torch.floor(value)
 
 
 def quantize_half(value: torch.Tensor) -> torch.Tensor:
@@ -185,30 +186,30 @@ class AtrousModel:
             dy = (base[:, 1] * step).reshape(-1, 1, 1)
             self._indices[(step, 0)] = self._indices_from_offsets(dx, dy)
 
-    def _large_indices(self, step: int, frame: int) -> torch.Tensor:
-        key = (step, frame)
+    def _large_indices(self, step: int) -> torch.Tensor:
+        key = (step, 0)
         if key in self._indices:
             return self._indices[key]
 
         yy, xx = torch.meshgrid(
-            torch.arange(self.height, device=self.device, dtype=torch.float32),
-            torch.arange(self.width, device=self.device, dtype=torch.float32),
+            torch.arange(self.height, device=self.device, dtype=torch.int64),
+            torch.arange(self.width, device=self.device, dtype=torch.int64),
             indexing="ij",
         )
-        weyl = fract(
-            xx.new_tensor(frame * 0.6180339887498949 + 0.4142135623730951)
+        mask = 0xFFFFFFFF
+        seed = (
+            ((xx * 0x9E3779B9) & mask)
+            ^ ((yy * 0x85EBCA6B) & mask)
+            ^ ((step * 0xC2B2AE35) & mask)
         )
-        px = xx + weyl
-        py = yy + weyl
-        p3 = fract(torch.stack((px, py, px), dim=0) * 0.1031)
-        dot_term = (
-            p3[0] * (p3[1] + 33.33)
-            + p3[1] * (p3[2] + 33.33)
-            + p3[2] * (p3[0] + 33.33)
+        seed = ((seed ^ 61) ^ (seed >> 16)) & mask
+        seed = (seed * 9) & mask
+        seed = (seed ^ (seed >> 4)) & mask
+        seed = (seed * 0x27D4EB2D) & mask
+        seed = (seed ^ (seed >> 15)) & mask
+        angle = 2.0 * math.pi * (
+            (seed >> 8).to(torch.float32) * (1.0 / 16777216.0)
         )
-        p3 = p3 + dot_term.unsqueeze(0)
-        random_value = fract((p3[0] + p3[1]) * p3[2])
-        angle = 2.0 * math.pi * fract(random_value + step * 0.6180339887498949)
         cosine = torch.cos(angle)
         sine = torch.sin(angle)
         poisson = torch.tensor(POISSON, device=self.device, dtype=torch.float32)
@@ -216,8 +217,14 @@ class AtrousModel:
         source_y = poisson[:, 1, None, None]
         scale = float(step) * 1.75
         # GLSL mat2 is column-major.  This matches mat2(cs,-sn,sn,cs) * p.
-        dx = torch.round(scale * (cosine.unsqueeze(0) * source_x + sine.unsqueeze(0) * source_y))
-        dy = torch.round(scale * (-sine.unsqueeze(0) * source_x + cosine.unsqueeze(0) * source_y))
+        rotated_x = scale * (
+            cosine.unsqueeze(0) * source_x + sine.unsqueeze(0) * source_y
+        )
+        rotated_y = scale * (
+            -sine.unsqueeze(0) * source_x + cosine.unsqueeze(0) * source_y
+        )
+        dx = torch.sign(rotated_x) * torch.floor(torch.abs(rotated_x) + 0.5)
+        dy = torch.sign(rotated_y) * torch.floor(torch.abs(rotated_y) + 0.5)
         self._indices[key] = self._indices_from_offsets(dx.long(), dy.long())
         return self._indices[key]
 
@@ -229,78 +236,36 @@ class AtrousModel:
         gather_indices = indices.reshape(1, 1, taps, pixels).expand(batch, channels, -1, -1)
         return torch.gather(flat, 3, gather_indices).reshape(batch, channels, taps, height, width)
 
-    @staticmethod
-    def _bures_data(mean: torch.Tensor, quantize_stddev: bool) -> Tuple[torch.Tensor, ...]:
-        direction = mean[:, :3]
-        energy = mean[:, 3].clamp_min(0.0)
-        length2 = direction.square().sum(dim=1)
-        rho = length2.sqrt() / energy.clamp_min(1.0e-8)
-        rho = rho.clamp(0.0, 1.0 - 1.0e-6)
-        kappa = 3.0 * rho / (2.0 + (4.0 - 3.0 * rho.square()).clamp_min(1.0e-12).sqrt())
-        kappa2 = kappa.square()
-        denominator = 3.0 + kappa2
-        std_perpendicular = (1.0 - kappa2).clamp_min(0.0).sqrt() * 2.0 * energy / denominator
-        std_parallel = (1.0 + kappa2).sqrt() * 2.0 * energy / denominator
-        stddev = torch.stack((std_perpendicular, std_parallel), dim=1)
-        if quantize_stddev:
-            stddev = quantize_half(stddev.clamp_min(0.0))
-        axis_variance = stddev.square()
-        trace = 2.0 * axis_variance[:, 0] + axis_variance[:, 1]
-        anisotropy = axis_variance[:, 1] - axis_variance[:, 0]
-        inverse_length2 = torch.where(length2 > 1.0e-16, length2.reciprocal(), 0.0)
-        return stddev, trace, anisotropy, inverse_length2
-
     def _filter_level(
         self,
         mean: torch.Tensor,
         variance: torch.Tensor,
-        coefficient: torch.Tensor,
+        difference_correlation: torch.Tensor,
+        propagation_correlation: torch.Tensor,
         step: int,
         frame: int,
         simulate_fp16: bool,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        indices = self._indices[(step, 0)] if step <= 4 else self._large_indices(step, frame)
+        indices = self._indices[(step, 0)] if step <= 4 else self._large_indices(step)
         kernel_weights = GRID_WEIGHTS if step <= 4 else tuple(row[2] for row in POISSON)
         kernel = mean.new_tensor(kernel_weights).reshape(1, 1, -1, 1, 1)
         neighbor_mean = self._gather_neighbors(mean, indices)
         neighbor_variance = self._gather_neighbors(variance, indices)
 
-        quantize_stddev = simulate_fp16 and step <= 4
-        center_stddev, center_trace, center_anisotropy, center_inv_length2 = self._bures_data(
-            mean, quantize_stddev
-        )
-        sample_stddev, sample_trace, sample_anisotropy, sample_inv_length2 = self._bures_data(
-            neighbor_mean, quantize_stddev
-        )
-        center_direction = mean[:, :3].unsqueeze(2)
-        sample_direction = neighbor_mean[:, :3]
-        mean_dot = (center_direction * sample_direction).sum(dim=1)
-        direction_cosine2 = (
-            mean_dot.square()
-            * center_inv_length2.unsqueeze(1)
-            * sample_inv_length2
-        ).clamp_max(1.0)
-        cross_axes = (
-            center_stddev[:, 0].unsqueeze(1) * sample_stddev[:, 1]
-            + center_stddev[:, 1].unsqueeze(1) * sample_stddev[:, 0]
-        )
-        cross_2d = (
-            cross_axes.square()
-            + direction_cosine2
-            * center_anisotropy.unsqueeze(1)
-            * sample_anisotropy
-        ).clamp_min(0.0).sqrt()
-        cross_trace = center_stddev[:, 0].unsqueeze(1) * sample_stddev[:, 0] + cross_2d
-        mean_delta2 = (center_direction - sample_direction).square().sum(dim=1)
-        distance2 = (
-            mean_delta2
-            + center_trace.unsqueeze(1)
-            + sample_trace
-            - 2.0 * cross_trace
-        ).clamp_min(0.0)
+        distance2 = (mean.unsqueeze(2) - neighbor_mean).square().sum(dim=1)
 
-        variance_sum = variance[:, 0].unsqueeze(1) + neighbor_variance[:, 0]
-        weight = kernel[:, 0] * torch.exp(-self.phi * distance2 / variance_sum.clamp_min(1.0e-12))
+        center_variance = variance[:, 0].unsqueeze(1)
+        sample_variance = neighbor_variance[:, 0]
+        variance_sum = (
+            center_variance
+            + sample_variance
+            - 2.0 * difference_correlation
+            * (center_variance * sample_variance).clamp_min(0.0).sqrt()
+        ).clamp_min(0.0)
+        normalized_distance = torch.sqrt(
+            distance2 / variance_sum.clamp_min(1.0e-12)
+        )
+        weight = kernel[:, 0] * torch.exp(-self.phi * normalized_distance)
         weight = torch.where(weight > 1.0e-6, weight, 0.0)
         weight_sum = 1.0 + weight.sum(dim=1, keepdim=True)
         inverse_weight = weight_sum.reciprocal()
@@ -308,16 +273,16 @@ class AtrousModel:
         output_mean = (
             mean + (neighbor_mean * weight.unsqueeze(1)).sum(dim=2)
         ) * inverse_weight
-        variance_energy_1 = variance + (neighbor_variance * weight.unsqueeze(1)).sum(dim=2)
-        variance_energy_2 = variance + (
+        squared_weight_variance = variance + (
             neighbor_variance * weight.square().unsqueeze(1)
         ).sum(dim=2)
-        power = (2.0 - coefficient).clamp_min(1.0)
-        variance_mix = 2.0 - torch.pow(mean.new_tensor(2.0), coefficient)
+        weighted_stddev = variance.sqrt() + (
+            neighbor_variance.sqrt() * weight.unsqueeze(1)
+        ).sum(dim=2)
         output_variance = (
-            (1.0 - variance_mix) * variance_energy_1
-            + variance_mix * variance_energy_2
-        ) * torch.pow(inverse_weight, power)
+            (1.0 - propagation_correlation) * squared_weight_variance
+            + propagation_correlation * weighted_stddev.square()
+        ) * inverse_weight.square()
         output_mean = canonicalize_mean(output_mean)
         if simulate_fp16:
             output_mean = canonicalize_mean(quantize_half(output_mean))
@@ -326,7 +291,8 @@ class AtrousModel:
     def run(
         self,
         batch: Batch,
-        coefficients: torch.Tensor,
+        difference_correlations: torch.Tensor,
+        propagation_correlations: torch.Tensor,
         frame: int,
         simulate_fp16: bool,
     ) -> Tuple[torch.Tensor, torch.Tensor, List[Tuple[torch.Tensor, torch.Tensor]]]:
@@ -334,7 +300,8 @@ class AtrousModel:
         levels: List[Tuple[torch.Tensor, torch.Tensor]] = []
         for level, step in enumerate(STEPS):
             mean, variance = self._filter_level(
-                mean, variance, coefficients[level], step, frame, simulate_fp16
+                mean, variance, difference_correlations[level],
+                propagation_correlations[level], step, frame, simulate_fp16
             )
             levels.append((mean, variance))
         return mean, variance, levels
@@ -427,27 +394,24 @@ def normalized_level_metrics(
         [(mean - target).square().sum(dim=1).mean() for mean, _ in levels]
     )
     predicted = torch.stack([variance.mean() for _, variance in levels])
-    calibration = (torch.log(predicted.clamp_min(1.0e-12)) - torch.log(errors.clamp_min(1.0e-12))).square().mean()
+    mse_match = (torch.log(predicted.clamp_min(1.0e-12)) - torch.log(errors.clamp_min(1.0e-12))).square().mean()
     final_residual = levels[-1][0] - target
     patch_loss = final_residual.new_zeros(())
     for size in (4, 8, 16):
         pooled = F.avg_pool2d(final_residual, kernel_size=size, stride=size)
         patch_loss = patch_loss + pooled.square().sum(dim=1).mean() / input_error
     signal_loss = errors[-1] / input_error
-    return signal_loss, calibration, patch_loss / 3.0
+    return signal_loss, mse_match, patch_loss / 3.0
 
 
-def decode_coefficients(raw: torch.Tensor, monotonic: bool) -> torch.Tensor:
-    if not monotonic:
-        return torch.sigmoid(raw)
-    # Seven positive intervals partition [0, 1].  The first six cumulative
-    # sums are therefore a strictly increasing six-level coefficient table.
-    return torch.cumsum(torch.softmax(raw, dim=0), dim=0)[:-1]
+def decode_correlations(raw: torch.Tensor) -> torch.Tensor:
+    return torch.sigmoid(raw)
 
 
 def evaluate(
     model: AtrousModel,
-    coefficients: torch.Tensor,
+    difference_correlations: torch.Tensor,
+    propagation_correlations: torch.Tensor,
     histories: Iterable[int],
     seeds: Iterable[int],
     batch_size: int,
@@ -477,7 +441,8 @@ def evaluate(
                     generator,
                 )
                 _, _, levels = model.run(
-                    batch, coefficients, frame=seed % 8, simulate_fp16=simulate_fp16
+                    batch, difference_correlations, propagation_correlations,
+                    frame=seed % 8, simulate_fp16=simulate_fp16
                 )
                 signal, _, patch = normalized_level_metrics(batch, levels)
                 history_signal.append(float(signal))
@@ -507,7 +472,8 @@ def evaluate(
 
 def measure_bias(
     model: AtrousModel,
-    coefficients: torch.Tensor,
+    difference_correlations: torch.Tensor,
+    propagation_correlations: torch.Tensor,
     histories: Iterable[int],
     seeds: Iterable[int],
     batch_size: int,
@@ -547,7 +513,8 @@ def measure_bias(
                     generator,
                 )
                 output, _, _ = model.run(
-                    batch, coefficients, frame=seed % 8,
+                    batch, difference_correlations, propagation_correlations,
+                    frame=seed % 8,
                     simulate_fp16=simulate_fp16
                 )
                 target = batch.target[:, :, 0, 0]
@@ -600,19 +567,14 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--size", type=int, default=96)
     parser.add_argument("--batch-size", type=int, default=5)
     parser.add_argument("--atoms", type=int, default=8)
+    parser.add_argument("--phi", type=float, default=0.5)
     parser.add_argument("--learning-rate", type=float, default=0.008)
-    parser.add_argument("--variance-weight", type=float, default=0.005)
-    parser.add_argument("--patch-weight", type=float, default=0.75)
+    parser.add_argument("--signal-weight", type=float, default=0.0)
+    parser.add_argument("--patch-weight", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=991337)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--no-fp16-simulation", action="store_true")
     parser.add_argument("--validation-seeds", type=int, default=6)
-    parser.add_argument(
-        "--monotonic",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="constrain coefficients to increase with A-Trous radius",
-    )
     return parser.parse_args()
 
 
@@ -625,19 +587,20 @@ def main() -> None:
     device = torch.device(args.device)
     generator = torch.Generator(device=device).manual_seed(args.seed)
     simulate_fp16 = not args.no_fp16_simulation
-    model = AtrousModel(args.size, args.size, device)
+    model = AtrousModel(args.size, args.size, device, phi=args.phi)
 
-    initial = torch.tensor(ORIGINAL_COEFFICIENTS, device=device)
-    if args.monotonic:
-        intervals = torch.cat(
-            (initial[:1], initial[1:] - initial[:-1], 1.0 - initial[-1:])
-        ).clamp_min(1.0e-8)
-        raw_coefficients = torch.nn.Parameter(torch.log(intervals))
-    else:
-        raw_coefficients = torch.nn.Parameter(
-            torch.logit(initial.clamp(1.0e-4, 1.0 - 1.0e-4))
-        )
-    optimizer = torch.optim.Adam((raw_coefficients,), lr=args.learning_rate)
+    initial_difference = torch.tensor(
+        DEFAULT_DIFFERENCE_CORRELATIONS, device=device)
+    initial_propagation = torch.tensor(
+        DEFAULT_PROPAGATION_CORRELATIONS, device=device)
+    raw_difference = torch.nn.Parameter(
+        torch.logit(initial_difference.clamp(1.0e-4, 1.0 - 1.0e-4))
+    )
+    raw_propagation = torch.nn.Parameter(
+        torch.logit(initial_propagation.clamp(1.0e-4, 1.0 - 1.0e-4))
+    )
+    optimizer = torch.optim.Adam(
+        (raw_difference, raw_propagation), lr=args.learning_rate)
 
     for iteration in range(1, args.iterations + 1):
         history = HISTORIES[(iteration - 1) % len(HISTORIES)]
@@ -650,34 +613,50 @@ def main() -> None:
             device,
             generator,
         )
-        coefficients = decode_coefficients(raw_coefficients, args.monotonic)
+        difference_correlations = decode_correlations(raw_difference)
+        propagation_correlations = decode_correlations(raw_propagation)
         _, _, levels = model.run(
             batch,
-            coefficients,
+            difference_correlations,
+            propagation_correlations,
             frame=iteration % 8,
             simulate_fp16=simulate_fp16,
         )
-        signal_loss, calibration_loss, patch_loss = normalized_level_metrics(batch, levels)
-        loss = signal_loss + args.variance_weight * calibration_loss + args.patch_weight * patch_loss
+        # This MSE-matching term contains estimator bias.  It can tune the
+        # engineering default but must not be reported as an estimate of the
+        # trace-correlation coefficient itself.
+        signal_loss, mse_match_loss, patch_loss = normalized_level_metrics(batch, levels)
+        loss = mse_match_loss + args.signal_weight * signal_loss \
+            + args.patch_weight * patch_loss
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
-        torch.nn.utils.clip_grad_norm_((raw_coefficients,), 5.0)
+        torch.nn.utils.clip_grad_norm_((raw_difference, raw_propagation), 5.0)
         optimizer.step()
 
         if iteration == 1 or iteration % 25 == 0 or iteration == args.iterations:
-            values = ", ".join(f"{value:.6f}" for value in coefficients.detach().cpu().tolist())
+            difference_values = ",".join(
+                f"{value:.6f}"
+                for value in difference_correlations.detach().cpu().tolist()
+            )
+            propagation_values = ",".join(
+                f"{value:.6f}"
+                for value in propagation_correlations.detach().cpu().tolist()
+            )
             print(
                 f"iter={iteration:4d} N={history:2d} loss={float(loss):.6f} "
-                f"signal={float(signal_loss):.6f} calibration={float(calibration_loss):.6f} "
-                f"patch={float(patch_loss):.6f} coeff=[{values}]",
+                f"signal={float(signal_loss):.6f} mse_match={float(mse_match_loss):.6f} "
+                f"patch={float(patch_loss):.6f} "
+                f"p_diff=[{difference_values}] p_prop=[{propagation_values}]",
                 flush=True,
             )
 
-    trained = decode_coefficients(raw_coefficients, args.monotonic).detach()
+    trained_difference = decode_correlations(raw_difference).detach()
+    trained_propagation = decode_correlations(raw_propagation).detach()
     validation_seeds = tuple(args.seed + 900001 + i * 7919 for i in range(args.validation_seeds))
     original_metrics = evaluate(
         model,
-        initial,
+        initial_difference,
+        initial_propagation,
         HISTORIES,
         validation_seeds,
         args.batch_size,
@@ -686,7 +665,8 @@ def main() -> None:
     )
     trained_metrics = evaluate(
         model,
-        trained,
+        trained_difference,
+        trained_propagation,
         HISTORIES,
         validation_seeds,
         args.batch_size,
@@ -704,12 +684,17 @@ def main() -> None:
             "simulate_fp16": simulate_fp16,
             "seed": args.seed,
             "validation_seeds": validation_seeds,
-            "variance_weight": args.variance_weight,
+            "signal_weight": args.signal_weight,
             "patch_weight": args.patch_weight,
-            "monotonic": args.monotonic,
         },
-        "original_coefficients": dict(zip(map(str, STEPS), ORIGINAL_COEFFICIENTS)),
-        "trained_coefficients": dict(zip(map(str, STEPS), trained.cpu().tolist())),
+        "initial_difference_correlations": dict(zip(
+            map(str, STEPS), initial_difference.cpu().tolist())),
+        "initial_propagation_correlations": dict(zip(
+            map(str, STEPS), initial_propagation.cpu().tolist())),
+        "trained_difference_correlations": dict(zip(
+            map(str, STEPS), trained_difference.cpu().tolist())),
+        "trained_propagation_correlations": dict(zip(
+            map(str, STEPS), trained_propagation.cpu().tolist())),
         "original_metrics": original_metrics,
         "trained_metrics": trained_metrics,
     }

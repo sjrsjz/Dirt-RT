@@ -30,7 +30,7 @@ struct MaxEntSpecularHistory {
     vec3 surfacePosition;
     vec3 geometryNormal;
     SpecularMaxEnt signal;
-    float secondMoment;
+    float rootMeanY2;
     float hitDistance;
     float roughness;
     float historyLength;
@@ -306,11 +306,12 @@ void readRefrHistLight(uvec2 xy, out vec3 color, out float vprojDist,
 }
 
 // N1: primary surface geometry plus FP16 hit distance and roughness.
-// N2: the sole temporal MaxEnt6 history, sqrt(E[Y^2]) and Kish N_eff.
+// N2: the sole temporal MaxEnt6 history, rootMeanY2 and Kish N_eff.
 // N3: previous final denoised MaxEnt6 plus filtered standard deviation and a
 // negative layout stamp. It replaces the former secondary history in place.
 void writeMaxEntSpecularTemporalHistory(uvec2 xy, MaxEntSpecularHistory h) {
     h.signal = sanitizeSpecularMaxEnt(h.signal);
+    h.rootMeanY2 = sanitizeRootMeanSquareFP16(h.rootMeanY2);
     h.historyLength = isnan(h.historyLength) || isinf(h.historyLength)
         ? 1.0 : clamp(h.historyLength, 1.0, 65504.0);
     float surfaceDistance = length(h.surfacePosition);
@@ -322,7 +323,7 @@ void writeMaxEntSpecularTemporalHistory(uvec2 xy, MaxEntSpecularHistory h) {
         packHalf2x16(clamp(vec2(h.hitDistance, h.roughness), vec2(0.0), vec2(65504.0, 1.0))));
     uvec3 temporal = packSpecularMaxEnt(h.signal);
     reflectBuffer.data[addr(SPEC_N_HISTLIGHT, xy)] = uvec4(temporal,
-        pack2HalfClampedU(encodeSqrtMomentFP16(h.secondMoment),
+        pack2HalfClampedU(h.rootMeanY2,
             h.historyLength));
 }
 
@@ -349,13 +350,13 @@ void writeMaxEntSpecularDenoisedHistoryInvalid(uvec2 xy) {
 //   w  = filtered stddev, negative current-sample temporal weight
 // CoCg is unnecessary because temporal difference detection uses MaxEntY only.
 void writeMaxEntSpecularDenoisedReprojection(uvec2 xy, vec4 maxEntY,
-        float variance, float historySamples, float validWeight,
+        float standardDeviation, float historySamples, float validWeight,
         float temporalCurrentWeight) {
     reflectBuffer.data[addr(SPEC_N_LIGHT, xy)] = uvec4(
         packHalf2x16(clamp(maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(vec2(min(historySamples, 65504.0), clamp(validWeight, 0.0, 1.0))),
-        packHalf2x16(vec2(min(sqrt(max(variance, 0.0)), 65504.0),
+        packHalf2x16(vec2(clamp(standardDeviation, 0.0, 65504.0),
             -clamp(temporalCurrentWeight, 0.0, 1.0))));
 }
 
@@ -393,21 +394,22 @@ MaxEntSpecularHistory readMaxEntSpecularHistory(uvec2 xy) {
     h.surfacePosition = decodeNormalU(g.y) * surfaceDistance;
     unpackMaxEntHistoryNormalMaterial(g.z, h.geometryNormal, h.materialID);
     h.signal = unpackSpecularMaxEnt(s.xyz);
-    h.secondMoment = decodeSqrtMomentFP16(m2History.x);
+    h.rootMeanY2 = sanitizeRootMeanSquareFP16(m2History.x);
     h.historyLength = max(m2History.y, 0.0);
     bool denoisedValid = denoisedMetadata.x >= 0.0 && denoisedMetadata.y == -2.0
         && !any(isnan(denoisedMetadata)) && !any(isinf(denoisedMetadata));
     h.hitDistance = max(hitRoughness.x, 0.0);
     h.roughness = clamp(hitRoughness.y, 0.0, 1.0);
     bool valid = surfaceDistance >= 0.0 && !isnan(surfaceDistance) &&
-        !isinf(surfaceDistance) &&
+        !isinf(surfaceDistance) && !any(isnan(m2History))
+        && !any(isinf(m2History)) && m2History.x >= 0.0 &&
         h.historyLength >= 1.0 && h.historyLength <= 65504.0 &&
         h.materialID != 0xffffffffu && denoisedValid;
     if (!valid) {
         h.surfacePosition = vec3(0.0);
         h.geometryNormal = vec3(0.0, 1.0, 0.0);
         h.signal = emptySpecularMaxEnt();
-        h.secondMoment = 0.0;
+        h.rootMeanY2 = 0.0;
         h.hitDistance = 0.0;
         h.roughness = 1.0;
         h.historyLength = 0.0;

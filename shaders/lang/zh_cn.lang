@@ -152,8 +152,8 @@ option.RADIANCE_CACHE_RIS_GUIDING_KAPPA.comment = RIS 选中方向周围连续�
 # ===========================================================================
 # MaxEnt 漫反射时域
 # ===========================================================================
-option.MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY = Bures 冷启动历史阈值
-option.MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY.comment = 当前有效历史数量小于等于该值时停用 Bures 历史钳制。
+option.MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY = 矩空间冷启动历史阈值
+option.MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY.comment = 重投影有效样本数小于等于该值时停用矩空间历史钳制。
 
 option.MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY = 最大有效样本数
 option.MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY.comment = 漫反射历史的最大有效样本数。提高后更平滑，但对光照变化和解遮挡的响应更慢。
@@ -165,7 +165,7 @@ option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE = 重投影深度缩放
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE.comment = 缩放时域重投影足迹梯形的深度半范围。提高可接受离重建表面平面更远的历史样本，减少重置但可能跨薄几何体泄漏。
 
 option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE = 历史差异容差
-option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE.comment = 漫反射历史权重钳制所允许的标准化 Bures 距离。提高会保留更多历史，降低则会更快响应真实光照变化。
+option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE.comment = 漫反射历史钳制使用的标准化矩差异平方预算。16 等价于四倍标准差预算；提高会保留更多历史。
 
 option.MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS = 漫反射重投影半径
 option.MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS.comment = 漫反射时域路径足迹的像素半径。提高会允许更宽的路径重投影运动。
@@ -183,7 +183,7 @@ option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION = 镜面波瓣比例
 option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION.comment = 时域重投影允许的 GGX 波瓣比例。降低会在视角相关的反射变化处拒绝更多历史。
 
 option.MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE = 历史差异容差
-option.MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE.comment = 镜面历史权重钳制所允许的标准化 Bures 距离。提高会保留更多历史，降低则会更快响应真实反射变化。
+option.MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE.comment = 镜面历史钳制使用的标准化矩差异平方预算。16 等价于四倍标准差预算；提高会保留更多历史。
 
 option.MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS = 镜面重投影半径
 option.MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS.comment = 镜面时域足迹的像素半径。提高会允许更宽的反射重投影运动。
@@ -214,14 +214,11 @@ option.MAXENT_SPATIAL_NORMAL_SENSITIVITY.comment = 仅供折射方差滤波使�
 option.MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE = 平面距离容差
 option.MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE.comment = MaxEnt 虚像拒绝、折射和路径引导空域测试共用的相对投影平面深度容差。数值越大，越允许跨平面滤波。
 
-option.MAXENT_SPATIAL_VARIANCE_ADAPTATION = 方差适配
-option.MAXENT_SPATIAL_VARIANCE_ADAPTATION.comment = 控制连续空域层级传播方差时的保守程度。提高会保留更多方差，使后续层级持续进行更强滤波。
-
 option.MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY = 漫反射光场灵敏度
-option.MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY.comment = 按方差归一化的漫反射 MaxEnt 拒绝强度。提高会保留更多光场对比，降低则会进行更多平滑。
+option.MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY.comment = 按方差归一化的漫反射矩空间拒绝强度。提高会保留更多光场对比，降低则会进行更多平滑。
 
 option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY = 镜面光场灵敏度
-option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY.comment = 按方差归一化的镜面 MaxEnt 拒绝强度。提高会保留更多反射对比，降低则会进行更多平滑。
+option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY.comment = 按方差归一化的镜面矩空间拒绝强度。提高会保留更多反射对比，降低则会进行更多平滑。
 
 # ===========================================================================
 # 泛光
@@ -292,6 +289,10 @@ value.DEBUG_VIEW.20 = 路径引导
 value.DEBUG_VIEW.21 = 时域累积原始
 value.DEBUG_VIEW.22 = 辐射率缓存
 value.DEBUG_VIEW.23 = 漫反射降噪时域差异
+value.DEBUG_VIEW.24 = 降噪虚像法线
+value.DEBUG_VIEW.25 = 镜面降噪时域差异
+value.DEBUG_VIEW.26 = 漫反射方差准备
+value.DEBUG_VIEW.27 = 反射方差准备
 value.DEBUG_VIEW.31 = 缓存最近一次原始值
 value.DEBUG_VIEW.32 = 缓存 RIS Reservoir
 value.DEBUG_VIEW.33 = 缓存 RIS 样本数 M

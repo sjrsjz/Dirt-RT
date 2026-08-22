@@ -125,6 +125,9 @@ vec4 rtSampleAnisotropic(sampler2D textureSampler, vec2 uv, vec4 atlas,
 // roughness (R) anisotropically filtered, but select the remaining semantic
 // channels from one exact base-level texel. Camera jitter then resolves a
 // sub-pixel material boundary stochastically instead of inventing a closure.
+// R=255 is also a semantic endpoint: it means exactly zero GGX alpha. Preserve
+// that endpoint from the same base-level texel so filtering cannot turn an
+// authored delta reflector into a finite-width lobe.
 vec4 rtFetchAtlasSemanticTexel(sampler2D textureSampler, vec2 uv,
         vec4 atlas, ivec2 baseTextureSize) {
     ivec2 spriteOrigin = ivec2(round(atlas.xy * vec2(baseTextureSize)));
@@ -143,7 +146,11 @@ vec4 rtSampleLabPbrSpecular(sampler2D textureSampler, vec2 uv,
         baseTextureSize, footprint, true);
     vec4 semantic = rtFetchAtlasSemanticTexel(
         textureSampler, uv, atlas, baseTextureSize);
-    return vec4(filtered.r, semantic.gba);
+    // LabPBR smoothness is an 8-bit channel. This half-code threshold selects
+    // only the value 255; 254 and below retain the filtered continuous value.
+    float smoothness = semantic.r > (253.5 / 255.0)
+        ? 1.0 : filtered.r;
+    return vec4(smoothness, semantic.gba);
 }
 
 vec3 rtCameraRayDirection(vec2 pixel, vec2 launchSize,

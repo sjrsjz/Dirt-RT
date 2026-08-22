@@ -133,8 +133,9 @@ void writeDiffuseOutput(uvec2 xy, FirstBounceData fb, vec3 L_indirect,
         combinedMaxEnt = indMaxEnt;
         mask = 1.0;
     }
-    float currentMeanY2 = combinedMaxEnt.maxEntY.w * combinedMaxEnt.maxEntY.w; // Y² for 1-spp
-    writeDiffuseLightRT(xy, combinedMaxEnt, currentMeanY2);
+    // For one sample sqrt(E[Y²]) = |Y|. Encoded luminance is nonnegative.
+    writeDiffuseLightRT(xy, combinedMaxEnt,
+        max(combinedMaxEnt.maxEntY.w, 0.0));
     if (mask > 0.5) {
         writeDiffuseSurface(xy, fb.macro_n,
             fb.diffuseAlbedo, fb.roughness, fb.surfaceMotion,

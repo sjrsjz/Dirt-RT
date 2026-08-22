@@ -90,14 +90,17 @@ bool denoiserSpatialFilterLarge(ivec2 pixel, out DenoiserMaxEntSignal outputSign
         denoiserSpatialDecodeCenterGeometry(centerGeometryWords);
 
     DenoiserMaxEntSignal centerSignal = denoiserUnpackMaxEntSignalTrusted(centerSignalWords);
-    DenoiserSpatialBuresData centerBures = denoiserSpatialMakeBuresData(centerSignal.maxEntY);
     float surfaceRejectionScale = denoiserSpatialSurfaceRejectionScale(
         centerGeometry.surfaceDistance, float(size.y));
     float virtualDistanceAlpha = centerGeometry.ggxAlpha;
     vec3 centerVirtualPosition =
         denoiserSpatialLargeTileVirtualPosition[centerIndex].xyz;
     float virtualRejectionScale = denoiserSpatialVirtualRejectionScale(
-        centerGeometry.ggxAlpha, centerSignal.virtualDistance);
+            centerGeometry.ggxAlpha, centerSignal.virtualDistance);
+    float differenceCorrelation = maxentMomentDifferenceCorrelationForSpatialStep(
+            DENOISER_SPATIAL_STEP);
+    float propagationCorrelation = maxentMomentPropagationCorrelationForSpatialStep(
+            DENOISER_SPATIAL_STEP);
     uint rowStride = uint(DENOISER_SPATIAL_LARGE_TILE_SIZE);
 
     vec3 virtualTangentX = -denoiserSpatialLargeReadVirtualPosition(centerIndex - 1u, centerVirtualPosition);
@@ -140,11 +143,10 @@ bool denoiserSpatialFilterLarge(ivec2 pixel, out DenoiserMaxEntSignal outputSign
                 sampleSurfaceDistance, surfaceRejectionScale);
 
         DenoiserMaxEntSignal sampleSignal = denoiserUnpackMaxEntSignalTrusted(sampleSignalWords);
-        DenoiserSpatialBuresData sampleBures = denoiserSpatialMakeBuresData(sampleSignal.maxEntY);
 
         float virtualDistanceWeight;
-        float weight = 0.0*denoiserSpatialWeight(centerSignal, centerBures,
-                sampleSignal, sampleBures, samplePrimaryRay,
+        float weight = denoiserSpatialWeight(centerSignal,
+                sampleSignal, differenceCorrelation, samplePrimaryRay,
                 surfaceGeometryExponent,
                 DENOISER_SPATIAL_POISSON_8[i].w,
                 DENOISER_SPATIAL_PHI_LUMINANCE,
@@ -155,7 +157,7 @@ bool denoiserSpatialFilterLarge(ivec2 pixel, out DenoiserMaxEntSignal outputSign
             virtualDistanceWeight);
     }
 
-    outputSignal = denoiserSpatialResolve(accum, DENOISER_SPATIAL_STEP);
+    outputSignal = denoiserSpatialResolve(accum, propagationCorrelation);
     return true;
 }
 

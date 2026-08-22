@@ -4,10 +4,9 @@
 #include "/lib/buffers/diffuse_buffer.glsl"
 #include "/lib/lighting/maxent_encode.glsl"
 
-// ===========================================================================
-// Diffuse data structs — in-memory unpacked representation (storage-agnostic)
-// ===========================================================================
-
+// In-memory wrappers preserve the storage ABI's root second moment. Any
+// interpolation squares the roots, blends E[Y^2] linearly, then takes the one
+// required root for the resulting stored value.
 struct diffuseIlluminationData {
     MaxEntEncoding data;
     MaxEntEncoding data_swap;
@@ -16,8 +15,8 @@ struct diffuseIlluminationData {
     vec3 histNormal;
     float weight;
     float prev_weight;
-    float meanY2;       // second moment E[Y²] for swap (current accumulated)
-    float prev_meanY2;  // second moment E[Y²] for history
+    float rootMeanY2;
+    float prevRootMeanY2;
 };
 
 struct DiffuseIlluminationWriteData {
@@ -25,22 +24,15 @@ struct DiffuseIlluminationWriteData {
     vec3 pos;
     float surfaceMask;
     float weight;
-    float meanY2;       // second moment E[Y²]
+    float rootMeanY2;
 };
 
-// ===========================================================================
-// Diffuse load/fetch/write — compatible with temporal_diffuse and composite
-// ===========================================================================
-
-// Load diffuse input from current-frame RT output (used by temporal_diffuse)
 DiffuseIlluminationWriteData loadDiffuseInput(ivec2 p) {
     uvec2 xy = uvec2(p);
     DiffuseIlluminationWriteData t;
     MaxEntEncoding maxent;
-    float meanY2;
-    readDiffuseLightRT(xy, maxent, meanY2);
+    readDiffuseLightRT(xy, maxent, t.rootMeanY2);
     t.data_swap = maxent;
-    t.meanY2 = meanY2;
     float distance;
     readDiffusePrimaryGeometry(xy, t.pos, distance);
     t.surfaceMask = distance >= 0.0 ? 1.0 : 0.0;
@@ -48,37 +40,36 @@ DiffuseIlluminationWriteData loadDiffuseInput(ivec2 p) {
     return t;
 }
 
-// Read history diffuse illumination (used by temporal_diffuse)
 diffuseIlluminationData fetchDiffuse(ivec2 p) {
     uvec2 xy = uvec2(p);
     diffuseIlluminationData tmp;
 
-    // swap = current frame accumulated (N=4)
     MaxEntEncoding maxent;
-    float weight, meanY2;
-    readDiffuseSwap(xy, maxent, weight, meanY2);
+    float weight;
+    readDiffuseSwap(xy, maxent, weight, tmp.rootMeanY2);
     tmp.data_swap = maxent;
     tmp.weight = weight;
-    tmp.meanY2 = meanY2;
 
 #ifndef DIFFUSE_BUFFER_MIN2
-    // hist = previous frame history (N=2)
-    readDiffuseHist(xy, maxent, weight, meanY2);
+    readDiffuseHist(xy, maxent, weight, tmp.prevRootMeanY2);
     tmp.data = maxent;
     tmp.prev_weight = weight;
-    tmp.prev_meanY2 = meanY2;
-
-    // History geometry reconstructs position from F32 distance + oct ray.
     readDiffuseHistGeo(xy, tmp.pos, tmp.histNormal);
 #endif
     return tmp;
 }
 
-diffuseIlluminationData blendDiffuse(diffuseIlluminationData A, diffuseIlluminationData B, float x) {
+float blendDiffuseRootMeanY2(float rootA, float rootB, float x) {
+    return sqrt(max(mix(rootA * rootA, rootB * rootB, x), 0.0));
+}
+
+diffuseIlluminationData blendDiffuse(diffuseIlluminationData A,
+        diffuseIlluminationData B, float x) {
     diffuseIlluminationData t;
     t.data_swap = mix_maxent(A.data_swap, B.data_swap, x);
-    t.weight = (B.weight - A.weight) * x + A.weight;
-    t.meanY2 = (B.meanY2 - A.meanY2) * x + A.meanY2;
+    t.weight = mix(A.weight, B.weight, x);
+    t.rootMeanY2 = blendDiffuseRootMeanY2(
+        A.rootMeanY2, B.rootMeanY2, x);
 #ifndef DIFFUSE_BUFFER_MIN2
     t.data = mix_maxent(A.data, B.data, x);
     t.pos = mix(A.pos, B.pos, x);
@@ -87,8 +78,9 @@ diffuseIlluminationData blendDiffuse(diffuseIlluminationData A, diffuseIlluminat
     t.histNormal = blendedNormalLen2 > 1e-8
         ? blendedNormal * inversesqrt(blendedNormalLen2)
         : vec3(0.0, 1.0, 0.0);
-    t.prev_weight = (B.prev_weight - A.prev_weight) * x + A.prev_weight;
-    t.prev_meanY2 = (B.prev_meanY2 - A.prev_meanY2) * x + A.prev_meanY2;
+    t.prev_weight = mix(A.prev_weight, B.prev_weight, x);
+    t.prevRootMeanY2 = blendDiffuseRootMeanY2(
+        A.prevRootMeanY2, B.prevRootMeanY2, x);
 #endif
     return t;
 }
@@ -100,7 +92,8 @@ diffuseIlluminationData sampleDiffuse(vec2 p) {
     diffuseIlluminationData B = fetchDiffuse(p1 + ivec2(1, 0));
     diffuseIlluminationData C = fetchDiffuse(p1 + ivec2(0, 1));
     diffuseIlluminationData D = fetchDiffuse(p1 + ivec2(1, 1));
-    return blendDiffuse(blendDiffuse(A, B, p2.x), blendDiffuse(C, D, p2.x), p2.y);
+    return blendDiffuse(blendDiffuse(A, B, p2.x),
+        blendDiffuse(C, D, p2.x), p2.y);
 }
 
 vec3 sampleDiffusePos(vec2 p) {
@@ -112,46 +105,35 @@ vec3 sampleDiffusePos(vec2 p) {
 
 void writeDiffuse(diffuseIlluminationData data, ivec2 p) {
     uvec2 xy = uvec2(p);
-
-    // Always write swap (N=4)
-    writeDiffuseSwap(xy, data.data_swap, data.weight, data.meanY2);
+    writeDiffuseSwap(xy, data.data_swap, data.weight, data.rootMeanY2);
 
 #if !defined(DIFFUSE_BUFFER_MIN) && !defined(DIFFUSE_BUFFER_MIN2)
-    // Full write: also update history N=1 and current history-geometry parity.
-    writeDiffuseHist(xy, data.data, data.prev_weight, data.prev_meanY2);
+    writeDiffuseHist(xy, data.data, data.prev_weight,
+        data.prevRootMeanY2);
     writeDiffuseHistGeo(xy, data.pos, data.histNormal, data.prev_weight);
 #endif
 }
-
-// ===========================================================================
-// Diffuse prev-frame (ray1.rgen guiding)
-// ===========================================================================
 
 #if defined(PREV_DIFFUSE_BUFFER)
 
 DiffuseIlluminationWriteData fetchPrevDiffuse(ivec2 p) {
     uvec2 xy = uvec2(p);
     DiffuseIlluminationWriteData t;
-
-    // swap = previous frame final denoised result (used by ray1.rgen for guiding)
     MaxEntEncoding maxent;
-    float weight, meanY2;
-    readDiffuseSwap(xy, maxent, weight, meanY2);
+    float weight;
+    readDiffuseSwap(xy, maxent, weight, t.rootMeanY2);
     t.data_swap = maxent;
     t.weight = weight;
-    t.meanY2 = meanY2;
 
-    // Read position+mask from the primary G-buffer published by ray0.
     float distance;
     readDiffusePrimaryGeometry(xy, t.pos, distance);
     t.surfaceMask = distance >= 0.0 ? 1.0 : 0.0;
-
     return t;
 }
 
 void writePrevDiffuse(DiffuseIlluminationWriteData data, ivec2 p) {
-    uvec2 xy = uvec2(p);
-    writeDiffuseSwap(xy, data.data_swap, data.weight, data.meanY2);
+    writeDiffuseSwap(uvec2(p), data.data_swap, data.weight,
+        data.rootMeanY2);
 }
 
 #endif

@@ -158,8 +158,8 @@ Reservoir spatialReservoir(uvec2 gid, vec3 centerNormal, vec3 centerPos, inout u
 
         uvec2 xy = uvec2(sc);
         MaxEntEncoding maxent;
-        float meanY2_unused;
-        readDiffuseLightRT(xy, maxent, meanY2_unused);
+        float rootMeanY2_unused;
+        readDiffuseLightRT(xy, maxent, rootMeanY2_unused);
         vec4 y = maxent.maxEntY;
         if (isSky(y) || readDiffuseSurfaceMask(xy) < 0.5) continue;
 

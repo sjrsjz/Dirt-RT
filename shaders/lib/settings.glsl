@@ -63,13 +63,17 @@
 #define RADIANCE_CACHE_RIS_GUIDING_KAPPA 0.75 // Concentration of the finite-width RIS proposal lobe. Higher values focus more tightly around the selected direction. [0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.95]
 
 // -- Shared MaxEnt temporal difference rejection --
-#define MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY 4.0 // Disable Bures history clamping at or below this N_eff. [0.0 1.0 2.0 3.0 4.0 6.0 8.0 12.0 16.0 24.0 32.0]
+#define MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY 4.0 // Disable moment-space history clamping at or below this N_eff. [0.0 1.0 2.0 3.0 4.0 6.0 8.0 12.0 16.0 24.0 32.0]
+// Additive trace variance of the denoiser's intrinsic moment-space error.
+// This is a statistical model parameter in squared-moment units, not a
+// numerical epsilon; it remains outside the temporal alpha-squared term.
+#define MAXENT_TEMPORAL_DENOISER_INTRINSIC_VARIANCE 1e-4
 
 // -- MaxEnt diffuse temporal accumulation --
 #define MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY 64 // Maximum Kish effective sample count. Higher = smoother but slower response. [1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384]
 #define MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT 0.0001 // History confidence below which reprojection is discarded. [0.000001 0.00001 0.0001 0.001 0.01]
 #define MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE 1.0 // Reprojection footprint depth tolerance. [0.25 0.5 0.75 1.0 1.5 2.0 3.0 4.0]
-#define MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE 16.0 // Standardized Bures-distance tolerance for history clamping. Higher retains more history. [0.5 1.0 2.0 3.0 4.0 5.0 6.0 8.0 10.0 12.0 16.0 24.0 32.0]
+#define MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE 512.0 // Squared standardized moment-evidence budget for history clamping. [0.5 1.0 2.0 3.0 4.0 5.0 6.0 8.0 10.0 12.0 16.0 24.0 32.0]
 #define MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS 1.0 // Diffuse reprojection footprint radius in pixels. [0.5 1.0 1.5 2.0 3.0]
 
 // -- MaxEnt specular temporal accumulation --
@@ -78,7 +82,7 @@
 #define MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY 64 // Maximum Kish effective sample count. [1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384]
 #define MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD 0.01 // Relative temporal plane threshold. [0.0025 0.005 0.0075 0.01 0.015 0.02 0.03 0.05]
 #define MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION 0.5 // Accepted GGX lobe fraction. [0.25 0.35 0.5 0.65 0.75 0.9]
-#define MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE 16.0 // Standardized Bures-distance tolerance for history clamping. Higher retains more history. [0.5 1.0 2.0 3.0 4.0 5.0 6.0 8.0 10.0 12.0 16.0 24.0 32.0]
+#define MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE 512.0 // Squared standardized moment-evidence budget for history clamping. [0.5 1.0 2.0 3.0 4.0 5.0 6.0 8.0 10.0 12.0 16.0 24.0 32.0]
 #define MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS 1.0 // Specular reprojection footprint radius in pixels. [0.5 1.0 1.5 2.0 3.0]
 
 // -- Shared MaxEnt variance preparation (diffuse + specular) --
@@ -88,9 +92,32 @@
 
 // -- Unified MaxEnt spatial filter --
 #define MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE 0.1 // Relative projected plane-depth tolerance, including MaxEnt virtual-image planes. [0.005 0.01 0.02 0.03 0.04 0.05 0.06 0.07 0.08 0.09 0.1 0.2 0.3 0.4 0.5]
-#define MAXENT_SPATIAL_VARIANCE_ADAPTATION 1.0 // Conservativeness of variance propagation across spatial levels. Higher retains more variance. [0.0 0.25 0.5 0.75 1.0 1.5 2.0]
-#define MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY 0.8 // Diffuse variance-normalized MaxEnt rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
-#define MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY 0.8 // Specular variance-normalized MaxEnt rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
+// Trace-error correlations induced by the fixed sampling kernels alone.
+// These constants depend on the pass and accumulated kernel footprint, but
+// not on phi, scene geometry, MaxEnt, the light distribution, or N_eff.
+#define MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_1 0.0
+#define MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_2 0.1633
+#define MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_4 0.2171
+#define MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_8 0.2508
+#define MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_16 0.2585
+#define MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_32 0.2665
+#define MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_1 0.0
+#define MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_2 0.1060
+#define MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_4 0.1412
+#define MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_8 0.1394
+#define MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_16 0.1471
+#define MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_32 0.1525
+// The fixed final kernel gives about 0.9446 axial and 0.9443 diagonal
+// adjacent correlation. Uniform bilinear phases weight these 0.8 and 0.2.
+#define MAXENT_TEMPORAL_REPROJECTION_CORRELATION 0.9446
+// A fresh temporal observation is independent of the preceding estimator
+// under the sampling model used to define N_eff.
+#define MAXENT_TEMPORAL_INNOVATION_CORRELATION 0.0
+// Surface- and virtual-motion histories have scene-dependent separation. The
+// fixed-kernel adjacent value is only an explicit local-overlap approximation.
+#define MAXENT_SPECULAR_BRANCH_CORRELATION 0.9446
+#define MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY 0.35 // Diffuse variance-normalized moment-space rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
+#define MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY 0.35 // Specular variance-normalized moment-space rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
 
 // -- Refraction/path-guide spatial compatibility (not MaxEnt filtering) --
 #define MAXENT_SPATIAL_NORMAL_SENSITIVITY 32.0 // Refraction variance-filter texture-normal rejection strength. [1 2 4 8 16 32 64 128]
@@ -115,7 +142,7 @@
 #define VPROJDIST_SKY 60000.0 // Virtual projected distance assigned to sky hits (m). Used by specular/refraction denoiser to tag infinity. [5000.0 10000.0 25000.0 50000.0 60000.0 100000.0 250000.0]
 
 // -- Debug view --
-#define DEBUG_VIEW 0 // Debug output mode. [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 31 32 33 34 35 36 37]
+#define DEBUG_VIEW 0 // Debug output mode. [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 31 32 33 34 35 36 37]
 
 /*
 const int depthtex0Format = RGBA32F;

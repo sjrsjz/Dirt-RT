@@ -113,21 +113,21 @@ MaxEntSpecularInput maxentUnpackSpecularInput(uvec4 p) {
 
 struct MaxEntTemporalSignal {
     SpecularMaxEnt signal;
-    float secondMoment;
+    float rootMeanY2;
     float historyLength;
 };
 
 uvec4 maxentPackTemporal(MaxEntTemporalSignal s) {
     uvec3 p = packSpecularMaxEnt(s.signal);
     return uvec4(p, maxentPackHalf2(
-        encodeSqrtMomentFP16(s.secondMoment), s.historyLength));
+        sanitizeRootMeanSquareFP16(s.rootMeanY2), s.historyLength));
 }
 
 MaxEntTemporalSignal maxentUnpackTemporal(uvec4 p) {
     MaxEntTemporalSignal s;
     s.signal = unpackSpecularMaxEnt(p.xyz);
     vec2 momentHistory = unpackHalf2x16(p.w);
-    s.secondMoment = decodeSqrtMomentFP16(momentHistory.x);
+    s.rootMeanY2 = sanitizeRootMeanSquareFP16(momentHistory.x);
     s.historyLength = max(momentHistory.y, 0.0);
     return s;
 }

@@ -70,8 +70,8 @@ void unpackCurrentLight(out MaxEntEncoding maxEnt, out float meanY2) {
     uvec4 packedLight = currentLightPacked();
     maxEnt.maxEntY = vec4(unpackHalf2x16(packedLight.x), unpackHalf2x16(packedLight.y));
     maxEnt.CoCg = unpackHalf2x16(packedLight.z);
-    float sqrtMeanY2 = unpackHalf2x16(packedLight.w).y;
-    meanY2 = sqrtMeanY2 * sqrtMeanY2;
+    float rootMeanY2 = unpackHalf2x16(packedLight.w).y;
+    meanY2 = rootMeanY2 * rootMeanY2;
 }
 
 // ===========================================================================
@@ -208,13 +208,17 @@ void resetToCurrentSample() {
     unpackCurrentLight(outputMaxEnt, outputMeanY2);
 }
 
-void publishDenoisedReprojection(vec4 weightedMaxEntY, float weightedVariance,
+void publishDenoisedReprojection(vec4 weightedMaxEntY,
+    float squaredWeightVarianceSum, float weightedStddevSum,
     float validWeight, float historySamples, float temporalCurrentWeight) {
     float inverseWeight = 1.0 / validWeight;
+    float standardDeviation = maxentMomentWeightedMeanStandardDeviation(
+        squaredWeightVarianceSum, weightedStddevSum, inverseWeight,
+        MAXENT_TEMPORAL_REPROJECTION_CORRELATION);
     writeDiffuseDenoisedReprojection(
         gl_GlobalInvocationID.xy,
         weightedMaxEntY * inverseWeight,
-        weightedVariance * inverseWeight,
+        standardDeviation,
         historySamples,
         validWeight,
         temporalCurrentWeight
@@ -246,7 +250,8 @@ void MixDiffuse() {
     float sumWeightOverSamples = 0.0;
     float accumulatedHistoryEvidence = 0.0;
     vec4 denoisedMaxEntY = vec4(0.0);
-    float denoisedVariance = 0.0;
+    float denoisedSquaredWeightVariance = 0.0;
+    float denoisedWeightedStddev = 0.0;
 
     float currVoN = dot(normalize(currentPosition), geometryNormal);
 
@@ -312,7 +317,9 @@ void MixDiffuse() {
 
         float tapDenoisedStddev = unpackHalf2x16(denoisedWords.w).x;
         denoisedMaxEntY += tapWeight * tapDenoisedMaxEntY;
-        denoisedVariance += tapWeight * tapDenoisedStddev * tapDenoisedStddev;
+        denoisedSquaredWeightVariance += tapWeight * tapWeight
+            * tapDenoisedStddev * tapDenoisedStddev;
+        denoisedWeightedStddev += tapWeight * tapDenoisedStddev;
 
         MaxEntEncoding tapMaxEnt;
         tapMaxEnt.maxEntY = clamp(
@@ -378,7 +385,8 @@ void MixDiffuse() {
 
     publishDenoisedReprojection(
         denoisedMaxEntY,
-        denoisedVariance,
+        denoisedSquaredWeightVariance,
+        denoisedWeightedStddev,
         validKernelWeight,
         historySamples,
         curAlpha
@@ -432,7 +440,8 @@ void main() {
 
     if (motionValid < 0.5) {
         resetToCurrentSample();
-        writeDiffuseSwap(pix, outputMaxEnt, output_weight, outputMeanY2);
+        writeDiffuseSwap(pix, outputMaxEnt, output_weight,
+            sqrt(max(outputMeanY2, 0.0)));
         writeDiffuseDenoisedReprojectionInvalid(pix);
         imageStore(colorimg6, ivec2(pix), uvec4(0u));
         return;
@@ -445,5 +454,6 @@ void main() {
         ? (clipPos.xyz / clipPos.w) * 0.5 + 0.5 : vec3(-1.0);
 
     MixDiffuse();
-    writeDiffuseSwap(pix, outputMaxEnt, output_weight, outputMeanY2);
+    writeDiffuseSwap(pix, outputMaxEnt, output_weight,
+        sqrt(max(outputMeanY2, 0.0)));
 }

@@ -1,12 +1,15 @@
 #ifndef MAXENT_TEMPORAL_STATISTICS_GLSL
 #define MAXENT_TEMPORAL_STATISTICS_GLSL
 
+#include "/lib/lighting/denoiser/maxent_moment_statistics.glsl"
+
 // Kish effective sample count for normalized estimator weights:
 //
 //     N_eff = 1 / sum_i(w_i^2)
 //
-// Tracking N_eff rather than elapsed frames keeps the variance of an
-// adaptively weighted temporal mean consistent with V_population/(N_eff-1).
+// Tracking N_eff rather than elapsed frames lets the stored weighted central
+// moment S estimate the temporal-mean variance as S/(N_eff-1), conditional on
+// independent identically distributed samples and fixed weights.
 
 float maxentTemporalFiniteEffectiveSamples(float sampleCount) {
     if (isnan(sampleCount) || isinf(sampleCount)) return 0.0;

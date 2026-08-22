@@ -22,9 +22,9 @@
 // N=9: Alternate history geometry for race-free frame ping-pong.
 // N=10..11: Exact previous/current denoiser RGBA32UI output ping-pong.
 //
-// .w lane uses packHalf2x16: Kish N_eff:f16 + sqrt(meanY2):f16.
-// sqrt compression keeps HDR second moments within f16 range (e.g. Y=1000 →
-// sqrt(Y²)=1000 < 65504), at the cost of relative precision halved after squaring.
+// .w lane uses packHalf2x16: Kish N_eff:f16 + rootMeanY2:f16.
+// Storage APIs accept sqrt(E[Y²]) directly. Arithmetic code squares it only
+// where linear second-moment operations require E[Y²].
 // Current position, geometry normal and validity come from compact primary
 // geometry; a negative primary distance is the only sky/no-surface marker.
 
@@ -90,13 +90,15 @@ uvec4 readDiffuseDenoisedPreviousRaw(uvec2 xy) {
 // denoised signal reprojected by the real diffuse temporal pass. Resolve reads
 // it once, then replaces it with the exact current colortex4 words. Scratch z
 // stores (history N_eff, valid mass), while w stores (filtered stddev, current alpha).
-void writeDiffuseDenoisedReprojection(uvec2 xy, vec4 maxEntY, float variance,
+void writeDiffuseDenoisedReprojection(uvec2 xy, vec4 maxEntY,
+        float standardDeviation,
         float historySamples, float validWeight, float temporalCurrentWeight) {
     diffuseBuffer.data[addr(diffuseDenoisedWritePlane(), xy)] = uvec4(
         packHalf2x16(clamp(maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(vec2(min(historySamples, 65504.0), clamp(validWeight, 0.0, 1.0))),
-        packHalf2x16(vec2(min(sqrt(max(variance, 0.0)), 65504.0), clamp(temporalCurrentWeight, 0.0, 1.0))));
+        packHalf2x16(vec2(clamp(standardDeviation, 0.0, 65504.0),
+            clamp(temporalCurrentWeight, 0.0, 1.0))));
 }
 
 void writeDiffuseDenoisedReprojectionInvalid(uvec2 xy) {
@@ -107,21 +109,23 @@ void writeDiffuseDenoisedReprojectionInvalid(uvec2 xy) {
 // ===========================================================================
 // N=0 — Current RT Light
 // ===========================================================================
-// .w = packHalf2x16(0.0, sqrt(meanY2))  —  single-sample second moment Y²
+// .w = packHalf2x16(0.0, rootMeanY2)
 
-void writeDiffuseLightRT(uvec2 xy, MaxEntEncoding maxent, float meanY2) {
-    float sqrtM2 = sqrt(max(meanY2, 0.0));
+void writeDiffuseLightRT(uvec2 xy, MaxEntEncoding maxent,
+        float rootMeanY2) {
+    rootMeanY2 = sanitizeRootMeanSquareFP16(rootMeanY2);
     diffuseBuffer.data[addr(DIF_N_LIGHT, xy)] = uvec4(
         packHalf2x16(clamp(maxent.maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(maxent.maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(maxent.CoCg,        vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(vec2(0.0, sqrtM2))
+        packHalf2x16(vec2(0.0, rootMeanY2))
     );
 }
 uvec4 readDiffuseLightRTRaw(uvec2 xy) {
     return diffuseBuffer.data[addr(DIF_N_LIGHT, xy)];
 }
-void readDiffuseLightRT(uvec2 xy, out MaxEntEncoding maxent, out float meanY2) {
+void readDiffuseLightRT(uvec2 xy, out MaxEntEncoding maxent,
+        out float rootMeanY2) {
     uvec4 v = readDiffuseLightRTRaw(xy);
     vec2 ay_xy = unpackHalf2x16(v.x);
     vec2 ay_zw = unpackHalf2x16(v.y);
@@ -129,7 +133,7 @@ void readDiffuseLightRT(uvec2 xy, out MaxEntEncoding maxent, out float meanY2) {
     maxent.maxEntY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
     maxent.CoCg = cocg;
     vec2 wm = unpackHalf2x16(v.w);
-    meanY2 = wm.y * wm.y;  // undo sqrt compression
+    rootMeanY2 = sanitizeRootMeanSquareFP16(wm.y);
 }
 
 // Helper: write zero light (sky reset)
@@ -202,18 +206,20 @@ void readDiffuseMotion(uvec2 xy, out vec3 motion, out float valid) {
 // ===========================================================================
 // N=1 — History Light
 // ===========================================================================
-// .w = packHalf2x16(N_eff, sqrt(meanY2))
+// .w = packHalf2x16(N_eff, rootMeanY2)
 
-void writeDiffuseHist(uvec2 xy, MaxEntEncoding maxent, float weight, float meanY2) {
-    float sqrtM2 = sqrt(max(meanY2, 0.0));
+void writeDiffuseHist(uvec2 xy, MaxEntEncoding maxent, float weight,
+        float rootMeanY2) {
+    rootMeanY2 = sanitizeRootMeanSquareFP16(rootMeanY2);
     diffuseBuffer.data[addr(DIF_N_HIST, xy)] = uvec4(
         packHalf2x16(clamp(maxent.maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(maxent.maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(maxent.CoCg,        vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(vec2(weight, sqrtM2))
+        packHalf2x16(vec2(weight, rootMeanY2))
     );
 }
-void readDiffuseHist(uvec2 xy, out MaxEntEncoding maxent, out float weight, out float meanY2) {
+void readDiffuseHist(uvec2 xy, out MaxEntEncoding maxent, out float weight,
+        out float rootMeanY2) {
     uvec4 v = diffuseBuffer.data[addr(DIF_N_HIST, xy)];
     vec2 ay_xy = unpackHalf2x16(v.x);
     vec2 ay_zw = unpackHalf2x16(v.y);
@@ -222,7 +228,7 @@ void readDiffuseHist(uvec2 xy, out MaxEntEncoding maxent, out float weight, out 
     maxent.CoCg = cocg;
     vec2 wm = unpackHalf2x16(v.w);
     weight = wm.x;
-    meanY2 = wm.y * wm.y;
+    rootMeanY2 = sanitizeRootMeanSquareFP16(wm.y);
 }
 
 // ===========================================================================
@@ -279,21 +285,23 @@ void readDiffuseHistGeo(uvec2 xy, out vec3 pos, out vec3 geometryNormal) {
 // ===========================================================================
 // N=3 — Swap Light
 // ===========================================================================
-// .w = packHalf2x16(N_eff, sqrt(meanY2))
+// .w = packHalf2x16(N_eff, rootMeanY2)
 
-void writeDiffuseSwap(uvec2 xy, MaxEntEncoding maxent, float weight, float meanY2) {
-    float sqrtM2 = sqrt(max(meanY2, 0.0));
+void writeDiffuseSwap(uvec2 xy, MaxEntEncoding maxent, float weight,
+        float rootMeanY2) {
+    rootMeanY2 = sanitizeRootMeanSquareFP16(rootMeanY2);
     diffuseBuffer.data[addr(DIF_N_SWAP, xy)] = uvec4(
         packHalf2x16(clamp(maxent.maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(maxent.maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(maxent.CoCg,        vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(vec2(weight, sqrtM2))
+        packHalf2x16(vec2(weight, rootMeanY2))
     );
 }
 uvec4 readDiffuseSwapRaw(uvec2 xy) {
     return diffuseBuffer.data[addr(DIF_N_SWAP, xy)];
 }
-void readDiffuseSwap(uvec2 xy, out MaxEntEncoding maxent, out float weight, out float meanY2) {
+void readDiffuseSwap(uvec2 xy, out MaxEntEncoding maxent, out float weight,
+        out float rootMeanY2) {
     uvec4 v = readDiffuseSwapRaw(xy);
     vec2 ay_xy = unpackHalf2x16(v.x);
     vec2 ay_zw = unpackHalf2x16(v.y);
@@ -302,7 +310,7 @@ void readDiffuseSwap(uvec2 xy, out MaxEntEncoding maxent, out float weight, out 
     maxent.CoCg = clamp(cocg, vec2(-65504.0), vec2(65504.0));
     vec2 wm = unpackHalf2x16(v.w);
     weight = wm.x;
-    meanY2 = wm.y * wm.y;
+    rootMeanY2 = sanitizeRootMeanSquareFP16(wm.y);
 }
 
 // ===========================================================================
@@ -376,14 +384,13 @@ struct RestirGIFreshCandidate {
 };
 
 void writeRestirGIMaxEntPlane(uint plane, uvec2 xy,
-        MaxEntEncoding encoded, float meanY2) {
+        MaxEntEncoding encoded, float rootMeanY2) {
     // Never allow a bad donor or color transform to poison the finalize and
     // temporal passes. The biased prewarm itself performs no density division.
     if (any(isnan(encoded.maxEntY)) || any(isinf(encoded.maxEntY))
             || any(isnan(encoded.CoCg)) || any(isinf(encoded.CoCg)))
         encoded = init_maxent();
-    if (isnan(meanY2) || isinf(meanY2) || meanY2 < 0.0)
-        meanY2 = 0.0;
+    rootMeanY2 = sanitizeRootMeanSquareFP16(rootMeanY2);
     diffuseBuffer.data[addr(plane, xy)] = uvec4(
         packHalf2x16(clamp(encoded.maxEntY.xy,
             vec2(-65504.0), vec2(65504.0))),
@@ -391,24 +398,22 @@ void writeRestirGIMaxEntPlane(uint plane, uvec2 xy,
             vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(encoded.CoCg,
             vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(vec2(0.0,
-            clamp(sqrt(max(meanY2, 0.0)), 0.0, 65504.0))));
+        packHalf2x16(vec2(0.0, rootMeanY2)));
 }
 
 void readRestirGIMaxEntPlane(uint plane, uvec2 xy,
-        out MaxEntEncoding encoded, out float meanY2) {
+        out MaxEntEncoding encoded, out float rootMeanY2) {
     uvec4 packedValue = diffuseBuffer.data[addr(plane, xy)];
     vec2 xyValue = unpackHalf2x16(packedValue.x);
     vec2 zwValue = unpackHalf2x16(packedValue.y);
     encoded.maxEntY = vec4(xyValue, zwValue);
     encoded.CoCg = unpackHalf2x16(packedValue.z);
-    float sqrtM2 = unpackHalf2x16(packedValue.w).y;
+    rootMeanY2 = unpackHalf2x16(packedValue.w).y;
     if (any(isnan(encoded.maxEntY)) || any(isinf(encoded.maxEntY))
             || any(isnan(encoded.CoCg)) || any(isinf(encoded.CoCg)))
         encoded = init_maxent();
-    if (isnan(sqrtM2) || isinf(sqrtM2) || sqrtM2 < 0.0)
-        sqrtM2 = 0.0;
-    meanY2 = sqrtM2 * sqrtM2;
+    if (isnan(rootMeanY2) || isinf(rootMeanY2) || rootMeanY2 < 0.0)
+        rootMeanY2 = 0.0;
 }
 
 void clearRestirGIScratch(uvec2 xy) {
@@ -419,24 +424,24 @@ void clearRestirGIScratch(uvec2 xy) {
 
 void writeRestirGIDirect(uvec2 xy, MaxEntEncoding direct) {
     writeRestirGIMaxEntPlane(DIF_N_RESTIR_DIRECT, xy, direct,
-        direct.maxEntY.w * direct.maxEntY.w);
+        max(direct.maxEntY.w, 0.0));
 }
 
 void readRestirGIDirect(uvec2 xy, out MaxEntEncoding direct) {
-    float unusedMeanY2;
+    float unusedRootMeanY2;
     readRestirGIMaxEntPlane(DIF_N_RESTIR_DIRECT, xy,
-        direct, unusedMeanY2);
+        direct, unusedRootMeanY2);
 }
 
 void writeRestirGIPrewarm(uvec2 xy, MaxEntEncoding indirect) {
     writeRestirGIMaxEntPlane(DIF_N_RESTIR_PREWARM, xy, indirect,
-        indirect.maxEntY.w * indirect.maxEntY.w);
+        max(indirect.maxEntY.w, 0.0));
 }
 
 void readRestirGIPrewarm(uvec2 xy, out MaxEntEncoding indirect) {
-    float unusedMeanY2;
+    float unusedRootMeanY2;
     readRestirGIMaxEntPlane(DIF_N_RESTIR_PREWARM, xy,
-        indirect, unusedMeanY2);
+        indirect, unusedRootMeanY2);
 }
 
 void writeRestirGIFreshCandidate(uvec2 xy,

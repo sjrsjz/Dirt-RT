@@ -53,12 +53,81 @@ float logDistNorm(float d) {
     return clamp(log2(max(d, 0.01) * 100.0 + 1.0) / 14.0, 0.0, 1.0);
 }
 
-#if DEBUG_VIEW == 23
-vec3 debugDiffuseDenoisedTemporalDifference(uvec2 pixel) {
-    float normalizedDistance = debugReadDiffuseDenoisedDifference(pixel);
+#if DEBUG_VIEW == 23 || DEBUG_VIEW == 25
+vec3 debugDenoisedTemporalDifference(float normalizedDistance) {
     if (!(normalizedDistance >= 0.0) || isnan(normalizedDistance) || isinf(normalizedDistance))
         return vec3(1.0, 0.0, 1.0);
     return jetColormap(1.0 - exp2(-0.5 * min(normalizedDistance, 32.0)));
+}
+#endif
+
+#if DEBUG_VIEW == 26 || DEBUG_VIEW == 27
+vec3 debugVariancePreparation(float standardDeviation) {
+    if (!(standardDeviation >= 0.0) || isnan(standardDeviation)
+            || isinf(standardDeviation))
+        return vec3(1.0, 0.0, 1.0);
+    float variance = standardDeviation * standardDeviation;
+    // Log2 display of the actual trace variance. V=1 occupies 1/16 of the
+    // scale and V=65535 reaches red; larger HDR variances saturate.
+    float normalizedVariance = clamp(log2(1.0 + variance) / 16.0,
+        0.0, 1.0);
+    return jetColormap(normalizedVariance);
+}
+#endif
+
+#if DEBUG_VIEW == 24
+bool debugReadFinalDenoisedVirtualPosition(ivec2 pixel,
+        out vec3 position) {
+    if (any(lessThan(pixel, ivec2(0)))
+            || any(greaterThanEqual(pixel, ivec2(resolution_global)))) {
+        position = vec3(0.0);
+        return false;
+    }
+
+    SpecularMaxEnt unusedSignal;
+    float virtualDistance, validWeight;
+    readReflMaxEnt(uvec2(pixel), unusedSignal, virtualDistance, validWeight);
+    if (!(validWeight > 0.0) || !(virtualDistance > 0.0)
+            || isnan(virtualDistance) || isinf(virtualDistance)) {
+        position = vec3(0.0);
+        return false;
+    }
+
+    position = reconstructPrimaryRay(uvec2(pixel)) * virtualDistance;
+    return !any(isnan(position)) && !any(isinf(position));
+}
+
+bool debugFinalDenoisedVirtualNormal(ivec2 pixel, out vec3 normal) {
+    vec3 centerPosition;
+    if (!debugReadFinalDenoisedVirtualPosition(pixel, centerPosition)) {
+        normal = vec3(0.0);
+        return false;
+    }
+
+    // Match the denoiser's one-pixel central-difference reconstruction.
+    // Missing image-edge or invalid neighbors collapse to the center point.
+    vec3 left = centerPosition;
+    vec3 right = centerPosition;
+    vec3 down = centerPosition;
+    vec3 up = centerPosition;
+    vec3 candidate;
+    if (debugReadFinalDenoisedVirtualPosition(
+            pixel + ivec2(-1, 0), candidate)) left = candidate;
+    if (debugReadFinalDenoisedVirtualPosition(
+            pixel + ivec2(1, 0), candidate)) right = candidate;
+    if (debugReadFinalDenoisedVirtualPosition(
+            pixel + ivec2(0, -1), candidate)) down = candidate;
+    if (debugReadFinalDenoisedVirtualPosition(
+            pixel + ivec2(0, 1), candidate)) up = candidate;
+
+    vec3 virtualTangentX = right - left;
+    vec3 virtualTangentY = up - down;
+    vec3 unnormalizedNormal = cross(virtualTangentX, virtualTangentY);
+    float normalLength2 = dot(unnormalizedNormal, unnormalizedNormal);
+    vec3 fallback = normalize(reconstructPrimaryRay(uvec2(pixel)));
+    normal = normalLength2 > 1e-20
+        ? unnormalizedNormal * inversesqrt(normalLength2) : fallback;
+    return !any(isnan(normal)) && !any(isinf(normal));
 }
 #endif
 
@@ -161,7 +230,37 @@ void main() {
     float surfaceMask = primaryDistance >= 0.0 ? 1.0 : 0.0;
 
     #if DEBUG_VIEW == 23
-    fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0) : debugDiffuseDenoisedTemporalDifference(xy);
+    fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0)
+        : debugDenoisedTemporalDifference(
+            debugReadDiffuseDenoisedDifference(xy));
+    return;
+    #elif DEBUG_VIEW == 25
+    fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0)
+        : debugDenoisedTemporalDifference(
+            debugReadSpecularDenoisedDifference(xy));
+    return;
+    #elif DEBUG_VIEW == 26
+    fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0)
+        : debugVariancePreparation(
+            debugReadDiffuseVariancePreparationStandardDeviation(xy));
+    return;
+    #elif DEBUG_VIEW == 27
+    fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0)
+        : debugVariancePreparation(
+            debugReadSpecularVariancePreparationStandardDeviation(xy));
+    return;
+    #endif
+
+    #if DEBUG_VIEW == 24
+    if (surfaceMask < 0.5) {
+        fragColor.xyz = vec3(0.0);
+        return;
+    }
+    vec3 virtualNormal;
+    bool virtualNormalValid = debugFinalDenoisedVirtualNormal(
+        pix, virtualNormal);
+    fragColor.xyz = virtualNormalValid
+        ? virtualNormal * 0.5 + 0.5 : vec3(1.0, 0.0, 1.0);
     return;
     #endif
 
@@ -372,8 +471,8 @@ void main() {
     // 原始时域累积白模 (N=2 hist MaxEnt × geometryNormal, 降噪前)
     {
         MaxEntEncoding raw;
-        float w, meanY2_unused;
-        readDiffuseHist(xy, raw, w, meanY2_unused);
+        float w, rootMeanY2_unused;
+        readDiffuseHist(xy, raw, w, rootMeanY2_unused);
         fragColor.xyz = projectDiffuseLighting(
             raw, geometryNormal, rdVal, rough, vec3(1.0));
     }

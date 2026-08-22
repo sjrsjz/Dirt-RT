@@ -9,7 +9,7 @@ layout(local_size_x = 16, local_size_y = 16) in;
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/buffer_io.glsl"
 #include "/lib/lighting/denoiser/maxent_spatial_signal.glsl"
-#include "/lib/lighting/denoiser/maxent_bures.glsl"
+#include "/lib/lighting/denoiser/maxent_moment_statistics.glsl"
 
 uniform usampler2D colortex4;
 uniform usampler2D colortex5;
@@ -51,7 +51,7 @@ void main() {
     vec4 currentMaxEntY = vec4(unpackHalf2x16(packedLight.x), unpackHalf2x16(packedLight.y));
     vec4 historyMaxEntY = vec4(unpackHalf2x16(reprojectedWords.x), unpackHalf2x16(reprojectedWords.y));
     float normalizedDistance;
-    tmp.weight = maxentClampHistoryWeightByDenoisedDifference(tmp.weight,
+    tmp.weight = maxentClampHistoryWeightByMomentDifference(tmp.weight,
             currentMaxEntY, historyMaxEntY, historyDeviationAlpha.x,
             historyMeta.x, historyMeta.y, historyDeviationAlpha.y,
             float(MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY),
@@ -59,7 +59,7 @@ void main() {
     debugWriteDiffuseDenoisedDifference(gxy, normalizedDistance);
     tmp.prev_weight = tmp.weight;
     tmp.data = tmp.data_swap;
-    tmp.prev_meanY2 = tmp.meanY2;
+    tmp.prevRootMeanY2 = tmp.rootMeanY2;
 
     MaxEntEncoding encoded = unpackLightSample(packedLight);
     float primaryDistance;

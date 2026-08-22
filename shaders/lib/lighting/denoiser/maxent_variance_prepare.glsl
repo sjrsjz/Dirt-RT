@@ -9,7 +9,7 @@
 // Source signal:
 //   maxEntY      = (E[Y * direction], E[Y])
 //   CoCg         = chroma paired with E[Y]
-//   meanY2       = raw temporal second moment E[Y^2]
+//   rootMeanY2   = temporal root second moment sqrt(E[Y^2])
 //   historyLength = Kish effective temporal sample count N_eff
 //
 // Outputs:
@@ -17,11 +17,11 @@
 //               maxent_spatial_geometry.glsl
 //   colortex4 = canonical RGBA32UI MaxEnt signal documented in
 //               maxent_spatial_signal.glsl
-// The variance carried by colortex4 is a local squared-Bures uncertainty
-// estimate for the temporally accumulated MaxEnt state. It is obtained by
-// pulling the Gaussian Bures/W2 metric back to (v, omega), contracting that
-// metric with the covariance information recoverable from E[Y^2], and is
-// computed in F32 then stored as an FP16 square root. First-surface plane
+// The variance carried by colortex4 is the trace uncertainty of the encoded
+// linear moment vector (E[Y u], E[Y]).  Since |(Y u, Y)|^2 = 2Y^2, it is
+// obtained directly from the stored moments without a decoder distribution or
+// covariance-shape assumption. It is stored and propagated as an FP16
+// standard deviation. First-surface plane
 // consistency constrains both variance pooling stages. The signal's upper
 // metadata half contains the already constructed radial virtual distance, not
 // reflection hit distance.
@@ -40,7 +40,7 @@ layout(rgba32ui) uniform writeonly uimage2D colorimg3;
 struct DenoiserVarianceSource {
     vec4 maxEntY;
     vec2 CoCg;
-    float meanY2;
+    float rootMeanY2;
     float historyLength;
     float hitDistance;
 };
@@ -59,7 +59,7 @@ DenoiserVarianceSource denoiserVarianceEmptySource() {
     DenoiserVarianceSource source;
     source.maxEntY = vec4(0.0);
     source.CoCg = vec2(0.0);
-    source.meanY2 = 0.0;
+    source.rootMeanY2 = 0.0;
     source.historyLength = 1.0;
     source.hitDistance = 0.0;
     return source;
@@ -112,7 +112,7 @@ DenoiserVarianceSource denoiserVarianceLoadSource(ivec2 pixel) {
     source.CoCg = unpackHalf2x16(words.z);
     vec2 historyRootM2 = unpackHalf2x16(words.w);
     source.historyLength = historyRootM2.x;
-    source.meanY2 = historyRootM2.y * historyRootM2.y;
+    source.rootMeanY2 = historyRootM2.y;
     source.hitDistance = 0.0;
     #else
     uvec4 words = reflectBuffer.data[addr(SPEC_N_HISTLIGHT, uvec2(pixel))];
@@ -120,7 +120,7 @@ DenoiserVarianceSource denoiserVarianceLoadSource(ivec2 pixel) {
     source.maxEntY = signal.maxEntY;
     source.CoCg = signal.CoCg;
     vec2 rootM2History = unpackHalf2x16(words.w);
-    source.meanY2 = rootM2History.x * rootM2History.x;
+    source.rootMeanY2 = rootM2History.x;
     source.historyLength = rootM2History.y;
     source.hitDistance = unpackHalf2x16(reflectBuffer.data[addr(SPEC_N_HISTGEO, uvec2(pixel))].w).x;
     #endif
@@ -136,6 +136,14 @@ void denoiserVarianceStore(ivec2 pixel, DenoiserMaxEntSignal signal,
 void denoiserVarianceStoreInvalid(ivec2 pixel) {
     imageStore(colorimg3, pixel, uvec4(floatBitsToUint(-1.0), 0u, 0u, 0u));
     imageStore(colorimg4, pixel, denoiserInvalidMaxEntSignalWords());
+
+    #if defined(MAXENT_VARIANCE_DIFFUSE) && DEBUG_VIEW == 26
+    debugWriteDiffuseVariancePreparationStandardDeviation(
+        uvec2(pixel), -1.0);
+    #elif defined(MAXENT_VARIANCE_SPECULAR) && DEBUG_VIEW == 27
+    debugWriteSpecularVariancePreparationStandardDeviation(
+        uvec2(pixel), -1.0);
+    #endif
 }
 
 float denoiserVarianceSanitizeNonnegative(float value) {
@@ -154,127 +162,31 @@ vec4 denoiserVarianceCanonicalMean(vec4 meanState) {
     return vec4(directionalMean, meanY);
 }
 
-float denoiserVarianceCanonicalMeanY2(vec4 meanState, float meanY2) {
-    meanY2 = denoiserVarianceSanitizeNonnegative(meanY2);
-    return max(meanY2, max(meanState.w * meanState.w, dot(meanState.xyz, meanState.xyz)));
+float denoiserVarianceCanonicalRootMeanY2(vec4 meanState,
+    float rootMeanY2) {
+    rootMeanY2 = denoiserVarianceSanitizeNonnegative(rootMeanY2);
+    // denoiserVarianceCanonicalMean() already guarantees |E[Y u]| <= E[Y],
+    // so enforcing sqrt(E[Y^2]) >= E[Y] also enforces the directional bound.
+    return max(rootMeanY2, meanState.w);
 }
 
-// Local pullback of the Gaussian Bures/W2 metric to the 4-DOF
-// MaxEnt parameterization theta = (v, omega).
-//
-// The Gaussian proxy is axisymmetric around n = v / |v|:
-//   Sigma = p^2 (I - nn^T) + q^2 nn^T,
-// with the same p/q construction used by the spatial Bures distance.
-// For an infinitesimal perturbation dv = n dr + dv_perp and dOmega,
-//
-//   d_B^2 ~= Grr dr^2 + Gperp |dv_perp|^2
-//              + 2 GrOmega dr dOmega + GOmegaOmega dOmega^2.
-//
-// Only E[Y^2] is stored, so the full covariance of (v, omega) is not
-// identifiable. We therefore use the following closure:
-//   * the exact scalar magnitudes available from the stored moments,
-//       tr Cov[Y u] = E[Y^2] - |v|^2,
-//       Var[Y]      = E[Y^2] - omega^2;
-//   * the MaxEnt Gaussian proxy only to split tr Cov[Y u] into the radial
-//     and two perpendicular components;
-//   * Cov(dr, dOmega) = 0, because E[Y^2 u] is not stored.
-//
-// The returned value is in squared-Bures units.  It is the population-form
-// uncertainty proxy, i.e. it carries the same (N - 1) / N bias as the raw
-// second moments.  denoiserVarianceOfTemporalMean() converts it to the
-// uncertainty of the temporal mean by dividing by N - 1.
-float denoiserVarianceBuresPopulation(vec4 meanState, float meanY2) {
+float denoiserVariancePopulation(vec4 meanState, float rootMeanY2) {
     meanState = denoiserVarianceCanonicalMean(meanState);
-    meanY2 = denoiserVarianceCanonicalMeanY2(meanState, meanY2);
-
-    vec3 v = meanState.xyz;
-    float omega = meanState.w;
-    float r2 = dot(v, v);
-    float omega2 = omega * omega;
-
-    // These two scalar covariance magnitudes are determined exactly by the
-    // stored moments.  They are population-form (1/N-normalized) scatters.
-    float vectorPopulationTrace = max(meanY2 - r2, 0.0);
-    float energyPopulationVariance = max(meanY2 - omega2, 0.0);
-
-    if (vectorPopulationTrace <= 0.0 && energyPopulationVariance <= 0.0)
-        return 0.0;
-
-    // A nonnegative Y with E[Y] == 0 must be identically zero.  This branch
-    // is therefore only a numerical-degeneracy fallback.  At v -> 0 the
-    // exact pullback metric tends to G_v = 1 and G_omega = 4/3.
-    if (omega2 <= 1e-30)
-        return vectorPopulationTrace
-            + (4.0 / 3.0) * energyPopulationVariance;
-
-    // Same closed-form axisymmetric covariance as denoiserSpatialMakeBuresData:
-    //   s  = sqrt(4 omega^2 - 3/4 |v|^2)
-    //   p2 = (2 omega^2 + omega s) / 9 - |v|^2 / 3
-    //   q2 = p2 + |v|^2 / 2
-    float rootArgument = max(4.0 * omega2 - 0.75 * r2, 0.0);
-    float traceRoot = sqrt(rootArgument);
-    float common_ = (2.0 * omega2 + omega * traceRoot) / 9.0;
-    float p2 = max(common_ - r2 / 3.0, 0.0);
-    float q2 = max(common_ + r2 / 6.0, 0.0);
-    float shapeTrace = 2.0 * p2 + q2;
-
-    if (traceRoot <= 0.0 || p2 <= 0.0 || q2 <= 0.0 || shapeTrace <= 0.0)
-        return vectorPopulationTrace
-            + (4.0 / 3.0) * energyPopulationVariance;
-
-    // The true second directional moment E[Y^2 uu^T] is unavailable.  Use
-    // the MaxEnt proxy only for its axisymmetric shape, while preserving the
-    // observed total vector variance magnitude from E[Y^2].
-    float radialPopulationVariance = vectorPopulationTrace * q2 / shapeTrace;
-    float perpendicularPopulationTrace = max(
-            vectorPopulationTrace - radialPopulationVariance, 0.0);
-
-    float p = sqrt(p2);
-    float q = sqrt(q2);
-    float r = sqrt(r2);
-
-    // Derivatives of p^2 and q^2 with respect to r = |v| and omega.
-    // traceRoot is safely nonzero for realizable |v| <= omega, omega > 0.
-    float dp2Dr = -omega * r / (12.0 * traceRoot) - (2.0 / 3.0) * r;
-    float dq2Dr = -omega * r / (12.0 * traceRoot) + (1.0 / 3.0) * r;
-    float dCommonDOmega = (4.0 * omega + traceRoot
-            + 4.0 * omega2 / traceRoot) / 9.0;
-
-    float dpDr = dp2Dr / (2.0 * p);
-    float dqDr = dq2Dr / (2.0 * q);
-    float dpDOmega = dCommonDOmega / (2.0 * p);
-    float dqDOmega = dCommonDOmega / (2.0 * q);
-
-    // Local Bures metric coefficients.  The perpendicular term contains the
-    // covariance-orientation contribution in addition to the Euclidean mean
-    // displacement.  Since q^2 - p^2 = |v|^2 / 2, it simplifies to r^2 /
-    // (4 (p^2 + q^2)).
-    float Grr = 1.0 + 2.0 * dpDr * dpDr + dqDr * dqDr;
-    float Gperp = 1.0 + r2 / (4.0 * (p2 + q2));
-    float GOmegaOmega = 2.0 * dpDOmega * dpDOmega
-            + dqDOmega * dqDOmega;
-
-    // The pullback also has
-    //   GrOmega = 2 dp/dr dp/domega + dq/dr dq/domega,
-    // but its covariance contraction requires Cov(dr, domega), equivalently
-    // E[Y^2 u], which is not present in the compact signal.  The zero-cross
-    // closure avoids inventing an unobservable sign/correlation.
-
-    float buresPopulationVariance =
-          Grr * radialPopulationVariance
-        + Gperp * perpendicularPopulationTrace
-        + GOmegaOmega * energyPopulationVariance;
-
-    return denoiserVarianceSanitizeNonnegative(buresPopulationVariance);
+    rootMeanY2 = denoiserVarianceCanonicalRootMeanY2(
+            meanState, rootMeanY2);
+    // z = (Y u, Y), |u| = 1, hence E[|z|^2] = 2 E[Y^2].
+    // This is exactly tr Cov[z] for the stored population moments.
+    return max(2.0 * rootMeanY2 * rootMeanY2
+            - dot(meanState, meanState), 0.0);
 }
 
-float denoiserVarianceOfTemporalMean(vec4 meanState, float meanY2, float historyLength) {
-    // Every population covariance term above carries the usual (N - 1) / N
-    // bias.  Dividing the contracted Bures population uncertainty by N - 1
-    // therefore gives the local squared-Bures uncertainty of the temporal
-    // sample mean, under the covariance-shape closure above.
+float denoiserVarianceOfTemporalMean(vec4 meanState, float rootMeanY2,
+    float historyLength) {
+    // For normalized temporal weights, the stored central second moment has
+    // expectation (1 - 1/N_eff) tr Cov[z].  Dividing by N_eff - 1 therefore
+    // estimates tr Cov[weighted mean].
     if (historyLength <= 1.5) return 0.0;
-    return denoiserVarianceBuresPopulation(meanState, meanY2)
+    return denoiserVariancePopulation(meanState, rootMeanY2)
         / (historyLength - 1.0);
 }
 
@@ -283,7 +195,8 @@ DenoiserVarianceSource denoiserVarianceSanitizeSource(DenoiserVarianceSource sou
     if (any(isnan(source.CoCg)) || any(isinf(source.CoCg)))
         source.CoCg = vec2(0.0);
     if (source.maxEntY.w <= 0.0) source.CoCg = vec2(0.0);
-    source.meanY2 = denoiserVarianceCanonicalMeanY2(source.maxEntY, source.meanY2);
+    source.rootMeanY2 = denoiserVarianceCanonicalRootMeanY2(
+            source.maxEntY, source.rootMeanY2);
     source.historyLength = clamp(denoiserVarianceSanitizeNonnegative(source.historyLength), 1.0, 65504.0);
     source.hitDistance = clamp(denoiserVarianceSanitizeNonnegative(source.hitDistance),
             0.0, DENOISER_SPATIAL_FP16_MAX);
@@ -325,8 +238,8 @@ void denoiserVarianceWriteTile(uint index, DenoiserVarianceGeometry geometry,
                     vec2(65504.0))),
             packHalf2x16(clamp(source.maxEntY.zw, vec2(-65504.0),
                     vec2(65504.0))));
-    denoiserVarianceMomentTile[index] = packHalf2x16(vec2(source.historyLength,
-                min(sqrt(source.meanY2), 65504.0)));
+    denoiserVarianceMomentTile[index] = packHalf2x16(vec2(
+                source.historyLength, min(source.rootMeanY2, 65504.0)));
 }
 
 void denoiserVarianceLoadTile(uint index, ivec2 pixel, ivec2 imageMax) {
@@ -360,7 +273,7 @@ vec4 denoiserVarianceTileMean(uint index) {
 
 vec2 denoiserVarianceTileMomentHistory(uint index) {
     vec2 historyRootM2 = unpackHalf2x16(denoiserVarianceMomentTile[index]);
-    return vec2(historyRootM2.y * historyRootM2.y, historyRootM2.x);
+    return historyRootM2.yx;
 }
 
 void main() {
@@ -421,18 +334,43 @@ void main() {
         barrier();
     }
 
-    float estimatorVariance = 0.0;
+    float estimatorStandardDeviation = 0.0;
     if (centerValid) {
         vec4 centerMean = denoiserVarianceTileMean(centerIndex);
         vec2 centerMomentHistory = denoiserVarianceTileMomentHistory(centerIndex);
-        float centerMeanY2 = centerMomentHistory.x;
+        float centerRootMeanY2 = centerMomentHistory.x;
         float centerHistory = centerMomentHistory.y;
-        float temporalVariance = denoiserVarianceOfTemporalMean(centerMean, centerMeanY2, centerHistory);
+        float temporalVariance = denoiserVarianceOfTemporalMean(
+                centerMean, centerRootMeanY2, centerHistory);
         float spatialVariance = temporalVariance;
-
         if (centerHistory < varianceHistoryEnd
                 && denoiserVariancePoolRequired != 0u) {
             float sumMass = 0.0;
+
+            // For the Bessel/Kish correction of the pooled raw observations.
+            //
+            // Pixel i has spatial weight k_i and temporal Kish count N_i.
+            // Its pooled mass is
+            //
+            //     a_i = k_i * N_i.
+            //
+            // If the normalized temporal weights inside pixel i are t_ij, then
+            //
+            //     sum_j t_ij^2 = 1 / N_i.
+            //
+            // Therefore the squared-weight contribution of all raw observations
+            // represented by pixel i is
+            //
+            //     a_i^2 * sum_j t_ij^2
+            //   = k_i^2 * N_i.
+            //
+            // After normalization by sumMass^2 this gives
+            //
+            //     q = sum_j w_j^2
+            //
+            // for the complete pooled observation set.
+            float sumSquaredObservationWeight = 0.0;
+
             vec4 sumMean = vec4(0.0);
             float sumMeanY2 = 0.0;
 
@@ -441,49 +379,108 @@ void main() {
                     uint sampleIndex = uint(int(centerY) + offsetY)
                             * MAXENT_VARIANCE_SHARED_WIDTH
                             + uint(int(centerX) + offsetX);
+
                     if (!denoiserVarianceTileValid(sampleIndex)
                             || denoiserVarianceTileMaterial(sampleIndex)
                                 != centerGeometry.materialID)
                         continue;
 
-                    float spatialWeight = MAXENT_VARIANCE_KERNEL_1D[abs(offsetX)]
+                    float spatialWeight =
+                        MAXENT_VARIANCE_KERNEL_1D[abs(offsetX)]
                             * MAXENT_VARIANCE_KERNEL_1D[abs(offsetY)]
-                            * exp(-denoiserVarianceTileSurfacePlaneDepthExponent(sampleIndex, centerPlaneOffset,
-                                    centerGeometry.surfaceNormal, surfaceRejectionScale));
-                    vec2 sampleMomentHistory = denoiserVarianceTileMomentHistory(sampleIndex);
-                    float mass = spatialWeight * sampleMomentHistory.y;
+                            * exp(-denoiserVarianceTileSurfacePlaneDepthExponent(
+                                    sampleIndex,
+                                    centerPlaneOffset,
+                                    centerGeometry.surfaceNormal,
+                                    surfaceRejectionScale));
+
+                    vec2 sampleMomentHistory =
+                        denoiserVarianceTileMomentHistory(sampleIndex);
+
+                    float sampleRootMeanY2 = sampleMomentHistory.x;
+                    float sampleHistory = sampleMomentHistory.y;
+
+                    // Total observation mass represented by this pixel.
+                    float mass = spatialWeight * sampleHistory;
 
                     sumMass += mass;
+
+                    // Under independent temporal observations:
+                    //
+                    //     mass^2 / N_i
+                    //   = spatialWeight^2 * N_i.
+                    //
+                    // This is the numerator of the combined squared normalized
+                    // observation weight.
+                    sumSquaredObservationWeight +=
+                        spatialWeight * spatialWeight * sampleHistory;
+
                     sumMean += mass
                             * denoiserVarianceTileMean(sampleIndex);
-                    sumMeanY2 += mass * sampleMomentHistory.x;
+
+                    sumMeanY2 += mass
+                            * sampleRootMeanY2 * sampleRootMeanY2;
                 }
             }
 
             if (sumMass > 1e-8) {
                 float inverseMass = 1.0 / sumMass;
-                vec4 pooledMean = denoiserVarianceCanonicalMean(sumMean * inverseMass);
-                float pooledMeanY2 = denoiserVarianceCanonicalMeanY2(pooledMean, sumMeanY2 * inverseMass);
-                float pooledPopulationVariance = denoiserVarianceBuresPopulation(
-                        pooledMean, pooledMeanY2);
-                // Preserve the legacy cold-start spatial treatment exactly:
-                // the neighborhood estimates a per-observation uncertainty
-                // scale, while only the center pixel's actual temporal history
-                // reduces the estimator variance.  No Kish/Bessel correction
-                // is introduced in this version.
-                spatialVariance = pooledPopulationVariance
-                        / centerHistory;
+
+                vec4 pooledMean = denoiserVarianceCanonicalMean(
+                        sumMean * inverseMass);
+
+                float pooledRootMeanY2 =
+                    denoiserVarianceCanonicalRootMeanY2(
+                        pooledMean,
+                        sqrt(max(sumMeanY2 * inverseMass, 0.0)));
+
+                // Biased weighted central second moment:
+                //
+                //     S_pool
+                //       = 2 E_pool[Y^2] - |E_pool[(Y u, Y)]|^2
+                //
+                // and
+                //
+                //     E[S_pool] = (1 - q) tr Cov[z].
+                float pooledBiasedObservationVariance =
+                    denoiserVariancePopulation(
+                        pooledMean, pooledRootMeanY2);
+
+                float inverseMassSquared = inverseMass * inverseMass;
+
+                // q = sum normalized raw-observation weights squared.
+                float squaredWeightMass =
+                    sumSquaredObservationWeight * inverseMassSquared;
+
+                // Effective number of independent observations in the spatial pool:
+                //
+                //     N_pool = 1 / q.
+                //
+                // We need at least two effective observations to estimate variance.
+                float besselDenominator = 1.0 - squaredWeightMass;
+
+                if (besselDenominator > 1e-6) {
+                    // Unbiased estimate of the per-observation trace covariance.
+                    float observationVariance =
+                        pooledBiasedObservationVariance
+                            / besselDenominator;
+
+                    // The neighborhood only estimates the noise of one observation.
+                    // The center pixel still has its own temporal estimator with
+                    // N_eff = centerHistory.
+                    spatialVariance =
+                        observationVariance / centerHistory;
+                }
             }
         }
 
-        float temporalTrust = smoothstep(varianceHistoryBegin, varianceHistoryEnd, centerHistory);
-        if (centerHistory <= 1.5) temporalTrust = 0.0;
-        // Both paths are expressed in the same local squared-Bures units; the
-        // sigma-domain transition therefore keeps the existing cold-start
-        // behavior while changing only the uncertainty geometry.
-        float estimatorSigma = mix(sqrt(spatialVariance), sqrt(temporalVariance), temporalTrust);
-        estimatorVariance = denoiserVarianceSanitizeNonnegative(estimatorSigma * estimatorSigma);
+        // max(sqrt(a), sqrt(b)) = sqrt(max(a, b)): expose the root-domain
+        // quantity directly instead of squaring it only for the packer to
+        // take the same square root again.
+        estimatorStandardDeviation = sqrt(max(
+                    spatialVariance, temporalVariance));
     }
+
     if (!centerInBounds) return;
     if (!centerValid) {
         denoiserVarianceStoreInvalid(centerPixel);
@@ -493,8 +490,17 @@ void main() {
     DenoiserMaxEntSignal outputSignal;
     outputSignal.maxEntY = centerSource.maxEntY;
     outputSignal.CoCg = centerSource.CoCg;
-    outputSignal.variance = estimatorVariance;
+    outputSignal.standardDeviation = estimatorStandardDeviation;
     outputSignal.virtualDistance = centerGeometry.surfaceDistance + centerGeometry.virtualScale * centerSource.hitDistance;
+
+    #if defined(MAXENT_VARIANCE_DIFFUSE) && DEBUG_VIEW == 26
+    debugWriteDiffuseVariancePreparationStandardDeviation(
+        pixel, estimatorStandardDeviation);
+    #elif defined(MAXENT_VARIANCE_SPECULAR) && DEBUG_VIEW == 27
+    debugWriteSpecularVariancePreparationStandardDeviation(
+        pixel, estimatorStandardDeviation);
+    #endif
+
     denoiserVarianceStore(centerPixel, outputSignal, centerGeometryWords, centerGeometry);
 }
 
