@@ -164,8 +164,8 @@ option.MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT.comment = 低于此置信度�
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE = 重投影深度缩放
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE.comment = 缩放时域重投影足迹梯形的深度半范围。提高可接受离重建表面平面更远的历史样本，减少重置但可能跨薄几何体泄漏。
 
-option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE = 历史差异容差
-option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE.comment = 漫反射历史钳制使用的标准化矩差异平方预算。16 等价于四倍标准差预算；提高会保留更多历史。
+option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE = 鲁棒历史差异容差
+option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE.comment = 重投影历史与当前 5x5 单次高斯重加权均值之间的标准化矩证据平方预算；提高会保留更多漫反射历史。
 
 option.MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS = 漫反射重投影半径
 option.MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS.comment = 漫反射时域路径足迹的像素半径。提高会允许更宽的路径重投影运动。
@@ -182,8 +182,8 @@ option.MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD.comment = 重投影表面
 option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION = 镜面波瓣比例
 option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION.comment = 时域重投影允许的 GGX 波瓣比例。降低会在视角相关的反射变化处拒绝更多历史。
 
-option.MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE = 历史差异容差
-option.MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE.comment = 镜面历史钳制使用的标准化矩差异平方预算。16 等价于四倍标准差预算；提高会保留更多历史。
+option.MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE = 鲁棒历史差异容差
+option.MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE.comment = 重投影历史与当前 5x5 单次高斯重加权均值之间的标准化矩证据平方预算；提高会保留更多镜面历史。
 
 option.MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS = 镜面重投影半径
 option.MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS.comment = 镜面时域足迹的像素半径。提高会允许更宽的反射重投影运动。
@@ -288,9 +288,9 @@ value.DEBUG_VIEW.19 = 折射虚拟距离
 value.DEBUG_VIEW.20 = 路径引导
 value.DEBUG_VIEW.21 = 时域累积原始
 value.DEBUG_VIEW.22 = 辐射率缓存
-value.DEBUG_VIEW.23 = 漫反射降噪时域差异
+value.DEBUG_VIEW.23 = 鲁棒漫反射降噪时域差异
 value.DEBUG_VIEW.24 = 降噪虚像法线
-value.DEBUG_VIEW.25 = 镜面降噪时域差异
+value.DEBUG_VIEW.25 = 鲁棒镜面降噪时域差异
 value.DEBUG_VIEW.26 = 漫反射方差准备
 value.DEBUG_VIEW.27 = 反射方差准备
 value.DEBUG_VIEW.31 = 缓存最近一次原始值

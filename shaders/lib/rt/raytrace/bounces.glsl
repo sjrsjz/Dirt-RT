@@ -9,7 +9,7 @@
 
 void handleFirstBounce_Reflection(
     vec3 rd_i, vec3 ro_o, vec3 macroNormal, vec3 geometryNormal, vec3 microNormal,
-    material surf, LobeProbs lobes, float etaRatio,
+    material surf, float etaRatio,
     out vec3 bsdf_weight, out vec3 next_rd,
     out float sampledStrategyPdf, out bool sampledDelta
 ) {
@@ -18,9 +18,6 @@ void handleFirstBounce_Reflection(
     next_rd = rd_i;
     sampledStrategyPdf = 0.0;
     sampledDelta = isDeltaSpecular(surf.R.x);
-    // Dedicated first-lobe passes are full-screen. Do not start a
-    // continuation for a material whose reflection lobe has zero support.
-    if (lobes.P_spec <= 1e-8) return;
 
     if (sampledDelta) {
         next_rd = reflect(rd_i, macroNormal);

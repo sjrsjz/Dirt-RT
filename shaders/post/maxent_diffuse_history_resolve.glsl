@@ -9,10 +9,12 @@ layout(local_size_x = 16, local_size_y = 16) in;
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/buffer_io.glsl"
 #include "/lib/lighting/denoiser/maxent_spatial_signal.glsl"
+#include "/lib/lighting/denoiser/maxent_spatial_virtual_projection.glsl"
 #include "/lib/lighting/denoiser/maxent_moment_statistics.glsl"
 
 uniform usampler2D colortex4;
 uniform usampler2D colortex5;
+#include "/lib/lighting/denoiser/maxent_temporal_robust_tile.glsl"
 
 MaxEntEncoding unpackLightSample(uvec4 d1) {
     MaxEntEncoding encoded;
@@ -21,7 +23,82 @@ MaxEntEncoding unpackLightSample(uvec4 d1) {
     return encoded;
 }
 
+MaxEntTemporalRobustEstimate maxentDiffuseCurrentRobustMomentEstimate(
+        ivec2 centerPixel, vec4 centerMoment,
+        float centerStandardDeviation) {
+    uint acceptedMask = maxentTemporalRobustNeighborhoodBit(ivec2(0));
+    int sampleCount = 1;
+    vec4 momentSum = centerMoment;
+
+    ivec2 imageSize = textureSize(colortex4, 0);
+    uvec4 centerGeometryWords =
+        maxentTemporalRobustTileGeometryWords(ivec2(0));
+    float centerSurfaceDistance = uintBitsToFloat(centerGeometryWords.w);
+    if (!(centerSurfaceDistance >= 0.0) || isnan(centerSurfaceDistance)
+            || isinf(centerSurfaceDistance)) {
+        MaxEntTemporalRobustEstimate centerEstimate;
+        centerEstimate.moment = centerMoment;
+        centerEstimate.standardDeviation = centerStandardDeviation;
+        return centerEstimate;
+    }
+
+    uint centerMaterial = centerGeometryWords.y >> 16u;
+    vec3 centerSurfaceNormal = decodeNormalU(centerGeometryWords.x);
+    vec3 centerPrimaryRay = reconstructPrimaryRay(uvec2(centerPixel));
+    float centerPlaneOffset = centerSurfaceDistance
+        * dot(centerSurfaceNormal, centerPrimaryRay);
+    float surfaceRejectionScale = denoiserSpatialSurfaceRejectionScale(
+        centerSurfaceDistance, float(imageSize.y));
+
+    for (int offsetY = -MAXENT_TEMPORAL_ROBUST_RADIUS;
+            offsetY <= MAXENT_TEMPORAL_ROBUST_RADIUS; ++offsetY) {
+        for (int offsetX = -MAXENT_TEMPORAL_ROBUST_RADIUS;
+                offsetX <= MAXENT_TEMPORAL_ROBUST_RADIUS; ++offsetX) {
+            if (offsetX == 0 && offsetY == 0) continue;
+            ivec2 offset = ivec2(offsetX, offsetY);
+            ivec2 samplePixel = centerPixel + offset;
+            if (any(lessThan(samplePixel, ivec2(0)))
+                    || any(greaterThanEqual(samplePixel, imageSize)))
+                continue;
+
+            uvec4 sampleGeometryWords =
+                maxentTemporalRobustTileGeometryWords(offset);
+            float sampleSurfaceDistance = uintBitsToFloat(
+                sampleGeometryWords.w);
+            if (!(sampleSurfaceDistance >= 0.0)
+                    || isnan(sampleSurfaceDistance)
+                    || isinf(sampleSurfaceDistance)
+                    || (sampleGeometryWords.y >> 16u) != centerMaterial)
+                continue;
+
+            vec3 sampleSurfaceNormal = decodeNormalU(sampleGeometryWords.x);
+            if (dot(centerSurfaceNormal, sampleSurfaceNormal) <= 0.0)
+                continue;
+            vec3 samplePrimaryRay = reconstructPrimaryRay(uvec2(samplePixel));
+            float planeExponent = denoiserSpatialSurfacePlaneDepthExponent(
+                centerPlaneOffset, centerSurfaceNormal, samplePrimaryRay,
+                sampleSurfaceDistance, surfaceRejectionScale);
+            if (planeExponent
+                    > MAXENT_TEMPORAL_ROBUST_MAX_PLANE_EXPONENT)
+                continue;
+
+            uvec4 sampleWords = maxentTemporalRobustTileSignalWords(offset);
+            if (!denoiserSpatialSignalWordsValid(sampleWords)) continue;
+            vec4 sampleMoment = maxentTemporalRobustTileMoment(offset);
+            if (any(isnan(sampleMoment)) || any(isinf(sampleMoment))) continue;
+            acceptedMask |= maxentTemporalRobustNeighborhoodBit(offset);
+            momentSum += sampleMoment;
+            ++sampleCount;
+        }
+    }
+
+    return maxentTemporalGaussianReweightedTileEstimate(
+        acceptedMask, sampleCount, momentSum, centerMoment,
+        centerStandardDeviation);
+}
+
 void main() {
+    maxentTemporalRobustLoadSharedTile();
     uvec2 gid = gl_GlobalInvocationID.xy;
     if (any(greaterThanEqual(gid, uvec2(resolution_global)))) return;
     ivec2 pix = ivec2(gid);
@@ -30,7 +107,7 @@ void main() {
     // Temporal used this parity as its reprojected-denoised scratch. Consume it
     // before replacing it with the exact current spatial result.
     uvec4 reprojectedWords = readDiffuseDenoisedCurrentRaw(gxy);
-    uvec4 packedLight = texelFetch(colortex4, pix, 0);
+    uvec4 packedLight = maxentTemporalRobustTileSignalWords(ivec2(0));
     writeDiffuseDenoisedCurrentRaw(gxy, packedLight);
     if (unpackHalf2x16(packedLight.w).x < 0.0) {
         // No surface: invalidate every temporal consumer with four raw stores
@@ -50,9 +127,15 @@ void main() {
     vec2 historyDeviationAlpha = unpackHalf2x16(reprojectedWords.w);
     vec4 currentMaxEntY = vec4(unpackHalf2x16(packedLight.x), unpackHalf2x16(packedLight.y));
     vec4 historyMaxEntY = vec4(unpackHalf2x16(reprojectedWords.x), unpackHalf2x16(reprojectedWords.y));
+    float currentStandardDeviation = max(
+        unpackHalf2x16(packedLight.w).x, 0.0);
+    MaxEntTemporalRobustEstimate robustCurrent =
+        maxentDiffuseCurrentRobustMomentEstimate(
+            pix, currentMaxEntY, currentStandardDeviation);
     float normalizedDistance;
     tmp.weight = maxentClampHistoryWeightByMomentDifference(tmp.weight,
-            currentMaxEntY, historyMaxEntY, historyDeviationAlpha.x,
+            robustCurrent.moment, robustCurrent.standardDeviation,
+            historyMaxEntY, historyDeviationAlpha.x,
             historyMeta.x, historyMeta.y, historyDeviationAlpha.y,
             float(MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY),
             MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE, normalizedDistance);

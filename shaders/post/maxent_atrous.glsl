@@ -22,7 +22,6 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 #if defined(MAXENT_ATROUS_FINAL_RESOLVE)
 #include "/lib/buffers/specular_buffer.glsl"
-#include "/lib/lighting/denoiser/maxent_moment_statistics.glsl"
 #endif
 
 #if defined(MAXENT_ATROUS_WRITE_ALTERNATE)
@@ -59,35 +58,6 @@ SpecularMaxEnt maxentAtrousSpecularSignal(DenoiserMaxEntSignal signal) {
     return result;
 }
 
-void maxentApplySpecularHistoryDifferenceClamp(uvec2 pixel,
-        SpecularMaxEnt currentSignal) {
-    float normalizedDistance = -1.0;
-    uvec4 historyWords = reflectBuffer.data[addr(SPEC_N_HISTLIGHT, pixel)];
-    vec2 momentHistory = unpackHalf2x16(historyWords.w);
-    if (!(momentHistory.y >= 1.0) || any(isnan(momentHistory))
-            || any(isinf(momentHistory))) {
-        debugWriteSpecularDenoisedDifference(pixel, normalizedDistance);
-        return;
-    }
-
-    vec4 historyMaxEntY;
-    float historyStddev, historySamples, validWeight, temporalCurrentWeight;
-    if (!readMaxEntSpecularDenoisedReprojection(pixel, historyMaxEntY,
-            historyStddev, historySamples, validWeight,
-            temporalCurrentWeight)) {
-        debugWriteSpecularDenoisedDifference(pixel, normalizedDistance);
-        return;
-    }
-    momentHistory.y = maxentClampHistoryWeightByMomentDifference(
-            momentHistory.y, currentSignal.maxEntY, historyMaxEntY,
-            historyStddev, historySamples, validWeight,
-            temporalCurrentWeight, float(MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY),
-            MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE,
-            normalizedDistance);
-    historyWords.w = pack2HalfClampedU(momentHistory.x, momentHistory.y);
-    reflectBuffer.data[addr(SPEC_N_HISTLIGHT, pixel)] = historyWords;
-    debugWriteSpecularDenoisedDifference(pixel, normalizedDistance);
-}
 #endif
 
 void denoiserSpatialStore(ivec2 pixel, DenoiserMaxEntSignal signal) {
@@ -98,10 +68,11 @@ void denoiserSpatialStore(ivec2 pixel, DenoiserMaxEntSignal signal) {
 
     #if defined(MAXENT_ATROUS_FINAL_RESOLVE)
     SpecularMaxEnt specular = maxentAtrousSpecularSignal(signal);
-    maxentApplySpecularHistoryDifferenceClamp(uvec2(pixel), specular);
     writeMaxEntSpecularDenoisedHistory(uvec2(pixel), specular,
         signal.standardDeviation);
-    writeReflMaxEnt(uvec2(pixel), specular, signal.virtualDistance, 1.0);
+    // SPEC_N_LIGHT still contains the reprojected denoised-history scratch.
+    // The following full-screen resolve reads the completed 5x5 final-output
+    // neighborhood, clamps history confidence, then publishes reflection N0.
     #endif
 }
 
@@ -111,8 +82,7 @@ void denoiserSpatialStoreInvalid(ivec2 pixel) {
 
     #if defined(MAXENT_ATROUS_FINAL_RESOLVE)
     writeMaxEntSpecularDenoisedHistoryInvalid(uvec2(pixel));
-    debugWriteSpecularDenoisedDifference(uvec2(pixel), -1.0);
-    writeReflMaxEnt(uvec2(pixel), emptySpecularMaxEnt(), 0.0, 0.0);
+    // Final reflection invalidation is deferred with the valid resolve above.
     #endif
 }
 

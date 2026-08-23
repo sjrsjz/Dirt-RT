@@ -285,15 +285,43 @@ LobeProbs computeLobeProbs(material surf, vec3 rd_i, vec3 macroNormal, float rs)
 
     float transmissionSelector = clamp(surf.S.y, 0.0, 1.0);
     float diffuseSelector = 1.0 - transmissionSelector;
+    float specularSelector = clamp(surf.S.x, 0.0, 1.0);
 
     vec3 interfaceF = mix(
-            rC.rgb * surf.S.x,
+            rC.rgb * specularSelector,
             vec3(p.F),
             transmissionSelector);
+    // Macro-normal Fresnel is not the support of a rough microfacet lobe.  In
+    // particular, F0 == 0 and NoV ~= 1 make it exactly zero even though tilted
+    // GGX facets have VoH < 1 and therefore non-zero Schlick Fresnel.
+    //
+    // Build a half-vector-independent proposal importance from a fixed
+    // cosine-weighted angular kernel.  Its Schlick moment is analytic:
+    //   E[(1 - mu)^5] = integral_0^1 2 mu (1 - mu)^5 dmu = 1 / 21.
+    // GGX alpha blends from the macro-normal value to that broad-kernel mean.
+    // This value only selects a lobe; the sampled BRDF and its PDF below still
+    // determine the Monte Carlo weight.
+    float etaDenominator = max(abs(1.0 + rs), 1e-8);
+    float dielectricF0 = (1.0 - rs) / etaDenominator;
+    dielectricF0 *= dielectricF0;
+    float dielectricF90 = (rs == 1.0) ? 0.0 : 1.0;
+    vec3 interfaceF0 = mix(
+            clamp(surf.Cs, vec3(0.0), vec3(1.0)) * specularSelector,
+            vec3(dielectricF0), transmissionSelector);
+    vec3 interfaceF90 = mix(
+            vec3(specularSelector), vec3(dielectricF90),
+            transmissionSelector);
+    const float SCHLICK_COSINE_KERNEL_MOMENT = 1.0 / 21.0;
+    vec3 cosineKernelMeanF = interfaceF0
+            + (interfaceF90 - interfaceF0) * SCHLICK_COSINE_KERNEL_MOMENT;
+    float proposalWidth = isDeltaSpecular(surf.R.x)
+            ? 0.0 : clamp(surf.R.x, 0.0, 1.0);
+    vec3 roughInterfaceImportance = max(interfaceF,
+            mix(interfaceF, cosineKernelMeanF, proposalWidth));
     // Probabilities choose a non-zero transport lobe; they are not Fresnel
     // absorption probabilities. In particular, a metal has Cd == 0 and must
     // never spend samples on a zero-valued diffuse branch.
-    float interfaceEnergy = clamp(luma(interfaceF), 0.0, 1.0);
+    float interfaceEnergy = clamp(luma(roughInterfaceImportance), 0.0, 1.0);
     float diffuseBaseEnergy = max(luma(max(surf.Cd, vec3(0.0))), 0.0);
     vec3 transmissionColor = evaluateTransmissionAlbedo(surf);
     float transmissionEnergy = max(luma(max(transmissionColor,

@@ -66,14 +66,14 @@
 #define MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY 4.0 // Disable moment-space history clamping at or below this N_eff. [0.0 1.0 2.0 3.0 4.0 6.0 8.0 12.0 16.0 24.0 32.0]
 // Additive trace variance of the denoiser's intrinsic moment-space error.
 // This is a statistical model parameter in squared-moment units, not a
-// numerical epsilon; it remains outside the temporal alpha-squared term.
-#define MAXENT_TEMPORAL_DENOISER_INTRINSIC_VARIANCE 1e-4
+// numerical epsilon; it is added after the current/history covariance model.
+#define MAXENT_TEMPORAL_DENOISER_INTRINSIC_VARIANCE 1e-10
 
 // -- MaxEnt diffuse temporal accumulation --
-#define MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY 64 // Maximum Kish effective sample count. Higher = smoother but slower response. [1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384]
+#define MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY 256 // Maximum Kish effective sample count. Higher = smoother but slower response. [1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384]
 #define MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT 0.0001 // History confidence below which reprojection is discarded. [0.000001 0.00001 0.0001 0.001 0.01]
 #define MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE 1.0 // Reprojection footprint depth tolerance. [0.25 0.5 0.75 1.0 1.5 2.0 3.0 4.0]
-#define MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE 512.0 // Squared standardized moment-evidence budget for history clamping. [0.5 1.0 2.0 3.0 4.0 5.0 6.0 8.0 10.0 12.0 16.0 24.0 32.0]
+#define MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE 128.0 // Squared standardized robust-current/history moment-evidence budget. [0.5 1.0 2.0 3.0 4.0 5.0 6.0 8.0 10.0 12.0 16.0 24.0 32.0]
 #define MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS 1.0 // Diffuse reprojection footprint radius in pixels. [0.5 1.0 1.5 2.0 3.0]
 
 // -- MaxEnt specular temporal accumulation --
@@ -82,7 +82,7 @@
 #define MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY 64 // Maximum Kish effective sample count. [1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384]
 #define MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD 0.01 // Relative temporal plane threshold. [0.0025 0.005 0.0075 0.01 0.015 0.02 0.03 0.05]
 #define MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION 0.5 // Accepted GGX lobe fraction. [0.25 0.35 0.5 0.65 0.75 0.9]
-#define MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE 512.0 // Squared standardized moment-evidence budget for history clamping. [0.5 1.0 2.0 3.0 4.0 5.0 6.0 8.0 10.0 12.0 16.0 24.0 32.0]
+#define MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE 128.0 // Squared standardized robust-current/history moment-evidence budget. [0.5 1.0 2.0 3.0 4.0 5.0 6.0 8.0 10.0 12.0 16.0 24.0 32.0]
 #define MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS 1.0 // Specular reprojection footprint radius in pixels. [0.5 1.0 1.5 2.0 3.0]
 
 // -- Shared MaxEnt variance preparation (diffuse + specular) --
@@ -110,14 +110,18 @@
 // The fixed final kernel gives about 0.9446 axial and 0.9443 diagonal
 // adjacent correlation. Uniform bilinear phases weight these 0.8 and 0.2.
 #define MAXENT_TEMPORAL_REPROJECTION_CORRELATION 0.9446
-// A fresh temporal observation is independent of the preceding estimator
-// under the sampling model used to define N_eff.
-#define MAXENT_TEMPORAL_INNOVATION_CORRELATION 0.0
 // Surface- and virtual-motion histories have scene-dependent separation. The
 // fixed-kernel adjacent value is only an explicit local-overlap approximation.
 #define MAXENT_SPECULAR_BRANCH_CORRELATION 0.9446
-#define MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY 0.35 // Diffuse variance-normalized moment-space rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
-#define MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY 0.35 // Specular variance-normalized moment-space rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
+// The post-A-Trous 5x5 robust estimator consumes heavily overlapping final
+// kernels. Expanding the six fixed sampling passes while omitting phi and
+// geometry gives about 0.9913 pair correlation within that neighborhood and
+// 0.9981 correlation between its mean response and the center response.
+#define MAXENT_TEMPORAL_ROBUST_PROPAGATION_CORRELATION 0.9913
+// #define MAXENT_TEMPORAL_ROBUST_HISTORY_OVERLAP_CORRELATION 0.9981
+#define MAXENT_TEMPORAL_ROBUST_HISTORY_OVERLAP_CORRELATION 0.0
+#define MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY 0.5 // Diffuse variance-normalized moment-space rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
+#define MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY 0.5 // Specular variance-normalized moment-space rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
 
 // -- Refraction/path-guide spatial compatibility (not MaxEnt filtering) --
 #define MAXENT_SPATIAL_NORMAL_SENSITIVITY 32.0 // Refraction variance-filter texture-normal rejection strength. [1 2 4 8 16 32 64 128]

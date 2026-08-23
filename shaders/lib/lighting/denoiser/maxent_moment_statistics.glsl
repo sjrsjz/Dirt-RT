@@ -44,8 +44,8 @@ float maxentMomentDistanceSq(vec4 a, vec4 b) {
 // This is a closure for the trace cross-covariance, not a claim that the
 // unavailable component-wise covariance matrix has been reconstructed.
 float maxentMomentDifferenceVarianceFromStandardDeviations(
-        float standardDeviationA, float standardDeviationB,
-        float correlation) {
+    float standardDeviationA, float standardDeviationB,
+    float correlation) {
     standardDeviationA = max(standardDeviationA, 0.0);
     standardDeviationB = max(standardDeviationB, 0.0);
     float p = clamp(correlation, -0.125, 1.0);
@@ -65,26 +65,27 @@ float maxentMomentDifferenceVarianceFromStandardDeviations(
 //   Var(sum_i w_i X_i / W)
 //     = ((1-p) Q + p S^2) / W^2.
 float maxentMomentWeightedMeanVariance(float squaredWeightVarianceSum,
-        float weightedStddevSum, float inverseWeightSum,
-        float correlation) {
+    float weightedStddevSum, float inverseWeightSum,
+    float correlation) {
     // -1/8 is conservative for every caller: the largest mixture is the
     // nine-estimator A-Trous pass.  Reprojection callers use positive p.
     float p = clamp(correlation, -0.125, 1.0);
     float numerator = (1.0 - p) * max(squaredWeightVarianceSum, 0.0)
-        + p * weightedStddevSum * weightedStddevSum;
+            + p * weightedStddevSum * weightedStddevSum;
     return max(numerator * inverseWeightSum * inverseWeightSum, 0.0);
 }
 
 float maxentMomentWeightedMeanStandardDeviation(
-        float squaredWeightVarianceSum, float weightedStddevSum,
-        float inverseWeightSum, float correlation) {
+    float squaredWeightVarianceSum, float weightedStddevSum,
+    float inverseWeightSum, float correlation) {
     return sqrt(maxentMomentWeightedMeanVariance(
-        squaredWeightVarianceSum, weightedStddevSum, inverseWeightSum,
-        correlation));
+            squaredWeightVarianceSum, weightedStddevSum, inverseWeightSum,
+            correlation));
 }
 
 float maxentClampHistoryWeightByMomentDifference(float historyWeight,
-    vec4 currentMoment, vec4 historyMoment, float historyStddev,
+    vec4 currentMoment, float currentStddev,
+    vec4 historyMoment, float historyStddev,
     float historySamples, float validWeight, float temporalCurrentWeight,
     float maximumHistory, float tolerance, out float normalizedDistance) {
     normalizedDistance = -1.0;
@@ -94,6 +95,8 @@ float maxentClampHistoryWeightByMomentDifference(float historyWeight,
     //     return historyWeight;
     if (any(isnan(currentMoment)) || any(isinf(currentMoment))
             || any(isnan(historyMoment)) || any(isinf(historyMoment))
+            || !(currentStddev >= 0.0) || isnan(currentStddev)
+            || isinf(currentStddev)
             || !(historyStddev >= 0.0) || isnan(historyStddev)
             || isinf(historyStddev)
             || !(historySamples >= 1.0) || isnan(historySamples)
@@ -104,42 +107,41 @@ float maxentClampHistoryWeightByMomentDifference(float historyWeight,
             || isnan(temporalCurrentWeight)
             || isinf(temporalCurrentWeight)) return historyWeight;
 
-    // In linear moment space T = (1-alpha) H + alpha X implies
-    // |T-H|^2 / alpha^2 = |X-H|^2 exactly.  The compared signals have also
-    // crossed the spatial filter, so applying that identity here is a local
-    // fixed-weight linearization of the data-dependent spatial operator.
-    // If H has N_eff samples, Var(X) ~= N_eff Var(H).  Apply the explicit
-    // trace-covariance closure instead of treating X and H as independent:
-    //
-    //   Var(X-H) ~= Var(H) (N_eff + 1 - 2 p_innovation sqrt(N_eff)).
     float distanceSq = maxentMomentDistanceSq(currentMoment, historyMoment);
-    float currentEquivalentStddev = sqrt(historySamples) * historyStddev;
-    float innovationVariance =
+    // The compared values are the robust current spatial estimator C and the
+    // reprojected previous denoised estimator H. Their standard deviations are
+    // both available, so do not reconstruct sigma_C from N_eff * Var(H).
+    //
+    // C retains (1-alpha) of H. The fixed-kernel overlap constant accounts for
+    // the additional 5x5 current reconstruction versus the history response.
+    // Expressing the known shared-history covariance in correlation form keeps
+    // the same scalar trace-covariance closure used by every spatial pass:
+    //
+    //   Cov(C,H) ~= p_overlap (1-alpha) Var(H)
+    //            = p_CH sigma_C sigma_H.
+    float sharedHistoryWeight = clamp(1.0 - temporalCurrentWeight, 0.0, 1.0);
+    float currentHistoryCorrelation = 0.0;
+    if (currentStddev > 0.0 && historyStddev > 0.0) {
+        currentHistoryCorrelation = clamp(
+                MAXENT_TEMPORAL_ROBUST_HISTORY_OVERLAP_CORRELATION
+                    * sharedHistoryWeight * historyStddev / currentStddev,
+                -0.125, 1.0);
+    }
+    float observedDifferenceVariance =
         maxentMomentDifferenceVarianceFromStandardDeviations(
-        currentEquivalentStddev, historyStddev,
-        MAXENT_TEMPORAL_INNOVATION_CORRELATION);
-    float alpha2 = temporalCurrentWeight * temporalCurrentWeight;
-    // The observed difference is between two already-denoised states. Model
-    // the denoiser/reprojection residual as an additive trace variance after
-    // the temporal mixture; unlike source innovation, it is not scaled by
-    // alpha^2. Its positive value also prevents a degenerate denominator, but
-    // that numerical consequence is not the parameter's statistical meaning.
-    float observedDifferenceVariance = alpha2 * innovationVariance
-        + MAXENT_TEMPORAL_DENOISER_INTRINSIC_VARIANCE;
-    normalizedDistance = sqrt(distanceSq / observedDifferenceVariance);
+            currentStddev, historyStddev, currentHistoryCorrelation)
+            + MAXENT_TEMPORAL_DENOISER_INTRINSIC_VARIANCE;
+    float normalizedDistanceSq = distanceSq / observedDifferenceVariance;
+    normalizedDistance = sqrt(normalizedDistanceSq);
     if (isnan(normalizedDistance) || isinf(normalizedDistance)) {
         normalizedDistance = -1.0;
         return historyWeight;
     }
 
-    // This trace-normalized discrepancy has unit expectation under a correct
-    // stationary covariance model, but it is not a chi-square/Wald statistic:
-    // the component-wise covariance shape is not identifiable from E[R^2].
-    // tolerance is a squared standardized-evidence budget.  Solving
-    // N * delta^2 / sigma^2 <= tolerance gives the retained-history cap.
-    float historyCap = min(tolerance
-        / max(normalizedDistance * normalizedDistance, 1e-10),
-        maximumHistory);
+    // // Only trace variance is identifiable from E[R^2], so this remains a
+    // // trace-standardized evidence measure rather than a chi-square/Wald test.
+    float historyCap = min(
+            tolerance * exp(-min(0.25*(normalizedDistanceSq), 80.0)), maximumHistory);
     return min(historyWeight, historyCap);
 }
 

@@ -132,7 +132,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         vec3 microNormal = macroNormal;
         #elif defined(FIRST_LOBE_REFLECTION)
         vec3 microNormal = macroNormal;
-        if (lobes.P_spec > 1e-8 && !isDeltaSpecular(surf.R.x))
+        if (!isDeltaSpecular(surf.R.x))
             microNormal = GGXVNDFNormal(macroNormal, -fb.rd_i, surf.R.x,
                 rtBlueNoise2D(xy, 0u));
         #else
@@ -155,7 +155,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         current_type = REFLECTION;
         bool firstDelta;
         handleFirstBounce_Reflection(fb.rd_i, ro_o, macroNormal,
-            geometryNormal, microNormal, surf, lobes, rs, bsdf_weight,
+            geometryNormal, microNormal, surf, rs, bsdf_weight,
             next_rd, lastBsdfStrategyPdf, firstDelta);
         lastBsdfDelta = firstDelta;
         lastNeeCompatible = true;
@@ -187,7 +187,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
         bool firstHasSunNee = (current_type == DIFFUSION
                     && lobes.P_diff > 1e-8)
-                || (current_type == REFLECTION && lobes.P_spec > 1e-8
+                || (current_type == REFLECTION
                     && !isDeltaSpecular(surf.R.x));
         if (!isDarkened && firstHasSunNee) {
             vec3 sunWi, sunLi;
@@ -326,7 +326,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             current_type = REFLECTION;
             bool firstDelta;
             handleFirstBounce_Reflection(rd_i, ro_o, macroNormal, geometryNormal, microNormal,
-                surf, lobes, rs, bsdf_weight, next_rd,
+                surf, rs, bsdf_weight, next_rd,
                 lastBsdfStrategyPdf, firstDelta);
             lastBsdfDelta = firstDelta;
             lastNeeCompatible = true;
@@ -363,7 +363,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         // --- NEE at depth 0 ---
         bool firstHasSunNee = (current_type == DIFFUSION
                     && lobes.P_diff > 1e-8)
-                || (current_type == REFLECTION && lobes.P_spec > 1e-8
+                || (current_type == REFLECTION
                     && !isDeltaSpecular(surf.R.x));
         if (!isDarkened && firstHasSunNee) {
             vec3 sunWi, sunLi;

@@ -8,7 +8,8 @@
 // Dedicated per-pixel diagnostic records. Debug producers never borrow a
 // production buffer, so changing DEBUG_VIEW cannot change renderer data flow.
 // COMMON: x=encoded reflection sample direction, y=diffuse standardized
-// moment distance, z=specular standardized moment distance,
+// robust-current/history moment distance, z=specular robust-current/history
+// moment distance,
 // w=packHalf2x16(diffuse/specular variance-prepare stddev).
 // SPECULAR_TEMPORAL: xyz=packed MaxEnt, w=FP16x2
 // hit distance/history contribution.

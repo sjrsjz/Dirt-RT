@@ -164,8 +164,8 @@ option.MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT.comment = History below this c
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE = Reprojection Depth Scale
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE.comment = Scales the depth half-extent of the temporal reprojection footprint trapezoid. Higher values accept history samples that are farther off the reconstructed surface plane, reducing resets but potentially leaking across thin geometry.
 
-option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE = History Difference Tolerance
-option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE.comment = Squared standardized moment-evidence budget used by diffuse history clamping. A value of 16 is the four-sigma-equivalent budget; higher values retain more history.
+option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE = Robust History Difference Tolerance
+option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE.comment = Squared standardized moment evidence between reprojected history and the current one-step 5x5 Gaussian-reweighted mean. Higher values retain more diffuse history.
 
 option.MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS = Diffuse Reprojection Radius
 option.MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS.comment = Diffuse temporal footprint radius in pixels. Larger values accept wider path reprojection motion.
@@ -182,8 +182,8 @@ option.MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD.comment = Relative plane-
 option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION = Lobe Fraction
 option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION.comment = Portion of the GGX lobe accepted during temporal reprojection. Lower values reject more history around view-dependent reflection changes.
 
-option.MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE = History Difference Tolerance
-option.MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE.comment = Squared standardized moment-evidence budget used by specular history clamping. A value of 16 is the four-sigma-equivalent budget; higher values retain more history.
+option.MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE = Robust History Difference Tolerance
+option.MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE.comment = Squared standardized moment evidence between reprojected history and the current one-step 5x5 Gaussian-reweighted mean. Higher values retain more specular history.
 
 option.MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS = Specular Reprojection Radius
 option.MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS.comment = Specular temporal footprint radius in pixels. Larger values accept wider reflection reprojection motion.
@@ -288,9 +288,9 @@ value.DEBUG_VIEW.19 = Refr. VirtDist
 value.DEBUG_VIEW.20 = Path Guide
 value.DEBUG_VIEW.21 = Temporal Raw
 value.DEBUG_VIEW.22 = Radiance Cache
-value.DEBUG_VIEW.23 = Denoised Diffuse Temporal Difference
+value.DEBUG_VIEW.23 = Robust Diffuse Temporal Difference
 value.DEBUG_VIEW.24 = Denoised Virtual Normal
-value.DEBUG_VIEW.25 = Denoised Specular Temporal Difference
+value.DEBUG_VIEW.25 = Robust Specular Temporal Difference
 value.DEBUG_VIEW.26 = Diffuse Variance Preparation
 value.DEBUG_VIEW.27 = Specular Variance Preparation
 value.DEBUG_VIEW.31 = Cache Latest Raw
