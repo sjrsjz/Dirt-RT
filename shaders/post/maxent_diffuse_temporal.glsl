@@ -1,7 +1,7 @@
 #version 430 core
 
 // ===========================================================================
-// MaxEnt diffuse temporal accumulation.
+// MaxEnt diffuse history reprojection and current-only denoiser input build.
 // ===========================================================================
 
 // A 128-thread group admits another resident block when registers are the
@@ -17,7 +17,7 @@ layout(rgba32ui) uniform writeonly uimage2D colorimg6;
 #include "/lib/buffers/buffer_io.glsl"
 #include "/lib/lighting/maxent.glsl"
 #include "/lib/lighting/denoiser/maxent_spatial_signal.glsl"
-#include "/lib/lighting/denoiser/maxent_temporal_statistics.glsl"
+#include "/lib/math/statistics.glsl"
 
 uniform vec2 resolution;
 
@@ -195,33 +195,24 @@ bool strictHistoryGeometryTestFast(vec3 historyPosition, TemporalFootprintFast f
 // 时域累积核心
 // ===========================================================================
 
-float maxentDiffuseTemporalCurrentWeightForTargetSamples(float historySamples,
-    float targetSamples) {
-    float Nh = max(historySamples, 1.0);
-    float Nt = clamp(targetSamples, 1.0, Nh + 1.0);
-    float radicand = Nh * max(Nh + 1.0 - Nt, 0.0) / max(Nt, 1e-8);
-    return clamp((1.0 + sqrt(max(radicand, 0.0))) / (Nh + 1.0), 0.0, 1.0);
-}
-
 void resetToCurrentSample() {
     output_weight = 1.0;
     unpackCurrentLight(outputMaxEnt, outputMeanY2);
 }
 
-void publishDenoisedReprojection(vec4 weightedMaxEntY,
+void publishDenoisedReprojection(vec4 weightedMaxEntY, vec2 weightedCoCg,
     float squaredWeightVarianceSum, float weightedStddevSum,
-    float validWeight, float historySamples, float temporalCurrentWeight) {
+    float validWeight) {
     float inverseWeight = 1.0 / validWeight;
-    float standardDeviation = maxentMomentWeightedMeanStandardDeviation(
+    float standardDeviation = statisticsWeightedMeanStandardDeviation(
         squaredWeightVarianceSum, weightedStddevSum, inverseWeight,
         MAXENT_TEMPORAL_REPROJECTION_CORRELATION);
     writeDiffuseDenoisedReprojection(
         gl_GlobalInvocationID.xy,
         weightedMaxEntY * inverseWeight,
+        weightedCoCg * inverseWeight,
         standardDeviation,
-        historySamples,
-        validWeight,
-        temporalCurrentWeight
+        validWeight
     );
 }
 
@@ -230,6 +221,7 @@ void MixDiffuse() {
             any(greaterThan(prevScreenPos, vec3(1.0)))) {
         writeDiffuseDenoisedReprojectionInvalid(gl_GlobalInvocationID.xy);
         resetToCurrentSample();
+        imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), uvec4(0u));
         return;
     }
 
@@ -237,6 +229,7 @@ void MixDiffuse() {
     if (!buildTemporalFootprintFast(currentPosition, geometryNormal, cameraDelta, fp)) {
         writeDiffuseDenoisedReprojectionInvalid(gl_GlobalInvocationID.xy);
         resetToCurrentSample();
+        imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), uvec4(0u));
         return;
     }
 
@@ -245,15 +238,13 @@ void MixDiffuse() {
     vec2 prevFrac = fract(prevCoord);
 
     MaxEntEncoding accumMaxEnt = init_maxent();
-    float accumMeanY2 = 0.0;
     float validKernelWeight = 0.0;
-    float sumWeightOverSamples = 0.0;
-    float accumulatedHistoryEvidence = 0.0;
+    float sumWeightOverRootSamples = 0.0;
+    float weightedEstimatorStddev = 0.0;
     vec4 denoisedMaxEntY = vec4(0.0);
+    vec2 denoisedCoCg = vec2(0.0);
     float denoisedSquaredWeightVariance = 0.0;
     float denoisedWeightedStddev = 0.0;
-
-    float currVoN = dot(normalize(currentPosition), geometryNormal);
 
     for (int i = 0; i < 4; i++) {
         ivec2 sampleTexel = prevBase + ivec2(i & 1, i >> 1);
@@ -266,7 +257,7 @@ void MixDiffuse() {
         uvec4 packedHistory = diffuseBuffer.data[addr(DIF_N_HIST, historyTexel)];
         vec2 historyMeta = unpackHalf2x16(packedHistory.w);
 
-        if (historyMeta.x < MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT) continue;
+        if (!statisticsValidEffectiveSampleCount(historyMeta.x)) continue;
 
         uvec4 packedGeometry = readDiffuseHistGeoRaw(historyTexel);
 
@@ -287,24 +278,7 @@ void MixDiffuse() {
         uvec4 denoisedWords = readDiffuseDenoisedPreviousRaw(historyTexel);
         if (!denoiserSpatialSignalWordsValid(denoisedWords)) continue;
 
-        float d1_sq = dot(historyPosition, historyPosition);
-        vec3 histPosCur = historyPosition - cameraDelta;
-        float d2_sq = dot(histPosCur, histPosCur);
-        float histVoN = dot(normalize(histPosCur), geometryNormal);
-
-        float scale = clamp(d2_sq * abs(histVoN) / max(d1_sq * abs(currVoN), 1e-3), 0.0, 1.0);
-
-        float tapEvidence = clamp(
-                geometryHistoryWeight,
-                0.0,
-                float(MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY)
-            );
-
-        float tapSamples = clamp(
-                geometryHistoryWeight,
-                1.0,
-                float(MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY)
-            );
+        float tapSamples = historyMeta.x;
 
         float bilinearX = (i & 1) == 0 ? 1.0 - prevFrac.x : prevFrac.x;
         float bilinearY = (i & 2) == 0 ? 1.0 - prevFrac.y : prevFrac.y;
@@ -317,6 +291,7 @@ void MixDiffuse() {
 
         float tapDenoisedStddev = unpackHalf2x16(denoisedWords.w).x;
         denoisedMaxEntY += tapWeight * tapDenoisedMaxEntY;
+        denoisedCoCg += tapWeight * unpackHalf2x16(denoisedWords.z);
         denoisedSquaredWeightVariance += tapWeight * tapWeight
             * tapDenoisedStddev * tapDenoisedStddev;
         denoisedWeightedStddev += tapWeight * tapDenoisedStddev;
@@ -329,14 +304,26 @@ void MixDiffuse() {
                 ),
                 vec4(-65504.0),
                 vec4(65504.0)
-            );
+        );
         tapMaxEnt.CoCg = unpackHalf2x16(packedHistory.z);
+        if (any(isnan(tapMaxEnt.maxEntY))
+                || any(isinf(tapMaxEnt.maxEntY))
+                || any(isnan(tapMaxEnt.CoCg))
+                || any(isinf(tapMaxEnt.CoCg)))
+            continue;
+        tapMaxEnt = sanitizeDiffuseMaxEntEncoding(tapMaxEnt);
 
         accumulate_maxent(accumMaxEnt, tapMaxEnt, tapWeight);
-        accumMeanY2 += tapWeight * historyMeta.y * historyMeta.y;
+        float tapMeanY2 = historyMeta.y * historyMeta.y;
+        float tapEstimatorVariance =
+            statisticsEstimatorVarianceFromMoments(
+                2.0 * tapMeanY2, tapMaxEnt.maxEntY, tapSamples);
+        // N=1 carries no identifiable within-pixel variance. Its zero term is
+        // intentionally completed by the cold-start spatial variance pool.
+        weightedEstimatorStddev += tapWeight
+            * sqrt(tapEstimatorVariance);
         validKernelWeight += tapWeight;
-        sumWeightOverSamples += tapWeight / tapSamples;
-        accumulatedHistoryEvidence += tapWeight * tapEvidence * scale;
+        sumWeightOverRootSamples += tapWeight * inversesqrt(tapSamples);
     }
 
     if (validKernelWeight < 1e-5) {
@@ -346,71 +333,64 @@ void MixDiffuse() {
         return;
     }
 
-    MaxEntEncoding histMaxEnt = scale_maxent(accumMaxEnt, 1.0 / validKernelWeight);
+    float inverseKernelWeight = 1.0 / validKernelWeight;
+    MaxEntEncoding histMaxEnt = scale_maxent(
+        accumMaxEnt, inverseKernelWeight);
 
-    float historySamples = maxentTemporalReprojectedEffectiveSamples(
-            validKernelWeight,
-            sumWeightOverSamples,
-            float(MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY)
-        );
+    float historySamples = statisticsReconstructedEffectiveSampleCount(
+        validKernelWeight, sumWeightOverRootSamples);
 
-    float historyEvidence = clamp(
-            accumulatedHistoryEvidence / validKernelWeight,
-            0.0,
-            float(MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY)
-        );
-
-    float histMeanY2 = accumMeanY2 / validKernelWeight;
-
-    if (historySamples < 1.0 ||
-            historyEvidence <= MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT) {
+    if (!statisticsValidEffectiveSampleCount(historySamples)) {
         writeDiffuseDenoisedReprojectionInvalid(gl_GlobalInvocationID.xy);
         resetToCurrentSample();
         imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), uvec4(0u));
         return;
     }
 
-    float maximumSamples = max(float(MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY), 1.0);
-    float retainedHistoryEvidence = min(historyEvidence, historySamples);
-
-    float targetSamples = min(
-            retainedHistoryEvidence + 1.0,
-            min(maximumSamples, historySamples + 1.0)
-        );
-
-    float curAlpha = maxentDiffuseTemporalCurrentWeightForTargetSamples(
-            historySamples,
-            max(targetSamples, 1.0)
-        );
-
-    publishDenoisedReprojection(
-        denoisedMaxEntY,
-        denoisedSquaredWeightVariance,
-        denoisedWeightedStddev,
-        validKernelWeight,
-        historySamples,
-        curAlpha
-    );
-
-    output_weight = maxentTemporalUpdatedEffectiveSamples(
-            historySamples,
-            curAlpha,
-            maximumSamples
-        );
+    // Bilinear reprojection reconstructs one fully correlated estimator
+    // field. Propagate its estimator variance first, then rebuild E[R^2] so
+    // it remains statistically consistent with the reconstructed mean and N.
+    float historyEstimatorVariance = statisticsWeightedMeanVariance(
+        0.0, weightedEstimatorStddev, inverseKernelWeight, 1.0);
+    float histMeanY2 = 0.5
+        * statisticsExpectedSquaredNormFromEstimatorVariance(
+            histMaxEnt.maxEntY, historyEstimatorVariance, historySamples);
+    // E[R^2] >= E[R]^2 is the scalar realizability constraint. It also
+    // retains the minimum angular variance required when E[R u] contracts.
+    histMeanY2 = max(histMeanY2,
+        histMaxEnt.maxEntY.w * histMaxEnt.maxEntY.w);
 
     MaxEntEncoding currentMaxEnt;
     float currentMeanY2;
     unpackCurrentLight(currentMaxEnt, currentMeanY2);
-
-    outputMeanY2 = mix(histMeanY2, currentMeanY2, curAlpha);
-    outputMaxEnt = curAlpha >= 0.9999
-        ? currentMaxEnt : mix_maxent(histMaxEnt, currentMaxEnt, curAlpha);
-
-    imageStore(
-        colorimg6,
-        ivec2(gl_GlobalInvocationID.xy),
-        uvec4(floatBitsToUint(validKernelWeight), 0u, 0u, 0u)
+    publishDenoisedReprojection(
+        denoisedMaxEntY,
+        denoisedCoCg,
+        denoisedSquaredWeightVariance,
+        denoisedWeightedStddev,
+        validKernelWeight
     );
+
+    // Build the provisional estimator requested by the late-resolve pipeline:
+    // one independent current observation is provisionally inserted into the
+    // reprojected history.  Variance preparation must see this growing Kish
+    // estimator; feeding it Neff=1 every frame permanently locks the spatial
+    // denoiser in its blurry cold-start regime.
+    // Diagnostic fixed-alpha mode: the provisional estimator must use the
+    // same alpha that final resolve later commits to Raw and denoised history.
+    float proposalAlpha = clamp(
+        float(MAXENT_TEMPORAL_FIXED_ALPHA), 0.0, 1.0);
+    output_weight = statisticsKishUpdateEffectiveSampleCount(
+        historySamples, proposalAlpha);
+    outputMeanY2 = mix(histMeanY2, currentMeanY2, proposalAlpha);
+    outputMaxEnt = mix_maxent(histMaxEnt, currentMaxEnt, proposalAlpha);
+
+    // Keep the raw reprojected temporal estimator alive until final resolve.
+    // DIF_N_SWAP/colortex4 contains the provisional estimator above; resolve
+    // later commits the estimator selected by the actual response alpha.
+    imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy),
+        packDiffuseTemporalState(histMaxEnt, historySamples,
+            sqrt(max(histMeanY2, 0.0))));
 }
 
 // ===========================================================================

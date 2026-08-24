@@ -5,6 +5,7 @@
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/buffer_io.glsl"
+#include "/lib/math/statistics.glsl"
 
 float maxentPerceptualRoughness(float ggxAlpha) {
     return sqrt(clamp(ggxAlpha, 0.0, 1.0));
@@ -130,14 +131,6 @@ MaxEntTemporalSignal maxentUnpackTemporal(uvec4 p) {
     s.rootMeanY2 = sanitizeRootMeanSquareFP16(momentHistory.x);
     s.historyLength = max(momentHistory.y, 0.0);
     return s;
-}
-
-uvec4 maxentPackTemporalAux(float hitDistance) {
-    return uvec4(maxentPackHalf2(hitDistance, 0.0), 0u, 0u, 0u);
-}
-
-float maxentUnpackTemporalHitDistance(uvec4 p) {
-    return max(unpackHalf2x16(p.x).x, 0.0);
 }
 
 float maxentSpecLobeTanHalfAngle(float roughness, float volumeFraction) {

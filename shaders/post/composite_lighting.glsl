@@ -54,10 +54,10 @@ float logDistNorm(float d) {
 }
 
 #if DEBUG_VIEW == 23 || DEBUG_VIEW == 25
-vec3 debugDenoisedTemporalDifference(float normalizedDistance) {
-    if (!(normalizedDistance >= 0.0) || isnan(normalizedDistance) || isinf(normalizedDistance))
+vec3 debugTemporalVarianceOptimalAlpha(float optimalAlpha) {
+    if (!(optimalAlpha >= 0.0) || isnan(optimalAlpha) || isinf(optimalAlpha))
         return vec3(1.0, 0.0, 1.0);
-    return jetColormap(1.0 - exp2(-0.5 * min(normalizedDistance, 32.0)));
+    return jetColormap(clamp(optimalAlpha, 0.0, 1.0));
 }
 #endif
 
@@ -231,13 +231,13 @@ void main() {
 
     #if DEBUG_VIEW == 23
     fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0)
-        : debugDenoisedTemporalDifference(
-            debugReadDiffuseDenoisedDifference(xy));
+        : debugTemporalVarianceOptimalAlpha(
+            debugReadDiffuseVarianceOptimalAlpha(xy));
     return;
     #elif DEBUG_VIEW == 25
     fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0)
-        : debugDenoisedTemporalDifference(
-            debugReadSpecularDenoisedDifference(xy));
+        : debugTemporalVarianceOptimalAlpha(
+            debugReadSpecularVarianceOptimalAlpha(xy));
     return;
     #elif DEBUG_VIEW == 26
     fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0)
@@ -409,8 +409,10 @@ void main() {
     }
 
     #elif DEBUG_VIEW == 13
-    // Diffuse temporal accumulation weight (heatmap) — N_eff / MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY
-    fragColor.xyz = jetColormap(clamp(tmp.weight / MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY, 0.0, 1.0));
+    // Logarithmic diffuse Kish N_eff: blue=1, red>=64. The optimal-MSE
+    // controller has no configured target history window.
+    fragColor.xyz = jetColormap(clamp(
+        log2(max(tmp.weight, 1.0)) / 6.0, 0.0, 1.0));
 
     #elif DEBUG_VIEW == 14
     // Actual temporal history contribution to the reflection radiance.

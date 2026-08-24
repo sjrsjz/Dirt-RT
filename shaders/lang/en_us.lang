@@ -152,20 +152,11 @@ option.RADIANCE_CACHE_RIS_GUIDING_KAPPA.comment = Concentration of the continuou
 # ===========================================================================
 # MaxEnt Diffuse Temporal
 # ===========================================================================
-option.MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY = Moment Cold-start History
-option.MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY.comment = Moment-space history clamping is disabled while the reprojected effective sample count is at or below this value.
-
 option.MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY = Max History Samples
-option.MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY.comment = Maximum effective diffuse history sample count. Higher values are smoother but react more slowly to lighting changes and disocclusion.
-
-option.MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT = Min History Weight
-option.MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT.comment = History below this confidence is discarded. Raise it to reset weak history sooner; lower it to preserve sparse history longer.
+option.MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY.comment = Finite-window Kish effective sample count for diffuse history. Before this window the minimum current weight is 1/(N+1); at the window it becomes 2/(N+1), preventing frozen history without directly clamping N.
 
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE = Reprojection Depth Scale
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE.comment = Scales the depth half-extent of the temporal reprojection footprint trapezoid. Higher values accept history samples that are farther off the reconstructed surface plane, reducing resets but potentially leaking across thin geometry.
-
-option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE = Robust History Difference Tolerance
-option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE.comment = Squared standardized moment evidence between reprojected history and the current one-step 5x5 Gaussian-reweighted mean. Higher values retain more diffuse history.
 
 option.MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS = Diffuse Reprojection Radius
 option.MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS.comment = Diffuse temporal footprint radius in pixels. Larger values accept wider path reprojection motion.
@@ -174,16 +165,13 @@ option.MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS.comment = Diffuse temporal fo
 # MaxEnt Specular Temporal
 # ===========================================================================
 option.MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY = Max History Samples
-option.MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY.comment = Maximum Kish effective sample count of reflection history. Statistical difference rejection automatically shortens it during real changes.
+option.MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY.comment = Finite-window Kish effective sample count for reflection history. Before this window the minimum current weight is 1/(N+1); at the window it becomes 2/(N+1), preventing frozen history without directly clamping N.
 
 option.MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD = Disocclusion Threshold
 option.MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD.comment = Relative plane-distance tolerance for reprojected surfaces. Lower values reject more history; higher values can leak history across thin geometry.
 
 option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION = Lobe Fraction
 option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION.comment = Portion of the GGX lobe accepted during temporal reprojection. Lower values reject more history around view-dependent reflection changes.
-
-option.MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE = Robust History Difference Tolerance
-option.MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE.comment = Squared standardized moment evidence between reprojected history and the current one-step 5x5 Gaussian-reweighted mean. Higher values retain more specular history.
 
 option.MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS = Specular Reprojection Radius
 option.MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS.comment = Specular temporal footprint radius in pixels. Larger values accept wider reflection reprojection motion.
@@ -278,7 +266,7 @@ value.DEBUG_VIEW.9 = RT Spatial Mean HitDist
 value.DEBUG_VIEW.10 = Specular Albedo
 value.DEBUG_VIEW.11 = Roughness
 value.DEBUG_VIEW.12 = Refl. Temporal Only
-value.DEBUG_VIEW.13 = Diffuse Weight
+value.DEBUG_VIEW.13 = Diffuse Kish Effective Samples
 value.DEBUG_VIEW.14 = Reflect History Contribution
 value.DEBUG_VIEW.15 = Refract Weight
 value.DEBUG_VIEW.16 = Surface Emission
@@ -288,9 +276,9 @@ value.DEBUG_VIEW.19 = Refr. VirtDist
 value.DEBUG_VIEW.20 = Path Guide
 value.DEBUG_VIEW.21 = Temporal Raw
 value.DEBUG_VIEW.22 = Radiance Cache
-value.DEBUG_VIEW.23 = Robust Diffuse Temporal Difference
+value.DEBUG_VIEW.23 = Diffuse Variance-Optimal Alpha
 value.DEBUG_VIEW.24 = Denoised Virtual Normal
-value.DEBUG_VIEW.25 = Robust Specular Temporal Difference
+value.DEBUG_VIEW.25 = Specular Variance-Optimal Alpha
 value.DEBUG_VIEW.26 = Diffuse Variance Preparation
 value.DEBUG_VIEW.27 = Specular Variance Preparation
 value.DEBUG_VIEW.31 = Cache Latest Raw

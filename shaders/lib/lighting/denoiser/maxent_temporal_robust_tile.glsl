@@ -1,9 +1,11 @@
 #ifndef MAXENT_TEMPORAL_ROBUST_TILE_GLSL
 #define MAXENT_TEMPORAL_ROBUST_TILE_GLSL
 
-// Both history-resolve programs use 16x16 workgroups. A two-pixel halo gives
-// each invocation a complete 5x5 neighborhood while every source texel and
-// geometry record is fetched from global memory only once per workgroup.
+// Both history-resolve programs use 16x16 workgroups. The including pass
+// supplies maxentTemporalRobustLoadSignalWords(), which reads the independently
+// current-frame-filtered branch rather than the temporally premixed proposal.
+// A two-pixel halo gives each invocation a complete 5x5 neighborhood while
+// every source signal and geometry record is fetched only once per workgroup.
 const int MAXENT_TEMPORAL_ROBUST_GROUP_SIZE = 16;
 const int MAXENT_TEMPORAL_ROBUST_RADIUS = 2;
 const int MAXENT_TEMPORAL_ROBUST_DIAMETER = 5;
@@ -48,7 +50,7 @@ void maxentTemporalRobustLoadSharedTile() {
         bool validPixel = all(greaterThanEqual(pixel, ivec2(0)))
             && all(lessThan(pixel, imageSize));
         maxentTemporalRobustSignalTile[tileIndex] = validPixel
-            ? texelFetch(colortex4, pixel, 0)
+            ? maxentTemporalRobustLoadSignalWords(pixel)
             : denoiserInvalidMaxEntSignalWords();
         maxentTemporalRobustGeometryTile[tileIndex] = validPixel
             ? readPrimaryGeometryWords(uvec2(pixel))
@@ -92,10 +94,9 @@ bool maxentTemporalRobustMaskContains(uint acceptedMask, int sampleIndex) {
 }
 
 // The caller constructs acceptedMask while performing geometry rejection once.
-// The two reconstruction sweeps then read only shared signal data: first the
-// scalar population variance, then one isotropic Gaussian reweighted mean.
-// The same frozen weights propagate the estimator trace variance; omitting
-// this step would compare the robust current mean using history noise alone.
+// The two reconstruction sweeps then read only shared denoiser output: first
+// the scalar population variance, then one isotropic Gaussian reweighted mean.
+// The same frozen weights propagate the supplied estimator trace variance.
 MaxEntTemporalRobustEstimate maxentTemporalGaussianReweightedTileEstimate(
         uint acceptedMask, int sampleCount, vec4 momentSum,
         vec4 fallbackMoment, float fallbackStandardDeviation) {
@@ -127,7 +128,7 @@ MaxEntTemporalRobustEstimate maxentTemporalGaussianReweightedTileEstimate(
     scalarVariance /= float(sampleCount);
     float inverseSampleCount = 1.0 / float(sampleCount);
     estimate.moment = initialMean;
-    estimate.standardDeviation = maxentMomentWeightedMeanStandardDeviation(
+    estimate.standardDeviation = statisticsWeightedMeanStandardDeviation(
         initialSquaredWeightVarianceSum, initialWeightedStddevSum,
         inverseSampleCount,
         MAXENT_TEMPORAL_ROBUST_PROPAGATION_CORRELATION);
@@ -165,7 +166,7 @@ MaxEntTemporalRobustEstimate maxentTemporalGaussianReweightedTileEstimate(
     if (any(isnan(reweightedMean)) || any(isinf(reweightedMean)))
         return estimate;
     estimate.moment = reweightedMean;
-    estimate.standardDeviation = maxentMomentWeightedMeanStandardDeviation(
+    estimate.standardDeviation = statisticsWeightedMeanStandardDeviation(
         squaredWeightVarianceSum, weightedStddevSum, 1.0 / weightSum,
         MAXENT_TEMPORAL_ROBUST_PROPAGATION_CORRELATION);
     return estimate;

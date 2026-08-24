@@ -21,12 +21,48 @@
 // N=8: Macro normal, diffuse material, motion and denoised-history difference.
 // N=9: Alternate history geometry for race-free frame ping-pong.
 // N=10..11: Exact previous/current denoiser RGBA32UI output ping-pong.
+// N=12..13: Shared independent-current spatial-filter ping-pong. Diffuse and
+// reflection execute serially and reuse these transient planes.
 //
 // .w lane uses packHalf2x16: Kish N_eff:f16 + rootMeanY2:f16.
 // Storage APIs accept sqrt(E[Y²]) directly. Arithmetic code squares it only
 // where linear second-moment operations require E[Y²].
 // Current position, geometry normal and validity come from compact primary
 // geometry; a negative primary distance is the only sky/no-surface marker.
+
+vec2 sanitizeDiffuseYCoCg(float Y, vec2 CoCg) {
+    float t = Y - CoCg.y;
+    vec3 rgb = vec3(t + CoCg.x, Y + CoCg.y, t - CoCg.x);
+    if (all(greaterThanEqual(rgb, vec3(0.0)))) return CoCg;
+
+    // FP16 quantization or mismatched legacy history can leave the fixed-Y
+    // chroma plane outside the nonnegative RGB cone. Project it back while
+    // preserving Y, then re-encode the same linear CoCg coordinates.
+    rgb = max(rgb, vec3(0.0));
+    float projectedY = dot(rgb, vec3(0.25, 0.5, 0.25));
+    rgb = projectedY > 1e-20 ? rgb * (Y / projectedY) : vec3(Y);
+    return vec2(0.5 * (rgb.r - rgb.b),
+        -0.25 * rgb.r + 0.5 * rgb.g - 0.25 * rgb.b);
+}
+
+MaxEntEncoding sanitizeDiffuseMaxEntEncoding(MaxEntEncoding maxent) {
+    if (any(isnan(maxent.maxEntY)) || any(isinf(maxent.maxEntY))
+            || any(isnan(maxent.CoCg)) || any(isinf(maxent.CoCg))
+            || !(maxent.maxEntY.w > 0.0))
+        return init_maxent();
+    maxent.maxEntY.w = min(maxent.maxEntY.w, 65504.0);
+    float directionalLengthSquared = dot(
+        maxent.maxEntY.xyz, maxent.maxEntY.xyz);
+    if (directionalLengthSquared
+            > maxent.maxEntY.w * maxent.maxEntY.w
+            && directionalLengthSquared > 0.0)
+        maxent.maxEntY.xyz *= maxent.maxEntY.w
+            * inversesqrt(directionalLengthSquared);
+    maxent.CoCg = sanitizeDiffuseYCoCg(maxent.maxEntY.w, maxent.CoCg);
+    maxent.CoCg = clamp(maxent.CoCg,
+        vec2(-65504.0), vec2(65504.0));
+    return maxent;
+}
 
 // Active twelve-plane layout. Current geometry is owned by geomBuffer and is
 // reconstructed from pixel + RT projection and F32 distance; it is not
@@ -45,6 +81,8 @@
 #define DIF_N_HISTGEO_ALT      9u
 #define DIF_N_DENOISED_A      10u
 #define DIF_N_DENOISED_B      11u
+#define DIF_N_CURRENT_A       12u
+#define DIF_N_CURRENT_B       13u
 
 uint diffuseHistoryGeometryWritePlane() {
     return (uint(frame_id) & 1u) == 0u ? DIF_N_HISTGEO : DIF_N_HISTGEO_ALT;
@@ -64,7 +102,7 @@ uint diffuseDenoisedReadPlane() {
 
 uint packDiffuseHistoryWeightStamp(float historyWeight) {
     if (!(historyWeight >= 0.0) || isinf(historyWeight)) historyWeight = 0.0;
-    uint packedWeight = packHalf2x16(vec2(min(historyWeight, 65504.0), 0.0)) & 0xffffu;
+    uint packedWeight = packHalf2x16(vec2(historyWeight, 0.0)) & 0xffffu;
     return packedWeight | ((uint(frame_id) & 0xffffu) << 16u);
 }
 
@@ -86,24 +124,88 @@ uvec4 readDiffuseDenoisedPreviousRaw(uvec2 xy) {
     return diffuseBuffer.data[addr(diffuseDenoisedReadPlane(), xy)];
 }
 
+void writeDiffuseIndependentCurrentA(uvec2 xy, uvec4 words) {
+    diffuseBuffer.data[addr(DIF_N_CURRENT_A, xy)] = words;
+}
+
+void writeDiffuseIndependentCurrentB(uvec2 xy, uvec4 words) {
+    diffuseBuffer.data[addr(DIF_N_CURRENT_B, xy)] = words;
+}
+
+uvec4 readDiffuseIndependentCurrentA(uvec2 xy) {
+    return diffuseBuffer.data[addr(DIF_N_CURRENT_A, xy)];
+}
+
+uvec4 readDiffuseIndependentCurrentB(uvec2 xy) {
+    return diffuseBuffer.data[addr(DIF_N_CURRENT_B, xy)];
+}
+
 // Before history resolve, the current parity is scratch for the previous
 // denoised signal reprojected by the real diffuse temporal pass. Resolve reads
 // it once, then replaces it with the exact current colortex4 words. Scratch z
-// stores (history N_eff, valid mass), while w stores (filtered stddev, current alpha).
-void writeDiffuseDenoisedReprojection(uvec2 xy, vec4 maxEntY,
-        float standardDeviation,
-        float historySamples, float validWeight, float temporalCurrentWeight) {
+// stores the CoCg belonging to the same denoised estimator as maxEntY; w stores
+// (filtered stddev, valid reprojection mass). Raw scratch separately owns N_eff.
+void writeDiffuseDenoisedReprojection(uvec2 xy, vec4 maxEntY, vec2 CoCg,
+        float standardDeviation, float validWeight) {
     diffuseBuffer.data[addr(diffuseDenoisedWritePlane(), xy)] = uvec4(
         packHalf2x16(clamp(maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(vec2(min(historySamples, 65504.0), clamp(validWeight, 0.0, 1.0))),
+        packHalf2x16(clamp(CoCg, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(vec2(clamp(standardDeviation, 0.0, 65504.0),
-            clamp(temporalCurrentWeight, 0.0, 1.0))));
+            clamp(validWeight, 0.0, 1.0))));
 }
 
 void writeDiffuseDenoisedReprojectionInvalid(uvec2 xy) {
     diffuseBuffer.data[addr(diffuseDenoisedWritePlane(), xy)] = uvec4(
         0u, 0u, 0u, packHalf2x16(vec2(-1.0, 0.0)));
+}
+
+bool readDiffuseDenoisedReprojection(uvec2 xy, out vec4 maxEntY,
+        out vec2 CoCg, out float standardDeviation, out float validWeight) {
+    uvec4 words = readDiffuseDenoisedCurrentRaw(xy);
+    CoCg = unpackHalf2x16(words.z);
+    vec2 deviationWeight = unpackHalf2x16(words.w);
+    standardDeviation = deviationWeight.x;
+    validWeight = deviationWeight.y;
+    bool valid = standardDeviation >= 0.0 && validWeight > 0.0
+        && !any(isnan(CoCg)) && !any(isinf(CoCg))
+        && !any(isnan(deviationWeight)) && !any(isinf(deviationWeight));
+    maxEntY = valid
+        ? vec4(unpackHalf2x16(words.x), unpackHalf2x16(words.y))
+        : vec4(0.0);
+    valid = valid && !any(isnan(maxEntY)) && !any(isinf(maxEntY));
+    if (!valid) CoCg = vec2(0.0);
+    return valid;
+}
+
+uvec4 packDiffuseTemporalState(MaxEntEncoding maxent,
+        float effectiveSamples, float rootMeanY2) {
+    maxent = sanitizeDiffuseMaxEntEncoding(maxent);
+    effectiveSamples = effectiveSamples >= 1.0
+            && effectiveSamples <= 65504.0
+            && !isnan(effectiveSamples) && !isinf(effectiveSamples)
+        ? effectiveSamples : 0.0;
+    rootMeanY2 = sanitizeRootMeanSquareFP16(rootMeanY2);
+    return uvec4(
+        packHalf2x16(clamp(maxent.maxEntY.xy,
+            vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(maxent.maxEntY.zw,
+            vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(maxent.CoCg,
+            vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(vec2(effectiveSamples, rootMeanY2)));
+}
+
+void unpackDiffuseTemporalState(uvec4 words, out MaxEntEncoding maxent,
+        out float effectiveSamples, out float rootMeanY2) {
+    maxent.maxEntY = clamp(vec4(unpackHalf2x16(words.x),
+        unpackHalf2x16(words.y)), vec4(-65504.0), vec4(65504.0));
+    maxent.CoCg = clamp(unpackHalf2x16(words.z),
+        vec2(-65504.0), vec2(65504.0));
+    maxent = sanitizeDiffuseMaxEntEncoding(maxent);
+    vec2 metadata = unpackHalf2x16(words.w);
+    effectiveSamples = metadata.x;
+    rootMeanY2 = sanitizeRootMeanSquareFP16(metadata.y);
 }
 
 // ===========================================================================
@@ -113,6 +215,7 @@ void writeDiffuseDenoisedReprojectionInvalid(uvec2 xy) {
 
 void writeDiffuseLightRT(uvec2 xy, MaxEntEncoding maxent,
         float rootMeanY2) {
+    maxent = sanitizeDiffuseMaxEntEncoding(maxent);
     rootMeanY2 = sanitizeRootMeanSquareFP16(rootMeanY2);
     diffuseBuffer.data[addr(DIF_N_LIGHT, xy)] = uvec4(
         packHalf2x16(clamp(maxent.maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
@@ -132,6 +235,7 @@ void readDiffuseLightRT(uvec2 xy, out MaxEntEncoding maxent,
     vec2 cocg  = unpackHalf2x16(v.z);
     maxent.maxEntY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
     maxent.CoCg = cocg;
+    maxent = sanitizeDiffuseMaxEntEncoding(maxent);
     vec2 wm = unpackHalf2x16(v.w);
     rootMeanY2 = sanitizeRootMeanSquareFP16(wm.y);
 }
@@ -210,13 +314,8 @@ void readDiffuseMotion(uvec2 xy, out vec3 motion, out float valid) {
 
 void writeDiffuseHist(uvec2 xy, MaxEntEncoding maxent, float weight,
         float rootMeanY2) {
-    rootMeanY2 = sanitizeRootMeanSquareFP16(rootMeanY2);
-    diffuseBuffer.data[addr(DIF_N_HIST, xy)] = uvec4(
-        packHalf2x16(clamp(maxent.maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(clamp(maxent.maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(clamp(maxent.CoCg,        vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(vec2(weight, rootMeanY2))
-    );
+    diffuseBuffer.data[addr(DIF_N_HIST, xy)] =
+        packDiffuseTemporalState(maxent, weight, rootMeanY2);
 }
 void readDiffuseHist(uvec2 xy, out MaxEntEncoding maxent, out float weight,
         out float rootMeanY2) {
@@ -226,6 +325,7 @@ void readDiffuseHist(uvec2 xy, out MaxEntEncoding maxent, out float weight,
     vec2 cocg  = unpackHalf2x16(v.z);
     maxent.maxEntY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
     maxent.CoCg = cocg;
+    maxent = sanitizeDiffuseMaxEntEncoding(maxent);
     vec2 wm = unpackHalf2x16(v.w);
     weight = wm.x;
     rootMeanY2 = sanitizeRootMeanSquareFP16(wm.y);
@@ -289,13 +389,8 @@ void readDiffuseHistGeo(uvec2 xy, out vec3 pos, out vec3 geometryNormal) {
 
 void writeDiffuseSwap(uvec2 xy, MaxEntEncoding maxent, float weight,
         float rootMeanY2) {
-    rootMeanY2 = sanitizeRootMeanSquareFP16(rootMeanY2);
-    diffuseBuffer.data[addr(DIF_N_SWAP, xy)] = uvec4(
-        packHalf2x16(clamp(maxent.maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(clamp(maxent.maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(clamp(maxent.CoCg,        vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(vec2(weight, rootMeanY2))
-    );
+    diffuseBuffer.data[addr(DIF_N_SWAP, xy)] =
+        packDiffuseTemporalState(maxent, weight, rootMeanY2);
 }
 uvec4 readDiffuseSwapRaw(uvec2 xy) {
     return diffuseBuffer.data[addr(DIF_N_SWAP, xy)];
@@ -308,6 +403,7 @@ void readDiffuseSwap(uvec2 xy, out MaxEntEncoding maxent, out float weight,
     vec2 cocg  = unpackHalf2x16(v.z);
     maxent.maxEntY = clamp(vec4(ay_xy, ay_zw), vec4(-65504.0), vec4(65504.0));
     maxent.CoCg = clamp(cocg, vec2(-65504.0), vec2(65504.0));
+    maxent = sanitizeDiffuseMaxEntEncoding(maxent);
     vec2 wm = unpackHalf2x16(v.w);
     weight = wm.x;
     rootMeanY2 = sanitizeRootMeanSquareFP16(wm.y);

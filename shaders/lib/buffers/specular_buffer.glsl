@@ -7,11 +7,13 @@
 #include "/lib/common/oct_encode.glsl"
 
 // Reflection has no current-frame position plane. Primary position is
-// reconstructed from the compact G-buffer, leaving four physical layers.
+// reconstructed from the compact G-buffer. N4 is transient reprojected
+// denoised chroma paired with the N0 reprojected denoised moments.
 #define SPEC_N_LIGHT     0u
 #define SPEC_N_HISTGEO   1u
 #define SPEC_N_HISTLIGHT 2u
 #define SPEC_N_HISTMETA  3u
+#define SPEC_N_DENOISED_REPROJECTED_CHROMA 4u
 
 // Refraction owns four PSR planes with unrelated semantics.
 #define REFR_N_ENDPOINT  0u
@@ -159,6 +161,18 @@ SpecularMaxEnt sanitizeSpecularMaxEnt(SpecularMaxEnt s) {
     float momentLength = length(s.maxEntY.xyz);
     if (momentLength > s.maxEntY.w)
         s.maxEntY.xyz *= s.maxEntY.w / max(momentLength, 1e-20);
+    vec3 rgb = vec3(
+        s.maxEntY.w + 0.8596 * s.CoCg.x - 1.4304 * s.CoCg.y,
+        s.maxEntY.w - 0.1404 * s.CoCg.x + 0.5696 * s.CoCg.y,
+        s.maxEntY.w - 1.1404 * s.CoCg.x - 1.4304 * s.CoCg.y);
+    if (any(lessThan(rgb, vec3(0.0)))) {
+        rgb = max(rgb, vec3(0.0));
+        float projectedY = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+        rgb = projectedY > 1e-20
+            ? rgb * (s.maxEntY.w / projectedY) : vec3(s.maxEntY.w);
+        s.CoCg = vec2(0.5 * (rgb.r - rgb.b),
+            -0.25 * rgb.r + 0.5 * rgb.g - 0.25 * rgb.b);
+    }
     s.CoCg = clamp(s.CoCg, vec2(-65504.0), vec2(65504.0));
     return s;
 }
@@ -310,10 +324,14 @@ void readRefrHistLight(uvec2 xy, out vec3 color, out float vprojDist,
 // N3: previous final denoised MaxEnt6 plus filtered standard deviation and a
 // negative layout stamp. It replaces the former secondary history in place.
 void writeMaxEntSpecularTemporalHistory(uvec2 xy, MaxEntSpecularHistory h) {
+    if (!(h.historyLength >= 1.0) || h.historyLength > 65504.0
+            || isnan(h.historyLength) || isinf(h.historyLength)) {
+        reflectBuffer.data[addr(SPEC_N_HISTGEO, xy)] = uvec4(0u);
+        reflectBuffer.data[addr(SPEC_N_HISTLIGHT, xy)] = uvec4(0u);
+        return;
+    }
     h.signal = sanitizeSpecularMaxEnt(h.signal);
     h.rootMeanY2 = sanitizeRootMeanSquareFP16(h.rootMeanY2);
-    h.historyLength = isnan(h.historyLength) || isinf(h.historyLength)
-        ? 1.0 : clamp(h.historyLength, 1.0, 65504.0);
     float surfaceDistance = length(h.surfacePosition);
     vec3 surfaceDirection = surfaceDistance > 1e-8
         ? h.surfacePosition / surfaceDistance : vec3(0.0, 0.0, -1.0);
@@ -344,41 +362,55 @@ void writeMaxEntSpecularDenoisedHistoryInvalid(uvec2 xy) {
         packHalf2x16(vec2(-1.0, 0.0)));
 }
 
-// Transient N0 layout consumed by the final spatial pass:
+// Transient layout consumed by the final spatial pass:
 //   xy = reprojected previous denoised MaxEntY
-//   z  = previous N_eff, valid mass
-//   w  = filtered stddev, negative current-sample temporal weight
-// CoCg is unnecessary because temporal difference detection uses MaxEntY only.
-void writeMaxEntSpecularDenoisedReprojection(uvec2 xy, vec4 maxEntY,
-        float standardDeviation, float historySamples, float validWeight,
-        float temporalCurrentWeight) {
+//   z  = reprojection alpha floor, reprojected reflection hit distance
+//   w  = filtered stddev, -2 layout stamp
+//   N4.x = CoCg from that exact same denoised reprojection
+void writeMaxEntSpecularDenoisedReprojection(uvec2 xy, SpecularMaxEnt signal,
+        float standardDeviation, float hitDistance, float alphaFloor) {
+    signal = sanitizeSpecularMaxEnt(signal);
     reflectBuffer.data[addr(SPEC_N_LIGHT, xy)] = uvec4(
-        packHalf2x16(clamp(maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(clamp(maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(vec2(min(historySamples, 65504.0), clamp(validWeight, 0.0, 1.0))),
+        packHalf2x16(clamp(signal.maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(signal.maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(vec2(clamp(alphaFloor, 0.0, 1.0),
+            clamp(hitDistance, 0.0, 65504.0))),
         packHalf2x16(vec2(clamp(standardDeviation, 0.0, 65504.0),
-            -clamp(temporalCurrentWeight, 0.0, 1.0))));
+            -2.0)));
+    reflectBuffer.data[addr(SPEC_N_DENOISED_REPROJECTED_CHROMA, xy)] =
+        uvec4(packHalf2x16(signal.CoCg), 0x43524742u, 0u, 0u);
 }
 
 void writeMaxEntSpecularDenoisedReprojectionInvalid(uvec2 xy) {
     reflectBuffer.data[addr(SPEC_N_LIGHT, xy)] = uvec4(0u, 0u, 0u,
         packHalf2x16(vec2(-1.0, 0.0)));
+    reflectBuffer.data[addr(SPEC_N_DENOISED_REPROJECTED_CHROMA, xy)] =
+        uvec4(0u);
 }
 
-bool readMaxEntSpecularDenoisedReprojection(uvec2 xy, out vec4 maxEntY,
-        out float stddev, out float historySamples, out float validWeight,
-        out float temporalCurrentWeight) {
+bool readMaxEntSpecularDenoisedReprojection(uvec2 xy,
+        out SpecularMaxEnt signal,
+        out float stddev, out float alphaFloor, out float hitDistance) {
     uvec4 words = reflectBuffer.data[addr(SPEC_N_LIGHT, xy)];
+    uvec4 chromaWords = reflectBuffer.data[
+        addr(SPEC_N_DENOISED_REPROJECTED_CHROMA, xy)];
     vec2 historyMeta = unpackHalf2x16(words.z);
     vec2 metadata = unpackHalf2x16(words.w);
     stddev = metadata.x;
-    historySamples = historyMeta.x;
-    validWeight = historyMeta.y;
-    temporalCurrentWeight = -metadata.y;
-    bool valid = stddev >= 0.0 && historySamples >= 1.0 && validWeight > 0.0
-        && metadata.y < 0.0 && !any(isnan(historyMeta)) && !any(isinf(historyMeta))
+    alphaFloor = historyMeta.x;
+    hitDistance = historyMeta.y;
+    bool valid = stddev >= 0.0 && alphaFloor >= 0.0 && alphaFloor <= 1.0
+        && metadata.y == -2.0
+        && chromaWords.y == 0x43524742u
+        && !any(isnan(historyMeta)) && !any(isinf(historyMeta))
         && !any(isnan(metadata)) && !any(isinf(metadata));
-    maxEntY = valid ? vec4(unpackHalf2x16(words.x), unpackHalf2x16(words.y)) : vec4(0.0);
+    signal.maxEntY = valid
+        ? vec4(unpackHalf2x16(words.x), unpackHalf2x16(words.y)) : vec4(0.0);
+    signal.CoCg = valid ? unpackHalf2x16(chromaWords.x) : vec2(0.0);
+    valid = valid && !any(isnan(signal.maxEntY))
+        && !any(isinf(signal.maxEntY)) && !any(isnan(signal.CoCg))
+        && !any(isinf(signal.CoCg));
+    signal = valid ? sanitizeSpecularMaxEnt(signal) : emptySpecularMaxEnt();
     return valid;
 }
 

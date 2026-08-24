@@ -58,7 +58,7 @@ float denoiserSpatialWeight(DenoiserMaxEntSignal centerSignal,
             sampleSignal.virtualDistance, virtualRejectionScale);
     float distanceSq = maxentMomentDistanceSq(
             centerSignal.maxEntY, sampleSignal.maxEntY);
-    float variance = maxentMomentDifferenceVarianceFromStandardDeviations(
+    float variance = statisticsDifferenceVarianceFromStandardDeviations(
             centerSignal.standardDeviation,
             sampleSignal.standardDeviation,
             momentCorrelation);
@@ -115,7 +115,7 @@ DenoiserMaxEntSignal denoiserSpatialResolve(
     outputSignal.maxEntY = vec4(accum.maxEntY) * lightNormalization;
     outputSignal.CoCg = vec2(accum.CoCg) * lightNormalization;
     outputSignal.standardDeviation =
-        maxentMomentWeightedMeanStandardDeviation(
+        statisticsWeightedMeanStandardDeviation(
             accum.varianceEnergy.x, accum.varianceEnergy.y, invWeight,
             propagationCorrelation);
     outputSignal.virtualDistance = accum.virtualDistance

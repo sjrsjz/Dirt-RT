@@ -5,8 +5,10 @@
 //   ivec2 denoiserSpatialImageSize()
 //   uvec4 denoiserSpatialLoadGeometryWords(ivec2 pixel)
 //   uvec4 denoiserSpatialLoadSignalWords(ivec2 pixel)
+//   uvec4 maxentAtrousLoadIndependentCurrentWords(ivec2 pixel)
 //   DenoiserSpatialCenterGeometry denoiserSpatialDecodeCenterGeometry(words)
-//   void denoiserSpatialStore(ivec2 pixel, DenoiserMaxEntSignal signal)
+//   void denoiserSpatialStore(ivec2 pixel, DenoiserMaxEntSignal signal,
+//       DenoiserMaxEntSignal independentCurrent)
 //   void denoiserSpatialStoreInvalid(ivec2 pixel)
 // Required macros:
 //   DENOISER_SPATIAL_STEP, DENOISER_SPATIAL_PHI_LUMINANCE
@@ -36,7 +38,10 @@ void main() {
     if (!denoiserSpatialInBounds(pixel, size)) return;
 
     uvec4 centerSignalWords = denoiserSpatialLoadSignalWords(pixel);
-    if (!denoiserSpatialSignalWordsValid(centerSignalWords)) {
+    uvec4 centerCurrentWords =
+        maxentAtrousLoadIndependentCurrentWords(pixel);
+    if (!denoiserSpatialSignalWordsValid(centerSignalWords)
+            || !denoiserSpatialSignalWordsValid(centerCurrentWords)) {
         denoiserSpatialStoreInvalid(pixel);
         return;
     }
@@ -49,6 +54,8 @@ void main() {
     DenoiserSpatialCenterGeometry centerGeometry =
         denoiserSpatialDecodeCenterGeometry(centerGeometryWords);
     DenoiserMaxEntSignal centerSignal = denoiserUnpackMaxEntSignalTrusted(centerSignalWords);
+    DenoiserMaxEntSignal centerCurrent =
+        denoiserUnpackMaxEntSignalTrusted(centerCurrentWords);
 
     float surfaceRejectionScale = denoiserSpatialSurfaceRejectionScale(
             centerGeometry.surfaceDistance, float(size.y));
@@ -70,6 +77,8 @@ void main() {
     vec3 centerVirtualNormal = denoiserSpatialVirtualNormal(
             virtualTangentX, virtualTangentY, centerGeometry.primaryRay);
     DenoiserSpatialAccumulator accum = denoiserSpatialBeginAccumulation(centerSignal);
+    DenoiserSpatialAccumulator currentAccum =
+        denoiserSpatialBeginAccumulation(centerCurrent);
 
     for (int i = 0; i < 8; ++i) {
         ivec2 samplePixel = pixel + DENOISER_SPATIAL_GRID_8[i] * DENOISER_SPATIAL_STEP;
@@ -77,8 +86,11 @@ void main() {
 
         uvec4 sampleGeometryWords = denoiserSpatialLoadGeometryWords(samplePixel);
         uvec4 sampleSignalWords = denoiserSpatialLoadSignalWords(samplePixel);
+        uvec4 sampleCurrentWords =
+            maxentAtrousLoadIndependentCurrentWords(samplePixel);
         if (!denoiserSpatialGeometryWordsValid(sampleGeometryWords)
-                || !denoiserSpatialSignalWordsValid(sampleSignalWords))
+                || !denoiserSpatialSignalWordsValid(sampleSignalWords)
+                || !denoiserSpatialSignalWordsValid(sampleCurrentWords))
             continue;
 
         vec3 samplePrimaryRay;
@@ -92,6 +104,8 @@ void main() {
                         - centerGeometry.surfacePlaneOffset);
 
         DenoiserMaxEntSignal sampleSignal = denoiserUnpackMaxEntSignalTrusted(sampleSignalWords);
+        DenoiserMaxEntSignal sampleCurrent =
+            denoiserUnpackMaxEntSignalTrusted(sampleCurrentWords);
         float virtualDistanceWeight;
         float weight = denoiserSpatialWeight(centerSignal,
                 sampleSignal, differenceCorrelation, samplePrimaryRay,
@@ -103,10 +117,13 @@ void main() {
                 virtualDistanceWeight);
         denoiserSpatialAccumulate(accum, sampleSignal, weight,
             virtualDistanceWeight);
+        denoiserSpatialAccumulate(currentAccum, sampleCurrent, weight,
+            virtualDistanceWeight);
     }
 
-    denoiserSpatialStore(pixel, denoiserSpatialResolve(
-            accum, propagationCorrelation));
+    denoiserSpatialStore(pixel,
+        denoiserSpatialResolve(accum, propagationCorrelation),
+        denoiserSpatialResolve(currentAccum, propagationCorrelation));
 }
 
 #endif // MAXENT_SPATIAL_ATROUS_SMALL_GLSL

@@ -40,7 +40,9 @@ vec3 denoiserSpatialLargeReadVirtualPosition(uint tileIndex, vec3 fallback) {
     return packedPosition.w > 0.0 ? packedPosition.xyz : fallback;
 }
 
-bool denoiserSpatialFilterLarge(ivec2 pixel, out DenoiserMaxEntSignal outputSignal) {
+bool denoiserSpatialFilterLarge(ivec2 pixel,
+        out DenoiserMaxEntSignal outputSignal,
+        out DenoiserMaxEntSignal outputIndependentCurrent) {
     ivec2 size = denoiserSpatialImageSize();
     uvec2 localID = gl_LocalInvocationID.xy;
     ivec2 tileOrigin = ivec2(gl_WorkGroupID.xy * uint(DENOISER_SPATIAL_LARGE_WORKGROUP_SIZE)) - ivec2(1);
@@ -79,9 +81,13 @@ bool denoiserSpatialFilterLarge(ivec2 pixel, out DenoiserMaxEntSignal outputSign
 
     barrier();
     outputSignal = denoiserEmptyMaxEntSignal();
+    outputIndependentCurrent = denoiserEmptyMaxEntSignal();
     if (!denoiserSpatialLargeInBounds(pixel, size)) return false;
 
-    if (!denoiserSpatialSignalWordsValid(centerSignalWords))
+    uvec4 centerCurrentWords =
+        maxentAtrousLoadIndependentCurrentWords(pixel);
+    if (!denoiserSpatialSignalWordsValid(centerSignalWords)
+            || !denoiserSpatialSignalWordsValid(centerCurrentWords))
         return false;
     uvec4 centerGeometryWords = denoiserSpatialLoadGeometryWords(pixel);
     if (!denoiserSpatialGeometryWordsValid(centerGeometryWords))
@@ -90,6 +96,8 @@ bool denoiserSpatialFilterLarge(ivec2 pixel, out DenoiserMaxEntSignal outputSign
         denoiserSpatialDecodeCenterGeometry(centerGeometryWords);
 
     DenoiserMaxEntSignal centerSignal = denoiserUnpackMaxEntSignalTrusted(centerSignalWords);
+    DenoiserMaxEntSignal centerCurrent =
+        denoiserUnpackMaxEntSignalTrusted(centerCurrentWords);
     float surfaceRejectionScale = denoiserSpatialSurfaceRejectionScale(
         centerGeometry.surfaceDistance, float(size.y));
     float virtualDistanceAlpha = centerGeometry.ggxAlpha;
@@ -111,6 +119,8 @@ bool denoiserSpatialFilterLarge(ivec2 pixel, out DenoiserMaxEntSignal outputSign
         virtualTangentX, virtualTangentY, centerGeometry.primaryRay);
 
     DenoiserSpatialAccumulator accum = denoiserSpatialBeginAccumulation(centerSignal);
+    DenoiserSpatialAccumulator currentAccum =
+        denoiserSpatialBeginAccumulation(centerCurrent);
 
     // Independent per-pixel rotation avoids exposing the 8x8 workgroup grid
     // through correlated Poisson directions. Use a scalar integer hash here:
@@ -129,8 +139,11 @@ bool denoiserSpatialFilterLarge(ivec2 pixel, out DenoiserMaxEntSignal outputSign
 
         uvec4 sampleGeometryWords = denoiserSpatialLoadGeometryWords(samplePixel);
         uvec4 sampleSignalWords = denoiserSpatialLoadSignalWords(samplePixel);
+        uvec4 sampleCurrentWords =
+            maxentAtrousLoadIndependentCurrentWords(samplePixel);
         if (!denoiserSpatialGeometryWordsValid(sampleGeometryWords)
-                || !denoiserSpatialSignalWordsValid(sampleSignalWords))
+                || !denoiserSpatialSignalWordsValid(sampleSignalWords)
+                || !denoiserSpatialSignalWordsValid(sampleCurrentWords))
             continue;
         vec3 samplePrimaryRay;
         float sampleSurfaceDistance;
@@ -143,6 +156,8 @@ bool denoiserSpatialFilterLarge(ivec2 pixel, out DenoiserMaxEntSignal outputSign
                 sampleSurfaceDistance, surfaceRejectionScale);
 
         DenoiserMaxEntSignal sampleSignal = denoiserUnpackMaxEntSignalTrusted(sampleSignalWords);
+        DenoiserMaxEntSignal sampleCurrent =
+            denoiserUnpackMaxEntSignalTrusted(sampleCurrentWords);
 
         float virtualDistanceWeight;
         float weight = denoiserSpatialWeight(centerSignal,
@@ -155,9 +170,13 @@ bool denoiserSpatialFilterLarge(ivec2 pixel, out DenoiserMaxEntSignal outputSign
                 virtualDistanceWeight);
         denoiserSpatialAccumulate(accum, sampleSignal, weight,
             virtualDistanceWeight);
+        denoiserSpatialAccumulate(currentAccum, sampleCurrent, weight,
+            virtualDistanceWeight);
     }
 
     outputSignal = denoiserSpatialResolve(accum, propagationCorrelation);
+    outputIndependentCurrent = denoiserSpatialResolve(
+        currentAccum, propagationCorrelation);
     return true;
 }
 

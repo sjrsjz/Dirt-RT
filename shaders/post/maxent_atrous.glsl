@@ -4,6 +4,7 @@
 // Required macros:
 //   MAXENT_ATROUS_STEP
 //   DENOISER_SPATIAL_PHI_LUMINANCE
+//   one of MAXENT_ATROUS_DIFFUSE / MAXENT_ATROUS_SPECULAR
 // Optional macros:
 //   MAXENT_ATROUS_SMALL_KERNEL
 //   MAXENT_ATROUS_FINAL_RESOLVE (reflection output hook)
@@ -19,6 +20,16 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 #include "/lib/common.glsl"
 #include "/lib/lighting/denoiser/maxent_spatial_geometry.glsl"
+
+#if defined(MAXENT_ATROUS_DIFFUSE) && defined(MAXENT_ATROUS_SPECULAR)
+#error "Select one independent-current A-Trous storage domain"
+#elif defined(MAXENT_ATROUS_DIFFUSE)
+#include "/lib/buffers/diffuse_buffer.glsl"
+#elif defined(MAXENT_ATROUS_SPECULAR)
+#include "/lib/buffers/diffuse_buffer.glsl"
+#else
+#error "Select an independent-current A-Trous storage domain"
+#endif
 
 #if defined(MAXENT_ATROUS_FINAL_RESOLVE)
 #include "/lib/buffers/specular_buffer.glsl"
@@ -48,6 +59,38 @@ void maxentAtrousStoreSignalWords(ivec2 pixel, uvec4 words) {
     #endif
 }
 
+uvec4 maxentAtrousLoadIndependentCurrentWords(ivec2 pixel) {
+    #if defined(MAXENT_ATROUS_DIFFUSE)
+        #if defined(MAXENT_ATROUS_WRITE_ALTERNATE)
+        return readDiffuseIndependentCurrentA(uvec2(pixel));
+        #else
+        return readDiffuseIndependentCurrentB(uvec2(pixel));
+        #endif
+    #else
+        #if defined(MAXENT_ATROUS_WRITE_ALTERNATE)
+        return readDiffuseIndependentCurrentA(uvec2(pixel));
+        #else
+        return readDiffuseIndependentCurrentB(uvec2(pixel));
+        #endif
+    #endif
+}
+
+void maxentAtrousStoreIndependentCurrentWords(ivec2 pixel, uvec4 words) {
+    #if defined(MAXENT_ATROUS_DIFFUSE)
+        #if defined(MAXENT_ATROUS_WRITE_ALTERNATE)
+        writeDiffuseIndependentCurrentB(uvec2(pixel), words);
+        #else
+        writeDiffuseIndependentCurrentA(uvec2(pixel), words);
+        #endif
+    #else
+        #if defined(MAXENT_ATROUS_WRITE_ALTERNATE)
+        writeDiffuseIndependentCurrentB(uvec2(pixel), words);
+        #else
+        writeDiffuseIndependentCurrentA(uvec2(pixel), words);
+        #endif
+    #endif
+}
+
 #if defined(MAXENT_ATROUS_FINAL_RESOLVE)
 SpecularMaxEnt maxentAtrousSpecularSignal(DenoiserMaxEntSignal signal) {
     SpecularMaxEnt result;
@@ -60,25 +103,29 @@ SpecularMaxEnt maxentAtrousSpecularSignal(DenoiserMaxEntSignal signal) {
 
 #endif
 
-void denoiserSpatialStore(ivec2 pixel, DenoiserMaxEntSignal signal) {
+void denoiserSpatialStore(ivec2 pixel, DenoiserMaxEntSignal signal,
+        DenoiserMaxEntSignal independentCurrent) {
     // denoiserSpatialResolve() has already sanitized the signal once. Avoid a
     // second identical validation on the hot ping-pong store path.
     uvec4 packedSignal = denoiserPackMaxEntSignalTrusted(signal);
     maxentAtrousStoreSignalWords(pixel, packedSignal);
+    maxentAtrousStoreIndependentCurrentWords(pixel,
+        denoiserPackMaxEntSignalTrusted(independentCurrent));
 
     #if defined(MAXENT_ATROUS_FINAL_RESOLVE)
     SpecularMaxEnt specular = maxentAtrousSpecularSignal(signal);
     writeMaxEntSpecularDenoisedHistory(uvec2(pixel), specular,
         signal.standardDeviation);
-    // SPEC_N_LIGHT still contains the reprojected denoised-history scratch.
-    // The following full-screen resolve reads the completed 5x5 final-output
-    // neighborhood, clamps history confidence, then publishes reflection N0.
+    // SPEC_N_LIGHT still contains reprojected denoised-history scratch. The
+    // following resolve reads the completed 5x5 neighborhood, chooses actual
+    // alpha, performs the Kish update, and publishes reflection N0.
     #endif
 }
 
 void denoiserSpatialStoreInvalid(ivec2 pixel) {
     uvec4 invalidSignal = denoiserInvalidMaxEntSignalWords();
     maxentAtrousStoreSignalWords(pixel, invalidSignal);
+    maxentAtrousStoreIndependentCurrentWords(pixel, invalidSignal);
 
     #if defined(MAXENT_ATROUS_FINAL_RESOLVE)
     writeMaxEntSpecularDenoisedHistoryInvalid(uvec2(pixel));
@@ -97,12 +144,14 @@ void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 
     DenoiserMaxEntSignal signal;
-    if (!denoiserSpatialFilterLarge(pixel, signal)) {
+    DenoiserMaxEntSignal independentCurrent;
+    if (!denoiserSpatialFilterLarge(pixel, signal,
+            independentCurrent)) {
         if (any(greaterThanEqual(gl_GlobalInvocationID.xy,
                     resolution_global))) return;
         denoiserSpatialStoreInvalid(pixel);
         return;
     }
-    denoiserSpatialStore(pixel, signal);
+    denoiserSpatialStore(pixel, signal, independentCurrent);
 }
 #endif

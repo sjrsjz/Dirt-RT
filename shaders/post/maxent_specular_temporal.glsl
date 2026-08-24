@@ -4,7 +4,7 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 #define REFLECT_BUFFER
 #include "/lib/lighting/denoiser/maxent_specular_temporal_common.glsl"
-#include "/lib/lighting/denoiser/maxent_temporal_statistics.glsl"
+#include "/lib/math/statistics.glsl"
 
 uniform usampler2D colortex6;
 layout(rgba32ui) uniform writeonly uimage2D colorimg4;
@@ -18,7 +18,6 @@ struct MaxEntReprojectedHistory {
     uint normalWord;
     float roughness;
     float historyLength;
-    float historyEvidence;
     float footprintQuality;
     bool found;
 };
@@ -32,7 +31,6 @@ MaxEntReprojectedHistory maxentEmptyHistory() {
     h.normalWord = encodeNormalU(vec3(0.0, 1.0, 0.0));
     h.roughness = 1.0;
     h.historyLength = 0.0;
-    h.historyEvidence = 0.0;
     h.footprintQuality = 0.0;
     h.found = false;
     return h;
@@ -69,8 +67,8 @@ MaxEntReprojectedHistory maxentLoadHistory(
     vec4 bilinear = vec4((1.0 - f.x) * (1.0 - f.y),
         f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
     float sumWeight = 0.0;
-    float weightOverSamples = 0.0;
-    float sampleMass = 0.0;
+    float weightOverRootSamples = 0.0;
+    float weightedEstimatorStddev = 0.0;
     float validBilinearWeight = 0.0;
     int validTapCount = 0;
     SpecularMaxEnt signalSum = emptySpecularMaxEnt();
@@ -118,9 +116,10 @@ MaxEntReprojectedHistory maxentLoadHistory(
         validBilinearWeight += w;
         ++validTapCount;
         if (w <= 0.0) continue;
-        signalSum.maxEntY += vec4(unpackHalf2x16(signalWords.x), unpackHalf2x16(signalWords.y)) * w;
+        vec4 tapMaxEntY = vec4(unpackHalf2x16(signalWords.x),
+            unpackHalf2x16(signalWords.y));
+        signalSum.maxEntY += tapMaxEntY * w;
         signalSum.CoCg += unpackHalf2x16(signalWords.z) * w;
-        outHistory.secondMoment += momentHistory.x * momentHistory.x * w;
         denoisedSum.maxEntY += vec4(unpackHalf2x16(denoisedWords.x), unpackHalf2x16(denoisedWords.y)) * w;
         denoisedSum.CoCg += unpackHalf2x16(denoisedWords.z) * w;
         denoisedSquaredWeightVariance += denoisedMetadata.x
@@ -130,8 +129,12 @@ MaxEntReprojectedHistory maxentLoadHistory(
         outHistory.hitDistance += hitRoughness.x * w;
         outHistory.roughness += (hitRoughness.y - 1.0) * w;
         float samples = momentHistory.y;
-        weightOverSamples += w / samples;
-        sampleMass += w * samples;
+        float tapSecondMoment = momentHistory.x * momentHistory.x;
+        float tapEstimatorVariance =
+            statisticsEstimatorVarianceFromMoments(
+                2.0 * tapSecondMoment, tapMaxEntY, samples);
+        weightedEstimatorStddev += w * sqrt(tapEstimatorVariance);
+        weightOverRootSamples += w * inversesqrt(samples);
         normalSum += historyNormal * w;
         sumWeight += w;
     }
@@ -144,10 +147,9 @@ MaxEntReprojectedHistory maxentLoadHistory(
     float invWeight = 1.0 / sumWeight;
     signalSum = maxentScaleMaxEnt(signalSum, invWeight);
     outHistory.signalWords = packSpecularMaxEnt(signalSum);
-    outHistory.secondMoment *= invWeight;
     denoisedSum = maxentScaleMaxEnt(denoisedSum, invWeight);
     float denoisedStandardDeviation =
-        maxentMomentWeightedMeanStandardDeviation(
+        statisticsWeightedMeanStandardDeviation(
         denoisedSquaredWeightVariance, denoisedWeightedStddev, invWeight,
         MAXENT_TEMPORAL_REPROJECTION_CORRELATION);
     outHistory.denoisedWords = uvec4(packSpecularMaxEnt(denoisedSum),
@@ -155,14 +157,16 @@ MaxEntReprojectedHistory maxentLoadHistory(
     outHistory.hitDistance *= invWeight;
     outHistory.roughness = clamp(1.0 +
         (outHistory.roughness - 1.0) * invWeight, 0.0, 1.0);
-    outHistory.historyLength = maxentTemporalReprojectedEffectiveSamples(
-        sumWeight, weightOverSamples,
-        float(MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY));
-    // History evidence controls temporal reuse.  Unlike the statistical ESS,
-    // it is an arithmetic reconstruction of the contributing histories and
-    // therefore cannot acquire a texel-phase-dependent 2x/4x gain.
-    outHistory.historyEvidence = clamp(sampleMass * invWeight,
-        0.0, float(MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY));
+    outHistory.historyLength = statisticsReconstructedEffectiveSampleCount(
+        sumWeight, weightOverRootSamples);
+    float historyEstimatorVariance = statisticsWeightedMeanVariance(
+        0.0, weightedEstimatorStddev, invWeight, 1.0);
+    outHistory.secondMoment = 0.5
+        * statisticsExpectedSquaredNormFromEstimatorVariance(
+            signalSum.maxEntY, historyEstimatorVariance,
+            outHistory.historyLength);
+    outHistory.secondMoment = max(outHistory.secondMoment,
+        signalSum.maxEntY.w * signalSum.maxEntY.w);
     outHistory.normalWord = encodeNormalU(maxentSafeNormalize(normalSum * invWeight, currentNormal));
     outHistory.footprintQuality = clamp(validBilinearWeight, 0.0, 1.0);
     outHistory.found = true;
@@ -189,42 +193,99 @@ float maxentSpecMagicCurve(float roughness) {
     return 1.0 - exp2(-200.0 * roughness * roughness);
 }
 
-void maxentPublishDenoisedReprojection(MaxEntReprojectedHistory surface,
-        MaxEntReprojectedHistory virtualHistory, float surfaceAlpha,
-        float virtualAlpha, float virtualAmount) {
-    float surfaceWeight = surface.found ? (1.0 - virtualAmount) * (1.0 - surfaceAlpha) : 0.0;
-    float virtualWeight = virtualHistory.found ? virtualAmount * (1.0 - virtualAlpha) : 0.0;
+MaxEntReprojectedHistory maxentCombineReprojectedHistories(
+        MaxEntReprojectedHistory surface,
+        MaxEntReprojectedHistory virtualHistory, float virtualAmount) {
+    float surfaceWeight = surface.found ? 1.0 - virtualAmount : 0.0;
+    float virtualWeight = virtualHistory.found ? virtualAmount : 0.0;
+    if (!surface.found && virtualHistory.found) virtualWeight = 1.0;
+    if (surface.found && !virtualHistory.found) surfaceWeight = 1.0;
     float historyWeight = surfaceWeight + virtualWeight;
-    if (historyWeight <= 1e-5) {
+    if (historyWeight <= 1e-5) return maxentEmptyHistory();
+
+    float inverseHistoryWeight = 1.0 / historyWeight;
+    MaxEntReprojectedHistory combined = maxentEmptyHistory();
+    SpecularMaxEnt surfaceSignal = unpackSpecularMaxEnt(surface.signalWords);
+    SpecularMaxEnt virtualSignal = unpackSpecularMaxEnt(
+        virtualHistory.signalWords);
+    SpecularMaxEnt combinedSignal = maxentScaleMaxEnt(
+        maxentWeightedMaxEnt(surfaceSignal, surfaceWeight,
+            virtualSignal, virtualWeight), inverseHistoryWeight);
+    combined.signalWords = packSpecularMaxEnt(combinedSignal);
+
+    SpecularMaxEnt surfaceDenoised = unpackSpecularMaxEnt(
+        surface.denoisedWords.xyz);
+    SpecularMaxEnt virtualDenoised = unpackSpecularMaxEnt(
+        virtualHistory.denoisedWords.xyz);
+    SpecularMaxEnt denoised = maxentScaleMaxEnt(maxentWeightedMaxEnt(
+        surfaceDenoised, surfaceWeight, virtualDenoised, virtualWeight),
+        inverseHistoryWeight);
+    float surfaceStddev = surface.found
+        ? uintBitsToFloat(surface.denoisedWords.w) : 0.0;
+    float virtualStddev = virtualHistory.found
+        ? uintBitsToFloat(virtualHistory.denoisedWords.w) : 0.0;
+    float denoisedStddev = statisticsWeightedMeanStandardDeviation(
+        surfaceWeight * surfaceWeight * surfaceStddev * surfaceStddev
+            + virtualWeight * virtualWeight * virtualStddev * virtualStddev,
+        surfaceWeight * surfaceStddev + virtualWeight * virtualStddev,
+        inverseHistoryWeight, MAXENT_SPECULAR_BRANCH_CORRELATION);
+    combined.denoisedWords = uvec4(packSpecularMaxEnt(denoised),
+        floatBitsToUint(denoisedStddev));
+    combined.hitDistance = (surfaceWeight * surface.hitDistance
+        + virtualWeight * virtualHistory.hitDistance)
+        * inverseHistoryWeight;
+    combined.roughness = (surfaceWeight * surface.roughness
+        + virtualWeight * virtualHistory.roughness)
+        * inverseHistoryWeight;
+    float surfaceSamples = max(surface.historyLength, 1.0);
+    float virtualSamples = max(virtualHistory.historyLength, 1.0);
+    combined.historyLength = statisticsCorrelatedEffectiveSampleCount(
+        historyWeight,
+        surfaceWeight * surfaceWeight / surfaceSamples
+            + virtualWeight * virtualWeight / virtualSamples,
+        surfaceWeight * inversesqrt(surfaceSamples)
+            + virtualWeight * inversesqrt(virtualSamples),
+        MAXENT_SPECULAR_BRANCH_CORRELATION);
+    float surfaceEstimatorVariance =
+        statisticsEstimatorVarianceFromMoments(
+            2.0 * surface.secondMoment, surfaceSignal.maxEntY,
+            surfaceSamples);
+    float virtualEstimatorVariance =
+        statisticsEstimatorVarianceFromMoments(
+            2.0 * virtualHistory.secondMoment, virtualSignal.maxEntY,
+            virtualSamples);
+    float combinedEstimatorVariance = statisticsWeightedMeanVariance(
+        surfaceWeight * surfaceWeight * surfaceEstimatorVariance
+            + virtualWeight * virtualWeight * virtualEstimatorVariance,
+        surfaceWeight * sqrt(surfaceEstimatorVariance)
+            + virtualWeight * sqrt(virtualEstimatorVariance),
+        inverseHistoryWeight, MAXENT_SPECULAR_BRANCH_CORRELATION);
+    combined.secondMoment = 0.5
+        * statisticsExpectedSquaredNormFromEstimatorVariance(
+            combinedSignal.maxEntY, combinedEstimatorVariance,
+            combined.historyLength);
+    combined.secondMoment = max(combined.secondMoment,
+        combinedSignal.maxEntY.w * combinedSignal.maxEntY.w);
+    combined.footprintQuality = (surfaceWeight * surface.footprintQuality
+        + virtualWeight * virtualHistory.footprintQuality)
+        * inverseHistoryWeight;
+    combined.found = statisticsValidEffectiveSampleCount(
+        combined.historyLength);
+    return combined;
+}
+
+void maxentPublishDenoisedReprojection(MaxEntReprojectedHistory history,
+        float alphaFloor) {
+    if (!history.found) {
         writeMaxEntSpecularDenoisedReprojectionInvalid(gl_GlobalInvocationID.xy);
         return;
     }
-    float inverseHistoryWeight = 1.0 / historyWeight;
-    SpecularMaxEnt surfaceDenoised = unpackSpecularMaxEnt(surface.denoisedWords.xyz);
-    SpecularMaxEnt virtualDenoised = unpackSpecularMaxEnt(virtualHistory.denoisedWords.xyz);
-    SpecularMaxEnt denoised = maxentWeightedMaxEnt(surfaceDenoised,
-        surfaceWeight, virtualDenoised, virtualWeight);
-    denoised = maxentScaleMaxEnt(denoised, inverseHistoryWeight);
-    float surfaceStandardDeviation =
-        uintBitsToFloat(surface.denoisedWords.w);
-    float virtualStandardDeviation =
-        uintBitsToFloat(virtualHistory.denoisedWords.w);
-    float standardDeviation = maxentMomentWeightedMeanStandardDeviation(
-        surfaceWeight * surfaceWeight * surfaceStandardDeviation
-                * surfaceStandardDeviation
-            + virtualWeight * virtualWeight * virtualStandardDeviation
-                * virtualStandardDeviation,
-        surfaceWeight * surfaceStandardDeviation
-            + virtualWeight * virtualStandardDeviation,
-        inverseHistoryWeight, MAXENT_SPECULAR_BRANCH_CORRELATION);
-    float weightOverSamples = surfaceWeight / max(surface.historyLength, 1.0)
-        + virtualWeight / max(virtualHistory.historyLength, 1.0);
-    float historySamples = maxentTemporalReprojectedEffectiveSamples(
-        historyWeight, weightOverSamples,
-        float(MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY));
+    SpecularMaxEnt denoised = unpackSpecularMaxEnt(
+        history.denoisedWords.xyz);
+    float standardDeviation = uintBitsToFloat(history.denoisedWords.w);
     writeMaxEntSpecularDenoisedReprojection(gl_GlobalInvocationID.xy,
-        denoised.maxEntY, standardDeviation, historySamples, 1.0,
-        1.0 - historyWeight);
+        denoised, standardDeviation, history.hitDistance,
+        alphaFloor);
 }
 
 void main() {
@@ -291,11 +352,6 @@ void main() {
         virtualHistory.found = false;
     }
 
-    float surfaceEvidence = min(surface.historyEvidence,
-        float(MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY));
-    float virtualEvidence = min(virtualHistory.historyEvidence,
-        float(MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY));
-
     float lobeHalfAngle = max(atan(maxentSpecLobeTanHalfAngle(
         currentRoughness, MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION)), 1.5 / 255.0);
     vec3 Vprev = -maxentSafeNormalize(currentPos + cameraDelta, currentPos);
@@ -336,52 +392,59 @@ void main() {
             lobeRadiusPixels + 0.25, uvErrorPixels);
     }
 
-    float smbAlpha = surface.found
-        ? max(1.0 - smbConfidence,
-            1.0 / (1.0 + surfaceEvidence)) : 1.0;
-    float vmbAlpha = virtualHistory.found
-        ? max(1.0 - vmbConfidence,
-            1.0 / (1.0 + virtualEvidence)) : 1.0;
-    float vmbHitAlpha = virtualHistory.found
-        ? max(1.0 - vmbConfidence * hitConfidence,
-            max(0.1, 1.0 / (1.0 + virtualEvidence))) : 1.0;
-
-    SpecularMaxEnt temporalSMB = surface.found
-        ? maxentMixMaxEnt(unpackSpecularMaxEnt(surface.signalWords), noisy.signal, smbAlpha)
-        : noisy.signal;
-    SpecularMaxEnt temporalVMB = virtualHistory.found
-        ? maxentMixMaxEnt(unpackSpecularMaxEnt(virtualHistory.signalWords), noisy.signal, vmbAlpha)
-        : noisy.signal;
-    float m2SMB = surface.found ? mix(surface.secondMoment,
-        noisyM2, smbAlpha) : noisyM2;
-    float m2VMB = virtualHistory.found ? mix(virtualHistory.secondMoment,
-        noisyM2, vmbAlpha) : noisyM2;
-    float hitSMB = surface.found ? mix(surface.hitDistance,
-        noisy.hitDistance, max(smbAlpha, 0.1)) : noisy.hitDistance;
-    float hitVMB = virtualHistory.found ? mix(virtualHistory.hitDistance,
-        noisy.hitDistance, vmbHitAlpha) : noisy.hitDistance;
-
     float virtualAmount = virtualHistory.found
         ? virtualScale * virtualHistory.footprintQuality : 0.0;
     virtualAmount *= clamp(vmbConfidence / max(smbConfidence, 1e-6), 0.0, 1.0);
+    virtualAmount *= hitConfidence;
     virtualAmount = clamp(virtualAmount, 0.0, 1.0);
 
+    MaxEntReprojectedHistory history = maxentCombineReprojectedHistories(
+        surface, virtualHistory, virtualAmount);
+    float surfaceBranchWeight = surface.found ? 1.0 - virtualAmount : 0.0;
+    float virtualBranchWeight = virtualHistory.found ? virtualAmount : 0.0;
+    if (!surface.found && virtualHistory.found) virtualBranchWeight = 1.0;
+    if (surface.found && !virtualHistory.found) surfaceBranchWeight = 1.0;
+    float branchWeightSum = surfaceBranchWeight + virtualBranchWeight;
+    float historyConfidence = branchWeightSum > 1e-5
+        ? (surfaceBranchWeight * smbConfidence
+            + virtualBranchWeight * vmbConfidence * hitConfidence)
+            / branchWeightSum
+        : 0.0;
+
     MaxEntTemporalSignal temporal;
-    temporal.signal = maxentMixMaxEnt(temporalSMB, temporalVMB, virtualAmount);
-    float temporalMeanY2 = mix(m2SMB, m2VMB, virtualAmount);
-    temporal.rootMeanY2 = sqrt(max(temporalMeanY2, 0.0));
-    temporal.historyLength = maxentTemporalSharedCurrentEffectiveSamples(
-        surface.historyLength, smbAlpha, surface.found,
-        virtualHistory.historyLength, vmbAlpha,
-        virtualHistory.found, virtualAmount,
-        float(MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY));
+    if (history.found) {
+        float alphaFloor = 1.0 - clamp(historyConfidence, 0.0, 1.0);
+        // Keep the provisional estimator identical to the fixed-alpha update
+        // performed by final resolve.
+        float proposalAlpha = clamp(
+            float(MAXENT_TEMPORAL_FIXED_ALPHA), 0.0, 1.0);
+        SpecularMaxEnt historySignal = unpackSpecularMaxEnt(
+            history.signalWords);
+        temporal.signal = maxentMixMaxEnt(historySignal, noisy.signal,
+            proposalAlpha);
+        temporal.rootMeanY2 = sqrt(max(mix(history.secondMoment, noisyM2,
+            proposalAlpha), 0.0));
+        temporal.historyLength = statisticsKishUpdateEffectiveSampleCount(
+            history.historyLength, proposalAlpha);
+        maxentPublishDenoisedReprojection(history, alphaFloor);
+    } else {
+        temporal.signal = noisy.signal;
+        temporal.rootMeanY2 = sqrt(max(noisyM2, 0.0));
+        temporal.historyLength = 1.0;
+        writeMaxEntSpecularDenoisedReprojectionInvalid(pixel);
+    }
 
-    float hitDistance = mix(hitSMB, hitVMB, virtualAmount);
-    maxentPublishDenoisedReprojection(surface, virtualHistory,
-        smbAlpha, vmbAlpha, virtualAmount);
-
+    MaxEntTemporalSignal reprojectedTemporal;
+    reprojectedTemporal.signal = history.found
+        ? unpackSpecularMaxEnt(history.signalWords)
+        : emptySpecularMaxEnt();
+    reprojectedTemporal.rootMeanY2 = history.found
+        ? sqrt(max(history.secondMoment, 0.0)) : 0.0;
+    reprojectedTemporal.historyLength = history.found
+        ? history.historyLength : 0.0;
     imageStore(colorimg4, ivec2(pixel), maxentPackTemporal(temporal));
-    imageStore(colorimg5, ivec2(pixel), maxentPackTemporalAux(hitDistance));
+    imageStore(colorimg5, ivec2(pixel), history.found
+        ? maxentPackTemporal(reprojectedTemporal) : uvec4(0u));
     debugWriteSpecularTemporal(pixel, packSpecularMaxEnt(temporal.signal),
-        hitDistance, 1.0 - mix(smbAlpha, vmbAlpha, virtualAmount));
+        noisy.hitDistance, 0.0);
 }

@@ -1,1 +1,1 @@
-#include "/post/maxent_specular_history_clamp.glsl"
+#include "/post/maxent_specular_final_resolve.glsl"

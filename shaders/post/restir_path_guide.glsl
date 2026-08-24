@@ -15,7 +15,6 @@ layout(local_size_x = 16, local_size_y = 16) in;
 #include "/lib/lighting/maxent.glsl"
 
 uniform usampler2D colortex4; // atrous 降噪 MaxEnt (packMaxEnt 格式, RGBA32UI)
-uniform usampler2D colortex6; // temporal_diffuse validKernelWeight
 
 layout(rgba32ui) uniform writeonly uimage2D colorimg5;
 
@@ -311,7 +310,14 @@ void main() {
     // Phase 4+5: 历史重投影 + RIS 合并
     StoredReservoir hist;
     if (sampleHistory(gxy, centerPos, centerDist, seed, hist)) {
-        float temporalConf = clamp(uintBitsToFloat(texelFetch(colortex6, pix, 0).r), 0.0, 1.0);
+        vec4 reprojectedMoment;
+        vec2 reprojectedCoCg;
+        float reprojectedStddev;
+        float temporalConf;
+        if (!readDiffuseDenoisedReprojection(gxy, reprojectedMoment,
+                reprojectedCoCg, reprojectedStddev, temporalConf))
+            temporalConf = 0.0;
+        temporalConf = clamp(temporalConf, 0.0, 1.0);
         combineWithHistory(r, hist, temporalConf, centerNormal, seed);
     }
 

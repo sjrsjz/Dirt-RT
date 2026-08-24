@@ -1,18 +1,12 @@
 #ifndef MAXENT_MOMENT_STATISTICS_GLSL
 #define MAXENT_MOMENT_STATISTICS_GLSL
 
-// The denoiser operates on the encoder's linear moment vector
-//
-//     m = (E[R u], E[R]).
-//
-// No decoder distribution is involved.  For a unit direction u, a raw sample
-// z = (R u, R) satisfies |z|^2 = 2 R^2, so E[R^2] is sufficient to recover
-// the trace of the sampling covariance of z.  The full covariance matrix, and
-// covariance between two already filtered estimators, are not stored.
+#include "/lib/math/statistics.glsl"
+
+// The denoiser operates on m=(E[R u], E[R]). No decoder distribution is
+// involved. For one raw sample z=(R u,R), |z|^2=2R^2.
 
 float maxentMomentDifferenceCorrelationForSpatialStep(int stepRadius) {
-    // Kernel-weighted center/tap trace correlation inherited from all
-    // preceding fixed-kernel passes.
     if (stepRadius <= 1) return MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_1;
     if (stepRadius <= 2) return MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_2;
     if (stepRadius <= 4) return MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_4;
@@ -22,7 +16,6 @@ float maxentMomentDifferenceCorrelationForSpatialStep(int stepRadius) {
 }
 
 float maxentMomentPropagationCorrelationForSpatialStep(int stepRadius) {
-    // Kernel-pair-weighted trace correlation among all nine pass inputs.
     if (stepRadius <= 1) return MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_1;
     if (stepRadius <= 2) return MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_2;
     if (stepRadius <= 4) return MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_4;
@@ -33,116 +26,75 @@ float maxentMomentPropagationCorrelationForSpatialStep(int stepRadius) {
 
 float maxentMomentDistanceSq(vec4 a, vec4 b) {
     vec4 delta = a - b;
-    return max(dot(delta, delta), 0.0);
+    return dot(delta, delta);
 }
 
-// Scalar covariance closure for estimator-error vectors:
-//
-//   E[epsilon_a . epsilon_b] ~= p_context sigma_a sigma_b,
-//   sigma_i^2 = V_i = E[|epsilon_i|^2].
-//
-// This is a closure for the trace cross-covariance, not a claim that the
-// unavailable component-wise covariance matrix has been reconstructed.
-float maxentMomentDifferenceVarianceFromStandardDeviations(
-    float standardDeviationA, float standardDeviationB,
-    float correlation) {
-    standardDeviationA = max(standardDeviationA, 0.0);
-    standardDeviationB = max(standardDeviationB, 0.0);
-    float p = clamp(correlation, -0.125, 1.0);
-    float varianceA = standardDeviationA * standardDeviationA;
-    float varianceB = standardDeviationB * standardDeviationB;
-    float covarianceTrace = p * standardDeviationA * standardDeviationB;
-    return max(varianceA + varianceB - 2.0 * covarianceTrace, 0.0);
+float maxentTemporalCurrentEstimatorVariance(float standardDeviation) {
+    standardDeviation = max(standardDeviation, 0.0);
+    return standardDeviation * standardDeviation
+        + MAXENT_TEMPORAL_DENOISER_INTRINSIC_VARIANCE;
 }
 
-// Complete covariance expansion for a normalized weighted mean.  Callers
-// accumulate
-//
-//   Q = sum_i w_i^2 V_i,       S = sum_i w_i sqrt(V_i),
-//
-// then the constant-correlation closure gives
-//
-//   Var(sum_i w_i X_i / W)
-//     = ((1-p) Q + p S^2) / W^2.
-float maxentMomentWeightedMeanVariance(float squaredWeightVarianceSum,
-    float weightedStddevSum, float inverseWeightSum,
-    float correlation) {
-    // -1/8 is conservative for every caller: the largest mixture is the
-    // nine-estimator A-Trous pass.  Reprojection callers use positive p.
-    float p = clamp(correlation, -0.125, 1.0);
-    float numerator = (1.0 - p) * max(squaredWeightVarianceSum, 0.0)
-            + p * weightedStddevSum * weightedStddevSum;
-    return max(numerator * inverseWeightSum * inverseWeightSum, 0.0);
+float maxentTemporalProposalCorrectedStandardDeviation(
+        float proposalStddev, float currentStddev,
+        float correctionCurrentWeight) {
+    float proposalVariance = max(proposalStddev, 0.0)
+        * max(proposalStddev, 0.0);
+    float currentVariance = maxentTemporalCurrentEstimatorVariance(
+        currentStddev);
+    // The configured statistical closure assumes zero correlation.
+    return sqrt(statisticsIndependentBlendVariance(
+        proposalVariance, currentVariance,
+        correctionCurrentWeight));
 }
 
-float maxentMomentWeightedMeanStandardDeviation(
-    float squaredWeightVarianceSum, float weightedStddevSum,
-    float inverseWeightSum, float correlation) {
-    return sqrt(maxentMomentWeightedMeanVariance(
-            squaredWeightVarianceSum, weightedStddevSum, inverseWeightSum,
-            correlation));
-}
-
-float maxentClampHistoryWeightByMomentDifference(float historyWeight,
-    vec4 currentMoment, float currentStddev,
-    vec4 historyMoment, float historyStddev,
-    float historySamples, float validWeight, float temporalCurrentWeight,
-    float maximumHistory, float tolerance, out float normalizedDistance) {
-    normalizedDistance = -1.0;
-    historyWeight = isnan(historyWeight) || isinf(historyWeight)
-        ? 0.0 : max(historyWeight, 0.0);
-    // if (historySamples <= MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY)
-    //     return historyWeight;
-    if (any(isnan(currentMoment)) || any(isinf(currentMoment))
+// Minimum-MSE update between two independent denoised estimators:
+//   H = previous final filtered output, reprojected to this frame;
+//   C = current Raw RT observation filtered with the proposal's exact spatial
+//       weights, but never temporally premixed with H.
+// Their variances are directly comparable and require neither beta
+// deconvolution nor subtraction of nearly equal variances. In the stationary
+// limit V_H=V0/N and V_C=V0 this naturally becomes 1/(N+1).
+float maxentTemporalMinimumMseAlpha(float alphaFloor,
+        vec4 currentMoment, float currentEstimatorVariance,
+        vec4 historyMoment,
+        float historyStddev, float historyEffectiveSamples,
+        out float varianceOptimalAlpha) {
+    varianceOptimalAlpha = -1.0;
+    alphaFloor = isnan(alphaFloor) || isinf(alphaFloor)
+        ? 1.0 : clamp(alphaFloor, 0.0, 1.0);
+    if (any(isnan(currentMoment))
+            || any(isinf(currentMoment))
             || any(isnan(historyMoment)) || any(isinf(historyMoment))
-            || !(currentStddev >= 0.0) || isnan(currentStddev)
-            || isinf(currentStddev)
+            || !(currentEstimatorVariance >= 0.0)
+            || isnan(currentEstimatorVariance)
+            || isinf(currentEstimatorVariance)
             || !(historyStddev >= 0.0) || isnan(historyStddev)
             || isinf(historyStddev)
-            || !(historySamples >= 1.0) || isnan(historySamples)
-            || isinf(historySamples)
-            || !(validWeight > 0.0) || isnan(validWeight)
-            || isinf(validWeight)
-            || !(temporalCurrentWeight > 0.0)
-            || isnan(temporalCurrentWeight)
-            || isinf(temporalCurrentWeight)) return historyWeight;
+            || !statisticsValidEffectiveSampleCount(
+                historyEffectiveSamples))
+        return alphaFloor;
 
-    float distanceSq = maxentMomentDistanceSq(currentMoment, historyMoment);
-    // The compared values are the robust current spatial estimator C and the
-    // reprojected previous denoised estimator H. Their standard deviations are
-    // both available, so do not reconstruct sigma_C from N_eff * Var(H).
-    //
-    // C retains (1-alpha) of H. The fixed-kernel overlap constant accounts for
-    // the additional 5x5 current reconstruction versus the history response.
-    // Expressing the known shared-history covariance in correlation form keeps
-    // the same scalar trace-covariance closure used by every spatial pass:
-    //
-    //   Cov(C,H) ~= p_overlap (1-alpha) Var(H)
-    //            = p_CH sigma_C sigma_H.
-    float sharedHistoryWeight = clamp(1.0 - temporalCurrentWeight, 0.0, 1.0);
-    float currentHistoryCorrelation = 0.0;
-    if (currentStddev > 0.0 && historyStddev > 0.0) {
-        currentHistoryCorrelation = clamp(
-                MAXENT_TEMPORAL_ROBUST_HISTORY_OVERLAP_CORRELATION
-                    * sharedHistoryWeight * historyStddev / currentStddev,
-                -0.125, 1.0);
-    }
-    float observedDifferenceVariance =
-        maxentMomentDifferenceVarianceFromStandardDeviations(
-            currentStddev, historyStddev, currentHistoryCorrelation)
-            + MAXENT_TEMPORAL_DENOISER_INTRINSIC_VARIANCE;
-    float normalizedDistanceSq = distanceSq / observedDifferenceVariance;
-    normalizedDistance = sqrt(normalizedDistanceSq);
-    if (isnan(normalizedDistance) || isinf(normalizedDistance)) {
-        normalizedDistance = -1.0;
-        return historyWeight;
-    }
+    float historyVariance = historyStddev * historyStddev;
+    float currentVariance = currentEstimatorVariance
+        + MAXENT_TEMPORAL_DENOISER_INTRINSIC_VARIANCE;
+    float distanceSq = maxentMomentDistanceSq(
+        currentMoment, historyMoment);
+    float innovationVariance = historyVariance + currentVariance;
+    varianceOptimalAlpha = statisticsMinimumMseIndependentCurrentWeight(
+        0.0, historyVariance, currentVariance);
+    float estimatedSquaredBias = statisticsPositivePartSquaredBias(
+        distanceSq, 0*innovationVariance);
+    float optimalAlpha = statisticsMinimumMseIndependentCurrentWeight(
+        estimatedSquaredBias, historyVariance, currentVariance);
+    // // varianceOptimalAlpha is explicitly independent of distanceSq and is not
+    // // the alpha used to update temporal history.
+    // // The MSE optimum remains bounded by equal-weight Kish warm-up and
+    // // reprojection confidence.  Bypassing alphaFloor would overweight an old
+    // // first sample or retain history whose footprint was only partly valid.
+    // return max(alphaFloor, optimalAlpha);
 
-    // // Only trace variance is identifiable from E[R^2], so this remains a
-    // // trace-standardized evidence measure rather than a chi-square/Wald test.
-    float historyCap = min(
-            tolerance * exp(-min(0.25*(normalizedDistanceSq), 80.0)), maximumHistory);
-    return min(historyWeight, historyCap);
+    return mix(1.0, 1.0 / (1.0 + historyEffectiveSamples), exp(-0.01 * sqrt(distanceSq / (historyVariance + currentVariance))));
 }
 
 #endif // MAXENT_MOMENT_STATISTICS_GLSL

@@ -39,19 +39,19 @@ vec3 debugReadReflectionSampleDirection(uvec2 xy) {
     return decodeNormalU(debugLoad(DEBUG_N_COMMON, xy).x);
 }
 
-void debugWriteDiffuseDenoisedDifference(uvec2 xy, float normalizedDistance) {
-    debugBuffer.data[addr(DEBUG_N_COMMON, xy)].y = floatBitsToUint(normalizedDistance);
+void debugWriteDiffuseVarianceOptimalAlpha(uvec2 xy, float optimalAlpha) {
+    debugBuffer.data[addr(DEBUG_N_COMMON, xy)].y = floatBitsToUint(optimalAlpha);
 }
 
-float debugReadDiffuseDenoisedDifference(uvec2 xy) {
+float debugReadDiffuseVarianceOptimalAlpha(uvec2 xy) {
     return uintBitsToFloat(debugLoad(DEBUG_N_COMMON, xy).y);
 }
 
-void debugWriteSpecularDenoisedDifference(uvec2 xy, float normalizedDistance) {
-    debugBuffer.data[addr(DEBUG_N_COMMON, xy)].z = floatBitsToUint(normalizedDistance);
+void debugWriteSpecularVarianceOptimalAlpha(uvec2 xy, float optimalAlpha) {
+    debugBuffer.data[addr(DEBUG_N_COMMON, xy)].z = floatBitsToUint(optimalAlpha);
 }
 
-float debugReadSpecularDenoisedDifference(uvec2 xy) {
+float debugReadSpecularVarianceOptimalAlpha(uvec2 xy) {
     return uintBitsToFloat(debugLoad(DEBUG_N_COMMON, xy).z);
 }
 

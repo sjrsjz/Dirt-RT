@@ -3,6 +3,7 @@
 
 #include "/lib/buffers/diffuse_buffer.glsl"
 #include "/lib/lighting/maxent_encode.glsl"
+#include "/lib/math/statistics.glsl"
 
 // In-memory wrappers preserve the storage ABI's root second moment. Any
 // interpolation squares the roots, blends E[Y^2] linearly, then takes the one
@@ -67,7 +68,8 @@ diffuseIlluminationData blendDiffuse(diffuseIlluminationData A,
         diffuseIlluminationData B, float x) {
     diffuseIlluminationData t;
     t.data_swap = mix_maxent(A.data_swap, B.data_swap, x);
-    t.weight = mix(A.weight, B.weight, x);
+    t.weight = statisticsKishBlendEffectiveSampleCounts(
+        A.weight, B.weight, x);
     t.rootMeanY2 = blendDiffuseRootMeanY2(
         A.rootMeanY2, B.rootMeanY2, x);
 #ifndef DIFFUSE_BUFFER_MIN2
@@ -78,7 +80,8 @@ diffuseIlluminationData blendDiffuse(diffuseIlluminationData A,
     t.histNormal = blendedNormalLen2 > 1e-8
         ? blendedNormal * inversesqrt(blendedNormalLen2)
         : vec3(0.0, 1.0, 0.0);
-    t.prev_weight = mix(A.prev_weight, B.prev_weight, x);
+    t.prev_weight = statisticsKishBlendEffectiveSampleCounts(
+        A.prev_weight, B.prev_weight, x);
     t.prevRootMeanY2 = blendDiffuseRootMeanY2(
         A.prevRootMeanY2, B.prevRootMeanY2, x);
 #endif

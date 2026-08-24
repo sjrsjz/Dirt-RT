@@ -152,20 +152,11 @@ option.RADIANCE_CACHE_RIS_GUIDING_KAPPA.comment = RIS 选中方向周围连续�
 # ===========================================================================
 # MaxEnt 漫反射时域
 # ===========================================================================
-option.MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY = 矩空间冷启动历史阈值
-option.MAXENT_TEMPORAL_DIFFERENCE_COLD_START_HISTORY.comment = 重投影有效样本数小于等于该值时停用矩空间历史钳制。
-
 option.MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY = 最大有效样本数
-option.MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY.comment = 漫反射历史的最大有效样本数。提高后更平滑，但对光照变化和解遮挡的响应更慢。
-
-option.MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT = 最小历史权重
-option.MAXENT_DIFFUSE_TEMPORAL_MIN_HISTORY_WEIGHT.comment = 低于此置信度的历史会被丢弃。提高可更早重置弱历史，降低则会更久保留稀疏历史。
+option.MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY.comment = 漫反射历史的有限窗口 Kish 有效样本数。达到窗口前，当前样本最小权重为 1/(N+1)；达到窗口后改为 2/(N+1)，从而不直接钳制 N 也不会锁死历史。
 
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE = 重投影深度缩放
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE.comment = 缩放时域重投影足迹梯形的深度半范围。提高可接受离重建表面平面更远的历史样本，减少重置但可能跨薄几何体泄漏。
-
-option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE = 鲁棒历史差异容差
-option.MAXENT_DIFFUSE_TEMPORAL_DIFFERENCE_TOLERANCE.comment = 重投影历史与当前 5x5 单次高斯重加权均值之间的标准化矩证据平方预算；提高会保留更多漫反射历史。
 
 option.MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS = 漫反射重投影半径
 option.MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS.comment = 漫反射时域路径足迹的像素半径。提高会允许更宽的路径重投影运动。
@@ -174,16 +165,13 @@ option.MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS.comment = 漫反射时域路�
 # MaxEnt 镜面时域
 # ===========================================================================
 option.MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY = 最大有效样本数
-option.MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY.comment = 镜面反射历史的最大 Kish 有效样本数。统计差异拒绝会在真实变化时自动缩短历史。
+option.MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY.comment = 镜面历史的有限窗口 Kish 有效样本数。达到窗口前，当前样本最小权重为 1/(N+1)；达到窗口后改为 2/(N+1)，从而不直接钳制 N 也不会锁死历史。
 
 option.MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD = 解遮挡阈值
 option.MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD.comment = 重投影表面的相对平面距离容差。降低会拒绝更多历史，提高则可能使历史越过薄小几何体。
 
 option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION = 镜面波瓣比例
 option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION.comment = 时域重投影允许的 GGX 波瓣比例。降低会在视角相关的反射变化处拒绝更多历史。
-
-option.MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE = 鲁棒历史差异容差
-option.MAXENT_SPECULAR_TEMPORAL_DIFFERENCE_TOLERANCE.comment = 重投影历史与当前 5x5 单次高斯重加权均值之间的标准化矩证据平方预算；提高会保留更多镜面历史。
 
 option.MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS = 镜面重投影半径
 option.MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS.comment = 镜面时域足迹的像素半径。提高会允许更宽的反射重投影运动。
@@ -278,7 +266,7 @@ value.DEBUG_VIEW.9 = 反射命中距离
 value.DEBUG_VIEW.10 = 镜面反照率
 value.DEBUG_VIEW.11 = 粗糙度
 value.DEBUG_VIEW.12 = 反射仅时域
-value.DEBUG_VIEW.13 = 漫反射历史权重
+value.DEBUG_VIEW.13 = 漫反射 Kish 有效样本数
 value.DEBUG_VIEW.14 = 反射实际历史贡献
 value.DEBUG_VIEW.15 = 折射历史权重
 value.DEBUG_VIEW.16 = 表面自发光
@@ -288,9 +276,9 @@ value.DEBUG_VIEW.19 = 折射虚拟距离
 value.DEBUG_VIEW.20 = 路径引导
 value.DEBUG_VIEW.21 = 时域累积原始
 value.DEBUG_VIEW.22 = 辐射率缓存
-value.DEBUG_VIEW.23 = 鲁棒漫反射降噪时域差异
+value.DEBUG_VIEW.23 = 漫反射方差最优 Alpha
 value.DEBUG_VIEW.24 = 降噪虚像法线
-value.DEBUG_VIEW.25 = 鲁棒镜面降噪时域差异
+value.DEBUG_VIEW.25 = 镜面方差最优 Alpha
 value.DEBUG_VIEW.26 = 漫反射方差准备
 value.DEBUG_VIEW.27 = 反射方差准备
 value.DEBUG_VIEW.31 = 缓存最近一次原始值
