@@ -1,10 +1,14 @@
+// Purpose: preserve the raw reprojected reflection estimator before colortex5 becomes A-Trous input.
+// Dispatch: 16x16.
+// Reads: colortex5 raw reprojection, current geometry, filtered-history reprojection scratch.
+// Writes: reflection N1/N2 transient history staging planes.
+// Persistent side effects: none; resolve.glsl overwrites these planes with the accepted update.
+// Invalid representation: zero staging records.
+
 layout(local_size_x = 16, local_size_y = 16) in;
 
-// Race-free transfer of the raw reprojected estimator into N1/N2 scratch.
-// The final resolve overwrites these planes with the actually accepted update.
-
 #define REFLECT_BUFFER
-#include "/lib/lighting/denoiser/maxent_specular_temporal_common.glsl"
+#include "/post/denoiser/reflection/common.glsl"
 
 uniform usampler2D colortex5;
 
@@ -22,12 +26,12 @@ void main() {
     MaxEntTemporalSignal temporal = maxentUnpackTemporal(
         texelFetch(colortex5, ivec2(pixel), 0));
     SpecularMaxEnt denoisedSignal;
-    float denoisedStddev, reprojectionAlphaFloor;
-    float historyHitDistance;
-    if (!statisticsValidEffectiveSampleCount(temporal.historyLength)
+    float denoisedEstimatorStdDev, reprojectionAlphaFloor;
+    float currentTrackingHitDistance;
+    if (!statisticsValidEffectiveSampleCount(temporal.historyEffectiveSamples)
             || !readMaxEntSpecularDenoisedReprojection(pixel,
-                denoisedSignal, denoisedStddev, reprojectionAlphaFloor,
-                historyHitDistance)) {
+                denoisedSignal, denoisedEstimatorStdDev, reprojectionAlphaFloor,
+                currentTrackingHitDistance)) {
         reflectBuffer.data[addr(SPEC_N_HISTGEO, pixel)] = uvec4(0u);
         reflectBuffer.data[addr(SPEC_N_HISTLIGHT, pixel)] = uvec4(0u);
         return;
@@ -37,9 +41,9 @@ void main() {
     history.geometryNormal = geometry.normal;
     history.signal = temporal.signal;
     history.rootMeanY2 = temporal.rootMeanY2;
-    history.hitDistance = historyHitDistance;
+    history.hitDistance = currentTrackingHitDistance;
     history.roughness = geometry.roughness;
-    history.historyLength = temporal.historyLength;
+    history.historyEffectiveSamples = temporal.historyEffectiveSamples;
     history.materialID = geometry.materialID;
     writeMaxEntSpecularTemporalHistory(pixel, history);
 }

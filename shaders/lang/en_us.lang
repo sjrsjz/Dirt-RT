@@ -150,11 +150,14 @@ option.RADIANCE_CACHE_RIS_GUIDING_KAPPA = Cache RIS Guide Sharpness
 option.RADIANCE_CACHE_RIS_GUIDING_KAPPA.comment = Concentration of the continuous sampling lobe around the RIS-selected direction. Higher values can find compact lights faster but are more sensitive to stale or imprecise directions; lower values are more robust.
 
 # ===========================================================================
+# Shared MaxEnt Temporal Response
+# ===========================================================================
+option.MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE = Moment-distance Response Scale
+option.MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE.comment = Shared by diffuse and specular temporal accumulation. It scales squared moment distance relative to the combined estimator variance. Higher values give the current frame more weight for the same difference and reject history more aggressively.
+
+# ===========================================================================
 # MaxEnt Diffuse Temporal
 # ===========================================================================
-option.MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY = Max History Samples
-option.MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY.comment = Finite-window Kish effective sample count for diffuse history. Before this window the minimum current weight is 1/(N+1); at the window it becomes 2/(N+1), preventing frozen history without directly clamping N.
-
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE = Reprojection Depth Scale
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE.comment = Scales the depth half-extent of the temporal reprojection footprint trapezoid. Higher values accept history samples that are farther off the reconstructed surface plane, reducing resets but potentially leaking across thin geometry.
 
@@ -164,9 +167,6 @@ option.MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS.comment = Diffuse temporal fo
 # ===========================================================================
 # MaxEnt Specular Temporal
 # ===========================================================================
-option.MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY = Max History Samples
-option.MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY.comment = Finite-window Kish effective sample count for reflection history. Before this window the minimum current weight is 1/(N+1); at the window it becomes 2/(N+1), preventing frozen history without directly clamping N.
-
 option.MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD = Disocclusion Threshold
 option.MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD.comment = Relative plane-distance tolerance for reprojected surfaces. Lower values reject more history; higher values can leak history across thin geometry.
 
@@ -196,9 +196,6 @@ option.MAXENT_VARIANCE_HISTORY_END.comment = Shared diffuse/specular effective s
 # ===========================================================================
 # MaxEnt Spatial Filter
 # ===========================================================================
-option.MAXENT_SPATIAL_NORMAL_SENSITIVITY = Texture-normal Sensitivity
-option.MAXENT_SPATIAL_NORMAL_SENSITIVITY.comment = Texture-normal rejection strength used only by the refraction variance filter; it no longer affects MaxEnt spatial filtering.
-
 option.MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE = Plane-distance Tolerance
 option.MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE.comment = Relative projected plane-depth tolerance used by MaxEnt virtual-image rejection, refraction, and path-guide spatial tests. Higher values permit more cross-plane filtering.
 
@@ -251,40 +248,46 @@ option.VPROJDIST_SKY.comment = Virtual projected distance (meters) assigned to s
 # ===========================================================================
 # Debug
 # ===========================================================================
-option.DEBUG_VIEW = Debug View
-option.DEBUG_VIEW.comment = Replaces the final image with an internal lighting or cache visualization. Use Normal for regular rendering.
-value.DEBUG_VIEW.0 = Normal
-value.DEBUG_VIEW.1 = Diffuse
-value.DEBUG_VIEW.2 = Refract
-value.DEBUG_VIEW.3 = Reflect
-value.DEBUG_VIEW.4 = White Model
-value.DEBUG_VIEW.5 = Light Field
-value.DEBUG_VIEW.6 = Normals
-value.DEBUG_VIEW.7 = Absorption
-value.DEBUG_VIEW.8 = Refl. Direction
-value.DEBUG_VIEW.9 = RT Spatial Mean HitDist
-value.DEBUG_VIEW.10 = Specular Albedo
-value.DEBUG_VIEW.11 = Roughness
-value.DEBUG_VIEW.12 = Refl. Temporal Only
-value.DEBUG_VIEW.13 = Diffuse Kish Effective Samples
-value.DEBUG_VIEW.14 = Reflect History Contribution
-value.DEBUG_VIEW.15 = Refract Weight
-value.DEBUG_VIEW.16 = Surface Emission
-value.DEBUG_VIEW.17 = Medium Emission
-value.DEBUG_VIEW.18 = Diffuse Albedo
-value.DEBUG_VIEW.19 = Refr. VirtDist
-value.DEBUG_VIEW.20 = Path Guide
-value.DEBUG_VIEW.21 = Temporal Raw
-value.DEBUG_VIEW.22 = Radiance Cache
-value.DEBUG_VIEW.23 = Diffuse Variance-Optimal Alpha
-value.DEBUG_VIEW.24 = Denoised Virtual Normal
-value.DEBUG_VIEW.25 = Specular Variance-Optimal Alpha
-value.DEBUG_VIEW.26 = Diffuse Variance Preparation
-value.DEBUG_VIEW.27 = Specular Variance Preparation
-value.DEBUG_VIEW.31 = Cache Latest Raw
-value.DEBUG_VIEW.32 = Cache RIS Reservoir
-value.DEBUG_VIEW.33 = Cache RIS Sample Count
-value.DEBUG_VIEW.34 = Cache Final Temporal
-value.DEBUG_VIEW.35 = Motion Match Status
-value.DEBUG_VIEW.36 = Entity World Motion
-value.DEBUG_VIEW.37 = Screen Motion
+option.DEBUG_RT_FORCE_GEOMETRY_NORMAL = RT Geometry Normals Only
+option.DEBUG_RT_FORCE_GEOMETRY_NORMAL.comment = Replaces normal-mapped shading normals with face-forward triangle geometry normals in every RT material evaluation and disables RT parallax occlusion mapping. Rasterized G-buffer materials are unchanged.
+value.DEBUG_RT_FORCE_GEOMETRY_NORMAL.1 = On
+value.DEBUG_RT_FORCE_GEOMETRY_NORMAL.0 = Off
+
+option.DEBUG_VIEW = Categorized Debug View
+option.DEBUG_VIEW.comment = Grouped by output, material, denoiser, refraction, cache, and motion. Scalar heat maps generally use blue for low, red for high, and magenta for invalid data.
+value.DEBUG_VIEW.0 = [Output] Final Composite
+value.DEBUG_VIEW.1 = [Output] Diffuse Lighting
+value.DEBUG_VIEW.2 = [Output] Specular Lighting
+value.DEBUG_VIEW.3 = [Output] Refraction Lighting
+value.DEBUG_VIEW.4 = [Output] Diffuse Irradiance, No Albedo
+value.DEBUG_VIEW.5 = [Output] Primary-Surface Material Light
+value.DEBUG_VIEW.6 = [Output] Path Medium Emission
+value.DEBUG_VIEW.7 = [Output] Path Absorption Transmittance
+value.DEBUG_VIEW.10 = [Material] Shading Normal
+value.DEBUG_VIEW.11 = [Material] Diffuse Albedo
+value.DEBUG_VIEW.12 = [Material] Specular Albedo
+value.DEBUG_VIEW.13 = [Material] GGX Alpha
+value.DEBUG_VIEW.20 = [Diffuse Denoiser] Committed Raw Temporal History
+value.DEBUG_VIEW.21 = [Diffuse Denoiser] Final Normalized Absolute First Moment
+value.DEBUG_VIEW.22 = [Diffuse Denoiser] Kish N_eff
+value.DEBUG_VIEW.23 = [Diffuse Denoiser] Noise-Only Current Weight VH/(VH+VC)
+value.DEBUG_VIEW.24 = [Diffuse Denoiser] Prepared Estimator Variance
+value.DEBUG_VIEW.30 = [Specular Denoiser] Actual RT Sample Direction
+value.DEBUG_VIEW.31 = [Specular Denoiser] Current Tracking Hit Distance
+value.DEBUG_VIEW.32 = [Specular Denoiser] Committed Raw Temporal History
+value.DEBUG_VIEW.33 = [Specular Denoiser] Final Virtual-Image Normal
+value.DEBUG_VIEW.34 = [Specular Denoiser] Kish N_eff
+value.DEBUG_VIEW.35 = [Specular Denoiser] Resolved History Contribution 1-alpha
+value.DEBUG_VIEW.36 = [Specular Denoiser] Noise-Only Current Weight VH/(VH+VC)
+value.DEBUG_VIEW.37 = [Specular Denoiser] Prepared Estimator Variance
+value.DEBUG_VIEW.40 = [Refraction] PSR Resolve Route
+value.DEBUG_VIEW.41 = [Refraction] Virtual Endpoint Distance
+value.DEBUG_VIEW.50 = [Path Guide] Final MaxEnt Direction
+value.DEBUG_VIEW.51 = [Radiance Cache] Surface History Sample + Surface Light
+value.DEBUG_VIEW.52 = [Radiance Cache] Current Raw Irradiance
+value.DEBUG_VIEW.53 = [Radiance Cache] Temporal History Irradiance
+value.DEBUG_VIEW.54 = [Radiance Cache] History Sample Count M
+value.DEBUG_VIEW.55 = [Radiance Cache] Final Filtered Irradiance
+value.DEBUG_VIEW.60 = [Motion] Entity Match Status
+value.DEBUG_VIEW.61 = [Motion] Entity World Displacement
+value.DEBUG_VIEW.62 = [Motion] Primary-Surface Screen Velocity

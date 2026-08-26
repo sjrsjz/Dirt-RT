@@ -1,27 +1,30 @@
-#ifndef MAXENT_TEMPORAL_ROBUST_TILE_GLSL
-#define MAXENT_TEMPORAL_ROBUST_TILE_GLSL
+#ifndef MAXENT_DENOISER_ROBUST_MEAN_GLSL
+#define MAXENT_DENOISER_ROBUST_MEAN_GLSL
+
+#include "/lib/lighting/denoiser/internal_constants.glsl"
+#include "/lib/lighting/denoiser/signal.glsl"
+#include "/lib/lighting/denoiser/light_difference.glsl"
+#include "/lib/math/statistics.glsl"
 
 // Both history-resolve programs use 16x16 workgroups. The including pass
-// supplies maxentTemporalRobustLoadSignalWords(), which reads the independently
-// current-frame-filtered branch rather than the temporally premixed proposal.
-// A two-pixel halo gives each invocation a complete 5x5 neighborhood while
+// supplies image-size, signal and geometry callbacks. The signal callback reads
+// the independently current-frame-filtered branch, never the premixed proposal.
+// A one-pixel halo gives each invocation a complete 3x3 neighborhood while
 // every source signal and geometry record is fetched only once per workgroup.
 const int MAXENT_TEMPORAL_ROBUST_GROUP_SIZE = 16;
-const int MAXENT_TEMPORAL_ROBUST_RADIUS = 2;
-const int MAXENT_TEMPORAL_ROBUST_DIAMETER = 5;
-const int MAXENT_TEMPORAL_ROBUST_SAMPLE_COUNT = 25;
-const int MAXENT_TEMPORAL_ROBUST_TILE_SIZE = 20;
-const int MAXENT_TEMPORAL_ROBUST_TILE_AREA = 400;
+const int MAXENT_TEMPORAL_ROBUST_RADIUS = 1;
+const int MAXENT_TEMPORAL_ROBUST_DIAMETER = 2 * MAXENT_TEMPORAL_ROBUST_RADIUS + 1;
+const int MAXENT_TEMPORAL_ROBUST_SAMPLE_COUNT = MAXENT_TEMPORAL_ROBUST_DIAMETER * MAXENT_TEMPORAL_ROBUST_DIAMETER;
+const int MAXENT_TEMPORAL_ROBUST_TILE_SIZE = MAXENT_TEMPORAL_ROBUST_GROUP_SIZE + 2 * MAXENT_TEMPORAL_ROBUST_RADIUS;
+const int MAXENT_TEMPORAL_ROBUST_TILE_AREA = MAXENT_TEMPORAL_ROBUST_TILE_SIZE * MAXENT_TEMPORAL_ROBUST_TILE_SIZE;
 const float MAXENT_TEMPORAL_ROBUST_MAX_PLANE_EXPONENT = 1.0;
 
-shared uvec4 maxentTemporalRobustSignalTile[
-    MAXENT_TEMPORAL_ROBUST_TILE_AREA];
-shared uvec4 maxentTemporalRobustGeometryTile[
-    MAXENT_TEMPORAL_ROBUST_TILE_AREA];
+shared uvec4 maxentTemporalRobustSignalTile[MAXENT_TEMPORAL_ROBUST_TILE_AREA];
+shared uvec4 maxentTemporalRobustGeometryTile[MAXENT_TEMPORAL_ROBUST_TILE_AREA];
 
 struct MaxEntTemporalRobustEstimate {
     vec4 moment;
-    float standardDeviation;
+    float estimatorStdDev;
 };
 
 int maxentTemporalRobustTileIndex(ivec2 tilePixel) {
@@ -29,13 +32,12 @@ int maxentTemporalRobustTileIndex(ivec2 tilePixel) {
 }
 
 ivec2 maxentTemporalRobustTilePixel(ivec2 offset) {
-    return ivec2(gl_LocalInvocationID.xy)
-        + ivec2(MAXENT_TEMPORAL_ROBUST_RADIUS) + offset;
+    return ivec2(gl_LocalInvocationID.xy) + ivec2(MAXENT_TEMPORAL_ROBUST_RADIUS) + offset;
 }
 
 void maxentTemporalRobustLoadSharedTile() {
     int localIndex = int(gl_LocalInvocationIndex);
-    ivec2 imageSize = textureSize(colortex4, 0);
+    ivec2 imageSize = maxentTemporalRobustImageSize();
     ivec2 groupOrigin = ivec2(gl_WorkGroupID.xy)
         * MAXENT_TEMPORAL_ROBUST_GROUP_SIZE;
     for (int tileIndex = localIndex;
@@ -52,8 +54,7 @@ void maxentTemporalRobustLoadSharedTile() {
         maxentTemporalRobustSignalTile[tileIndex] = validPixel
             ? maxentTemporalRobustLoadSignalWords(pixel)
             : denoiserInvalidMaxEntSignalWords();
-        maxentTemporalRobustGeometryTile[tileIndex] = validPixel
-            ? readPrimaryGeometryWords(uvec2(pixel))
+        maxentTemporalRobustGeometryTile[tileIndex] = validPixel ? maxentTemporalRobustLoadGeometryWords(pixel)
             : uvec4(0u, 0u, 0u, floatBitsToUint(-1.0));
     }
     memoryBarrierShared();
@@ -75,9 +76,8 @@ vec4 maxentTemporalRobustTileMoment(ivec2 offset) {
     return vec4(unpackHalf2x16(words.x), unpackHalf2x16(words.y));
 }
 
-float maxentTemporalRobustTileStandardDeviation(ivec2 offset) {
-    return max(unpackHalf2x16(
-        maxentTemporalRobustTileSignalWords(offset).w).x, 0.0);
+float maxentTemporalRobustTileEstimatorStdDev(ivec2 offset) {
+    return max(unpackHalf2x16(maxentTemporalRobustTileSignalWords(offset).w).x, 0.0);
 }
 
 int maxentTemporalRobustNeighborhoodIndex(ivec2 offset) {
@@ -97,18 +97,17 @@ bool maxentTemporalRobustMaskContains(uint acceptedMask, int sampleIndex) {
 // The two reconstruction sweeps then read only shared denoiser output: first
 // the scalar population variance, then one isotropic Gaussian reweighted mean.
 // The same frozen weights propagate the supplied estimator trace variance.
-MaxEntTemporalRobustEstimate maxentTemporalGaussianReweightedTileEstimate(
-        uint acceptedMask, int sampleCount, vec4 momentSum,
-        vec4 fallbackMoment, float fallbackStandardDeviation) {
+MaxEntTemporalRobustEstimate maxentTemporalGaussianReweightedTileEstimate(uint acceptedMask, int sampleCount,
+        vec4 momentSum, vec4 fallbackMoment, float fallbackEstimatorStdDev) {
     MaxEntTemporalRobustEstimate estimate;
     estimate.moment = fallbackMoment;
-    estimate.standardDeviation = max(fallbackStandardDeviation, 0.0);
+    estimate.estimatorStdDev = max(fallbackEstimatorStdDev, 0.0);
     if (sampleCount <= 0) return estimate;
     vec4 initialMean = momentSum / float(sampleCount);
 
     float scalarVariance = 0.0;
     float initialSquaredWeightVarianceSum = 0.0;
-    float initialWeightedStddevSum = 0.0;
+    float initialWeightedStdDevSum = 0.0;
     for (int sampleIndex = 0;
             sampleIndex < MAXENT_TEMPORAL_ROBUST_SAMPLE_COUNT; ++sampleIndex) {
         if (!maxentTemporalRobustMaskContains(acceptedMask, sampleIndex))
@@ -117,19 +116,17 @@ MaxEntTemporalRobustEstimate maxentTemporalGaussianReweightedTileEstimate(
             sampleIndex % MAXENT_TEMPORAL_ROBUST_DIAMETER,
             sampleIndex / MAXENT_TEMPORAL_ROBUST_DIAMETER)
             - ivec2(MAXENT_TEMPORAL_ROBUST_RADIUS);
-        scalarVariance += maxentMomentDistanceSq(
+        scalarVariance += maxentLightSampleDistanceSq(
             maxentTemporalRobustTileMoment(offset), initialMean);
-        float standardDeviation =
-            maxentTemporalRobustTileStandardDeviation(offset);
-        initialSquaredWeightVarianceSum +=
-            standardDeviation * standardDeviation;
-        initialWeightedStddevSum += standardDeviation;
+        float estimatorStdDev = maxentTemporalRobustTileEstimatorStdDev(offset);
+        initialSquaredWeightVarianceSum += estimatorStdDev * estimatorStdDev;
+        initialWeightedStdDevSum += estimatorStdDev;
     }
     scalarVariance /= float(sampleCount);
     float inverseSampleCount = 1.0 / float(sampleCount);
     estimate.moment = initialMean;
-    estimate.standardDeviation = statisticsWeightedMeanStandardDeviation(
-        initialSquaredWeightVarianceSum, initialWeightedStddevSum,
+    estimate.estimatorStdDev = statisticsWeightedMeanStandardDeviation(
+        initialSquaredWeightVarianceSum, initialWeightedStdDevSum,
         inverseSampleCount,
         MAXENT_TEMPORAL_ROBUST_PROPAGATION_CORRELATION);
     if (!(scalarVariance > 0.0) || isnan(scalarVariance)
@@ -139,7 +136,7 @@ MaxEntTemporalRobustEstimate maxentTemporalGaussianReweightedTileEstimate(
     vec4 weightedMomentSum = vec4(0.0);
     float weightSum = 0.0;
     float squaredWeightVarianceSum = 0.0;
-    float weightedStddevSum = 0.0;
+    float weightedStdDevSum = 0.0;
     for (int sampleIndex = 0;
             sampleIndex < MAXENT_TEMPORAL_ROBUST_SAMPLE_COUNT; ++sampleIndex) {
         if (!maxentTemporalRobustMaskContains(acceptedMask, sampleIndex))
@@ -149,15 +146,13 @@ MaxEntTemporalRobustEstimate maxentTemporalGaussianReweightedTileEstimate(
             sampleIndex / MAXENT_TEMPORAL_ROBUST_DIAMETER)
             - ivec2(MAXENT_TEMPORAL_ROBUST_RADIUS);
         vec4 moment = maxentTemporalRobustTileMoment(offset);
-        float residualSq = maxentMomentDistanceSq(moment, initialMean);
+        float residualSq = maxentLightSampleDistanceSq(moment, initialMean);
         float weight = exp(-residualSq * inverseTwoVariance);
         weightedMomentSum += weight * moment;
         weightSum += weight;
-        float standardDeviation =
-            maxentTemporalRobustTileStandardDeviation(offset);
-        squaredWeightVarianceSum += weight * weight
-            * standardDeviation * standardDeviation;
-        weightedStddevSum += weight * standardDeviation;
+        float estimatorStdDev = maxentTemporalRobustTileEstimatorStdDev(offset);
+        squaredWeightVarianceSum += weight * weight * estimatorStdDev * estimatorStdDev;
+        weightedStdDevSum += weight * estimatorStdDev;
     }
     if (!(weightSum > 0.0) || isnan(weightSum) || isinf(weightSum))
         return estimate;
@@ -166,10 +161,10 @@ MaxEntTemporalRobustEstimate maxentTemporalGaussianReweightedTileEstimate(
     if (any(isnan(reweightedMean)) || any(isinf(reweightedMean)))
         return estimate;
     estimate.moment = reweightedMean;
-    estimate.standardDeviation = statisticsWeightedMeanStandardDeviation(
-        squaredWeightVarianceSum, weightedStddevSum, 1.0 / weightSum,
+    estimate.estimatorStdDev = statisticsWeightedMeanStandardDeviation(
+        squaredWeightVarianceSum, weightedStdDevSum, 1.0 / weightSum,
         MAXENT_TEMPORAL_ROBUST_PROPAGATION_CORRELATION);
     return estimate;
 }
 
-#endif // MAXENT_TEMPORAL_ROBUST_TILE_GLSL
+#endif // MAXENT_DENOISER_ROBUST_MEAN_GLSL

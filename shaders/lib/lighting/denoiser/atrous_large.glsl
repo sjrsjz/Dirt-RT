@@ -1,7 +1,7 @@
-#ifndef MAXENT_SPATIAL_ATROUS_LARGE_GLSL
-#define MAXENT_SPATIAL_ATROUS_LARGE_GLSL
+#ifndef MAXENT_DENOISER_ATROUS_LARGE_GLSL
+#define MAXENT_DENOISER_ATROUS_LARGE_GLSL
 
-// Same policy interface as maxent_spatial_atrous_small.glsl, except stores are
+// Same policy interface as atrous_small.glsl, except stores are
 // owned by the including pass. This lets the shared Poisson implementation be
 // used by both fragment and compute entry points.
 
@@ -85,7 +85,7 @@ bool denoiserSpatialFilterLarge(ivec2 pixel,
     if (!denoiserSpatialLargeInBounds(pixel, size)) return false;
 
     uvec4 centerCurrentWords =
-        maxentAtrousLoadIndependentCurrentWords(pixel);
+        denoiserSpatialLoadIndependentCurrentWords(pixel);
     if (!denoiserSpatialSignalWordsValid(centerSignalWords)
             || !denoiserSpatialSignalWordsValid(centerCurrentWords))
         return false;
@@ -93,12 +93,12 @@ bool denoiserSpatialFilterLarge(ivec2 pixel,
     if (!denoiserSpatialGeometryWordsValid(centerGeometryWords))
         return false;
     DenoiserSpatialCenterGeometry centerGeometry =
-        denoiserSpatialDecodeCenterGeometry(centerGeometryWords);
+        denoiserSpatialDecodeCenterGeometry(centerGeometryWords, pixel);
 
     DenoiserMaxEntSignal centerSignal = denoiserUnpackMaxEntSignalTrusted(centerSignalWords);
     DenoiserMaxEntSignal centerCurrent =
         denoiserUnpackMaxEntSignalTrusted(centerCurrentWords);
-    float surfaceRejectionScale = denoiserSpatialSurfaceRejectionScale(
+    float surfaceRejectionScale = denoiserSpatialDistanceRejectionScale(
         centerGeometry.surfaceDistance, float(size.y));
     float virtualDistanceAlpha = centerGeometry.ggxAlpha;
     vec3 centerVirtualPosition =
@@ -140,20 +140,23 @@ bool denoiserSpatialFilterLarge(ivec2 pixel,
         uvec4 sampleGeometryWords = denoiserSpatialLoadGeometryWords(samplePixel);
         uvec4 sampleSignalWords = denoiserSpatialLoadSignalWords(samplePixel);
         uvec4 sampleCurrentWords =
-            maxentAtrousLoadIndependentCurrentWords(samplePixel);
+            denoiserSpatialLoadIndependentCurrentWords(samplePixel);
         if (!denoiserSpatialGeometryWordsValid(sampleGeometryWords)
                 || !denoiserSpatialSignalWordsValid(sampleSignalWords)
                 || !denoiserSpatialSignalWordsValid(sampleCurrentWords))
             continue;
         vec3 samplePrimaryRay;
+        vec3 samplePdfDirection;
         float sampleSurfaceDistance;
-        denoiserSpatialDecodeSampleGeometry(sampleGeometryWords,
-            samplePrimaryRay, sampleSurfaceDistance);
+        denoiserSpatialDecodeSampleGeometry(sampleGeometryWords, samplePixel,
+            samplePrimaryRay, samplePdfDirection, sampleSurfaceDistance);
         float surfaceGeometryExponent =
-            denoiserSpatialSurfacePlaneDepthExponent(
+            denoiserSpatialAxialDistanceExponent(
                 centerGeometry.surfacePlaneOffset,
-                centerGeometry.surfaceNormal, samplePrimaryRay,
-                sampleSurfaceDistance, surfaceRejectionScale);
+                centerGeometry.geometryNormal, samplePrimaryRay,
+                sampleSurfaceDistance, surfaceRejectionScale)
+            + denoiserSpatialPdfDirectionExponent(
+                centerGeometry.pdfDirection, samplePdfDirection);
 
         DenoiserMaxEntSignal sampleSignal = denoiserUnpackMaxEntSignalTrusted(sampleSignalWords);
         DenoiserMaxEntSignal sampleCurrent =
@@ -180,4 +183,4 @@ bool denoiserSpatialFilterLarge(ivec2 pixel,
     return true;
 }
 
-#endif // MAXENT_SPATIAL_ATROUS_LARGE_GLSL
+#endif // MAXENT_DENOISER_ATROUS_LARGE_GLSL

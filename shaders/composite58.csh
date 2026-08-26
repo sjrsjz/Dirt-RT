@@ -1,1 +1,1 @@
-#include "/post/maxent_diffuse_history_resolve.glsl"
+#include "/post/denoiser/diffuse/resolve.glsl"

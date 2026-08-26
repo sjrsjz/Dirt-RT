@@ -1,6 +1,7 @@
+#version 430 core
+
 #define DENOISER_SPATIAL_PHI_LUMINANCE MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY
-#define MAXENT_ATROUS_DIFFUSE
 #define MAXENT_ATROUS_SMALL_KERNEL
 #define MAXENT_ATROUS_WRITE_ALTERNATE
 #define MAXENT_ATROUS_STEP 1
-#include "/post/maxent_atrous.glsl"
+#include "/post/denoiser/diffuse/atrous_pass.glsl"

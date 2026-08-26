@@ -53,16 +53,16 @@ float logDistNorm(float d) {
     return clamp(log2(max(d, 0.01) * 100.0 + 1.0) / 14.0, 0.0, 1.0);
 }
 
-#if DEBUG_VIEW == 23 || DEBUG_VIEW == 25
-vec3 debugTemporalVarianceOptimalAlpha(float optimalAlpha) {
-    if (!(optimalAlpha >= 0.0) || isnan(optimalAlpha) || isinf(optimalAlpha))
+#if DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_NOISE_ONLY_CURRENT_WEIGHT || DEBUG_VIEW == DEBUG_VIEW_SPECULAR_NOISE_ONLY_CURRENT_WEIGHT
+vec3 debugNoiseOnlyCurrentWeight(float currentWeight) {
+    if (!(currentWeight >= 0.0) || isnan(currentWeight) || isinf(currentWeight))
         return vec3(1.0, 0.0, 1.0);
-    return jetColormap(clamp(optimalAlpha, 0.0, 1.0));
+    return jetColormap(clamp(currentWeight, 0.0, 1.0));
 }
 #endif
 
-#if DEBUG_VIEW == 26 || DEBUG_VIEW == 27
-vec3 debugVariancePreparation(float standardDeviation) {
+#if DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_PREPARED_ESTIMATOR_VARIANCE || DEBUG_VIEW == DEBUG_VIEW_SPECULAR_PREPARED_ESTIMATOR_VARIANCE
+vec3 debugPreparedEstimatorVariance(float standardDeviation) {
     if (!(standardDeviation >= 0.0) || isnan(standardDeviation)
             || isinf(standardDeviation))
         return vec3(1.0, 0.0, 1.0);
@@ -75,7 +75,14 @@ vec3 debugVariancePreparation(float standardDeviation) {
 }
 #endif
 
-#if DEBUG_VIEW == 24
+#if DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_KISH_EFFECTIVE_SAMPLES || DEBUG_VIEW == DEBUG_VIEW_SPECULAR_KISH_EFFECTIVE_SAMPLES
+vec3 debugKishEffectiveSamples(float effectiveSamples) {
+    if (!(effectiveSamples >= 1.0) || isnan(effectiveSamples) || isinf(effectiveSamples)) return vec3(1.0, 0.0, 1.0);
+    return jetColormap(clamp(log2(effectiveSamples) / log2(65504.0), 0.0, 1.0));
+}
+#endif
+
+#if DEBUG_VIEW == DEBUG_VIEW_SPECULAR_FINAL_VIRTUAL_NORMAL
 bool debugReadFinalDenoisedVirtualPosition(ivec2 pixel,
         out vec3 position) {
     if (any(lessThan(pixel, ivec2(0)))
@@ -229,29 +236,27 @@ void main() {
     float primaryDistance = uintBitsToFloat(primaryGeometryWords.w);
     float surfaceMask = primaryDistance >= 0.0 ? 1.0 : 0.0;
 
-    #if DEBUG_VIEW == 23
+    #if DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_NOISE_ONLY_CURRENT_WEIGHT
     fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0)
-        : debugTemporalVarianceOptimalAlpha(
-            debugReadDiffuseVarianceOptimalAlpha(xy));
+        : debugNoiseOnlyCurrentWeight(debugReadDiffuseNoiseOnlyCurrentWeight(xy));
     return;
-    #elif DEBUG_VIEW == 25
+    #elif DEBUG_VIEW == DEBUG_VIEW_SPECULAR_NOISE_ONLY_CURRENT_WEIGHT
     fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0)
-        : debugTemporalVarianceOptimalAlpha(
-            debugReadSpecularVarianceOptimalAlpha(xy));
+        : debugNoiseOnlyCurrentWeight(debugReadSpecularNoiseOnlyCurrentWeight(xy));
     return;
-    #elif DEBUG_VIEW == 26
+    #elif DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_PREPARED_ESTIMATOR_VARIANCE
     fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0)
-        : debugVariancePreparation(
-            debugReadDiffuseVariancePreparationStandardDeviation(xy));
+        : debugPreparedEstimatorVariance(
+            debugReadDiffusePreparedEstimatorStandardDeviation(xy));
     return;
-    #elif DEBUG_VIEW == 27
+    #elif DEBUG_VIEW == DEBUG_VIEW_SPECULAR_PREPARED_ESTIMATOR_VARIANCE
     fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0)
-        : debugVariancePreparation(
-            debugReadSpecularVariancePreparationStandardDeviation(xy));
+        : debugPreparedEstimatorVariance(
+            debugReadSpecularPreparedEstimatorStandardDeviation(xy));
     return;
     #endif
 
-    #if DEBUG_VIEW == 24
+    #if DEBUG_VIEW == DEBUG_VIEW_SPECULAR_FINAL_VIRTUAL_NORMAL
     if (surfaceMask < 0.5) {
         fragColor.xyz = vec3(0.0);
         return;
@@ -264,7 +269,7 @@ void main() {
     return;
     #endif
 
-    #if DEBUG_VIEW >= 35 && DEBUG_VIEW <= 37
+    #if DEBUG_VIEW >= DEBUG_VIEW_MOTION_MATCH_STATUS && DEBUG_VIEW <= DEBUG_VIEW_MOTION_PRIMARY_SCREEN
     // Sky pixels do not contain a surface motion record.
     if (surfaceMask < 0.5) {
         fragColor.xyz = vec3(0.0);
@@ -272,10 +277,10 @@ void main() {
     }
     #endif
 
-    // =========================================================================
-    // 分支 1: 天空像素 — 读 Geo0 + N=3 + N=4
-    // =========================================================================
+    // Sky has no surface-domain denoiser, material, cache, or motion record.
+    // Only diagnostics with an explicit sky meaning produce a non-black value.
     if (surfaceMask < 0.5) {
+        #if DEBUG_VIEW == DEBUG_VIEW_OUTPUT_COMPOSITE
         vec3 emisVal, rdVal, absorptionVal;
         vec3 transAlbedo_unused, lightVal_unused;
         readMiscTransport(GEO_N_MISC, xy, transAlbedo_unused, emisVal);
@@ -296,6 +301,15 @@ void main() {
             dFdy(rdVal));
         sky = max(sky - pointSunDisc + filteredSunDisc, vec3(0.0));
         fragColor.xyz = absorptionVal * sky + emisVal;
+        #elif DEBUG_VIEW == DEBUG_VIEW_OUTPUT_MEDIUM_EMISSION
+        vec3 transmissionAlbedoUnused;
+        readMiscTransport(GEO_N_MISC, xy, transmissionAlbedoUnused, fragColor.xyz);
+        #elif DEBUG_VIEW == DEBUG_VIEW_OUTPUT_ABSORPTION_TRANSMITTANCE
+        vec3 surfaceLightUnused;
+        readLightAbs(GEO_N_LIGHTABS, xy, surfaceLightUnused, fragColor.xyz);
+        #else
+        fragColor.xyz = vec3(0.0);
+        #endif
         writeDiffuseLightRTSky(xy);
         return;
     }
@@ -338,7 +352,10 @@ void main() {
 
     // MaxEnt 漫反射投影使用微法线；EON 开启时同时恢复粗糙漫反射响应。
 
-    #if DEBUG_VIEW == 0
+    // ---------------------------------------------------------------------
+    // Final lighting decomposition (0-7).
+    // ---------------------------------------------------------------------
+    #if DEBUG_VIEW == DEBUG_VIEW_OUTPUT_COMPOSITE
     fragColor.xyz = absorptionVal
             * (diffuseLighting
                 + refractionLighting * transAlbedo
@@ -346,84 +363,107 @@ void main() {
                 + lightVal)
             + emisVal;
 
-    #elif DEBUG_VIEW == 1
-    // Diffuse transport only. First-hit NEE is already part of this signal.
+    #elif DEBUG_VIEW == DEBUG_VIEW_OUTPUT_DIFFUSE_LIGHTING
+    // Material-applied diffuse transport. First-hit NEE is already included.
     fragColor.xyz = diffuseLighting;
 
-    #elif DEBUG_VIEW == 2
-    // Refract only
-    fragColor.xyz = refractionLighting * transAlbedo;
-
-    #elif DEBUG_VIEW == 3
-    // Reflect only
+    #elif DEBUG_VIEW == DEBUG_VIEW_OUTPUT_SPECULAR_LIGHTING
     fragColor.xyz = specularLighting;
 
-    #elif DEBUG_VIEW == 4
-    // White model: diffuse irradiance only, no albedo
+    #elif DEBUG_VIEW == DEBUG_VIEW_OUTPUT_REFRACTION_LIGHTING
+    fragColor.xyz = refractionLighting * transAlbedo;
+
+    #elif DEBUG_VIEW == DEBUG_VIEW_OUTPUT_DIFFUSE_IRRADIANCE
+    // Diffuse projection without the material diffuse-albedo multiplier.
     fragColor.xyz = projectDiffuseLighting(
         tmp.data_swap, textureNormal, rdVal, rough, vec3(1.0));
 
-    #elif DEBUG_VIEW == 5
-    // Light field: MaxEnt normalized dominant direction × energy
-    fragColor.xyz = 2.0 * abs(tmp.data_swap.maxEntY.xyz / max(max(tmp.data_swap.maxEntY.w, length(tmp.data_swap.maxEntY.xyz)), 1e-6));
+    #elif DEBUG_VIEW == DEBUG_VIEW_OUTPUT_PRIMARY_SURFACE_LIGHT
+    fragColor.xyz = lightVal;
 
-    #elif DEBUG_VIEW == 6
-    // Normals: world-space geometryNormal as RGB
-    fragColor.xyz = textureNormal * 0.5 + 0.5;
+    #elif DEBUG_VIEW == DEBUG_VIEW_OUTPUT_MEDIUM_EMISSION
+    fragColor.xyz = emisVal;
 
-    #elif DEBUG_VIEW == 7
-    // Absorption / atmospheric transmission
+    #elif DEBUG_VIEW == DEBUG_VIEW_OUTPUT_ABSORPTION_TRANSMITTANCE
     fragColor.xyz = absorptionVal;
 
-    #elif DEBUG_VIEW == 8
-    // Actually sampled GGX direction published by the reflection ray pass.
-    fragColor.xyz = debugReadReflectionSampleDirection(xy) * 0.5 + 0.5;
+    // ---------------------------------------------------------------------
+    // Primary material and geometry (10-13).
+    // ---------------------------------------------------------------------
+    #elif DEBUG_VIEW == DEBUG_VIEW_MATERIAL_SHADING_NORMAL
+    fragColor.xyz = textureNormal * 0.5 + 0.5;
 
-    #elif DEBUG_VIEW == 9
-    // Temporal virtual-reprojection hit distance before spatial filtering.
-    {
-        uvec3 debugSignalWords;
-        float d, historyContribution;
-        debugReadSpecularTemporal(xy, debugSignalWords, d, historyContribution);
-        fragColor.xyz = (d >= VPROJDIST_SKY * 0.99) ? vec3(1.0) : jetColormap(logDistNorm(d));
-    }
+    #elif DEBUG_VIEW == DEBUG_VIEW_MATERIAL_DIFFUSE_ALBEDO
+    fragColor.xyz = diffAlbedo;
 
-    #elif DEBUG_VIEW == 10
-    // Specular albedo (rC.rgb * S.x) — the reflection material multiplier
+    #elif DEBUG_VIEW == DEBUG_VIEW_MATERIAL_SPECULAR_ALBEDO
+    // Reflection material multiplier produced by the primary material model.
     fragColor.xyz = specAlbedo;
 
-    #elif DEBUG_VIEW == 11
-    // Roughness as grayscale
+    #elif DEBUG_VIEW == DEBUG_VIEW_MATERIAL_GGX_ALPHA
     fragColor.xyz = vec3(rough);
 
-    #elif DEBUG_VIEW == 12
-    // Temporally accumulated reflection before every spatial stage, projected
-    // through the same GGX/Fresnel BRDF used by the final reflection output.
+    // ---------------------------------------------------------------------
+    // Diffuse denoiser (20-24). Views 23-24 return before this branch.
+    // ---------------------------------------------------------------------
+    #elif DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_TEMPORAL_HISTORY_SIGNAL
+    {
+        MaxEntEncoding temporalHistory;
+        float effectiveSamples, rootMeanY2Unused;
+        readDiffuseHist(xy, temporalHistory, effectiveSamples, rootMeanY2Unused);
+        fragColor.xyz = projectDiffuseLighting(temporalHistory, geometryNormal, rdVal, rough, vec3(1.0));
+    }
+
+    #elif DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_FINAL_NORMALIZED_FIRST_MOMENT
+    // 2*abs(E[R*u]/max(E[R], |E[R*u]|)); this is directionality, not RGB light.
+    fragColor.xyz = 2.0 * abs(tmp.data_swap.maxEntY.xyz / max(max(tmp.data_swap.maxEntY.w, length(tmp.data_swap.maxEntY.xyz)), 1e-6));
+
+    #elif DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_KISH_EFFECTIVE_SAMPLES
+    // Blue is N_eff=1; red approaches the FP16 metadata storage limit.
+    fragColor.xyz = debugKishEffectiveSamples(tmp.weight);
+
+    // ---------------------------------------------------------------------
+    // Specular denoiser (30-37). Views 33, 36, and 37 return above.
+    // ---------------------------------------------------------------------
+    #elif DEBUG_VIEW == DEBUG_VIEW_SPECULAR_SAMPLED_DIRECTION
+    fragColor.xyz = debugReadReflectionSampleDirection(xy) * 0.5 + 0.5;
+
+    #elif DEBUG_VIEW == DEBUG_VIEW_SPECULAR_CURRENT_TRACKING_HIT_DISTANCE
     {
         uvec3 debugSignalWords;
-        float debugHitDistance, historyContribution;
-        debugReadSpecularTemporal(xy, debugSignalWords, debugHitDistance, historyContribution);
+        float trackingHitDistance, resolvedHistoryContribution;
+        debugReadSpecularTemporalState(xy, debugSignalWords, trackingHitDistance, resolvedHistoryContribution);
+        fragColor.xyz = trackingHitDistance >= VPROJDIST_SKY * 0.99 ? vec3(1.0) : jetColormap(logDistNorm(trackingHitDistance));
+    }
+
+    #elif DEBUG_VIEW == DEBUG_VIEW_SPECULAR_TEMPORAL_HISTORY_SIGNAL
+    // Committed Raw RT temporal history, projected without the spatial result.
+    {
+        uvec3 debugSignalWords;
+        float trackingHitDistance, resolvedHistoryContribution;
+        debugReadSpecularTemporalState(xy, debugSignalWords, trackingHitDistance, resolvedHistoryContribution);
         fragColor.xyz = projectSpecularMaxEnt(
             unpackSpecularMaxEnt(debugSignalWords), rdVal, textureNormal,
             geometryNormal, rough, primaryCs, primaryS, primaryEtaRatio);
     }
 
-    #elif DEBUG_VIEW == 13
-    // Logarithmic diffuse Kish N_eff: blue=1, red>=64. The optimal-MSE
-    // controller has no configured target history window.
-    fragColor.xyz = jetColormap(clamp(
-        log2(max(tmp.weight, 1.0)) / 6.0, 0.0, 1.0));
+    #elif DEBUG_VIEW == DEBUG_VIEW_SPECULAR_KISH_EFFECTIVE_SAMPLES
+    // Read the committed current-frame history, not the final blend weight.
+    fragColor.xyz = debugKishEffectiveSamples(readMaxEntSpecularHistory(xy).historyEffectiveSamples);
 
-    #elif DEBUG_VIEW == 14
-    // Actual temporal history contribution to the reflection radiance.
+    #elif DEBUG_VIEW == DEBUG_VIEW_SPECULAR_RESOLVED_HISTORY_CONTRIBUTION
+    // Exact history coefficient used by the Raw RT temporal commit: 1-alpha.
     {
         uvec3 debugSignalWords;
-        float debugHitDistance, historyContribution;
-        debugReadSpecularTemporal(xy, debugSignalWords, debugHitDistance, historyContribution);
-        fragColor.xyz = jetColormap(clamp(historyContribution, 0.0, 1.0));
+        float trackingHitDistance, resolvedHistoryContribution;
+        debugReadSpecularTemporalState(xy, debugSignalWords, trackingHitDistance, resolvedHistoryContribution);
+        fragColor.xyz = jetColormap(clamp(resolvedHistoryContribution, 0.0, 1.0));
     }
 
-    #elif DEBUG_VIEW == 15
+    // ---------------------------------------------------------------------
+    // Refraction and PSR (40-41).
+    // ---------------------------------------------------------------------
+    #elif DEBUG_VIEW == DEBUG_VIEW_REFRACTION_PSR_ROUTE
     // PSR route: green=screen reuse, blue=environment, orange=cache fallback.
     {
         PSRResolveData psr = readPSRResolve(xy);
@@ -433,20 +473,7 @@ void main() {
             : vec3(0.0);
     }
 
-    #elif DEBUG_VIEW == 16
-    // First-surface material emission
-    fragColor.xyz = lightVal;
-
-    #elif DEBUG_VIEW == 17
-    // Emission accumulated along the primary medium segment
-    fragColor.xyz = emisVal;
-
-    #elif DEBUG_VIEW == 18
-    // Diffuse albedo — per-pixel diffuse material multiplier
-    fragColor.xyz = diffAlbedo;
-
-    #elif DEBUG_VIEW == 19
-    // Refraction virtual projection distance (IOR-adjusted, rainbow colormap, log scale)
+    #elif DEBUG_VIEW == DEBUG_VIEW_REFRACTION_VIRTUAL_ENDPOINT_DISTANCE
     {
         PSRResolveData psr = readPSRResolve(xy);
         float d = length(psr.endpointRelative);
@@ -454,33 +481,26 @@ void main() {
             : jetColormap(logDistNorm(d));
     }
 
-    #elif DEBUG_VIEW == 20
-    // Path guide MaxEnt direction as RGB (蓄水池+降噪投票结果, N=5)
+    // ---------------------------------------------------------------------
+    // Path guiding and radiance cache (50-55).
+    // ---------------------------------------------------------------------
+    #elif DEBUG_VIEW == DEBUG_VIEW_PATH_GUIDE_FINAL_DIRECTION
     {
         vec4 guideY;
         float guideW;
         float guideM;
         readPathGuide(xy, guideY, guideW, guideM);
         if (guideM < 1e-6) {
-            fragColor.xyz = vec3(0.0); // 无效/天空 → 黑
+            fragColor.xyz = vec3(0.0);
         } else {
             vec3 dir = guideY.xyz / max(length(guideY.xyz), 1e-6);
-            fragColor.xyz = dir * 0.5 + 0.5; // 方向→RGB
+            fragColor.xyz = dir * 0.5 + 0.5;
         }
     }
 
-    #elif DEBUG_VIEW == 21
-    // 原始时域累积白模 (N=2 hist MaxEnt × geometryNormal, 降噪前)
-    {
-        MaxEntEncoding raw;
-        float w, rootMeanY2_unused;
-        readDiffuseHist(xy, raw, w, rootMeanY2_unused);
-        fragColor.xyz = projectDiffuseLighting(
-            raw, geometryNormal, rdVal, rough, vec3(1.0));
-    }
-
-    #elif DEBUG_VIEW == 22
-    // 世界格点辐射率缓存：可见表面处的白模辐照度
+    #elif DEBUG_VIEW == DEBUG_VIEW_RADIANCE_CACHE_SURFACE_HISTORY_SAMPLE
+    // Trilinear history-cache irradiance at the visible surface plus its
+    // separately stored primary-surface light.
     {
         vec3 relativePos;
         float distance;
@@ -499,7 +519,7 @@ void main() {
         fragColor.xyz += lightVal;
     }
 
-    #elif DEBUG_VIEW >= 31 && DEBUG_VIEW <= 34
+    #elif DEBUG_VIEW >= DEBUG_VIEW_RADIANCE_CACHE_CURRENT_IRRADIANCE && DEBUG_VIEW <= DEBUG_VIEW_RADIANCE_CACHE_FILTERED_IRRADIANCE
     {
         vec3 relativePos;
         float distance;
@@ -510,17 +530,17 @@ void main() {
         if (!validateRadianceCacheAddress(address)) {
             fragColor.xyz = vec3(1.0, 0.0, 1.0);
         } else {
-            #if DEBUG_VIEW == 31
+            #if DEBUG_VIEW == DEBUG_VIEW_RADIANCE_CACHE_CURRENT_IRRADIANCE
                 RadianceCache cache = loadRadianceCachePlanes(address,
                     RC_PLANE_CURRENT_0, RC_PLANE_CURRENT_1);
                 fragColor.xyz = radianceCacheValueValid(cache)
                     ? radianceCacheDiffuseIncident(cache, textureNormal) : vec3(0.0);
-            #elif DEBUG_VIEW == 32
+            #elif DEBUG_VIEW == DEBUG_VIEW_RADIANCE_CACHE_HISTORY_IRRADIANCE
                 RadianceCache cache = loadRadianceCachePlanes(address,
                     RC_PLANE_HISTORY_0, RC_PLANE_HISTORY_1);
                 fragColor.xyz = radianceCacheValueValid(cache)
                     ? radianceCacheDiffuseIncident(cache, textureNormal) : vec3(0.0);
-            #elif DEBUG_VIEW == 33
+            #elif DEBUG_VIEW == DEBUG_VIEW_RADIANCE_CACHE_HISTORY_SAMPLE_COUNT
                 RadianceCache cache = loadRadianceCachePlanes(address,
                     RC_PLANE_HISTORY_0, RC_PLANE_HISTORY_1);
                 fragColor.xyz = jetColormap(clamp(cache.M
@@ -534,7 +554,10 @@ void main() {
         }
     }
 
-    #elif DEBUG_VIEW == 35
+    // ---------------------------------------------------------------------
+    // Entity and screen-space motion (60-62).
+    // ---------------------------------------------------------------------
+    #elif DEBUG_VIEW == DEBUG_VIEW_MOTION_MATCH_STATUS
     {
         vec3 surfaceMotion;
         float motionClass;
@@ -558,7 +581,7 @@ void main() {
         }
     }
 
-    #elif DEBUG_VIEW == 36
+    #elif DEBUG_VIEW == DEBUG_VIEW_MOTION_ENTITY_WORLD
     {
         vec3 surfaceMotion;
         float motionClass;
@@ -574,7 +597,7 @@ void main() {
         }
     }
 
-    #elif DEBUG_VIEW == 37
+    #elif DEBUG_VIEW == DEBUG_VIEW_MOTION_PRIMARY_SCREEN
     {
         vec3 surfaceMotion;
         float motionClass;

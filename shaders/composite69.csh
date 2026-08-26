@@ -1,4 +1,5 @@
+#version 430 core
+
 #define DENOISER_SPATIAL_PHI_LUMINANCE MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY
-#define MAXENT_ATROUS_SPECULAR
 #define MAXENT_ATROUS_STEP 8
-#include "/post/maxent_atrous.glsl"
+#include "/post/denoiser/reflection/atrous_pass.glsl"

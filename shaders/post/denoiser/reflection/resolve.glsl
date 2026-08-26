@@ -1,24 +1,33 @@
 #version 430 core
 
-// Final temporal resolve. The A-trous chain supplies the stable response proxy
-// and its propagated variance; this pass obtains alpha from the completed 5x5
-// robust estimate and only then commits one Raw RT observation to history.
+// Purpose: choose reflection currentAlpha from denoised estimators and commit raw/filtered histories.
+// Dispatch: 16x16.
+// Reads: colortex5 final A-Trous signal, colortex6 Raw reflection, shared independent-current scratch,
+//        staged raw reprojection, and filtered-history reprojection scratch.
+// Writes: reflection temporal history, filtered history, and public reflection output.
+// Persistent side effects: this is the only reflection history commit point.
+// Invalid representation: invalid signal metadata clears every owned persistent record.
 layout(local_size_x = 16, local_size_y = 16) in;
 
 #define REFLECT_BUFFER
-#include "/lib/lighting/denoiser/maxent_specular_temporal_common.glsl"
-#include "/lib/lighting/denoiser/maxent_spatial_signal.glsl"
-#include "/lib/lighting/denoiser/maxent_spatial_virtual_projection.glsl"
-#include "/lib/lighting/denoiser/maxent_moment_statistics.glsl"
+#include "/post/denoiser/reflection/common.glsl"
+#include "/lib/lighting/denoiser/signal.glsl"
+#include "/lib/lighting/denoiser/virtual_projection.glsl"
+#include "/lib/lighting/denoiser/temporal_response.glsl"
 
-uniform usampler2D colortex4;
+uniform usampler2D colortex5;
 uniform usampler2D colortex6;
 
+#include "/lib/lighting/denoiser/scratch_io.glsl"
+
 uvec4 maxentTemporalRobustLoadSignalWords(ivec2 pixel) {
-    return readDiffuseIndependentCurrentA(uvec2(pixel));
+    return denoiserScratchLoadA(pixel);
 }
 
-#include "/lib/lighting/denoiser/maxent_temporal_robust_tile.glsl"
+ivec2 maxentTemporalRobustImageSize() { return textureSize(colortex5, 0); }
+uvec4 maxentTemporalRobustLoadGeometryWords(ivec2 pixel) { return readPrimaryGeometryWords(uvec2(pixel)); }
+
+#include "/lib/lighting/denoiser/robust_mean.glsl"
 
 vec3 maxentSpecularNeighborhoodVirtualPosition(
         vec3 primaryRay, float virtualDistance) {
@@ -73,11 +82,11 @@ MaxEntTemporalRobustEstimate maxentSpecularCurrentRobustMomentEstimate(
     int sampleCount = 1;
     vec4 momentSum = centerSignal.maxEntY;
 
-    ivec2 imageSize = textureSize(colortex4, 0);
+    ivec2 imageSize = textureSize(colortex5, 0);
     vec3 centerPrimaryRay = reconstructPrimaryRay(uvec2(centerPixel));
     float centerPlaneOffset = centerGeometry.distance
         * dot(centerGeometry.normal, centerPrimaryRay);
-    float surfaceRejectionScale = denoiserSpatialSurfaceRejectionScale(
+    float surfaceRejectionScale = denoiserSpatialDistanceRejectionScale(
         centerGeometry.distance, float(imageSize.y));
 
     vec3 centerVirtualPosition = maxentSpecularNeighborhoodVirtualPosition(
@@ -118,7 +127,7 @@ MaxEntTemporalRobustEstimate maxentSpecularCurrentRobustMomentEstimate(
 
             vec3 samplePrimaryRay = reconstructPrimaryRay(
                 uvec2(samplePixel));
-            float surfaceExponent = denoiserSpatialSurfacePlaneDepthExponent(
+            float surfaceExponent = denoiserSpatialAxialDistanceExponent(
                 centerPlaneOffset, centerGeometry.normal, samplePrimaryRay,
                 sampleGeometry.distance, surfaceRejectionScale);
             if (surfaceExponent
@@ -140,7 +149,7 @@ MaxEntTemporalRobustEstimate maxentSpecularCurrentRobustMomentEstimate(
 
     return maxentTemporalGaussianReweightedTileEstimate(
         acceptedMask, sampleCount, momentSum, centerSignal.maxEntY,
-        centerSignal.standardDeviation);
+        centerSignal.estimatorStdDev);
 }
 
 void main() {
@@ -148,7 +157,7 @@ void main() {
     uvec2 pixel = gl_GlobalInvocationID.xy;
     if (any(greaterThanEqual(pixel, resolution_global))) return;
 
-    uvec4 currentSignalWords = texelFetch(colortex4, ivec2(pixel), 0);
+    uvec4 currentSignalWords = texelFetch(colortex5, ivec2(pixel), 0);
     DenoiserMaxEntSignal currentSignal =
         denoiserUnpackMaxEntSignal(currentSignalWords);
     DenoiserMaxEntSignal independentCurrent =
@@ -157,9 +166,11 @@ void main() {
         maxentTemporalRobustTileGeometryWords(ivec2(0)), pixel);
     if (!currentGeometry.valid
             || !denoiserSpatialSignalWordsValid(currentSignalWords)) {
-        debugWriteSpecularVarianceOptimalAlpha(pixel, -1.0);
+        debugWriteSpecularNoiseOnlyCurrentWeight(pixel, -1.0);
+        debugWriteSpecularTemporalStateInvalid(pixel);
         reflectBuffer.data[addr(SPEC_N_HISTGEO, pixel)] = uvec4(0u);
         reflectBuffer.data[addr(SPEC_N_HISTLIGHT, pixel)] = uvec4(0u);
+        writeMaxEntSpecularDenoisedHistoryInvalid(pixel);
         writeReflMaxEnt(pixel, emptySpecularMaxEnt(), 0.0, 0.0);
         return;
     }
@@ -169,98 +180,79 @@ void main() {
     MaxEntSpecularHistory reprojected =
         readMaxEntSpecularHistory(pixel);
 
-    float varianceOptimalAlpha = -1.0;
+    float noiseOnlyCurrentWeight = -1.0;
     SpecularMaxEnt historyDenoisedSignal;
-    float historyStddev, reprojectionAlphaFloor;
-    float historyHitDistance;
-    bool hasHistory = statisticsValidEffectiveSampleCount(
-            reprojected.historyLength)
-        && readMaxEntSpecularDenoisedReprojection(pixel,
-            historyDenoisedSignal, historyStddev,
-            reprojectionAlphaFloor, historyHitDistance);
+    float historyEstimatorStdDev, reprojectionAlphaFloor, currentTrackingHitDistance;
+    bool denoisedReprojectionValid = readMaxEntSpecularDenoisedReprojection(pixel, historyDenoisedSignal,
+        historyEstimatorStdDev, reprojectionAlphaFloor, currentTrackingHitDistance);
+    bool hasHistory = statisticsValidEffectiveSampleCount(reprojected.historyEffectiveSamples)
+        && denoisedReprojectionValid;
 
-    float actualAlpha = 1.0;
+    float currentAlpha = 1.0;
     float proposalAlpha = 1.0;
     bool independentCurrentValid = false;
     if (hasHistory) {
         proposalAlpha = clamp(
             float(MAXENT_TEMPORAL_FIXED_ALPHA), 0.0, 1.0);
-        actualAlpha = proposalAlpha;
+        currentAlpha = max(proposalAlpha, reprojectionAlphaFloor);
         independentCurrentValid = maxentSpecularRobustCurrentSignal(
             ivec2(0), independentCurrent);
         if (independentCurrentValid) {
             MaxEntTemporalRobustEstimate robustCurrent =
                 maxentSpecularCurrentRobustMomentEstimate(
                     ivec2(pixel), independentCurrent, currentGeometry);
-            float windowAlphaFloor =
-                statisticsKishFiniteWindowCurrentWeightFloor(
-                    reprojected.historyLength,
-                    float(MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY));
-            float alphaFloor = max(reprojectionAlphaFloor,
-                windowAlphaFloor);
-            float unusedAdaptiveAlpha = maxentTemporalMinimumMseAlpha(
-                alphaFloor, robustCurrent.moment,
-                robustCurrent.standardDeviation
-                    * robustCurrent.standardDeviation,
-                historyDenoisedSignal.maxEntY, historyStddev,
-                reprojected.historyLength,
-                varianceOptimalAlpha);
+            float responseAlpha = maxentTemporalResponseAlpha(
+                reprojectionAlphaFloor, robustCurrent.moment,
+                robustCurrent.estimatorStdDev * robustCurrent.estimatorStdDev,
+                historyDenoisedSignal.maxEntY, historyEstimatorStdDev,
+                reprojected.historyEffectiveSamples,
+                noiseOnlyCurrentWeight);
+            currentAlpha = responseAlpha;
         }
     }
-    debugWriteSpecularVarianceOptimalAlpha(pixel, varianceOptimalAlpha);
+    debugWriteSpecularNoiseOnlyCurrentWeight(pixel, noiseOnlyCurrentWeight);
 
     MaxEntSpecularHistory committed;
     committed.surfacePosition = currentGeometry.position;
     committed.geometryNormal = currentGeometry.normal;
     committed.roughness = currentGeometry.roughness;
     committed.materialID = currentGeometry.materialID;
+    committed.hitDistance = currentTrackingHitDistance;
     if (hasHistory) {
         committed.signal = maxentMixMaxEnt(reprojected.signal,
-            noisy.signal, actualAlpha);
-        committed.rootMeanY2 = sqrt(max(mix(
+            noisy.signal, currentAlpha);
+        committed.rootMeanY2 = sqrt(mix(
             reprojected.rootMeanY2 * reprojected.rootMeanY2,
             noisy.signal.maxEntY.w * noisy.signal.maxEntY.w,
-            actualAlpha), 0.0));
-        committed.hitDistance = mix(reprojected.hitDistance,
-            noisy.hitDistance, actualAlpha);
-        committed.historyLength =
+            currentAlpha));
+        committed.historyEffectiveSamples =
             statisticsKishUpdateEffectiveSampleCount(
-                reprojected.historyLength, actualAlpha);
+                reprojected.historyEffectiveSamples, currentAlpha);
     } else {
         committed.signal = noisy.signal;
-        committed.rootMeanY2 = max(noisy.signal.maxEntY.w, 0.0);
-        committed.hitDistance = noisy.hitDistance;
-        committed.historyLength = 1.0;
+        committed.rootMeanY2 = abs(noisy.signal.maxEntY.w);
+        committed.historyEffectiveSamples = 1.0;
     }
     writeMaxEntSpecularTemporalHistory(pixel, committed);
-    debugWriteSpecularTemporal(pixel, packSpecularMaxEnt(committed.signal),
-        committed.hitDistance, 1.0 - actualAlpha);
+    debugWriteSpecularTemporalState(pixel, packSpecularMaxEnt(committed.signal),
+        committed.hitDistance, 1.0 - currentAlpha);
 
     SpecularMaxEnt filtered;
-    float resolvedStandardDeviation = sqrt(
-        maxentTemporalCurrentEstimatorVariance(
-            currentSignal.standardDeviation));
+    float resolvedEstimatorStdDev = sqrt(maxentTemporalCurrentEstimatorVariance(currentSignal.estimatorStdDev));
     if (hasHistory && independentCurrentValid) {
-        float correctionAlpha = clamp((actualAlpha - proposalAlpha)
+        float correctionCurrentWeight = clamp((currentAlpha - proposalAlpha)
             / max(1.0 - proposalAlpha, 1e-6), 0.0, 1.0);
         filtered.maxEntY = mix(currentSignal.maxEntY,
-            independentCurrent.maxEntY, correctionAlpha);
+            independentCurrent.maxEntY, correctionCurrentWeight);
         filtered.CoCg = mix(currentSignal.CoCg,
-            independentCurrent.CoCg, correctionAlpha);
-        resolvedStandardDeviation =
-            maxentTemporalProposalCorrectedStandardDeviation(
-                currentSignal.standardDeviation,
-                independentCurrent.standardDeviation,
-                correctionAlpha);
-    } else if (hasHistory) {
-        filtered.maxEntY = currentSignal.maxEntY;
-        filtered.CoCg = currentSignal.CoCg;
+            independentCurrent.CoCg, correctionCurrentWeight);
+        resolvedEstimatorStdDev = maxentTemporalProposalCorrectedStandardDeviation(
+            currentSignal.estimatorStdDev, independentCurrent.estimatorStdDev, correctionCurrentWeight);
     } else {
         filtered.maxEntY = currentSignal.maxEntY;
         filtered.CoCg = currentSignal.CoCg;
     }
-    writeMaxEntSpecularDenoisedHistory(pixel, filtered,
-        resolvedStandardDeviation);
+    writeMaxEntSpecularDenoisedHistory(pixel, filtered, resolvedEstimatorStdDev);
     vec3 primaryRay = reconstructPrimaryRay(pixel);
     float virtualScale = denoiserSpatialSpecularVirtualScale(primaryRay,
         currentGeometry.normal, currentGeometry.roughness);

@@ -1,5 +1,5 @@
-#ifndef MAXENT_SPATIAL_SIGNAL_GLSL
-#define MAXENT_SPATIAL_SIGNAL_GLSL
+#ifndef MAXENT_DENOISER_SIGNAL_GLSL
+#define MAXENT_DENOISER_SIGNAL_GLSL
 
 // Canonical input/output ABI for the MaxEnt spatial denoiser.
 //
@@ -7,7 +7,7 @@
 //   x = packHalf2x16(maxEntY.xy)
 //   y = packHalf2x16(maxEntY.zw)
 //   z = packHalf2x16(CoCg.xy)
-//   w = packHalf2x16(standardDeviation, virtualDistance)
+//   w = packHalf2x16(estimatorStdDev, virtualDistance)
 //
 // maxEntY.xyz is the directional first moment, maxEntY.w is total luminance,
 // and CoCg carries chroma. Estimator uncertainty remains an explicit standard
@@ -24,7 +24,7 @@ const float DENOISER_SPATIAL_FP16_MAX = 65504.0;
 struct DenoiserMaxEntSignal {
     vec4 maxEntY;
     vec2 CoCg;
-    float standardDeviation;
+    float estimatorStdDev;
     float virtualDistance;
 };
 
@@ -32,15 +32,14 @@ DenoiserMaxEntSignal denoiserEmptyMaxEntSignal() {
     DenoiserMaxEntSignal signal;
     signal.maxEntY = vec4(0.0);
     signal.CoCg = vec2(0.0);
-    signal.standardDeviation = 0.0;
+    signal.estimatorStdDev = 0.0;
     signal.virtualDistance = 0.0;
     return signal;
 }
 
 bool denoiserSpatialSignalWordsValid(uvec4 words) {
-    float standardDeviation = unpackHalf2x16(words.w).x;
-    return standardDeviation >= 0.0
-        && !isnan(standardDeviation) && !isinf(standardDeviation);
+    float estimatorStdDev = unpackHalf2x16(words.w).x;
+    return estimatorStdDev >= 0.0 && !isnan(estimatorStdDev) && !isinf(estimatorStdDev);
 }
 
 uvec4 denoiserInvalidMaxEntSignalWords() {
@@ -53,23 +52,11 @@ DenoiserMaxEntSignal denoiserSanitizeMaxEntSignal(
         signal.maxEntY = vec4(0.0);
     if (any(isnan(signal.CoCg)) || any(isinf(signal.CoCg)))
         signal.CoCg = vec2(0.0);
-    if (isnan(signal.standardDeviation) || isinf(signal.standardDeviation))
-        signal.standardDeviation = 0.0;
+    if (isnan(signal.estimatorStdDev) || isinf(signal.estimatorStdDev)) signal.estimatorStdDev = 0.0;
     if (isnan(signal.virtualDistance) || isinf(signal.virtualDistance))
         signal.virtualDistance = 0.0;
 
-    signal.maxEntY.w = max(signal.maxEntY.w, 0.0);
-    float meanLength2 = dot(signal.maxEntY.xyz, signal.maxEntY.xyz);
-    float totalEnergy2 = signal.maxEntY.w * signal.maxEntY.w;
-    if (meanLength2 > totalEnergy2 && meanLength2 > 0.0)
-        signal.maxEntY.xyz *= signal.maxEntY.w * inversesqrt(meanLength2);
-
-    if (signal.maxEntY.w <= 0.0) {
-        signal.maxEntY = vec4(0.0);
-        signal.CoCg = vec2(0.0);
-    }
-    signal.standardDeviation = clamp(signal.standardDeviation, 0.0,
-        DENOISER_SPATIAL_FP16_MAX);
+    signal.estimatorStdDev = clamp(signal.estimatorStdDev, 0.0, DENOISER_SPATIAL_FP16_MAX);
     signal.virtualDistance = clamp(signal.virtualDistance, 0.0,
         DENOISER_SPATIAL_FP16_MAX);
     return signal;
@@ -80,9 +67,9 @@ DenoiserMaxEntSignal denoiserUnpackMaxEntSignalTrusted(uvec4 words) {
     signal.maxEntY = vec4(unpackHalf2x16(words.x),
         unpackHalf2x16(words.y));
     signal.CoCg = unpackHalf2x16(words.z);
-    vec2 standardDeviationVirtualDistance = unpackHalf2x16(words.w);
-    signal.standardDeviation = standardDeviationVirtualDistance.x;
-    signal.virtualDistance = standardDeviationVirtualDistance.y;
+    vec2 estimatorStdDevVirtualDistance = unpackHalf2x16(words.w);
+    signal.estimatorStdDev = estimatorStdDevVirtualDistance.x;
+    signal.virtualDistance = estimatorStdDevVirtualDistance.y;
     return signal;
 }
 
@@ -91,9 +78,9 @@ DenoiserMaxEntSignal denoiserUnpackMaxEntSignalTrusted(uvec4 words) {
 // A-trous path avoids repeating the full finite/energy validation per tap.
 DenoiserMaxEntSignal denoiserUnpackMaxEntSignal(uvec4 words) {
     DenoiserMaxEntSignal signal = denoiserUnpackMaxEntSignalTrusted(words);
-    vec2 standardDeviationVirtualDistance = unpackHalf2x16(words.w);
-    signal.standardDeviation = max(standardDeviationVirtualDistance.x, 0.0);
-    signal.virtualDistance = max(standardDeviationVirtualDistance.y, 0.0);
+    vec2 estimatorStdDevVirtualDistance = unpackHalf2x16(words.w);
+    signal.estimatorStdDev = max(estimatorStdDevVirtualDistance.x, 0.0);
+    signal.virtualDistance = max(estimatorStdDevVirtualDistance.y, 0.0);
     return denoiserSanitizeMaxEntSignal(signal);
 }
 
@@ -108,8 +95,7 @@ uvec4 denoiserPackMaxEntSignalTrusted(DenoiserMaxEntSignal signal) {
         packHalf2x16(clamp(signal.CoCg,
             vec2(-DENOISER_SPATIAL_FP16_MAX),
             vec2(DENOISER_SPATIAL_FP16_MAX))),
-        packHalf2x16(vec2(signal.standardDeviation,
-            signal.virtualDistance)));
+        packHalf2x16(vec2(signal.estimatorStdDev, signal.virtualDistance)));
 }
 
 uvec4 denoiserPackMaxEntSignal(DenoiserMaxEntSignal signal) {
@@ -117,4 +103,4 @@ uvec4 denoiserPackMaxEntSignal(DenoiserMaxEntSignal signal) {
         denoiserSanitizeMaxEntSignal(signal));
 }
 
-#endif // MAXENT_SPATIAL_SIGNAL_GLSL
+#endif // MAXENT_DENOISER_SIGNAL_GLSL

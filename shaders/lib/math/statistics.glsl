@@ -98,21 +98,6 @@ float statisticsKishUpdateEffectiveSampleCount(float historyEffectiveSamples,
     return 1.0 / max(squaredWeightSum, 1e-12);
 }
 
-// Minimum current weight for a finite temporal window. During growth,
-// alpha=1/(N+1) is ordinary equal-weight accumulation and advances Kish N by
-// exactly one. Once the requested window is reached, alpha=2/(N+1) makes the
-// Kish update stationary (N'=N), yielding a finite-window EMA without ever
-// clamping or otherwise editing N_eff directly.
-float statisticsKishFiniteWindowCurrentWeightFloor(
-        float historyEffectiveSamples, float maximumEffectiveSamples) {
-    if (!statisticsValidEffectiveSampleCount(historyEffectiveSamples))
-        return 1.0;
-    maximumEffectiveSamples = max(maximumEffectiveSamples, 1.0);
-    float numerator = historyEffectiveSamples >= maximumEffectiveSamples
-        ? 2.0 : 1.0;
-    return clamp(numerator / (historyEffectiveSamples + 1.0), 0.0, 1.0);
-}
-
 // Trace-variance closure when only two scalar standard deviations and one
 // correlation coefficient are retained.
 float statisticsDifferenceVarianceFromStandardDeviations(
@@ -126,35 +111,17 @@ float statisticsDifferenceVarianceFromStandardDeviations(
         - 2.0 * p * standardDeviationA * standardDeviationB, 0.0);
 }
 
-// Positive-part estimate of a deterministic squared bias from one observed
-// estimator difference. For independent estimators,
-// E[|C-H|^2] = |b|^2 + V_C + V_H.
-float statisticsPositivePartSquaredBias(float squaredDifference,
-        float differenceNoiseVariance) {
-    if (!(squaredDifference >= 0.0) || isnan(squaredDifference)
-            || isinf(squaredDifference)
-            || !(differenceNoiseVariance >= 0.0)
-            || isnan(differenceNoiseVariance)
-            || isinf(differenceNoiseVariance))
-        return 0.0;
-    return max(squaredDifference - differenceNoiseVariance, 0.0);
-}
-
-// Minimum-MSE current weight for
-//   H = mu + b + e_H, C = mu + e_C,
-// with independent zero-mean estimator errors. The covariance term is
-// deliberately zero by contract.
-float statisticsMinimumMseIndependentCurrentWeight(float squaredBias,
-        float historyVariance, float currentVariance) {
-    squaredBias = max(squaredBias, 0.0);
+// Minimum-variance current weight V_H/(V_H+V_C) for two independent unbiased
+// estimators. This is exposed only as a diagnostic; temporal response uses its
+// separately tuned moment-distance function.
+float statisticsMinimumVarianceIndependentCurrentWeight(float historyVariance, float currentVariance) {
     historyVariance = max(historyVariance, 0.0);
     currentVariance = max(currentVariance, 0.0);
-    float historyMse = squaredBias + historyVariance;
-    float denominator = historyMse + currentVariance;
+    float denominator = historyVariance + currentVariance;
     if (!(denominator > 0.0) || isnan(denominator)
             || isinf(denominator))
         return 0.0;
-    return clamp(historyMse / denominator, 0.0, 1.0);
+    return clamp(historyVariance / denominator, 0.0, 1.0);
 }
 
 float statisticsIndependentBlendVariance(float historyVariance,
@@ -193,10 +160,9 @@ float statisticsBiasedCentralSecondMoment(float expectedSquaredNorm,
     return max(expectedSquaredNorm - dot(expectedValue, expectedValue), 0.0);
 }
 
-// For a weighted empirical estimator, the biased central moment and the
-// estimator variance satisfy B = (N_eff - 1) Var[mean]. These direct
-// conversions keep moment reconstruction and variance preparation exact
-// inverses without passing through per-observation variance unnecessarily.
+// For a weighted empirical estimator, the biased central moment and estimator variance satisfy
+// B = (N_eff - 1) Var[mean]. This is a read-only derivation from stored linear moments; variance must never be used
+// to reconstruct or overwrite E[R^2].
 float statisticsEstimatorVarianceFromBiasedCentralMoment(
         float biasedCentralMoment, float effectiveSamples) {
     if (!(effectiveSamples > 1.0) || isnan(effectiveSamples)
@@ -204,29 +170,6 @@ float statisticsEstimatorVarianceFromBiasedCentralMoment(
         return 0.0;
     return max(biasedCentralMoment, 0.0)
         / (effectiveSamples - 1.0);
-}
-
-float statisticsEstimatorVarianceFromMoments(float expectedSquaredNorm,
-        vec4 expectedValue, float effectiveSamples) {
-    return statisticsEstimatorVarianceFromBiasedCentralMoment(
-        statisticsBiasedCentralSecondMoment(
-            expectedSquaredNorm, expectedValue),
-        effectiveSamples);
-}
-
-float statisticsBiasedCentralMomentFromEstimatorVariance(
-        float estimatorVariance, float effectiveSamples) {
-    if (!statisticsValidEffectiveSampleCount(effectiveSamples)) return 0.0;
-    return max(effectiveSamples - 1.0, 0.0)
-        * max(estimatorVariance, 0.0);
-}
-
-float statisticsExpectedSquaredNormFromEstimatorVariance(
-        vec4 expectedValue, float estimatorVariance,
-        float effectiveSamples) {
-    return dot(expectedValue, expectedValue)
-        + statisticsBiasedCentralMomentFromEstimatorVariance(
-            estimatorVariance, effectiveSamples);
 }
 
 // E[S_biased] = (1 - 1/N_eff) Var[Z]. First recover Monte Carlo

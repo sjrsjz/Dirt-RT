@@ -11,9 +11,9 @@
 // Binding 2 — DiffuseBuffer pack/unpack (uvec4 raw-integer storage)
 // ===========================================================================
 // N=0: Current Light  — MaxEnt6 + current second moment.
-// N=1: History Light  — MaxEnt6 + history length/second moment.
+// N=1: History Light  — MaxEnt6 + Kish N_eff/rootMeanY2.
 // N=2: History Geo A  — F32 distance + oct ray + oct normal + N_eff/frame stamp.
-// N=3: Swap Light     — MaxEnt6 + accumulated length/second moment.
+// N=3: Swap Light     — MaxEnt6 + Kish N_eff/rootMeanY2.
 // N=4: Path Guide     — MaxEnt4 + F32 reservoir W/M.
 // N=5: ReSTIR GI first-hit direct-light MaxEnt atom.
 // N=6: ReSTIR GI endpoint distance/direction + signed first-direction PDF.
@@ -30,41 +30,18 @@
 // Current position, geometry normal and validity come from compact primary
 // geometry; a negative primary distance is the only sky/no-surface marker.
 
-vec2 sanitizeDiffuseYCoCg(float Y, vec2 CoCg) {
-    float t = Y - CoCg.y;
-    vec3 rgb = vec3(t + CoCg.x, Y + CoCg.y, t - CoCg.x);
-    if (all(greaterThanEqual(rgb, vec3(0.0)))) return CoCg;
-
-    // FP16 quantization or mismatched legacy history can leave the fixed-Y
-    // chroma plane outside the nonnegative RGB cone. Project it back while
-    // preserving Y, then re-encode the same linear CoCg coordinates.
-    rgb = max(rgb, vec3(0.0));
-    float projectedY = dot(rgb, vec3(0.25, 0.5, 0.25));
-    rgb = projectedY > 1e-20 ? rgb * (Y / projectedY) : vec3(Y);
-    return vec2(0.5 * (rgb.r - rgb.b),
-        -0.25 * rgb.r + 0.5 * rgb.g - 0.25 * rgb.b);
-}
-
 MaxEntEncoding sanitizeDiffuseMaxEntEncoding(MaxEntEncoding maxent) {
     if (any(isnan(maxent.maxEntY)) || any(isinf(maxent.maxEntY))
-            || any(isnan(maxent.CoCg)) || any(isinf(maxent.CoCg))
-            || !(maxent.maxEntY.w > 0.0))
+            || any(isnan(maxent.CoCg)) || any(isinf(maxent.CoCg)))
         return init_maxent();
-    maxent.maxEntY.w = min(maxent.maxEntY.w, 65504.0);
-    float directionalLengthSquared = dot(
-        maxent.maxEntY.xyz, maxent.maxEntY.xyz);
-    if (directionalLengthSquared
-            > maxent.maxEntY.w * maxent.maxEntY.w
-            && directionalLengthSquared > 0.0)
-        maxent.maxEntY.xyz *= maxent.maxEntY.w
-            * inversesqrt(directionalLengthSquared);
-    maxent.CoCg = sanitizeDiffuseYCoCg(maxent.maxEntY.w, maxent.CoCg);
-    maxent.CoCg = clamp(maxent.CoCg,
-        vec2(-65504.0), vec2(65504.0));
+    // This helper enforces only the FP16 storage domain. Moment-cone and RGB-feasibility projections belong to
+    // the decoder; applying them to encoder or latent state would make linear moment filtering nonlinear.
+    maxent.maxEntY = clamp(maxent.maxEntY, vec4(-65504.0), vec4(65504.0));
+    maxent.CoCg = clamp(maxent.CoCg, vec2(-65504.0), vec2(65504.0));
     return maxent;
 }
 
-// Active twelve-plane layout. Current geometry is owned by geomBuffer and is
+// Active fourteen-plane layout. Current geometry is owned by geomBuffer and is
 // reconstructed from pixel + RT projection and F32 distance; it is not
 // duplicated here.
 // DIF_N_HISTGEO/ALT = F32 distance + oct ray + oct normal + N_eff/frame stamp.
@@ -144,14 +121,14 @@ uvec4 readDiffuseIndependentCurrentB(uvec2 xy) {
 // denoised signal reprojected by the real diffuse temporal pass. Resolve reads
 // it once, then replaces it with the exact current colortex4 words. Scratch z
 // stores the CoCg belonging to the same denoised estimator as maxEntY; w stores
-// (filtered stddev, valid reprojection mass). Raw scratch separately owns N_eff.
+// (filtered estimatorStdDev, valid reprojection mass). Raw scratch separately owns N_eff.
 void writeDiffuseDenoisedReprojection(uvec2 xy, vec4 maxEntY, vec2 CoCg,
-        float standardDeviation, float validWeight) {
+        float estimatorStdDev, float validWeight) {
     diffuseBuffer.data[addr(diffuseDenoisedWritePlane(), xy)] = uvec4(
         packHalf2x16(clamp(maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(CoCg, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(vec2(clamp(standardDeviation, 0.0, 65504.0),
+        packHalf2x16(vec2(clamp(estimatorStdDev, 0.0, 65504.0),
             clamp(validWeight, 0.0, 1.0))));
 }
 
@@ -161,13 +138,13 @@ void writeDiffuseDenoisedReprojectionInvalid(uvec2 xy) {
 }
 
 bool readDiffuseDenoisedReprojection(uvec2 xy, out vec4 maxEntY,
-        out vec2 CoCg, out float standardDeviation, out float validWeight) {
+        out vec2 CoCg, out float estimatorStdDev, out float validWeight) {
     uvec4 words = readDiffuseDenoisedCurrentRaw(xy);
     CoCg = unpackHalf2x16(words.z);
     vec2 deviationWeight = unpackHalf2x16(words.w);
-    standardDeviation = deviationWeight.x;
+    estimatorStdDev = deviationWeight.x;
     validWeight = deviationWeight.y;
-    bool valid = standardDeviation >= 0.0 && validWeight > 0.0
+    bool valid = estimatorStdDev >= 0.0 && validWeight > 0.0
         && !any(isnan(CoCg)) && !any(isinf(CoCg))
         && !any(isnan(deviationWeight)) && !any(isinf(deviationWeight));
     maxEntY = valid

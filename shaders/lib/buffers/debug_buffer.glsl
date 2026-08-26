@@ -4,15 +4,15 @@
 #include "/lib/buffers/addr.glsl"
 #include "/lib/common/oct_encode.glsl"
 #include "/lib/common/pack_half.glsl"
+#include "/lib/debug/view_ids.glsl"
 
 // Dedicated per-pixel diagnostic records. Debug producers never borrow a
 // production buffer, so changing DEBUG_VIEW cannot change renderer data flow.
-// COMMON: x=encoded reflection sample direction, y=diffuse standardized
-// robust-current/history moment distance, z=specular robust-current/history
-// moment distance,
-// w=packHalf2x16(diffuse/specular variance-prepare stddev).
-// SPECULAR_TEMPORAL: xyz=packed MaxEnt, w=FP16x2
-// hit distance/history contribution.
+// COMMON: x=encoded reflection sample direction, y/z=diffuse/specular
+// noise-only current weight V_H/(V_H+V_C), w=FP16x2 diffuse/specular prepared
+// estimator standard deviation.
+// SPECULAR_TEMPORAL: xyz=resolved temporal MaxEnt, w=FP16x2 temporal tracking
+// hit distance/resolved history contribution (1-currentAlpha).
 const uint DEBUG_N_COMMON = 0u;
 const uint DEBUG_N_SPECULAR_TEMPORAL = 1u;
 
@@ -39,69 +39,69 @@ vec3 debugReadReflectionSampleDirection(uvec2 xy) {
     return decodeNormalU(debugLoad(DEBUG_N_COMMON, xy).x);
 }
 
-void debugWriteDiffuseVarianceOptimalAlpha(uvec2 xy, float optimalAlpha) {
-    debugBuffer.data[addr(DEBUG_N_COMMON, xy)].y = floatBitsToUint(optimalAlpha);
+void debugWriteDiffuseNoiseOnlyCurrentWeight(uvec2 xy, float currentWeight) {
+    debugBuffer.data[addr(DEBUG_N_COMMON, xy)].y = floatBitsToUint(currentWeight);
 }
 
-float debugReadDiffuseVarianceOptimalAlpha(uvec2 xy) {
+float debugReadDiffuseNoiseOnlyCurrentWeight(uvec2 xy) {
     return uintBitsToFloat(debugLoad(DEBUG_N_COMMON, xy).y);
 }
 
-void debugWriteSpecularVarianceOptimalAlpha(uvec2 xy, float optimalAlpha) {
-    debugBuffer.data[addr(DEBUG_N_COMMON, xy)].z = floatBitsToUint(optimalAlpha);
+void debugWriteSpecularNoiseOnlyCurrentWeight(uvec2 xy, float currentWeight) {
+    debugBuffer.data[addr(DEBUG_N_COMMON, xy)].z = floatBitsToUint(currentWeight);
 }
 
-float debugReadSpecularVarianceOptimalAlpha(uvec2 xy) {
+float debugReadSpecularNoiseOnlyCurrentWeight(uvec2 xy) {
     return uintBitsToFloat(debugLoad(DEBUG_N_COMMON, xy).z);
 }
 
-void debugWriteDiffuseVariancePreparationStandardDeviation(
+void debugWriteDiffusePreparedEstimatorStandardDeviation(
         uvec2 xy, float standardDeviation) {
     uint index = addr(DEBUG_N_COMMON, xy);
-    vec2 preparationStandardDeviations = unpackHalf2x16(
+    vec2 preparedEstimatorStandardDeviations = unpackHalf2x16(
         debugBuffer.data[index].w);
-    preparationStandardDeviations.x = clamp(
+    preparedEstimatorStandardDeviations.x = clamp(
         standardDeviation, -1.0, 65504.0);
     debugBuffer.data[index].w = packHalf2x16(
-        preparationStandardDeviations);
+        preparedEstimatorStandardDeviations);
 }
 
-void debugWriteSpecularVariancePreparationStandardDeviation(
+void debugWriteSpecularPreparedEstimatorStandardDeviation(
         uvec2 xy, float standardDeviation) {
     uint index = addr(DEBUG_N_COMMON, xy);
-    vec2 preparationStandardDeviations = unpackHalf2x16(
+    vec2 preparedEstimatorStandardDeviations = unpackHalf2x16(
         debugBuffer.data[index].w);
-    preparationStandardDeviations.y = clamp(
+    preparedEstimatorStandardDeviations.y = clamp(
         standardDeviation, -1.0, 65504.0);
     debugBuffer.data[index].w = packHalf2x16(
-        preparationStandardDeviations);
+        preparedEstimatorStandardDeviations);
 }
 
-float debugReadDiffuseVariancePreparationStandardDeviation(uvec2 xy) {
+float debugReadDiffusePreparedEstimatorStandardDeviation(uvec2 xy) {
     return unpackHalf2x16(debugLoad(DEBUG_N_COMMON, xy).w).x;
 }
 
-float debugReadSpecularVariancePreparationStandardDeviation(uvec2 xy) {
+float debugReadSpecularPreparedEstimatorStandardDeviation(uvec2 xy) {
     return unpackHalf2x16(debugLoad(DEBUG_N_COMMON, xy).w).y;
 }
 
-void debugWriteSpecularTemporal(uvec2 xy, uvec3 signalWords, float hitDistance, float historyContribution) {
+void debugWriteSpecularTemporalState(uvec2 xy, uvec3 signalWords, float trackingHitDistance, float resolvedHistoryContribution) {
     debugStore(DEBUG_N_SPECULAR_TEMPORAL, xy, uvec4(signalWords,
-        packHalf2x16(clamp(vec2(hitDistance, historyContribution),
+        packHalf2x16(clamp(vec2(trackingHitDistance, resolvedHistoryContribution),
             vec2(-65504.0), vec2(65504.0)))));
 }
 
-void debugWriteSpecularTemporalInvalid(uvec2 xy) {
+void debugWriteSpecularTemporalStateInvalid(uvec2 xy) {
     debugStore(DEBUG_N_SPECULAR_TEMPORAL, xy, uvec4(
         0u, 0u, 0u, packHalf2x16(vec2(-1.0, 0.0))));
 }
 
-void debugReadSpecularTemporal(uvec2 xy, out uvec3 signalWords, out float hitDistance, out float historyContribution) {
+void debugReadSpecularTemporalState(uvec2 xy, out uvec3 signalWords, out float trackingHitDistance, out float resolvedHistoryContribution) {
     uvec4 words = debugLoad(DEBUG_N_SPECULAR_TEMPORAL, xy);
     signalWords = words.xyz;
     vec2 metadata = unpackHalf2x16(words.w);
-    hitDistance = metadata.x;
-    historyContribution = metadata.y;
+    trackingHitDistance = metadata.x;
+    resolvedHistoryContribution = metadata.y;
 }
 
 #endif

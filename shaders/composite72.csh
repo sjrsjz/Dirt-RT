@@ -1,1 +1,1 @@
-#include "/post/maxent_specular_final_resolve.glsl"
+#include "/post/denoiser/reflection/resolve.glsl"

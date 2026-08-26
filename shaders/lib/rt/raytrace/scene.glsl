@@ -169,7 +169,7 @@ Material evaluateMaterial(Payload pld, vec3 rayOrigin, vec3 rd_i,
                 gradientU, gradientV);
         }
 
-        #if POM_ENABLED == 1
+        #if POM_ENABLED == 1 && DEBUG_RT_FORCE_GEOMETRY_NORMAL == 0
         if (bounce == 0u) {
             sampleUV = computeParallaxUV(blockTexNormal, localCoord, atlas,
                     rd_i, tbn, footprint.lod);
@@ -193,8 +193,12 @@ Material evaluateMaterial(Payload pld, vec3 rayOrigin, vec3 rd_i,
     Material evaluated = getMaterial(albedoTex, normalTex, specularTex, tbn,
         wetStrength_global, wetness_global, skylight, geomN);
     vec3 geometryNormal = faceforward(geomN, geomN, rd_i);
+    #if DEBUG_RT_FORCE_GEOMETRY_NORMAL == 1
+    evaluated.macroNormal = geometryNormal;
+    #else
     evaluated.macroNormal = constrainMappedNormal(evaluated.macroNormal,
         geometryNormal, -rd_i);
+    #endif
     return evaluated;
 }
 

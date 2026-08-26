@@ -1,1 +1,1 @@
-#include "/post/maxent_specular_input.glsl"
+#include "/post/denoiser/reflection/input.glsl"

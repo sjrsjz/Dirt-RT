@@ -1,35 +1,28 @@
-#ifndef MAXENT_SPATIAL_GEOMETRY_GLSL
-#define MAXENT_SPATIAL_GEOMETRY_GLSL
+#ifndef MAXENT_DENOISER_GEOMETRY_GLSL
+#define MAXENT_DENOISER_GEOMETRY_GLSL
 
 // Canonical denoiser-geometry adapter shared by all spatial signals.
 //
-// colortex3 RGBA32UI ABI, produced by maxent_variance_prepare.glsl:
+// RGBA32UI ABI produced by variance_prepare.glsl:
 //   x = floatBitsToUint(first-surface distance), negative means invalid/sky
 //   y = oct32 first-surface geometry normal
-//   z = oct32 primary ray direction
+//   z = oct32 estimated sampling-PDF direction
 //   w = half(perceptual roughness) | unused half
+// The primary ray is reconstructed from the pixel coordinate instead of being
+// stored, leaving both independent directions at full oct32 precision.
 //
 // The variance-preparation policy owns the signal roughness: diffuse writes
 // exactly 1.0, while specular writes sqrt(primary GGX alpha).
 #include "/lib/buffers/gbuffer.glsl"
-#include "/lib/lighting/denoiser/maxent_spatial_common.glsl"
-
-uniform usampler2D colortex3;
-
-ivec2 denoiserSpatialImageSize() {
-    return textureSize(colortex3, 0);
-}
-
-uvec4 denoiserSpatialLoadGeometryWords(ivec2 pixel) {
-    return texelFetch(colortex3, pixel, 0);
-}
+#include "/lib/lighting/denoiser/signal.glsl"
 
 bool denoiserSpatialGeometryWordsValid(uvec4 words) {
     return uintBitsToFloat(words.x) >= 0.0;
 }
 
 struct DenoiserSpatialCenterGeometry {
-    vec3 surfaceNormal;
+    vec3 geometryNormal;
+    vec3 pdfDirection;
     vec3 primaryRay;
     float surfaceDistance;
     float surfacePlaneOffset;
@@ -37,21 +30,24 @@ struct DenoiserSpatialCenterGeometry {
 };
 
 DenoiserSpatialCenterGeometry denoiserSpatialDecodeCenterGeometry(
-        uvec4 words) {
+        uvec4 words, ivec2 pixel) {
     DenoiserSpatialCenterGeometry geometry;
     geometry.surfaceDistance = uintBitsToFloat(words.x);
-    geometry.surfaceNormal = decodeNormalU(words.y);
-    geometry.primaryRay = decodeNormalU(words.z);
+    geometry.geometryNormal = decodeNormalU(words.y);
+    geometry.pdfDirection = decodeNormalU(words.z);
+    geometry.primaryRay = reconstructPrimaryRay(uvec2(pixel));
     geometry.surfacePlaneOffset = geometry.surfaceDistance
-        * dot(geometry.surfaceNormal, geometry.primaryRay);
+        * dot(geometry.geometryNormal, geometry.primaryRay);
     float roughness = unpackHalf2x16(words.w).x;
     geometry.ggxAlpha = roughness * roughness;
     return geometry;
 }
 
-void denoiserSpatialDecodeSampleGeometry(uvec4 words,
-        out vec3 primaryRay, out float surfaceDistance) {
-    primaryRay = decodeNormalU(words.z);
+void denoiserSpatialDecodeSampleGeometry(uvec4 words, ivec2 pixel,
+        out vec3 primaryRay, out vec3 pdfDirection,
+        out float surfaceDistance) {
+    primaryRay = reconstructPrimaryRay(uvec2(pixel));
+    pdfDirection = decodeNormalU(words.z);
     surfaceDistance = uintBitsToFloat(words.x);
 }
 
@@ -73,4 +69,4 @@ vec3 denoiserSpatialVirtualWorldPositionFromWords(
         pixel, signalWords, position) ? position : fallback;
 }
 
-#endif // MAXENT_SPATIAL_GEOMETRY_GLSL
+#endif // MAXENT_DENOISER_GEOMETRY_GLSL

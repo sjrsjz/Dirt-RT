@@ -33,9 +33,9 @@ struct MaxEntSpecularHistory {
     vec3 geometryNormal;
     SpecularMaxEnt signal;
     float rootMeanY2;
-    float hitDistance;
+    float hitDistance; // Per-frame virtual-motion tracking guide; never a temporally averaged lighting statistic.
     float roughness;
-    float historyLength;
+    float historyEffectiveSamples;
     uint materialID;
 };
 
@@ -154,25 +154,11 @@ SpecularMaxEnt emptySpecularMaxEnt() {
 
 SpecularMaxEnt sanitizeSpecularMaxEnt(SpecularMaxEnt s) {
     if (any(isnan(s.maxEntY)) || any(isinf(s.maxEntY)) ||
-            any(isnan(s.CoCg)) || any(isinf(s.CoCg)) ||
-            s.maxEntY.w <= 0.0)
+            any(isnan(s.CoCg)) || any(isinf(s.CoCg)))
         return emptySpecularMaxEnt();
-    s.maxEntY.w = clamp(s.maxEntY.w, 0.0, 65504.0);
-    float momentLength = length(s.maxEntY.xyz);
-    if (momentLength > s.maxEntY.w)
-        s.maxEntY.xyz *= s.maxEntY.w / max(momentLength, 1e-20);
-    vec3 rgb = vec3(
-        s.maxEntY.w + 0.8596 * s.CoCg.x - 1.4304 * s.CoCg.y,
-        s.maxEntY.w - 0.1404 * s.CoCg.x + 0.5696 * s.CoCg.y,
-        s.maxEntY.w - 1.1404 * s.CoCg.x - 1.4304 * s.CoCg.y);
-    if (any(lessThan(rgb, vec3(0.0)))) {
-        rgb = max(rgb, vec3(0.0));
-        float projectedY = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
-        rgb = projectedY > 1e-20
-            ? rgb * (s.maxEntY.w / projectedY) : vec3(s.maxEntY.w);
-        s.CoCg = vec2(0.5 * (rgb.r - rgb.b),
-            -0.25 * rgb.r + 0.5 * rgb.g - 0.25 * rgb.b);
-    }
+    // Storage sanitation is componentwise only. Directional/chroma feasibility is a decoder concern and must not
+    // alter the linear encoder or latent moments.
+    s.maxEntY = clamp(s.maxEntY, vec4(-65504.0), vec4(65504.0));
     s.CoCg = clamp(s.CoCg, vec2(-65504.0), vec2(65504.0));
     return s;
 }
@@ -324,8 +310,8 @@ void readRefrHistLight(uvec2 xy, out vec3 color, out float vprojDist,
 // N3: previous final denoised MaxEnt6 plus filtered standard deviation and a
 // negative layout stamp. It replaces the former secondary history in place.
 void writeMaxEntSpecularTemporalHistory(uvec2 xy, MaxEntSpecularHistory h) {
-    if (!(h.historyLength >= 1.0) || h.historyLength > 65504.0
-            || isnan(h.historyLength) || isinf(h.historyLength)) {
+    if (!(h.historyEffectiveSamples >= 1.0) || h.historyEffectiveSamples > 65504.0
+            || isnan(h.historyEffectiveSamples) || isinf(h.historyEffectiveSamples)) {
         reflectBuffer.data[addr(SPEC_N_HISTGEO, xy)] = uvec4(0u);
         reflectBuffer.data[addr(SPEC_N_HISTLIGHT, xy)] = uvec4(0u);
         return;
@@ -342,19 +328,19 @@ void writeMaxEntSpecularTemporalHistory(uvec2 xy, MaxEntSpecularHistory h) {
     uvec3 temporal = packSpecularMaxEnt(h.signal);
     reflectBuffer.data[addr(SPEC_N_HISTLIGHT, xy)] = uvec4(temporal,
         pack2HalfClampedU(h.rootMeanY2,
-            h.historyLength));
+            h.historyEffectiveSamples));
 }
 
-void writeMaxEntSpecularDenoisedHistory(uvec2 xy, SpecularMaxEnt signal, float stddev) {
+void writeMaxEntSpecularDenoisedHistory(uvec2 xy, SpecularMaxEnt signal, float estimatorStdDev) {
     signal = sanitizeSpecularMaxEnt(signal);
-    if (!(stddev >= 0.0) || isnan(stddev) || isinf(stddev)) {
+    if (!(estimatorStdDev >= 0.0) || isnan(estimatorStdDev) || isinf(estimatorStdDev)) {
         reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)] = uvec4(0u, 0u, 0u,
             packHalf2x16(vec2(-1.0, 0.0)));
         return;
     }
     uvec3 denoised = packSpecularMaxEnt(signal);
     reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)] = uvec4(denoised,
-        packHalf2x16(vec2(min(stddev, 65504.0), -2.0)));
+        packHalf2x16(vec2(min(estimatorStdDev, 65504.0), -2.0)));
 }
 
 void writeMaxEntSpecularDenoisedHistoryInvalid(uvec2 xy) {
@@ -364,42 +350,47 @@ void writeMaxEntSpecularDenoisedHistoryInvalid(uvec2 xy) {
 
 // Transient layout consumed by the final spatial pass:
 //   xy = reprojected previous denoised MaxEntY
-//   z  = reprojection alpha floor, reprojected reflection hit distance
-//   w  = filtered stddev, -2 layout stamp
+//   z  = reprojection alpha floor, current per-frame tracking hit distance
+//   w  = filtered estimatorStdDev, -2 layout stamp
 //   N4.x = CoCg from that exact same denoised reprojection
 void writeMaxEntSpecularDenoisedReprojection(uvec2 xy, SpecularMaxEnt signal,
-        float standardDeviation, float hitDistance, float alphaFloor) {
+        float estimatorStdDev, float trackingHitDistance, float alphaFloor) {
     signal = sanitizeSpecularMaxEnt(signal);
     reflectBuffer.data[addr(SPEC_N_LIGHT, xy)] = uvec4(
         packHalf2x16(clamp(signal.maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(signal.maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(vec2(clamp(alphaFloor, 0.0, 1.0),
-            clamp(hitDistance, 0.0, 65504.0))),
-        packHalf2x16(vec2(clamp(standardDeviation, 0.0, 65504.0),
+            clamp(trackingHitDistance, 0.0, 65504.0))),
+        packHalf2x16(vec2(clamp(estimatorStdDev, 0.0, 65504.0),
             -2.0)));
     reflectBuffer.data[addr(SPEC_N_DENOISED_REPROJECTED_CHROMA, xy)] =
         uvec4(packHalf2x16(signal.CoCg), 0x43524742u, 0u, 0u);
 }
 
-void writeMaxEntSpecularDenoisedReprojectionInvalid(uvec2 xy) {
-    reflectBuffer.data[addr(SPEC_N_LIGHT, xy)] = uvec4(0u, 0u, 0u,
+void writeMaxEntSpecularDenoisedReprojectionInvalid(uvec2 xy, float trackingHitDistance) {
+    reflectBuffer.data[addr(SPEC_N_LIGHT, xy)] = uvec4(0u, 0u,
+        packHalf2x16(vec2(0.0, clamp(trackingHitDistance, 0.0, 65504.0))),
         packHalf2x16(vec2(-1.0, 0.0)));
     reflectBuffer.data[addr(SPEC_N_DENOISED_REPROJECTED_CHROMA, xy)] =
         uvec4(0u);
 }
 
+void writeMaxEntSpecularDenoisedReprojectionInvalid(uvec2 xy) {
+    writeMaxEntSpecularDenoisedReprojectionInvalid(xy, 0.0);
+}
+
 bool readMaxEntSpecularDenoisedReprojection(uvec2 xy,
         out SpecularMaxEnt signal,
-        out float stddev, out float alphaFloor, out float hitDistance) {
+        out float estimatorStdDev, out float alphaFloor, out float hitDistance) {
     uvec4 words = reflectBuffer.data[addr(SPEC_N_LIGHT, xy)];
     uvec4 chromaWords = reflectBuffer.data[
         addr(SPEC_N_DENOISED_REPROJECTED_CHROMA, xy)];
     vec2 historyMeta = unpackHalf2x16(words.z);
     vec2 metadata = unpackHalf2x16(words.w);
-    stddev = metadata.x;
+    estimatorStdDev = metadata.x;
     alphaFloor = historyMeta.x;
     hitDistance = historyMeta.y;
-    bool valid = stddev >= 0.0 && alphaFloor >= 0.0 && alphaFloor <= 1.0
+    bool valid = estimatorStdDev >= 0.0 && alphaFloor >= 0.0 && alphaFloor <= 1.0
         && metadata.y == -2.0
         && chromaWords.y == 0x43524742u
         && !any(isnan(historyMeta)) && !any(isinf(historyMeta))
@@ -427,7 +418,7 @@ MaxEntSpecularHistory readMaxEntSpecularHistory(uvec2 xy) {
     unpackMaxEntHistoryNormalMaterial(g.z, h.geometryNormal, h.materialID);
     h.signal = unpackSpecularMaxEnt(s.xyz);
     h.rootMeanY2 = sanitizeRootMeanSquareFP16(m2History.x);
-    h.historyLength = max(m2History.y, 0.0);
+    h.historyEffectiveSamples = max(m2History.y, 0.0);
     bool denoisedValid = denoisedMetadata.x >= 0.0 && denoisedMetadata.y == -2.0
         && !any(isnan(denoisedMetadata)) && !any(isinf(denoisedMetadata));
     h.hitDistance = max(hitRoughness.x, 0.0);
@@ -435,7 +426,7 @@ MaxEntSpecularHistory readMaxEntSpecularHistory(uvec2 xy) {
     bool valid = surfaceDistance >= 0.0 && !isnan(surfaceDistance) &&
         !isinf(surfaceDistance) && !any(isnan(m2History))
         && !any(isinf(m2History)) && m2History.x >= 0.0 &&
-        h.historyLength >= 1.0 && h.historyLength <= 65504.0 &&
+        h.historyEffectiveSamples >= 1.0 && h.historyEffectiveSamples <= 65504.0 &&
         h.materialID != 0xffffffffu && denoisedValid;
     if (!valid) {
         h.surfacePosition = vec3(0.0);
@@ -444,7 +435,7 @@ MaxEntSpecularHistory readMaxEntSpecularHistory(uvec2 xy) {
         h.rootMeanY2 = 0.0;
         h.hitDistance = 0.0;
         h.roughness = 1.0;
-        h.historyLength = 0.0;
+        h.historyEffectiveSamples = 0.0;
         h.materialID = 0u;
     }
     return h;

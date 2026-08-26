@@ -1,10 +1,11 @@
-#ifndef MAXENT_SPECULAR_TEMPORAL_COMMON_GLSL
-#define MAXENT_SPECULAR_TEMPORAL_COMMON_GLSL
+#ifndef MAXENT_REFLECTION_DENOISER_COMMON_GLSL
+#define MAXENT_REFLECTION_DENOISER_COMMON_GLSL
 
-// MaxEnt specular temporal geometry, reprojection and signal helpers.
+// Reflection-only temporal geometry, reprojection and raw-storage adapters.
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/buffer_io.glsl"
+#include "/lib/lighting/denoiser/internal_constants.glsl"
 #include "/lib/math/statistics.glsl"
 
 float maxentPerceptualRoughness(float ggxAlpha) {
@@ -77,7 +78,7 @@ SpecularMaxEnt maxentMixMaxEnt(SpecularMaxEnt a, SpecularMaxEnt b, float t) {
     SpecularMaxEnt s;
     s.maxEntY = mix(a.maxEntY, b.maxEntY, t);
     s.CoCg = mix(a.CoCg, b.CoCg, t);
-    return sanitizeSpecularMaxEnt(s);
+    return s;
 }
 
 SpecularMaxEnt maxentWeightedMaxEnt(SpecularMaxEnt a, float wa,
@@ -91,7 +92,7 @@ SpecularMaxEnt maxentWeightedMaxEnt(SpecularMaxEnt a, float wa,
 SpecularMaxEnt maxentScaleMaxEnt(SpecularMaxEnt s, float scale) {
     s.maxEntY *= scale;
     s.CoCg *= scale;
-    return sanitizeSpecularMaxEnt(s);
+    return s;
 }
 
 // Raw temporal input: MaxEnt6 plus the reflection hit distance.
@@ -115,13 +116,13 @@ MaxEntSpecularInput maxentUnpackSpecularInput(uvec4 p) {
 struct MaxEntTemporalSignal {
     SpecularMaxEnt signal;
     float rootMeanY2;
-    float historyLength;
+    float historyEffectiveSamples;
 };
 
 uvec4 maxentPackTemporal(MaxEntTemporalSignal s) {
     uvec3 p = packSpecularMaxEnt(s.signal);
     return uvec4(p, maxentPackHalf2(
-        sanitizeRootMeanSquareFP16(s.rootMeanY2), s.historyLength));
+        sanitizeRootMeanSquareFP16(s.rootMeanY2), s.historyEffectiveSamples));
 }
 
 MaxEntTemporalSignal maxentUnpackTemporal(uvec4 p) {
@@ -129,7 +130,7 @@ MaxEntTemporalSignal maxentUnpackTemporal(uvec4 p) {
     s.signal = unpackSpecularMaxEnt(p.xyz);
     vec2 momentHistory = unpackHalf2x16(p.w);
     s.rootMeanY2 = sanitizeRootMeanSquareFP16(momentHistory.x);
-    s.historyLength = max(momentHistory.y, 0.0);
+    s.historyEffectiveSamples = max(momentHistory.y, 0.0);
     return s;
 }
 
@@ -140,4 +141,4 @@ float maxentSpecLobeTanHalfAngle(float roughness, float volumeFraction) {
         max(1.0 - volumeFraction, 1e-6);
 }
 
-#endif // MAXENT_SPECULAR_TEMPORAL_COMMON_GLSL
+#endif // MAXENT_REFLECTION_DENOISER_COMMON_GLSL

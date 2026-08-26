@@ -131,7 +131,7 @@ vec3IlluminationData fetchReflect(ivec2 p) {
 #ifndef REFLECT_BUFFER_MIN2
     MaxEntSpecularHistory history = readMaxEntSpecularHistory(xy);
     tmp.data = specularMaxEntTotalRgb(history.signal);
-    tmp.prev_weight = history.historyLength;
+    tmp.prev_weight = history.historyEffectiveSamples;
     tmp.pos = history.surfacePosition;
     tmp.normal = history.geometryNormal * history.hitDistance;
 #endif
@@ -156,7 +156,7 @@ bool fetchReflectHistoryGeometry(ivec2 p, out vec3 pos, out vec3 normal) {
     MaxEntSpecularHistory history = readMaxEntSpecularHistory(xy);
     pos = history.surfacePosition;
     normal = history.geometryNormal;
-    return history.historyLength >= 0.5;
+    return history.historyEffectiveSamples >= 0.5;
 }
 
 vec3IlluminationData sampleReflect(vec2 p) {

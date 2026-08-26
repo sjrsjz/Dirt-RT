@@ -1,13 +1,34 @@
-#ifndef MAXENT_SPATIAL_COMMON_GLSL
-#define MAXENT_SPATIAL_COMMON_GLSL
+#ifndef MAXENT_DENOISER_ATROUS_FILTER_GLSL
+#define MAXENT_DENOISER_ATROUS_FILTER_GLSL
 
-#include "/lib/lighting/denoiser/maxent_spatial_signal.glsl"
-#include "/lib/lighting/denoiser/maxent_spatial_virtual_projection.glsl"
-#include "/lib/lighting/denoiser/maxent_moment_statistics.glsl"
+#include "/lib/lighting/denoiser/internal_constants.glsl"
+#include "/lib/lighting/denoiser/signal.glsl"
+#include "/lib/lighting/denoiser/light_difference.glsl"
+#include "/lib/lighting/denoiser/geometry.glsl"
+#include "/lib/lighting/denoiser/virtual_projection.glsl"
+#include "/lib/math/statistics.glsl"
+
+float maxentMomentDifferenceCorrelationForSpatialStep(int stepRadius) {
+    if (stepRadius <= 1) return MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_1;
+    if (stepRadius <= 2) return MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_2;
+    if (stepRadius <= 4) return MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_4;
+    if (stepRadius <= 8) return MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_8;
+    if (stepRadius <= 16) return MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_16;
+    return MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_32;
+}
+
+float maxentMomentPropagationCorrelationForSpatialStep(int stepRadius) {
+    if (stepRadius <= 1) return MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_1;
+    if (stepRadius <= 2) return MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_2;
+    if (stepRadius <= 4) return MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_4;
+    if (stepRadius <= 8) return MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_8;
+    if (stepRadius <= 16) return MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_16;
+    return MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_32;
+}
 
 struct DenoiserSpatialAccumulator {
-    f16vec4 maxEntY;
-    f16vec2 CoCg;
+    vec4 maxEntY;
+    vec2 CoCg;
     vec2 varianceEnergy;
     float weight;
     float virtualDistance;
@@ -56,11 +77,11 @@ float denoiserSpatialWeight(DenoiserMaxEntSignal centerSignal,
         + denoiserSpatialVirtualPlaneDepthExponent(
             centerVirtualPosition, centerVirtualNormal, samplePrimaryRay,
             sampleSignal.virtualDistance, virtualRejectionScale);
-    float distanceSq = maxentMomentDistanceSq(
+    float distanceSq = maxentLightSampleDistanceSq(
             centerSignal.maxEntY, sampleSignal.maxEntY);
     float variance = statisticsDifferenceVarianceFromStandardDeviations(
-            centerSignal.standardDeviation,
-            sampleSignal.standardDeviation,
+            centerSignal.estimatorStdDev,
+            sampleSignal.estimatorStdDev,
             momentCorrelation);
     // Both variances may be exactly zero; without the floor, identical
     // signals produce 0/0 and poison the exponential with NaN.
@@ -74,16 +95,13 @@ float denoiserSpatialWeight(DenoiserMaxEntSignal centerSignal,
 DenoiserSpatialAccumulator denoiserSpatialBeginAccumulation(
     DenoiserMaxEntSignal center) {
     DenoiserSpatialAccumulator accum;
-    // The largest supported kernel mass is 7.2517605. Scaling every lighting
-    // term by the exact power of two 1/8 keeps all sanitized FP16 inputs below
-    // overflow while the six long-lived lighting accumulators stay packed.
-    accum.maxEntY = f16vec4(center.maxEntY * 0.125);
-    accum.CoCg = f16vec2(center.CoCg * 0.125);
+    accum.maxEntY = center.maxEntY;
+    accum.CoCg = center.CoCg;
     // x = sum w_i^2 V_i, y = sum w_i sqrt(V_i).  These are the two
     // sufficient accumulators for the constant-correlation expansion.
     accum.varianceEnergy = vec2(
-        center.standardDeviation * center.standardDeviation,
-        center.standardDeviation);
+        center.estimatorStdDev * center.estimatorStdDev,
+        center.estimatorStdDev);
     accum.weight = 1.0;
     accum.virtualDistance = center.virtualDistance;
     accum.virtualWeight = 1.0;
@@ -93,13 +111,11 @@ DenoiserSpatialAccumulator denoiserSpatialBeginAccumulation(
 void denoiserSpatialAccumulate(inout DenoiserSpatialAccumulator accum,
     DenoiserMaxEntSignal neighbor, float weight,
     float virtualDistanceWeight) {
-    float scaledWeight = weight * 0.125;
-    accum.maxEntY += f16vec4(neighbor.maxEntY * scaledWeight);
-    accum.CoCg += f16vec2(neighbor.CoCg * scaledWeight);
+    accum.maxEntY += neighbor.maxEntY * weight;
+    accum.CoCg += neighbor.CoCg * weight;
     accum.varianceEnergy += vec2(
-            weight * weight * neighbor.standardDeviation
-                * neighbor.standardDeviation,
-            weight * neighbor.standardDeviation);
+            weight * weight * neighbor.estimatorStdDev * neighbor.estimatorStdDev,
+            weight * neighbor.estimatorStdDev);
     accum.weight += weight;
     accum.virtualDistance += neighbor.virtualDistance
         * virtualDistanceWeight;
@@ -111,16 +127,13 @@ DenoiserMaxEntSignal denoiserSpatialResolve(
     // Both sums start at one and only receive nonnegative exponential weights.
     float invWeight = 1.0 / accum.weight;
     DenoiserMaxEntSignal outputSignal;
-    float lightNormalization = 8.0 * invWeight;
-    outputSignal.maxEntY = vec4(accum.maxEntY) * lightNormalization;
-    outputSignal.CoCg = vec2(accum.CoCg) * lightNormalization;
-    outputSignal.standardDeviation =
-        statisticsWeightedMeanStandardDeviation(
-            accum.varianceEnergy.x, accum.varianceEnergy.y, invWeight,
-            propagationCorrelation);
+    outputSignal.maxEntY = accum.maxEntY * invWeight;
+    outputSignal.CoCg = accum.CoCg * invWeight;
+    outputSignal.estimatorStdDev = statisticsWeightedMeanStandardDeviation(
+        accum.varianceEnergy.x, accum.varianceEnergy.y, invWeight, propagationCorrelation);
     outputSignal.virtualDistance = accum.virtualDistance
         / accum.virtualWeight;
     return denoiserSanitizeMaxEntSignal(outputSignal);
 }
 
-#endif // MAXENT_SPATIAL_COMMON_GLSL
+#endif // MAXENT_DENOISER_ATROUS_FILTER_GLSL

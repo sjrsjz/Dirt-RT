@@ -61,7 +61,7 @@ diffuseIlluminationData fetchDiffuse(ivec2 p) {
 }
 
 float blendDiffuseRootMeanY2(float rootA, float rootB, float x) {
-    return sqrt(max(mix(rootA * rootA, rootB * rootB, x), 0.0));
+    return sqrt(mix(rootA * rootA, rootB * rootB, x));
 }
 
 diffuseIlluminationData blendDiffuse(diffuseIlluminationData A,

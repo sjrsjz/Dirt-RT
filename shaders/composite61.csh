@@ -1,1 +1,1 @@
-#include "/post/maxent_specular_temporal.glsl"
+#include "/post/denoiser/reflection/temporal.glsl"

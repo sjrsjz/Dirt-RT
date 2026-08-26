@@ -150,11 +150,14 @@ option.RADIANCE_CACHE_RIS_GUIDING_KAPPA = 缓存 RIS 引导锐度
 option.RADIANCE_CACHE_RIS_GUIDING_KAPPA.comment = RIS 选中方向周围连续采样波瓣的集中度。数值越高越聚焦，可能更快命中紧凑光源，但对过期或不精确方向更敏感；数值越低越稳健。
 
 # ===========================================================================
+# MaxEnt 共享时域响应
+# ===========================================================================
+option.MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE = 矩差响应尺度
+option.MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE.comment = 漫反射与镜面时域累积共用。它控制矩距离平方相对于两侧估计器总方差的缩放；数值越大，相同帧间差异产生的当前帧权重越高，历史拒绝越强。
+
+# ===========================================================================
 # MaxEnt 漫反射时域
 # ===========================================================================
-option.MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY = 最大有效样本数
-option.MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY.comment = 漫反射历史的有限窗口 Kish 有效样本数。达到窗口前，当前样本最小权重为 1/(N+1)；达到窗口后改为 2/(N+1)，从而不直接钳制 N 也不会锁死历史。
-
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE = 重投影深度缩放
 option.MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE.comment = 缩放时域重投影足迹梯形的深度半范围。提高可接受离重建表面平面更远的历史样本，减少重置但可能跨薄几何体泄漏。
 
@@ -164,9 +167,6 @@ option.MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS.comment = 漫反射时域路�
 # ===========================================================================
 # MaxEnt 镜面时域
 # ===========================================================================
-option.MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY = 最大有效样本数
-option.MAXENT_SPECULAR_TEMPORAL_MAX_HISTORY.comment = 镜面历史的有限窗口 Kish 有效样本数。达到窗口前，当前样本最小权重为 1/(N+1)；达到窗口后改为 2/(N+1)，从而不直接钳制 N 也不会锁死历史。
-
 option.MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD = 解遮挡阈值
 option.MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD.comment = 重投影表面的相对平面距离容差。降低会拒绝更多历史，提高则可能使历史越过薄小几何体。
 
@@ -196,9 +196,6 @@ option.MAXENT_VARIANCE_HISTORY_END.comment = 漫反射与镜面共用的过渡�
 # ===========================================================================
 # MaxEnt 空域滤波
 # ===========================================================================
-option.MAXENT_SPATIAL_NORMAL_SENSITIVITY = 纹理法线灵敏度
-option.MAXENT_SPATIAL_NORMAL_SENSITIVITY.comment = 仅供折射方差滤波使用的纹理法线拒绝强度；不再影响 MaxEnt 空域滤波。
-
 option.MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE = 平面距离容差
 option.MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE.comment = MaxEnt 虚像拒绝、折射和路径引导空域测试共用的相对投影平面深度容差。数值越大，越允许跨平面滤波。
 
@@ -251,40 +248,46 @@ option.VPROJDIST_SKY.comment = 在镜面和折射降噪器中分配给天空像�
 # ===========================================================================
 # 调试
 # ===========================================================================
-option.DEBUG_VIEW = 调试视图
-option.DEBUG_VIEW.comment = 使用内部光照、路径或缓存可视化替换最终画面。正常游玩时请选择"正常"。
-value.DEBUG_VIEW.0 = 正常
-value.DEBUG_VIEW.1 = 漫反射
-value.DEBUG_VIEW.2 = 折射
-value.DEBUG_VIEW.3 = 反射
-value.DEBUG_VIEW.4 = 白模
-value.DEBUG_VIEW.5 = 光场
-value.DEBUG_VIEW.6 = 法线
-value.DEBUG_VIEW.7 = 吸收
-value.DEBUG_VIEW.8 = 反射方向
-value.DEBUG_VIEW.9 = 反射命中距离
-value.DEBUG_VIEW.10 = 镜面反照率
-value.DEBUG_VIEW.11 = 粗糙度
-value.DEBUG_VIEW.12 = 反射仅时域
-value.DEBUG_VIEW.13 = 漫反射 Kish 有效样本数
-value.DEBUG_VIEW.14 = 反射实际历史贡献
-value.DEBUG_VIEW.15 = 折射历史权重
-value.DEBUG_VIEW.16 = 表面自发光
-value.DEBUG_VIEW.17 = 介质发光
-value.DEBUG_VIEW.18 = 漫反射反照率
-value.DEBUG_VIEW.19 = 折射虚拟距离
-value.DEBUG_VIEW.20 = 路径引导
-value.DEBUG_VIEW.21 = 时域累积原始
-value.DEBUG_VIEW.22 = 辐射率缓存
-value.DEBUG_VIEW.23 = 漫反射方差最优 Alpha
-value.DEBUG_VIEW.24 = 降噪虚像法线
-value.DEBUG_VIEW.25 = 镜面方差最优 Alpha
-value.DEBUG_VIEW.26 = 漫反射方差准备
-value.DEBUG_VIEW.27 = 反射方差准备
-value.DEBUG_VIEW.31 = 缓存最近一次原始值
-value.DEBUG_VIEW.32 = 缓存 RIS Reservoir
-value.DEBUG_VIEW.33 = 缓存 RIS 样本数 M
-value.DEBUG_VIEW.34 = 缓存最终时域值
-value.DEBUG_VIEW.35 = 运动匹配状态
-value.DEBUG_VIEW.36 = 实体世界运动
-value.DEBUG_VIEW.37 = 屏幕运动
+option.DEBUG_RT_FORCE_GEOMETRY_NORMAL = RT 仅使用几何法线
+option.DEBUG_RT_FORCE_GEOMETRY_NORMAL.comment = 所有 RT 材质求值均以面向入射射线的三角形几何法线替换纹理着色法线，并停用 RT 视差遮蔽映射；光栅化 G-buffer 材质不受影响。
+value.DEBUG_RT_FORCE_GEOMETRY_NORMAL.1 = 开启
+value.DEBUG_RT_FORCE_GEOMETRY_NORMAL.0 = 关闭
+
+option.DEBUG_VIEW = 分类调试视图
+option.DEBUG_VIEW.comment = 按输出、材质、降噪、折射、缓存和运动分类。标量热图通常为蓝色低、红色高；洋红色表示无效数据。
+value.DEBUG_VIEW.0 = 【输出】最终合成
+value.DEBUG_VIEW.1 = 【输出】漫反射光照
+value.DEBUG_VIEW.2 = 【输出】镜面反射光照
+value.DEBUG_VIEW.3 = 【输出】折射光照
+value.DEBUG_VIEW.4 = 【输出】无反照率漫反射辐照度
+value.DEBUG_VIEW.5 = 【输出】首表面材质光
+value.DEBUG_VIEW.6 = 【输出】路径介质发光
+value.DEBUG_VIEW.7 = 【输出】路径吸收透射率
+value.DEBUG_VIEW.10 = 【材质】着色法线
+value.DEBUG_VIEW.11 = 【材质】漫反射反照率
+value.DEBUG_VIEW.12 = 【材质】镜面反照率
+value.DEBUG_VIEW.13 = 【材质】GGX Alpha
+value.DEBUG_VIEW.20 = 【漫反射降噪】提交的原始时域历史
+value.DEBUG_VIEW.21 = 【漫反射降噪】最终归一化绝对一阶矩
+value.DEBUG_VIEW.22 = 【漫反射降噪】Kish N_eff
+value.DEBUG_VIEW.23 = 【漫反射降噪】仅噪声当前权重 VH/(VH+VC)
+value.DEBUG_VIEW.24 = 【漫反射降噪】准备后的估计器方差
+value.DEBUG_VIEW.30 = 【镜面降噪】RT 实际采样方向
+value.DEBUG_VIEW.31 = 【镜面降噪】当前跟踪命中距离
+value.DEBUG_VIEW.32 = 【镜面降噪】提交的原始时域历史
+value.DEBUG_VIEW.33 = 【镜面降噪】最终虚像法线
+value.DEBUG_VIEW.34 = 【镜面降噪】Kish N_eff
+value.DEBUG_VIEW.35 = 【镜面降噪】最终历史贡献 1-α
+value.DEBUG_VIEW.36 = 【镜面降噪】仅噪声当前权重 VH/(VH+VC)
+value.DEBUG_VIEW.37 = 【镜面降噪】准备后的估计器方差
+value.DEBUG_VIEW.40 = 【折射】PSR 解析路径
+value.DEBUG_VIEW.41 = 【折射】虚像端点距离
+value.DEBUG_VIEW.50 = 【路径引导】最终 MaxEnt 方向
+value.DEBUG_VIEW.51 = 【辐射缓存】表面历史采样加首表面光
+value.DEBUG_VIEW.52 = 【辐射缓存】本帧原始辐照度
+value.DEBUG_VIEW.53 = 【辐射缓存】时域历史辐照度
+value.DEBUG_VIEW.54 = 【辐射缓存】历史样本数 M
+value.DEBUG_VIEW.55 = 【辐射缓存】最终滤波辐照度
+value.DEBUG_VIEW.60 = 【运动】实体匹配状态
+value.DEBUG_VIEW.61 = 【运动】实体世界位移
+value.DEBUG_VIEW.62 = 【运动】主表面屏幕速度

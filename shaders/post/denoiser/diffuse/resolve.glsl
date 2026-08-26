@@ -1,30 +1,37 @@
 #version 430 core
-// ===========================================================================
-// MaxEnt diffuse final temporal resolve and path-guide SSBO publication.
-// ===========================================================================
+// Purpose: choose diffuse currentAlpha from denoised estimators and commit raw/filtered histories.
+// Dispatch: 16x16.
+// Reads: colortex4 final A-Trous signal, colortex5 path guide, colortex6 raw reprojection,
+//        shared independent-current scratch, Raw RT diffuse signal, filtered-history reprojection.
+// Writes: diffuse raw history, geometry history, filtered history, swap state, and path guide.
+// Persistent side effects: this is the only diffuse history commit point.
+// Invalid representation: invalid signal metadata clears every owned persistent record.
 layout(local_size_x = 16, local_size_y = 16) in;
 #define DIFFUSE_BUFFER
 
 #include "/lib/constants.glsl"
 #include "/lib/buffers/frame_data.glsl"
 #include "/lib/buffers/buffer_io.glsl"
-#include "/lib/lighting/denoiser/maxent_spatial_signal.glsl"
-#include "/lib/lighting/denoiser/maxent_spatial_virtual_projection.glsl"
-#include "/lib/lighting/denoiser/maxent_moment_statistics.glsl"
+#include "/lib/lighting/denoiser/signal.glsl"
+#include "/lib/lighting/denoiser/virtual_projection.glsl"
+#include "/lib/lighting/denoiser/temporal_response.glsl"
+#include "/lib/lighting/denoiser/scratch_io.glsl"
 
 uniform usampler2D colortex4;
 uniform usampler2D colortex5;
 uniform usampler2D colortex6;
 
 uvec4 maxentTemporalRobustLoadSignalWords(ivec2 pixel) {
-    return readDiffuseIndependentCurrentA(uvec2(pixel));
+    return denoiserScratchLoadA(pixel);
 }
 
-#include "/lib/lighting/denoiser/maxent_temporal_robust_tile.glsl"
+ivec2 maxentTemporalRobustImageSize() { return textureSize(colortex4, 0); }
+uvec4 maxentTemporalRobustLoadGeometryWords(ivec2 pixel) { return readPrimaryGeometryWords(uvec2(pixel)); }
 
-MaxEntTemporalRobustEstimate maxentDiffuseCurrentRobustMomentEstimate(
-        ivec2 centerPixel, vec4 centerMoment,
-        float centerStandardDeviation) {
+#include "/lib/lighting/denoiser/robust_mean.glsl"
+
+MaxEntTemporalRobustEstimate maxentDiffuseCurrentRobustMomentEstimate(ivec2 centerPixel, vec4 centerMoment,
+        float centerEstimatorStdDev) {
     uint acceptedMask = maxentTemporalRobustNeighborhoodBit(ivec2(0));
     int sampleCount = 1;
     vec4 momentSum = centerMoment;
@@ -37,7 +44,7 @@ MaxEntTemporalRobustEstimate maxentDiffuseCurrentRobustMomentEstimate(
             || isinf(centerSurfaceDistance)) {
         MaxEntTemporalRobustEstimate centerEstimate;
         centerEstimate.moment = centerMoment;
-        centerEstimate.standardDeviation = centerStandardDeviation;
+        centerEstimate.estimatorStdDev = centerEstimatorStdDev;
         return centerEstimate;
     }
 
@@ -46,7 +53,7 @@ MaxEntTemporalRobustEstimate maxentDiffuseCurrentRobustMomentEstimate(
     vec3 centerPrimaryRay = reconstructPrimaryRay(uvec2(centerPixel));
     float centerPlaneOffset = centerSurfaceDistance
         * dot(centerSurfaceNormal, centerPrimaryRay);
-    float surfaceRejectionScale = denoiserSpatialSurfaceRejectionScale(
+    float surfaceRejectionScale = denoiserSpatialDistanceRejectionScale(
         centerSurfaceDistance, float(imageSize.y));
 
     for (int offsetY = -MAXENT_TEMPORAL_ROBUST_RADIUS;
@@ -74,7 +81,7 @@ MaxEntTemporalRobustEstimate maxentDiffuseCurrentRobustMomentEstimate(
             if (dot(centerSurfaceNormal, sampleSurfaceNormal) <= 0.0)
                 continue;
             vec3 samplePrimaryRay = reconstructPrimaryRay(uvec2(samplePixel));
-            float planeExponent = denoiserSpatialSurfacePlaneDepthExponent(
+            float planeExponent = denoiserSpatialAxialDistanceExponent(
                 centerPlaneOffset, centerSurfaceNormal, samplePrimaryRay,
                 sampleSurfaceDistance, surfaceRejectionScale);
             if (planeExponent
@@ -93,7 +100,7 @@ MaxEntTemporalRobustEstimate maxentDiffuseCurrentRobustMomentEstimate(
 
     return maxentTemporalGaussianReweightedTileEstimate(
         acceptedMask, sampleCount, momentSum, centerMoment,
-        centerStandardDeviation);
+        centerEstimatorStdDev);
 }
 
 void main() {
@@ -114,7 +121,7 @@ void main() {
         diffuseBuffer.data[addr(DIF_N_SWAP, gxy)] = uvec4(0u);
         diffuseBuffer.data[addr(DIF_N_PATHGUIDE, gxy)] = uvec4(0u);
         writeDiffuseHistGeoInvalid(gxy);
-        debugWriteDiffuseVarianceOptimalAlpha(gxy, -1.0);
+        debugWriteDiffuseNoiseOnlyCurrentWeight(gxy, -1.0);
         return;
     }
 
@@ -125,33 +132,33 @@ void main() {
     readDiffuseLightRT(gxy, currentRaw, currentRootMeanY2);
 
     MaxEntEncoding reprojectedRaw;
-    float historySamples, historyRootMeanY2;
+    float historyEffectiveSamples, historyRootMeanY2;
     unpackDiffuseTemporalState(texelFetch(colortex6, pix, 0),
-        reprojectedRaw, historySamples, historyRootMeanY2);
+        reprojectedRaw, historyEffectiveSamples, historyRootMeanY2);
 
     vec4 historyDenoisedMoment;
     vec2 historyDenoisedCoCg;
-    float historyDenoisedStddev;
+    float historyDenoisedEstimatorStdDev;
     float validWeight;
     bool hasHistory = readDiffuseDenoisedReprojection(gxy,
         historyDenoisedMoment, historyDenoisedCoCg,
-        historyDenoisedStddev, validWeight)
-        && statisticsValidEffectiveSampleCount(historySamples)
+        historyDenoisedEstimatorStdDev, validWeight)
+        && statisticsValidEffectiveSampleCount(historyEffectiveSamples)
         && !any(isnan(reprojectedRaw.maxEntY))
         && !any(isinf(reprojectedRaw.maxEntY))
         && !any(isnan(reprojectedRaw.CoCg))
         && !any(isinf(reprojectedRaw.CoCg));
 
-    float actualAlpha = 1.0;
+    float currentAlpha = 1.0;
     float proposalAlpha = 1.0;
-    float varianceOptimalAlpha = -1.0;
+    float noiseOnlyCurrentWeight = -1.0;
     DenoiserMaxEntSignal independentCurrent =
         denoiserEmptyMaxEntSignal();
     bool independentCurrentValid = false;
     if (hasHistory) {
         proposalAlpha = clamp(
             float(MAXENT_TEMPORAL_FIXED_ALPHA), 0.0, 1.0);
-        actualAlpha = proposalAlpha;
+        currentAlpha = proposalAlpha;
         uvec4 independentCurrentWords =
             maxentTemporalRobustTileSignalWords(ivec2(0));
         independentCurrentValid =
@@ -162,68 +169,56 @@ void main() {
             MaxEntTemporalRobustEstimate robustCurrent =
                 maxentDiffuseCurrentRobustMomentEstimate(pix,
                     independentCurrent.maxEntY,
-                    independentCurrent.standardDeviation);
+                    independentCurrent.estimatorStdDev);
             float reprojectionAlphaFloor =
                 1.0 - clamp(validWeight, 0.0, 1.0);
-            float windowAlphaFloor =
-                statisticsKishFiniteWindowCurrentWeightFloor(
-                    historySamples,
-                    float(MAXENT_DIFFUSE_TEMPORAL_MAX_HISTORY));
-            float alphaFloor = max(reprojectionAlphaFloor,
-                windowAlphaFloor);
-            float unusedAdaptiveAlpha = maxentTemporalMinimumMseAlpha(
-                alphaFloor, robustCurrent.moment,
-                robustCurrent.standardDeviation
-                    * robustCurrent.standardDeviation,
-                historyDenoisedMoment, historyDenoisedStddev,
-                historySamples,
-                varianceOptimalAlpha);
-            actualAlpha = unusedAdaptiveAlpha;
+            float responseAlpha = maxentTemporalResponseAlpha(
+                reprojectionAlphaFloor, robustCurrent.moment,
+                robustCurrent.estimatorStdDev * robustCurrent.estimatorStdDev,
+                historyDenoisedMoment, historyDenoisedEstimatorStdDev,
+                historyEffectiveSamples,
+                noiseOnlyCurrentWeight);
+            currentAlpha = responseAlpha;
         }
     }
-    debugWriteDiffuseVarianceOptimalAlpha(gxy, varianceOptimalAlpha);
+    debugWriteDiffuseNoiseOnlyCurrentWeight(gxy, noiseOnlyCurrentWeight);
 
     MaxEntEncoding committedRaw;
     float committedRootMeanY2;
-    float committedSamples;
+    float committedEffectiveSamples;
     if (hasHistory) {
-        committedRaw = mix_maxent(reprojectedRaw, currentRaw, actualAlpha);
-        committedRootMeanY2 = sqrt(max(mix(
+        committedRaw = mix_maxent(reprojectedRaw, currentRaw, currentAlpha);
+        committedRootMeanY2 = sqrt(mix(
             historyRootMeanY2 * historyRootMeanY2,
-            currentRootMeanY2 * currentRootMeanY2, actualAlpha), 0.0));
-        committedSamples = statisticsKishUpdateEffectiveSampleCount(
-            historySamples, actualAlpha);
+            currentRootMeanY2 * currentRootMeanY2, currentAlpha));
+        committedEffectiveSamples = statisticsKishUpdateEffectiveSampleCount(historyEffectiveSamples, currentAlpha);
     } else {
         committedRaw = currentRaw;
         committedRootMeanY2 = currentRootMeanY2;
-        committedSamples = 1.0;
+        committedEffectiveSamples = 1.0;
     }
 
     DenoiserMaxEntSignal resolvedSignal = filteredSignal;
     MaxEntEncoding filteredEncoding;
     if (hasHistory && independentCurrentValid) {
-        // actualAlpha is never below proposalAlpha.  Correct a provisional
+        // When currentAlpha exceeds proposalAlpha, correct the provisional
         // P=(1-beta)H+beta C toward the independently filtered current C with
-        // gamma=(alpha-beta)/(1-beta). Raw RT updates only the moment history;
-        // alpha=1 must still publish a spatially denoised current estimator.
-        float correctionAlpha = clamp((actualAlpha - proposalAlpha)
+        // correction=(currentAlpha-proposalAlpha)/(1-proposalAlpha). Raw RT updates only the moment history;
+        // currentAlpha=1 must still publish a spatially denoised current estimator.
+        float correctionCurrentWeight = clamp((currentAlpha - proposalAlpha)
             / max(1.0 - proposalAlpha, 1e-6), 0.0, 1.0);
         resolvedSignal.maxEntY = mix(filteredSignal.maxEntY,
-            independentCurrent.maxEntY, correctionAlpha);
+            independentCurrent.maxEntY, correctionCurrentWeight);
         filteredEncoding.CoCg = mix(filteredSignal.CoCg,
-            independentCurrent.CoCg, correctionAlpha);
-        resolvedSignal.standardDeviation =
+            independentCurrent.CoCg, correctionCurrentWeight);
+        resolvedSignal.estimatorStdDev =
             maxentTemporalProposalCorrectedStandardDeviation(
-                filteredSignal.standardDeviation,
-                independentCurrent.standardDeviation,
-                correctionAlpha);
-    } else if (hasHistory) {
-        filteredEncoding.CoCg = filteredSignal.CoCg;
+                filteredSignal.estimatorStdDev,
+                independentCurrent.estimatorStdDev,
+                correctionCurrentWeight);
     } else {
         filteredEncoding.CoCg = filteredSignal.CoCg;
-        resolvedSignal.standardDeviation = sqrt(
-            maxentTemporalCurrentEstimatorVariance(
-                filteredSignal.standardDeviation));
+        if (!hasHistory) resolvedSignal.estimatorStdDev = sqrt(maxentTemporalCurrentEstimatorVariance(filteredSignal.estimatorStdDev));
     }
     filteredEncoding.maxEntY = resolvedSignal.maxEntY;
     // The ping-ponged denoised history must contain the exact same resolved
@@ -232,14 +227,14 @@ void main() {
     packedLight = denoiserPackMaxEntSignal(resolvedSignal);
     writeDiffuseDenoisedCurrentRaw(gxy, packedLight);
 
-    writeDiffuseHist(gxy, committedRaw, committedSamples,
+    writeDiffuseHist(gxy, committedRaw, committedEffectiveSamples,
         committedRootMeanY2);
     vec3 currentPosition;
     float primaryDistance;
     readDiffusePrimaryGeometry(gxy, currentPosition, primaryDistance);
     writeDiffuseHistGeo(gxy, currentPosition,
-        readPrimaryGeometryNormal(gxy), committedSamples);
-    writeDiffuseSwap(gxy, filteredEncoding, committedSamples,
+        readPrimaryGeometryNormal(gxy), committedEffectiveSamples);
+    writeDiffuseSwap(gxy, filteredEncoding, committedEffectiveSamples,
         committedRootMeanY2);
 
     // Publish the path-guide reservoir after consuming temporal scratch.
