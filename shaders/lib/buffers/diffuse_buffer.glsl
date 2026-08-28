@@ -121,14 +121,14 @@ uvec4 readDiffuseIndependentCurrentB(uvec2 xy) {
 // denoised signal reprojected by the real diffuse temporal pass. Resolve reads
 // it once, then replaces it with the exact current colortex4 words. Scratch z
 // stores the CoCg belonging to the same denoised estimator as maxEntY; w stores
-// (filtered estimatorStdDev, valid reprojection mass). Raw scratch separately owns N_eff.
+// (filtered standardDeviation, valid reprojection mass). Raw scratch separately owns N_eff.
 void writeDiffuseDenoisedReprojection(uvec2 xy, vec4 maxEntY, vec2 CoCg,
-        float estimatorStdDev, float validWeight) {
+        float standardDeviation, float validWeight) {
     diffuseBuffer.data[addr(diffuseDenoisedWritePlane(), xy)] = uvec4(
         packHalf2x16(clamp(maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(CoCg, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(vec2(clamp(estimatorStdDev, 0.0, 65504.0),
+        packHalf2x16(vec2(clamp(standardDeviation, 0.0, 65504.0),
             clamp(validWeight, 0.0, 1.0))));
 }
 
@@ -138,13 +138,13 @@ void writeDiffuseDenoisedReprojectionInvalid(uvec2 xy) {
 }
 
 bool readDiffuseDenoisedReprojection(uvec2 xy, out vec4 maxEntY,
-        out vec2 CoCg, out float estimatorStdDev, out float validWeight) {
+        out vec2 CoCg, out float standardDeviation, out float validWeight) {
     uvec4 words = readDiffuseDenoisedCurrentRaw(xy);
     CoCg = unpackHalf2x16(words.z);
     vec2 deviationWeight = unpackHalf2x16(words.w);
-    estimatorStdDev = deviationWeight.x;
+    standardDeviation = deviationWeight.x;
     validWeight = deviationWeight.y;
-    bool valid = estimatorStdDev >= 0.0 && validWeight > 0.0
+    bool valid = standardDeviation >= 0.0 && validWeight > 0.0
         && !any(isnan(CoCg)) && !any(isinf(CoCg))
         && !any(isnan(deviationWeight)) && !any(isinf(deviationWeight));
     maxEntY = valid

@@ -31,7 +31,7 @@ uvec4 maxentTemporalRobustLoadGeometryWords(ivec2 pixel) { return readPrimaryGeo
 #include "/lib/lighting/denoiser/robust_mean.glsl"
 
 MaxEntTemporalRobustEstimate maxentDiffuseCurrentRobustMomentEstimate(ivec2 centerPixel, vec4 centerMoment,
-        float centerEstimatorStdDev) {
+        float centerStandardDeviation) {
     uint acceptedMask = maxentTemporalRobustNeighborhoodBit(ivec2(0));
     int sampleCount = 1;
     vec4 momentSum = centerMoment;
@@ -44,11 +44,10 @@ MaxEntTemporalRobustEstimate maxentDiffuseCurrentRobustMomentEstimate(ivec2 cent
             || isinf(centerSurfaceDistance)) {
         MaxEntTemporalRobustEstimate centerEstimate;
         centerEstimate.moment = centerMoment;
-        centerEstimate.estimatorStdDev = centerEstimatorStdDev;
+        centerEstimate.standardDeviation = centerStandardDeviation;
         return centerEstimate;
     }
 
-    uint centerMaterial = centerGeometryWords.y >> 16u;
     vec3 centerSurfaceNormal = decodeNormalU(centerGeometryWords.x);
     vec3 centerPrimaryRay = reconstructPrimaryRay(uvec2(centerPixel));
     float centerPlaneOffset = centerSurfaceDistance
@@ -73,8 +72,7 @@ MaxEntTemporalRobustEstimate maxentDiffuseCurrentRobustMomentEstimate(ivec2 cent
                 sampleGeometryWords.w);
             if (!(sampleSurfaceDistance >= 0.0)
                     || isnan(sampleSurfaceDistance)
-                    || isinf(sampleSurfaceDistance)
-                    || (sampleGeometryWords.y >> 16u) != centerMaterial)
+                    || isinf(sampleSurfaceDistance))
                 continue;
 
             vec3 sampleSurfaceNormal = decodeNormalU(sampleGeometryWords.x);
@@ -100,7 +98,7 @@ MaxEntTemporalRobustEstimate maxentDiffuseCurrentRobustMomentEstimate(ivec2 cent
 
     return maxentTemporalGaussianReweightedTileEstimate(
         acceptedMask, sampleCount, momentSum, centerMoment,
-        centerEstimatorStdDev);
+        centerStandardDeviation);
 }
 
 void main() {
@@ -138,11 +136,11 @@ void main() {
 
     vec4 historyDenoisedMoment;
     vec2 historyDenoisedCoCg;
-    float historyDenoisedEstimatorStdDev;
+    float historyDenoisedPropagatedStandardDeviation;
     float validWeight;
     bool hasHistory = readDiffuseDenoisedReprojection(gxy,
         historyDenoisedMoment, historyDenoisedCoCg,
-        historyDenoisedEstimatorStdDev, validWeight)
+        historyDenoisedPropagatedStandardDeviation, validWeight)
         && statisticsValidEffectiveSampleCount(historyEffectiveSamples)
         && !any(isnan(reprojectedRaw.maxEntY))
         && !any(isinf(reprojectedRaw.maxEntY))
@@ -169,13 +167,13 @@ void main() {
             MaxEntTemporalRobustEstimate robustCurrent =
                 maxentDiffuseCurrentRobustMomentEstimate(pix,
                     independentCurrent.maxEntY,
-                    independentCurrent.estimatorStdDev);
+                    independentCurrent.standardDeviation);
             float reprojectionAlphaFloor =
                 1.0 - clamp(validWeight, 0.0, 1.0);
             float responseAlpha = maxentTemporalResponseAlpha(
                 reprojectionAlphaFloor, robustCurrent.moment,
-                robustCurrent.estimatorStdDev * robustCurrent.estimatorStdDev,
-                historyDenoisedMoment, historyDenoisedEstimatorStdDev,
+                robustCurrent.standardDeviation * robustCurrent.standardDeviation,
+                historyDenoisedMoment, historyDenoisedPropagatedStandardDeviation,
                 historyEffectiveSamples,
                 noiseOnlyCurrentWeight);
             currentAlpha = responseAlpha;
@@ -211,14 +209,14 @@ void main() {
             independentCurrent.maxEntY, correctionCurrentWeight);
         filteredEncoding.CoCg = mix(filteredSignal.CoCg,
             independentCurrent.CoCg, correctionCurrentWeight);
-        resolvedSignal.estimatorStdDev =
+        resolvedSignal.standardDeviation =
             maxentTemporalProposalCorrectedStandardDeviation(
-                filteredSignal.estimatorStdDev,
-                independentCurrent.estimatorStdDev,
+                filteredSignal.standardDeviation,
+                independentCurrent.standardDeviation,
                 correctionCurrentWeight);
     } else {
         filteredEncoding.CoCg = filteredSignal.CoCg;
-        if (!hasHistory) resolvedSignal.estimatorStdDev = sqrt(maxentTemporalCurrentEstimatorVariance(filteredSignal.estimatorStdDev));
+        if (!hasHistory) resolvedSignal.standardDeviation = sqrt(maxentTemporalCurrentVariance(filteredSignal.standardDeviation));
     }
     filteredEncoding.maxEntY = resolvedSignal.maxEntY;
     // The ping-ponged denoised history must contain the exact same resolved

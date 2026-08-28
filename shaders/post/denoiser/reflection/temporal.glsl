@@ -151,12 +151,12 @@ MaxEntReprojectedHistory maxentLoadHistory(
     signalSum = maxentScaleMaxEnt(signalSum, invWeight);
     outHistory.signalWords = packSpecularMaxEnt(signalSum);
     denoisedSum = maxentScaleMaxEnt(denoisedSum, invWeight);
-    float denoisedEstimatorStdDev =
+    float denoisedPropagatedStandardDeviation =
         statisticsWeightedMeanStandardDeviation(
         denoisedSquaredWeightVariance, denoisedWeightedStdDev, invWeight,
         MAXENT_TEMPORAL_REPROJECTION_CORRELATION);
     outHistory.denoisedWords = uvec4(packSpecularMaxEnt(denoisedSum),
-        floatBitsToUint(denoisedEstimatorStdDev));
+        floatBitsToUint(denoisedPropagatedStandardDeviation));
     outHistory.hitDistance *= invWeight;
     outHistory.roughness = clamp(1.0 +
         (outHistory.roughness - 1.0) * invWeight, 0.0, 1.0);
@@ -216,17 +216,17 @@ MaxEntReprojectedHistory maxentCombineReprojectedHistories(
     SpecularMaxEnt denoised = maxentScaleMaxEnt(maxentWeightedMaxEnt(
         surfaceDenoised, surfaceWeight, virtualDenoised, virtualWeight),
         inverseHistoryWeight);
-    float surfaceEstimatorStdDev = surface.found
+    float surfacePropagatedStandardDeviation = surface.found
         ? uintBitsToFloat(surface.denoisedWords.w) : 0.0;
-    float virtualEstimatorStdDev = virtualHistory.found
+    float virtualPropagatedStandardDeviation = virtualHistory.found
         ? uintBitsToFloat(virtualHistory.denoisedWords.w) : 0.0;
-    float denoisedEstimatorStdDev = statisticsWeightedMeanStandardDeviation(
-        surfaceWeight * surfaceWeight * surfaceEstimatorStdDev * surfaceEstimatorStdDev
-            + virtualWeight * virtualWeight * virtualEstimatorStdDev * virtualEstimatorStdDev,
-        surfaceWeight * surfaceEstimatorStdDev + virtualWeight * virtualEstimatorStdDev,
+    float denoisedPropagatedStandardDeviation = statisticsWeightedMeanStandardDeviation(
+        surfaceWeight * surfaceWeight * surfacePropagatedStandardDeviation * surfacePropagatedStandardDeviation
+            + virtualWeight * virtualWeight * virtualPropagatedStandardDeviation * virtualPropagatedStandardDeviation,
+        surfaceWeight * surfacePropagatedStandardDeviation + virtualWeight * virtualPropagatedStandardDeviation,
         inverseHistoryWeight, MAXENT_SPECULAR_BRANCH_CORRELATION);
     combined.denoisedWords = uvec4(packSpecularMaxEnt(denoised),
-        floatBitsToUint(denoisedEstimatorStdDev));
+        floatBitsToUint(denoisedPropagatedStandardDeviation));
     combined.hitDistance = (surfaceWeight * surface.hitDistance
         + virtualWeight * virtualHistory.hitDistance)
         * inverseHistoryWeight;
@@ -259,9 +259,9 @@ void maxentPublishDenoisedReprojection(MaxEntReprojectedHistory history, float a
     }
     SpecularMaxEnt denoised = unpackSpecularMaxEnt(
         history.denoisedWords.xyz);
-    float estimatorStdDev = uintBitsToFloat(history.denoisedWords.w);
+    float standardDeviation = uintBitsToFloat(history.denoisedWords.w);
     writeMaxEntSpecularDenoisedReprojection(gl_GlobalInvocationID.xy,
-        denoised, estimatorStdDev, currentTrackingHitDistance,
+        denoised, standardDeviation, currentTrackingHitDistance,
         alphaFloor);
 }
 

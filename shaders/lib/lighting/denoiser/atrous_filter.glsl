@@ -80,12 +80,12 @@ float denoiserSpatialWeight(DenoiserMaxEntSignal centerSignal,
     float distanceSq = maxentLightSampleDistanceSq(
             centerSignal.maxEntY, sampleSignal.maxEntY);
     float variance = statisticsDifferenceVarianceFromStandardDeviations(
-            centerSignal.estimatorStdDev,
-            sampleSignal.estimatorStdDev,
+            centerSignal.standardDeviation,
+            sampleSignal.standardDeviation,
             momentCorrelation);
     // Both variances may be exactly zero; without the floor, identical
     // signals produce 0/0 and poison the exponential with NaN.
-    signalExponent += phiLuminance * sqrt(distanceSq / max(variance, 1e-12));
+    signalExponent += phiLuminance * sqrt(distanceSq / max(variance, 1e-20));
     float surfaceWeight = kernelWeight * exp(-signalExponent);
     virtualDistanceWeight = kernelWeight * virtualDistanceAlpha
         * exp(-surfaceGeometryExponent / max(virtualDistanceAlpha, 1e-5));
@@ -100,8 +100,8 @@ DenoiserSpatialAccumulator denoiserSpatialBeginAccumulation(
     // x = sum w_i^2 V_i, y = sum w_i sqrt(V_i).  These are the two
     // sufficient accumulators for the constant-correlation expansion.
     accum.varianceEnergy = vec2(
-        center.estimatorStdDev * center.estimatorStdDev,
-        center.estimatorStdDev);
+        center.standardDeviation * center.standardDeviation,
+        center.standardDeviation);
     accum.weight = 1.0;
     accum.virtualDistance = center.virtualDistance;
     accum.virtualWeight = 1.0;
@@ -114,8 +114,8 @@ void denoiserSpatialAccumulate(inout DenoiserSpatialAccumulator accum,
     accum.maxEntY += neighbor.maxEntY * weight;
     accum.CoCg += neighbor.CoCg * weight;
     accum.varianceEnergy += vec2(
-            weight * weight * neighbor.estimatorStdDev * neighbor.estimatorStdDev,
-            weight * neighbor.estimatorStdDev);
+            weight * weight * neighbor.standardDeviation * neighbor.standardDeviation,
+            weight * neighbor.standardDeviation);
     accum.weight += weight;
     accum.virtualDistance += neighbor.virtualDistance
         * virtualDistanceWeight;
@@ -129,7 +129,7 @@ DenoiserMaxEntSignal denoiserSpatialResolve(
     DenoiserMaxEntSignal outputSignal;
     outputSignal.maxEntY = accum.maxEntY * invWeight;
     outputSignal.CoCg = accum.CoCg * invWeight;
-    outputSignal.estimatorStdDev = statisticsWeightedMeanStandardDeviation(
+    outputSignal.standardDeviation = statisticsWeightedMeanStandardDeviation(
         accum.varianceEnergy.x, accum.varianceEnergy.y, invWeight, propagationCorrelation);
     outputSignal.virtualDistance = accum.virtualDistance
         / accum.virtualWeight;

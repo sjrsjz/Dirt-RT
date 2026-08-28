@@ -1,9 +1,9 @@
-// Purpose: prepare diffuse estimator variance and the independent-current branch for A-Trous.
+// Purpose: prepare diffuse Monte Carlo observation variance and the independent-current branch for A-Trous.
 // Dispatch: 16x16.
 // Reads: diffuse raw temporal proposal, Raw RT observation, compact primary geometry.
-// Writes: colortex3 geometry, colorimg4 prepared proposal, shared scratch plane A.
-// Persistent side effects: prepared diffuse estimator-variance diagnostic only.
-// Invalid representation: negative estimatorStdDev in signal metadata and negative geometry distance.
+// Writes: colortex3 geometry/center N_eff, colorimg4 prepared proposal, shared scratch plane A.
+// Persistent side effects: prepared diffuse Monte Carlo-variance diagnostic only.
+// Invalid representation: negative standardDeviation in signal metadata and negative geometry distance.
 
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(rgba32ui) uniform writeonly uimage2D colorimg3;
@@ -28,7 +28,6 @@ DenoiserVarianceGeometry denoiserVarianceLoadGeometry(ivec2 pixel) {
     geometry.surfaceDistance = uintBitsToFloat(words.w);
     geometry.virtualScale = 0.0;
     geometry.signalRoughness = 1.0;
-    geometry.materialID = words.y >> 16u;
     geometry.valid = geometry.surfaceDistance >= 0.0 && !isnan(geometry.surfaceDistance) && !isinf(geometry.surfaceDistance);
     return geometry;
 }
@@ -57,8 +56,8 @@ DenoiserVarianceSource denoiserVarianceLoadIndependentCurrentSource(ivec2 pixel)
 }
 
 void denoiserVarianceStorePrepared(ivec2 pixel, DenoiserMaxEntSignal signal, DenoiserMaxEntSignal independentCurrent,
-        uvec4 primaryGeometryWords, DenoiserVarianceGeometry geometry) {
-    imageStore(colorimg3, pixel, denoiserVariancePackSpatialGeometry(primaryGeometryWords, geometry));
+        uvec4 primaryGeometryWords, DenoiserVarianceGeometry geometry, float effectiveSamples) {
+    imageStore(colorimg3, pixel, denoiserVariancePackSpatialGeometry(primaryGeometryWords, geometry, effectiveSamples));
     imageStore(colorimg4, pixel, denoiserPackMaxEntSignal(signal));
     denoiserScratchStoreA(pixel, denoiserPackMaxEntSignal(independentCurrent));
 }
@@ -71,9 +70,9 @@ void denoiserVarianceStoreInvalid(ivec2 pixel) {
     denoiserVarianceDebugWrite(pixel, -1.0);
 }
 
-void denoiserVarianceDebugWrite(ivec2 pixel, float estimatorStdDev) {
-#if DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_PREPARED_ESTIMATOR_VARIANCE
-    debugWriteDiffusePreparedEstimatorStandardDeviation(uvec2(pixel), estimatorStdDev);
+void denoiserVarianceDebugWrite(ivec2 pixel, float standardDeviation) {
+#if DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_PREPARED_MONTE_CARLO_VARIANCE
+    debugWriteDiffusePreparedMonteCarloStandardDeviation(uvec2(pixel), standardDeviation);
 #endif
 }
 

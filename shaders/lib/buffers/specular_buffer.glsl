@@ -331,16 +331,16 @@ void writeMaxEntSpecularTemporalHistory(uvec2 xy, MaxEntSpecularHistory h) {
             h.historyEffectiveSamples));
 }
 
-void writeMaxEntSpecularDenoisedHistory(uvec2 xy, SpecularMaxEnt signal, float estimatorStdDev) {
+void writeMaxEntSpecularDenoisedHistory(uvec2 xy, SpecularMaxEnt signal, float standardDeviation) {
     signal = sanitizeSpecularMaxEnt(signal);
-    if (!(estimatorStdDev >= 0.0) || isnan(estimatorStdDev) || isinf(estimatorStdDev)) {
+    if (!(standardDeviation >= 0.0) || isnan(standardDeviation) || isinf(standardDeviation)) {
         reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)] = uvec4(0u, 0u, 0u,
             packHalf2x16(vec2(-1.0, 0.0)));
         return;
     }
     uvec3 denoised = packSpecularMaxEnt(signal);
     reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)] = uvec4(denoised,
-        packHalf2x16(vec2(min(estimatorStdDev, 65504.0), -2.0)));
+        packHalf2x16(vec2(min(standardDeviation, 65504.0), -2.0)));
 }
 
 void writeMaxEntSpecularDenoisedHistoryInvalid(uvec2 xy) {
@@ -351,17 +351,17 @@ void writeMaxEntSpecularDenoisedHistoryInvalid(uvec2 xy) {
 // Transient layout consumed by the final spatial pass:
 //   xy = reprojected previous denoised MaxEntY
 //   z  = reprojection alpha floor, current per-frame tracking hit distance
-//   w  = filtered estimatorStdDev, -2 layout stamp
+//   w  = filtered standardDeviation, -2 layout stamp
 //   N4.x = CoCg from that exact same denoised reprojection
 void writeMaxEntSpecularDenoisedReprojection(uvec2 xy, SpecularMaxEnt signal,
-        float estimatorStdDev, float trackingHitDistance, float alphaFloor) {
+        float standardDeviation, float trackingHitDistance, float alphaFloor) {
     signal = sanitizeSpecularMaxEnt(signal);
     reflectBuffer.data[addr(SPEC_N_LIGHT, xy)] = uvec4(
         packHalf2x16(clamp(signal.maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(signal.maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(vec2(clamp(alphaFloor, 0.0, 1.0),
             clamp(trackingHitDistance, 0.0, 65504.0))),
-        packHalf2x16(vec2(clamp(estimatorStdDev, 0.0, 65504.0),
+        packHalf2x16(vec2(clamp(standardDeviation, 0.0, 65504.0),
             -2.0)));
     reflectBuffer.data[addr(SPEC_N_DENOISED_REPROJECTED_CHROMA, xy)] =
         uvec4(packHalf2x16(signal.CoCg), 0x43524742u, 0u, 0u);
@@ -381,16 +381,16 @@ void writeMaxEntSpecularDenoisedReprojectionInvalid(uvec2 xy) {
 
 bool readMaxEntSpecularDenoisedReprojection(uvec2 xy,
         out SpecularMaxEnt signal,
-        out float estimatorStdDev, out float alphaFloor, out float hitDistance) {
+        out float standardDeviation, out float alphaFloor, out float hitDistance) {
     uvec4 words = reflectBuffer.data[addr(SPEC_N_LIGHT, xy)];
     uvec4 chromaWords = reflectBuffer.data[
         addr(SPEC_N_DENOISED_REPROJECTED_CHROMA, xy)];
     vec2 historyMeta = unpackHalf2x16(words.z);
     vec2 metadata = unpackHalf2x16(words.w);
-    estimatorStdDev = metadata.x;
+    standardDeviation = metadata.x;
     alphaFloor = historyMeta.x;
     hitDistance = historyMeta.y;
-    bool valid = estimatorStdDev >= 0.0 && alphaFloor >= 0.0 && alphaFloor <= 1.0
+    bool valid = standardDeviation >= 0.0 && alphaFloor >= 0.0 && alphaFloor <= 1.0
         && metadata.y == -2.0
         && chromaWords.y == 0x43524742u
         && !any(isnan(historyMeta)) && !any(isinf(historyMeta))

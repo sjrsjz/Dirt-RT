@@ -3,7 +3,7 @@
 // Reads: colortex3 geometry; colortex4/5 signal input; shared scratch plane A/B.
 // Writes: the opposite colortex4/5 image and the opposite scratch plane.
 // Persistent side effects: none.
-// Invalid representation: negative estimatorStdDev in signal metadata.
+// Invalid representation: negative standardDeviation in signal metadata.
 
 #ifndef DENOISER_SPATIAL_PHI_LUMINANCE
 #error "DENOISER_SPATIAL_PHI_LUMINANCE must be configured by the pass"

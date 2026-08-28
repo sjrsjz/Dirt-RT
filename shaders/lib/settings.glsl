@@ -63,7 +63,7 @@
 #define RADIANCE_CACHE_RIS_GUIDING_KAPPA 0.75 // Concentration of the finite-width RIS proposal lobe. Higher values focus more tightly around the selected direction. [0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.95]
 
 // -- Shared MaxEnt temporal response (diffuse + specular) --
-#define MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE 0.0025 // Moment-distance response strength. Higher values reject history more aggressively. [0.00001 0.000025 0.00005 0.0001 0.00025 0.0005 0.001 0.0025 0.005 0.01 0.025 0.05 0.1]
+#define MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE 0.001 // Moment-distance response strength. Higher values reject history more aggressively. [0.00001 0.000025 0.00005 0.0001 0.00025 0.0005 0.001 0.0025 0.005 0.01 0.025 0.05 0.1]
 
 // -- MaxEnt diffuse temporal accumulation --
 #define MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE 1.0 // Reprojection footprint depth tolerance. [0.25 0.5 0.75 1.0 1.5 2.0 3.0 4.0]
@@ -78,13 +78,13 @@
 
 // -- Shared MaxEnt variance preparation (diffuse + specular) --
 #define MAXENT_VARIANCE_KERNEL_SIGMA 1.0 // Gaussian kernel sigma (pixels) for short-history spatial variance pooling. Higher = wider support. [0.5 0.75 1.0 1.25 1.5 2.0 2.5]
-#define MAXENT_VARIANCE_HISTORY_BEGIN 2.0 // N_eff at which spatial→temporal variance transition begins. [1.0 2.0 4.0 6.0 8.0]
-#define MAXENT_VARIANCE_HISTORY_END 4.0 // N_eff at which temporal estimator variance becomes fully trusted. [4.0 6.0 8.0 12.0 16.0 24.0 32.0]
+#define MAXENT_VARIANCE_HISTORY_BEGIN 2.0 // N_eff at which spatial→temporal MC observation-variance transition begins. [1.0 2.0 4.0 6.0 8.0]
+#define MAXENT_VARIANCE_HISTORY_END 4.0 // N_eff at which temporal MC observation variance becomes fully trusted. [4.0 6.0 8.0 12.0 16.0 24.0 32.0]
 
 // -- Unified MaxEnt spatial filter --
 #define MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE 0.1 // Relative projected plane-depth tolerance, including MaxEnt virtual-image planes. [0.005 0.01 0.02 0.03 0.04 0.05 0.06 0.07 0.08 0.09 0.1 0.2 0.3 0.4 0.5]
-#define MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY 0.5 // Diffuse variance-normalized moment-space rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
-#define MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY 0.5 // Specular variance-normalized moment-space rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
+#define MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY 0.35 // Diffuse variance-normalized moment-space rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
+#define MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY 0.35 // Specular variance-normalized moment-space rejection strength. Higher preserves more contrast. [0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.5 0.6 0.7 0.8 0.9 1.0]
 
 // -- Bloom --
 #define CAMERA_VIGNETTE_STRENGTH 0.5 // Mix weight of the RT-projection/FOV-aware cos^4 lens falloff. 0 = off, 1 = ideal cos^4 falloff. [0.0 0.1 0.2 0.25 0.3 0.4 0.5 0.6 0.75 1.0]

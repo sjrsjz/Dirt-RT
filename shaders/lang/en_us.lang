@@ -188,10 +188,10 @@ option.MAXENT_VARIANCE_KERNEL_SIGMA = Kernel Sigma
 option.MAXENT_VARIANCE_KERNEL_SIGMA.comment = Shared diffuse/specular Gaussian kernel width for short-history MaxEnt variance pooling. Higher values trade edge precision for a more stable estimate.
 
 option.MAXENT_VARIANCE_HISTORY_BEGIN = Transition Begin Samples
-option.MAXENT_VARIANCE_HISTORY_BEGIN.comment = Shared diffuse/specular effective sample count at which the spatial-to-temporal estimator-variance transition begins.
+option.MAXENT_VARIANCE_HISTORY_BEGIN.comment = Shared diffuse/specular effective sample count at which the spatial-to-temporal MC observation-variance transition begins.
 
 option.MAXENT_VARIANCE_HISTORY_END = Transition End Samples
-option.MAXENT_VARIANCE_HISTORY_END.comment = Shared diffuse/specular effective sample count at which temporal estimator variance is fully trusted and large-kernel pooling is skipped.
+option.MAXENT_VARIANCE_HISTORY_END.comment = Shared diffuse/specular effective sample count at which temporal MC observation variance is fully trusted and large-kernel pooling is skipped.
 
 # ===========================================================================
 # MaxEnt Spatial Filter
@@ -271,7 +271,7 @@ value.DEBUG_VIEW.20 = [Diffuse Denoiser] Committed Raw Temporal History
 value.DEBUG_VIEW.21 = [Diffuse Denoiser] Final Normalized Absolute First Moment
 value.DEBUG_VIEW.22 = [Diffuse Denoiser] Kish N_eff
 value.DEBUG_VIEW.23 = [Diffuse Denoiser] Noise-Only Current Weight VH/(VH+VC)
-value.DEBUG_VIEW.24 = [Diffuse Denoiser] Prepared Estimator Variance
+value.DEBUG_VIEW.24 = [Diffuse Denoiser] Prepared MC Observation Variance
 value.DEBUG_VIEW.30 = [Specular Denoiser] Actual RT Sample Direction
 value.DEBUG_VIEW.31 = [Specular Denoiser] Current Tracking Hit Distance
 value.DEBUG_VIEW.32 = [Specular Denoiser] Committed Raw Temporal History
@@ -279,7 +279,7 @@ value.DEBUG_VIEW.33 = [Specular Denoiser] Final Virtual-Image Normal
 value.DEBUG_VIEW.34 = [Specular Denoiser] Kish N_eff
 value.DEBUG_VIEW.35 = [Specular Denoiser] Resolved History Contribution 1-alpha
 value.DEBUG_VIEW.36 = [Specular Denoiser] Noise-Only Current Weight VH/(VH+VC)
-value.DEBUG_VIEW.37 = [Specular Denoiser] Prepared Estimator Variance
+value.DEBUG_VIEW.37 = [Specular Denoiser] Prepared MC Observation Variance
 value.DEBUG_VIEW.40 = [Refraction] PSR Resolve Route
 value.DEBUG_VIEW.41 = [Refraction] Virtual Endpoint Distance
 value.DEBUG_VIEW.50 = [Path Guide] Final MaxEnt Direction

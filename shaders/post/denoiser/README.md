@@ -26,10 +26,13 @@ The encoder stores linear moment state `(E[R u], E[R], sqrt(E[R²]), N_eff)`. Sp
 - Reflection resolve (72) is the only accepted reflection-history commit point. Composite 63 temporarily stages raw reprojection in N1/N2, and composite 71 has no hidden history publication.
 - Raw RT updates raw moments, `sqrt(E[R²])`, and Kish `N_eff`; the visible result always comes from the spatially filtered branch.
 - `currentAlpha = 1` publishes the independently spatially filtered current result and updates raw Kish `N_eff` to 1.
-- `estimatorStdDev` always means the standard deviation of the estimator in the four-moment metric. Packing never performs a hidden square root.
+- `standardDeviation` starts as prepared MC observation deviation and is propagated once by every spatial pass. Packing never performs a hidden square root.
+- Short-history variance preparation pools only independent Raw RT observations from the current frame, then uses center `N_eff` to transition to the center pixel's temporal-moment estimate. Neighbor histories and neighbor `N_eff` never enter the spatial estimate, and the temporal estimate is not reapplied as a nonlinear lower bound.
+- Temporal response divides only the reprojected history's propagated variance by its Kish `N_eff`; the independently filtered current branch has temporal `N_eff=1`.
+- Spatial geometry stores center Kish `N_eff` instead of material identity. Spatial light-difference rejection multiplies its configured coefficient by `sqrt(N_eff)`; material boundaries are not a denoiser rejection condition.
 - `rootMeanY2` always means `sqrt(E[R²])`.
 - `E[R u]`, `E[R]`, `CoCg`, and `E[R²]` are linear encoder/latent moments. Every temporal, reprojection, branch, and spatial moment combination is a normalized weighted sum; only Kish `N_eff` has a nonlinear update.
-- Estimator variance is derived read-only from `(E[R u], E[R], E[R²], N_eff)`. It must never be inverted to reconstruct `E[R²]`, and moment-cone or RGB-feasibility projection is confined to decoding rather than history or latent filtering.
+- MC observation variance is derived read-only from `(E[R u], E[R], E[R²], N_eff)`. It must never be inverted to reconstruct `E[R²]`, and moment-cone or RGB-feasibility projection is confined to decoding rather than history or latent filtering.
 - Temporal reprojection reconstructs moments and Kish effective samples; it never linearly interpolates `N_eff`.
 - Diffuse reprojection pulls a normalized tent kernel through the local current-to-previous tangent-plane Jacobian. The same accepted weights reconstruct moments, filtered variance, and Kish `N_eff`; a Jacobian determinant never scales moment amplitudes.
 - Reflection hit distance is a per-frame virtual-motion tracking guide. It is never mixed with the lighting alpha.
@@ -38,3 +41,7 @@ The encoder stores linear moment state `(E[R u], E[R], sqrt(E[R²]), N_eff)`. Sp
 - Fixed estimator, provisional-pipeline and kernel-correlation constants live in `internal_constants.glsl`; they are code invariants, not shader-pack options.
 
 The first refactor intentionally keeps workgroup sizes, image formats, SSBO sizes, and A-Trous pass count unchanged.
+
+## TODO
+
+- Calibrate variance preparation. The current-frame Raw RT spatial fallback still assumes local stationarity and can confuse spatial signal variation with Monte Carlo variance.

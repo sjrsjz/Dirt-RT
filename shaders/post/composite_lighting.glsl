@@ -61,8 +61,8 @@ vec3 debugNoiseOnlyCurrentWeight(float currentWeight) {
 }
 #endif
 
-#if DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_PREPARED_ESTIMATOR_VARIANCE || DEBUG_VIEW == DEBUG_VIEW_SPECULAR_PREPARED_ESTIMATOR_VARIANCE
-vec3 debugPreparedEstimatorVariance(float standardDeviation) {
+#if DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_PREPARED_MONTE_CARLO_VARIANCE || DEBUG_VIEW == DEBUG_VIEW_SPECULAR_PREPARED_MONTE_CARLO_VARIANCE
+vec3 debugPreparedMonteCarloVariance(float standardDeviation) {
     if (!(standardDeviation >= 0.0) || isnan(standardDeviation)
             || isinf(standardDeviation))
         return vec3(1.0, 0.0, 1.0);
@@ -244,15 +244,15 @@ void main() {
     fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0)
         : debugNoiseOnlyCurrentWeight(debugReadSpecularNoiseOnlyCurrentWeight(xy));
     return;
-    #elif DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_PREPARED_ESTIMATOR_VARIANCE
+    #elif DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_PREPARED_MONTE_CARLO_VARIANCE
     fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0)
-        : debugPreparedEstimatorVariance(
-            debugReadDiffusePreparedEstimatorStandardDeviation(xy));
+        : debugPreparedMonteCarloVariance(
+            debugReadDiffusePreparedMonteCarloStandardDeviation(xy));
     return;
-    #elif DEBUG_VIEW == DEBUG_VIEW_SPECULAR_PREPARED_ESTIMATOR_VARIANCE
+    #elif DEBUG_VIEW == DEBUG_VIEW_SPECULAR_PREPARED_MONTE_CARLO_VARIANCE
     fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0)
-        : debugPreparedEstimatorVariance(
-            debugReadSpecularPreparedEstimatorStandardDeviation(xy));
+        : debugPreparedMonteCarloVariance(
+            debugReadSpecularPreparedMonteCarloStandardDeviation(xy));
     return;
     #endif
 

@@ -24,7 +24,7 @@ shared uvec4 maxentTemporalRobustGeometryTile[MAXENT_TEMPORAL_ROBUST_TILE_AREA];
 
 struct MaxEntTemporalRobustEstimate {
     vec4 moment;
-    float estimatorStdDev;
+    float standardDeviation;
 };
 
 int maxentTemporalRobustTileIndex(ivec2 tilePixel) {
@@ -76,7 +76,7 @@ vec4 maxentTemporalRobustTileMoment(ivec2 offset) {
     return vec4(unpackHalf2x16(words.x), unpackHalf2x16(words.y));
 }
 
-float maxentTemporalRobustTileEstimatorStdDev(ivec2 offset) {
+float maxentTemporalRobustTileStandardDeviation(ivec2 offset) {
     return max(unpackHalf2x16(maxentTemporalRobustTileSignalWords(offset).w).x, 0.0);
 }
 
@@ -96,12 +96,12 @@ bool maxentTemporalRobustMaskContains(uint acceptedMask, int sampleIndex) {
 // The caller constructs acceptedMask while performing geometry rejection once.
 // The two reconstruction sweeps then read only shared denoiser output: first
 // the scalar population variance, then one isotropic Gaussian reweighted mean.
-// The same frozen weights propagate the supplied estimator trace variance.
+// The same frozen weights propagate the supplied trace variance.
 MaxEntTemporalRobustEstimate maxentTemporalGaussianReweightedTileEstimate(uint acceptedMask, int sampleCount,
-        vec4 momentSum, vec4 fallbackMoment, float fallbackEstimatorStdDev) {
+        vec4 momentSum, vec4 fallbackMoment, float fallbackStandardDeviation) {
     MaxEntTemporalRobustEstimate estimate;
     estimate.moment = fallbackMoment;
-    estimate.estimatorStdDev = max(fallbackEstimatorStdDev, 0.0);
+    estimate.standardDeviation = max(fallbackStandardDeviation, 0.0);
     if (sampleCount <= 0) return estimate;
     vec4 initialMean = momentSum / float(sampleCount);
 
@@ -118,14 +118,14 @@ MaxEntTemporalRobustEstimate maxentTemporalGaussianReweightedTileEstimate(uint a
             - ivec2(MAXENT_TEMPORAL_ROBUST_RADIUS);
         scalarVariance += maxentLightSampleDistanceSq(
             maxentTemporalRobustTileMoment(offset), initialMean);
-        float estimatorStdDev = maxentTemporalRobustTileEstimatorStdDev(offset);
-        initialSquaredWeightVarianceSum += estimatorStdDev * estimatorStdDev;
-        initialWeightedStdDevSum += estimatorStdDev;
+        float standardDeviation = maxentTemporalRobustTileStandardDeviation(offset);
+        initialSquaredWeightVarianceSum += standardDeviation * standardDeviation;
+        initialWeightedStdDevSum += standardDeviation;
     }
     scalarVariance /= float(sampleCount);
     float inverseSampleCount = 1.0 / float(sampleCount);
     estimate.moment = initialMean;
-    estimate.estimatorStdDev = statisticsWeightedMeanStandardDeviation(
+    estimate.standardDeviation = statisticsWeightedMeanStandardDeviation(
         initialSquaredWeightVarianceSum, initialWeightedStdDevSum,
         inverseSampleCount,
         MAXENT_TEMPORAL_ROBUST_PROPAGATION_CORRELATION);
@@ -150,9 +150,9 @@ MaxEntTemporalRobustEstimate maxentTemporalGaussianReweightedTileEstimate(uint a
         float weight = exp(-residualSq * inverseTwoVariance);
         weightedMomentSum += weight * moment;
         weightSum += weight;
-        float estimatorStdDev = maxentTemporalRobustTileEstimatorStdDev(offset);
-        squaredWeightVarianceSum += weight * weight * estimatorStdDev * estimatorStdDev;
-        weightedStdDevSum += weight * estimatorStdDev;
+        float standardDeviation = maxentTemporalRobustTileStandardDeviation(offset);
+        squaredWeightVarianceSum += weight * weight * standardDeviation * standardDeviation;
+        weightedStdDevSum += weight * standardDeviation;
     }
     if (!(weightSum > 0.0) || isnan(weightSum) || isinf(weightSum))
         return estimate;
@@ -161,7 +161,7 @@ MaxEntTemporalRobustEstimate maxentTemporalGaussianReweightedTileEstimate(uint a
     if (any(isnan(reweightedMean)) || any(isinf(reweightedMean)))
         return estimate;
     estimate.moment = reweightedMean;
-    estimate.estimatorStdDev = statisticsWeightedMeanStandardDeviation(
+    estimate.standardDeviation = statisticsWeightedMeanStandardDeviation(
         squaredWeightVarianceSum, weightedStdDevSum, 1.0 / weightSum,
         MAXENT_TEMPORAL_ROBUST_PROPAGATION_CORRELATION);
     return estimate;

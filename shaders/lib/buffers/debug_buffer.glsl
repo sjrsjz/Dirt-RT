@@ -10,7 +10,7 @@
 // production buffer, so changing DEBUG_VIEW cannot change renderer data flow.
 // COMMON: x=encoded reflection sample direction, y/z=diffuse/specular
 // noise-only current weight V_H/(V_H+V_C), w=FP16x2 diffuse/specular prepared
-// estimator standard deviation.
+// Monte Carlo observation standard deviation.
 // SPECULAR_TEMPORAL: xyz=resolved temporal MaxEnt, w=FP16x2 temporal tracking
 // hit distance/resolved history contribution (1-currentAlpha).
 const uint DEBUG_N_COMMON = 0u;
@@ -55,33 +55,33 @@ float debugReadSpecularNoiseOnlyCurrentWeight(uvec2 xy) {
     return uintBitsToFloat(debugLoad(DEBUG_N_COMMON, xy).z);
 }
 
-void debugWriteDiffusePreparedEstimatorStandardDeviation(
+void debugWriteDiffusePreparedMonteCarloStandardDeviation(
         uvec2 xy, float standardDeviation) {
     uint index = addr(DEBUG_N_COMMON, xy);
-    vec2 preparedEstimatorStandardDeviations = unpackHalf2x16(
+    vec2 preparedMonteCarloStandardDeviations = unpackHalf2x16(
         debugBuffer.data[index].w);
-    preparedEstimatorStandardDeviations.x = clamp(
+    preparedMonteCarloStandardDeviations.x = clamp(
         standardDeviation, -1.0, 65504.0);
     debugBuffer.data[index].w = packHalf2x16(
-        preparedEstimatorStandardDeviations);
+        preparedMonteCarloStandardDeviations);
 }
 
-void debugWriteSpecularPreparedEstimatorStandardDeviation(
+void debugWriteSpecularPreparedMonteCarloStandardDeviation(
         uvec2 xy, float standardDeviation) {
     uint index = addr(DEBUG_N_COMMON, xy);
-    vec2 preparedEstimatorStandardDeviations = unpackHalf2x16(
+    vec2 preparedMonteCarloStandardDeviations = unpackHalf2x16(
         debugBuffer.data[index].w);
-    preparedEstimatorStandardDeviations.y = clamp(
+    preparedMonteCarloStandardDeviations.y = clamp(
         standardDeviation, -1.0, 65504.0);
     debugBuffer.data[index].w = packHalf2x16(
-        preparedEstimatorStandardDeviations);
+        preparedMonteCarloStandardDeviations);
 }
 
-float debugReadDiffusePreparedEstimatorStandardDeviation(uvec2 xy) {
+float debugReadDiffusePreparedMonteCarloStandardDeviation(uvec2 xy) {
     return unpackHalf2x16(debugLoad(DEBUG_N_COMMON, xy).w).x;
 }
 
-float debugReadSpecularPreparedEstimatorStandardDeviation(uvec2 xy) {
+float debugReadSpecularPreparedMonteCarloStandardDeviation(uvec2 xy) {
     return unpackHalf2x16(debugLoad(DEBUG_N_COMMON, xy).w).y;
 }
 

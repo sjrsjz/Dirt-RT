@@ -109,6 +109,7 @@ bool denoiserSpatialFilterLarge(ivec2 pixel,
             DENOISER_SPATIAL_STEP);
     float propagationCorrelation = maxentMomentPropagationCorrelationForSpatialStep(
             DENOISER_SPATIAL_STEP);
+    float lightDifferenceScale = DENOISER_SPATIAL_PHI_LUMINANCE * sqrt(centerGeometry.effectiveSamples);
     uint rowStride = uint(DENOISER_SPATIAL_LARGE_TILE_SIZE);
 
     vec3 virtualTangentX = -denoiserSpatialLargeReadVirtualPosition(centerIndex - 1u, centerVirtualPosition);
@@ -167,7 +168,7 @@ bool denoiserSpatialFilterLarge(ivec2 pixel,
                 sampleSignal, differenceCorrelation, samplePrimaryRay,
                 surfaceGeometryExponent,
                 DENOISER_SPATIAL_POISSON_8[i].w,
-                DENOISER_SPATIAL_PHI_LUMINANCE,
+                lightDifferenceScale,
                 virtualDistanceAlpha, centerVirtualPosition,
                 centerVirtualNormal, virtualRejectionScale,
                 virtualDistanceWeight);

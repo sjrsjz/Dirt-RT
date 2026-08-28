@@ -206,14 +206,14 @@ void publishDenoisedReprojection(vec4 weightedMaxEntY, vec2 weightedCoCg,
     float squaredWeightVarianceSum, float weightedStdDevSum,
     float acceptedWeight, float validCoverage) {
     float inverseWeight = 1.0 / acceptedWeight;
-    float estimatorStdDev = statisticsWeightedMeanStandardDeviation(
+    float standardDeviation = statisticsWeightedMeanStandardDeviation(
         squaredWeightVarianceSum, weightedStdDevSum, inverseWeight,
         MAXENT_TEMPORAL_REPROJECTION_CORRELATION);
     writeDiffuseDenoisedReprojection(
         gl_GlobalInvocationID.xy,
         weightedMaxEntY * inverseWeight,
         weightedCoCg * inverseWeight,
-        estimatorStdDev,
+        standardDeviation,
         validCoverage
     );
 }

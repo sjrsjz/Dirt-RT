@@ -121,7 +121,6 @@ MaxEntTemporalRobustEstimate maxentSpecularCurrentRobustMomentEstimate(
                 maxentTemporalRobustTileGeometryWords(offset),
                 uvec2(samplePixel));
             if (!sampleGeometry.valid
-                    || sampleGeometry.materialID != centerGeometry.materialID
                     || dot(centerGeometry.normal, sampleGeometry.normal) <= 0.0)
                 continue;
 
@@ -149,7 +148,7 @@ MaxEntTemporalRobustEstimate maxentSpecularCurrentRobustMomentEstimate(
 
     return maxentTemporalGaussianReweightedTileEstimate(
         acceptedMask, sampleCount, momentSum, centerSignal.maxEntY,
-        centerSignal.estimatorStdDev);
+        centerSignal.standardDeviation);
 }
 
 void main() {
@@ -182,9 +181,9 @@ void main() {
 
     float noiseOnlyCurrentWeight = -1.0;
     SpecularMaxEnt historyDenoisedSignal;
-    float historyEstimatorStdDev, reprojectionAlphaFloor, currentTrackingHitDistance;
+    float historyPropagatedStandardDeviation, reprojectionAlphaFloor, currentTrackingHitDistance;
     bool denoisedReprojectionValid = readMaxEntSpecularDenoisedReprojection(pixel, historyDenoisedSignal,
-        historyEstimatorStdDev, reprojectionAlphaFloor, currentTrackingHitDistance);
+        historyPropagatedStandardDeviation, reprojectionAlphaFloor, currentTrackingHitDistance);
     bool hasHistory = statisticsValidEffectiveSampleCount(reprojected.historyEffectiveSamples)
         && denoisedReprojectionValid;
 
@@ -203,8 +202,8 @@ void main() {
                     ivec2(pixel), independentCurrent, currentGeometry);
             float responseAlpha = maxentTemporalResponseAlpha(
                 reprojectionAlphaFloor, robustCurrent.moment,
-                robustCurrent.estimatorStdDev * robustCurrent.estimatorStdDev,
-                historyDenoisedSignal.maxEntY, historyEstimatorStdDev,
+                robustCurrent.standardDeviation * robustCurrent.standardDeviation,
+                historyDenoisedSignal.maxEntY, historyPropagatedStandardDeviation,
                 reprojected.historyEffectiveSamples,
                 noiseOnlyCurrentWeight);
             currentAlpha = responseAlpha;
@@ -238,7 +237,7 @@ void main() {
         committed.hitDistance, 1.0 - currentAlpha);
 
     SpecularMaxEnt filtered;
-    float resolvedEstimatorStdDev = sqrt(maxentTemporalCurrentEstimatorVariance(currentSignal.estimatorStdDev));
+    float resolvedStandardDeviation = sqrt(maxentTemporalCurrentVariance(currentSignal.standardDeviation));
     if (hasHistory && independentCurrentValid) {
         float correctionCurrentWeight = clamp((currentAlpha - proposalAlpha)
             / max(1.0 - proposalAlpha, 1e-6), 0.0, 1.0);
@@ -246,13 +245,13 @@ void main() {
             independentCurrent.maxEntY, correctionCurrentWeight);
         filtered.CoCg = mix(currentSignal.CoCg,
             independentCurrent.CoCg, correctionCurrentWeight);
-        resolvedEstimatorStdDev = maxentTemporalProposalCorrectedStandardDeviation(
-            currentSignal.estimatorStdDev, independentCurrent.estimatorStdDev, correctionCurrentWeight);
+        resolvedStandardDeviation = maxentTemporalProposalCorrectedStandardDeviation(
+            currentSignal.standardDeviation, independentCurrent.standardDeviation, correctionCurrentWeight);
     } else {
         filtered.maxEntY = currentSignal.maxEntY;
         filtered.CoCg = currentSignal.CoCg;
     }
-    writeMaxEntSpecularDenoisedHistory(pixel, filtered, resolvedEstimatorStdDev);
+    writeMaxEntSpecularDenoisedHistory(pixel, filtered, resolvedStandardDeviation);
     vec3 primaryRay = reconstructPrimaryRay(pixel);
     float virtualScale = denoiserSpatialSpecularVirtualScale(primaryRay,
         currentGeometry.normal, currentGeometry.roughness);

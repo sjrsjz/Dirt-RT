@@ -156,35 +156,17 @@ float statisticsWeightedMeanStandardDeviation(
 }
 
 float statisticsBiasedCentralSecondMoment(float expectedSquaredNorm,
-        vec4 expectedValue) {
+        vec3 expectedValue) {
     return max(expectedSquaredNorm - dot(expectedValue, expectedValue), 0.0);
 }
 
-// For a weighted empirical estimator, the biased central moment and estimator variance satisfy
-// B = (N_eff - 1) Var[mean]. This is a read-only derivation from stored linear moments; variance must never be used
-// to reconstruct or overwrite E[R^2].
-float statisticsEstimatorVarianceFromBiasedCentralMoment(
-        float biasedCentralMoment, float effectiveSamples) {
-    if (!(effectiveSamples > 1.0) || isnan(effectiveSamples)
-            || isinf(effectiveSamples))
-        return 0.0;
-    return max(biasedCentralMoment, 0.0)
-        / (effectiveSamples - 1.0);
-}
-
-// E[S_biased] = (1 - 1/N_eff) Var[Z]. First recover Monte Carlo
-// per-observation variance, then separately scale it for an estimator.
+// E[S_biased] = (1 - 1/N_eff) Var[Z]. Recover the Monte Carlo
+// per-observation variance without converting it to temporal mean variance.
 float statisticsObservationVarianceFromBiasedCentralMoment(
         float biasedCentralMoment, float effectiveSamples) {
     if (!(effectiveSamples > 1.0)) return 0.0;
     return max(biasedCentralMoment, 0.0)
         / (1.0 - 1.0 / effectiveSamples);
-}
-
-float statisticsEstimatorVarianceFromObservationVariance(
-        float observationVariance, float effectiveSamples) {
-    if (!statisticsValidEffectiveSampleCount(effectiveSamples)) return 0.0;
-    return max(observationVariance, 0.0) / effectiveSamples;
 }
 
 #endif // LIB_MATH_STATISTICS_GLSL

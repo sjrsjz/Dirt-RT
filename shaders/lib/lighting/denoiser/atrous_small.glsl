@@ -68,6 +68,7 @@ void main() {
             DENOISER_SPATIAL_STEP);
     float propagationCorrelation = maxentMomentPropagationCorrelationForSpatialStep(
             DENOISER_SPATIAL_STEP);
+    float lightDifferenceScale = DENOISER_SPATIAL_PHI_LUMINANCE * sqrt(centerGeometry.effectiveSamples);
     // Accumulate tangents in place so four decoded positions do not have to
     // remain live across the last neighbor fetch.
     vec3 virtualTangentX = -denoiserSpatialLoadVirtualPosition(pixel + ivec2(-1, 0), size, centerVirtualPosition);
@@ -114,7 +115,7 @@ void main() {
                 sampleSignal, differenceCorrelation, samplePrimaryRay,
                 surfaceGeometryExponent,
                 DENOISER_SPATIAL_GRID_WEIGHT[i],
-                DENOISER_SPATIAL_PHI_LUMINANCE,
+                lightDifferenceScale,
                 virtualDistanceAlpha, centerVirtualPosition,
                 centerVirtualNormal, virtualRejectionScale,
                 virtualDistanceWeight);

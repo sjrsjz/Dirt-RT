@@ -188,10 +188,10 @@ option.MAXENT_VARIANCE_KERNEL_SIGMA = 核 Sigma
 option.MAXENT_VARIANCE_KERNEL_SIGMA.comment = 漫反射与镜面共用的短历史 MaxEnt 方差池化高斯核宽度。提高可增强稳定性，但会降低边缘精度。
 
 option.MAXENT_VARIANCE_HISTORY_BEGIN = 过渡起始样本数
-option.MAXENT_VARIANCE_HISTORY_BEGIN.comment = 漫反射与镜面共用的空间→时域估计器方差过渡起始有效样本数。
+option.MAXENT_VARIANCE_HISTORY_BEGIN.comment = 漫反射与镜面共用的空间→时域MC观测方差过渡起始有效样本数。
 
 option.MAXENT_VARIANCE_HISTORY_END = 过渡结束样本数
-option.MAXENT_VARIANCE_HISTORY_END.comment = 漫反射与镜面共用的过渡结束有效样本数；达到后完全信任时域估计器方差并跳过大核池化。
+option.MAXENT_VARIANCE_HISTORY_END.comment = 漫反射与镜面共用的过渡结束有效样本数；达到后完全信任时域MC观测方差并跳过大核池化。
 
 # ===========================================================================
 # MaxEnt 空域滤波
@@ -271,7 +271,7 @@ value.DEBUG_VIEW.20 = 【漫反射降噪】提交的原始时域历史
 value.DEBUG_VIEW.21 = 【漫反射降噪】最终归一化绝对一阶矩
 value.DEBUG_VIEW.22 = 【漫反射降噪】Kish N_eff
 value.DEBUG_VIEW.23 = 【漫反射降噪】仅噪声当前权重 VH/(VH+VC)
-value.DEBUG_VIEW.24 = 【漫反射降噪】准备后的估计器方差
+value.DEBUG_VIEW.24 = 【漫反射降噪】准备后的MC观测方差
 value.DEBUG_VIEW.30 = 【镜面降噪】RT 实际采样方向
 value.DEBUG_VIEW.31 = 【镜面降噪】当前跟踪命中距离
 value.DEBUG_VIEW.32 = 【镜面降噪】提交的原始时域历史
@@ -279,7 +279,7 @@ value.DEBUG_VIEW.33 = 【镜面降噪】最终虚像法线
 value.DEBUG_VIEW.34 = 【镜面降噪】Kish N_eff
 value.DEBUG_VIEW.35 = 【镜面降噪】最终历史贡献 1-α
 value.DEBUG_VIEW.36 = 【镜面降噪】仅噪声当前权重 VH/(VH+VC)
-value.DEBUG_VIEW.37 = 【镜面降噪】准备后的估计器方差
+value.DEBUG_VIEW.37 = 【镜面降噪】准备后的MC观测方差
 value.DEBUG_VIEW.40 = 【折射】PSR 解析路径
 value.DEBUG_VIEW.41 = 【折射】虚像端点距离
 value.DEBUG_VIEW.50 = 【路径引导】最终 MaxEnt 方向

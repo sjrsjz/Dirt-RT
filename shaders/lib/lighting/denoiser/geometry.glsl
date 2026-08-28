@@ -7,7 +7,7 @@
 //   x = floatBitsToUint(first-surface distance), negative means invalid/sky
 //   y = oct32 first-surface geometry normal
 //   z = oct32 estimated sampling-PDF direction
-//   w = half(perceptual roughness) | unused half
+//   w = half(perceptual roughness) | half(center Kish N_eff)
 // The primary ray is reconstructed from the pixel coordinate instead of being
 // stored, leaving both independent directions at full oct32 precision.
 //
@@ -27,6 +27,7 @@ struct DenoiserSpatialCenterGeometry {
     float surfaceDistance;
     float surfacePlaneOffset;
     float ggxAlpha;
+    float effectiveSamples;
 };
 
 DenoiserSpatialCenterGeometry denoiserSpatialDecodeCenterGeometry(
@@ -38,8 +39,10 @@ DenoiserSpatialCenterGeometry denoiserSpatialDecodeCenterGeometry(
     geometry.primaryRay = reconstructPrimaryRay(uvec2(pixel));
     geometry.surfacePlaneOffset = geometry.surfaceDistance
         * dot(geometry.geometryNormal, geometry.primaryRay);
-    float roughness = unpackHalf2x16(words.w).x;
+    vec2 roughnessEffectiveSamples = unpackHalf2x16(words.w);
+    float roughness = roughnessEffectiveSamples.x;
     geometry.ggxAlpha = roughness * roughness;
+    geometry.effectiveSamples = roughnessEffectiveSamples.y;
     return geometry;
 }
 
