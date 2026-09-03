@@ -23,6 +23,8 @@
 // N=10..11: Exact previous/current denoiser RGBA32UI output ping-pong.
 // N=12..13: Shared independent-current spatial-filter ping-pong. Diffuse and
 // reflection execute serially and reuse these transient planes.
+// N=14: Shared scalar metadata: x/y are FP32 spatial N_eff ping-pong and z is
+// the FP32 diffuse filtered-history N_eff reconstructed for the current pixel.
 //
 // .w lane uses packHalf2x16: Kish N_eff:f16 + rootMeanY2:f16.
 // Storage APIs accept sqrt(E[Y²]) directly. Arithmetic code squares it only
@@ -41,7 +43,7 @@ MaxEntEncoding sanitizeDiffuseMaxEntEncoding(MaxEntEncoding maxent) {
     return maxent;
 }
 
-// Active fourteen-plane layout. Current geometry is owned by geomBuffer and is
+// Active fifteen-plane layout. Current geometry is owned by geomBuffer and is
 // reconstructed from pixel + RT projection and F32 distance; it is not
 // duplicated here.
 // DIF_N_HISTGEO/ALT = F32 distance + oct ray + oct normal + N_eff/frame stamp.
@@ -60,6 +62,7 @@ MaxEntEncoding sanitizeDiffuseMaxEntEncoding(MaxEntEncoding maxent) {
 #define DIF_N_DENOISED_B      11u
 #define DIF_N_CURRENT_A       12u
 #define DIF_N_CURRENT_B       13u
+#define DIF_N_DENOISER_META   14u
 
 uint diffuseHistoryGeometryWritePlane() {
     return (uint(frame_id) & 1u) == 0u ? DIF_N_HISTGEO : DIF_N_HISTGEO_ALT;
@@ -93,6 +96,15 @@ void writeDiffuseDenoisedCurrentRaw(uvec2 xy, uvec4 words) {
     diffuseBuffer.data[addr(diffuseDenoisedWritePlane(), xy)] = words;
 }
 
+void writeDiffuseDenoisedCurrentRaw(uvec2 xy, uvec4 words, float effectiveSamples) {
+    vec2 metadata = unpackHalf2x16(words.w);
+    // Negative N_eff is the persistent diffuse-history layout tag; spatial signals use this lane for nonnegative
+    // virtual distance, so stale pre-change records cannot be mistaken for valid estimator statistics.
+    metadata.y = -clamp(effectiveSamples, 1.0, 65504.0);
+    words.w = packHalf2x16(metadata);
+    writeDiffuseDenoisedCurrentRaw(xy, words);
+}
+
 uvec4 readDiffuseDenoisedCurrentRaw(uvec2 xy) {
     return diffuseBuffer.data[addr(diffuseDenoisedWritePlane(), xy)];
 }
@@ -117,34 +129,61 @@ uvec4 readDiffuseIndependentCurrentB(uvec2 xy) {
     return diffuseBuffer.data[addr(DIF_N_CURRENT_B, xy)];
 }
 
+float readDenoiserIndependentCurrentEffectiveSamplesA(ivec2 pixel) {
+    return uintBitsToFloat(diffuseBuffer.data[addr(DIF_N_DENOISER_META, pixel)].x);
+}
+
+float readDenoiserIndependentCurrentEffectiveSamplesB(ivec2 pixel) {
+    return uintBitsToFloat(diffuseBuffer.data[addr(DIF_N_DENOISER_META, pixel)].y);
+}
+
+void writeDenoiserIndependentCurrentEffectiveSamplesA(ivec2 pixel, float effectiveSamples) {
+    atomicExchange(diffuseBuffer.data[addr(DIF_N_DENOISER_META, pixel)].x, floatBitsToUint(effectiveSamples));
+}
+
+void writeDenoiserIndependentCurrentEffectiveSamplesB(ivec2 pixel, float effectiveSamples) {
+    atomicExchange(diffuseBuffer.data[addr(DIF_N_DENOISER_META, pixel)].y, floatBitsToUint(effectiveSamples));
+}
+
+void writeDiffuseDenoisedReprojectedEffectiveSamples(uvec2 xy, float effectiveSamples) {
+    atomicExchange(diffuseBuffer.data[addr(DIF_N_DENOISER_META, xy)].z, floatBitsToUint(effectiveSamples));
+}
+
+float readDiffuseDenoisedReprojectedEffectiveSamples(uvec2 xy) {
+    return uintBitsToFloat(diffuseBuffer.data[addr(DIF_N_DENOISER_META, xy)].z);
+}
+
 // Before history resolve, the current parity is scratch for the previous
 // denoised signal reprojected by the real diffuse temporal pass. Resolve reads
 // it once, then replaces it with the exact current colortex4 words. Scratch z
 // stores the CoCg belonging to the same denoised estimator as maxEntY; w stores
-// (filtered standardDeviation, valid reprojection mass). Raw scratch separately owns N_eff.
+// (filtered MC standardDeviation, valid reprojection mass). The denoised estimator N_eff is reconstructed separately
+// into DIF_N_DENOISER_META.z because Raw history owns an independent N_eff.
 void writeDiffuseDenoisedReprojection(uvec2 xy, vec4 maxEntY, vec2 CoCg,
-        float standardDeviation, float validWeight) {
+        float monteCarloStandardDeviation, float effectiveSamples, float validWeight) {
     diffuseBuffer.data[addr(diffuseDenoisedWritePlane(), xy)] = uvec4(
         packHalf2x16(clamp(maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(CoCg, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(vec2(clamp(standardDeviation, 0.0, 65504.0),
+        packHalf2x16(vec2(clamp(monteCarloStandardDeviation, 0.0, 65504.0),
             clamp(validWeight, 0.0, 1.0))));
+    writeDiffuseDenoisedReprojectedEffectiveSamples(xy, effectiveSamples);
 }
 
 void writeDiffuseDenoisedReprojectionInvalid(uvec2 xy) {
     diffuseBuffer.data[addr(diffuseDenoisedWritePlane(), xy)] = uvec4(
         0u, 0u, 0u, packHalf2x16(vec2(-1.0, 0.0)));
+    writeDiffuseDenoisedReprojectedEffectiveSamples(xy, 0.0);
 }
 
 bool readDiffuseDenoisedReprojection(uvec2 xy, out vec4 maxEntY,
-        out vec2 CoCg, out float standardDeviation, out float validWeight) {
+        out vec2 CoCg, out float monteCarloStandardDeviation, out float validWeight) {
     uvec4 words = readDiffuseDenoisedCurrentRaw(xy);
     CoCg = unpackHalf2x16(words.z);
     vec2 deviationWeight = unpackHalf2x16(words.w);
-    standardDeviation = deviationWeight.x;
+    monteCarloStandardDeviation = deviationWeight.x;
     validWeight = deviationWeight.y;
-    bool valid = standardDeviation >= 0.0 && validWeight > 0.0
+    bool valid = monteCarloStandardDeviation >= 0.0 && validWeight > 0.0
         && !any(isnan(CoCg)) && !any(isinf(CoCg))
         && !any(isnan(deviationWeight)) && !any(isinf(deviationWeight));
     maxEntY = valid
@@ -153,6 +192,13 @@ bool readDiffuseDenoisedReprojection(uvec2 xy, out vec4 maxEntY,
     valid = valid && !any(isnan(maxEntY)) && !any(isinf(maxEntY));
     if (!valid) CoCg = vec2(0.0);
     return valid;
+}
+
+bool readDiffuseDenoisedReprojection(uvec2 xy, out vec4 maxEntY, out vec2 CoCg,
+        out float monteCarloStandardDeviation, out float effectiveSamples, out float validWeight) {
+    bool valid = readDiffuseDenoisedReprojection(xy, maxEntY, CoCg, monteCarloStandardDeviation, validWeight);
+    effectiveSamples = readDiffuseDenoisedReprojectedEffectiveSamples(xy);
+    return valid && effectiveSamples >= 1.0 && !isnan(effectiveSamples) && !isinf(effectiveSamples);
 }
 
 uvec4 packDiffuseTemporalState(MaxEntEncoding maxent,

@@ -16,13 +16,13 @@
 // Outputs are returned through the including domain adapter. standardDeviation
 // initially stores the Monte Carlo observation standard deviation matched to
 // the configured light-sample metric; A-Trous then propagates it once per pass.
-// For two independent raw samples, E[distance^2]/2 is
+// For two independent observations, E[distance^2]/2 is
 // E[Y^2]-|E[Y u]|^2, available directly from the stored moments. The
-// short-history fallback pools only independent Raw RT observations from the
-// current frame; neighboring temporal histories and their N_eff never enter
-// that estimate. The estimated sampling-PDF direction constrains this spatial
-// pool. The signal's upper metadata half contains the already constructed
-// radial virtual distance, not reflection hit distance.
+// short-history fallback linearly reconstructs the temporal fields E[Y u],
+// E[Y] and E[Y^2] in space, while Kish N_eff is reconstructed separately from
+// the same weights. N_eff only removes finite-sample bias; the result remains
+// the variance of one MC observation. The signal's upper metadata half stores
+// constructed radial virtual distance, not reflection hit distance.
 
 struct DenoiserVarianceSource {
     vec4 maxEntY;
@@ -106,13 +106,13 @@ const uint MAXENT_VARIANCE_SHARED_AREA = 22u * 22u;
 
 // First-surface distance and primary-ray direction reconstruct the sample
 // position used by the geometry-normal plane test. The PDF direction supplies
-// an independent soft cosine weight. The remaining metadata word is only a
-// validity flag; variance pooling does not distinguish materials.
+// an independent soft cosine weight. Variance pooling does not distinguish
+// materials.
 shared uvec2 denoiserVarianceSurfaceTile[MAXENT_VARIANCE_SHARED_AREA];
 shared uint denoiserVariancePdfDirectionTile[MAXENT_VARIANCE_SHARED_AREA];
 shared uint denoiserVarianceMetadataTile[MAXENT_VARIANCE_SHARED_AREA];
-shared uvec2 denoiserVarianceCurrentMeanTile[MAXENT_VARIANCE_SHARED_AREA];
-shared float denoiserVarianceCurrentMeanY2Tile[MAXENT_VARIANCE_SHARED_AREA];
+shared uvec2 denoiserVarianceMeanTile[MAXENT_VARIANCE_SHARED_AREA];
+shared uint denoiserVarianceMomentTile[MAXENT_VARIANCE_SHARED_AREA];
 
 // The exposed sigma range starts at 0.5, so the denominator is >= 0.25.
 const float MAXENT_VARIANCE_KERNEL_DENOM = MAXENT_VARIANCE_KERNEL_SIGMA * MAXENT_VARIANCE_KERNEL_SIGMA;
@@ -123,18 +123,21 @@ const float MAXENT_VARIANCE_KERNEL_1D[4] = {
     exp(-4.5 / MAXENT_VARIANCE_KERNEL_DENOM)
     };
 
-void denoiserVarianceWriteTile(uint index, DenoiserVarianceGeometry geometry, DenoiserVarianceSource independentCurrent, bool valid) {
-    independentCurrent = denoiserVarianceSanitizeSource(independentCurrent);
+void denoiserVarianceWriteTile(uint index, DenoiserVarianceGeometry geometry, DenoiserVarianceSource source, bool valid) {
+    valid = valid && statisticsValidEffectiveSampleCount(source.historyEffectiveSamples);
+    source = denoiserVarianceSanitizeSource(source);
+    float effectiveSamples = valid ? min(source.historyEffectiveSamples, 65504.0) : 1.0;
     denoiserVarianceSurfaceTile[index] = uvec2(floatBitsToUint(geometry.surfaceDistance),
             encodeNormalU(geometry.primaryRay));
     denoiserVariancePdfDirectionTile[index] = encodeNormalU(geometry.pdfDirection);
     denoiserVarianceMetadataTile[index] = valid ? 0x80000000u : 0u;
-    denoiserVarianceCurrentMeanTile[index] = uvec2(
-            packHalf2x16(clamp(independentCurrent.maxEntY.xy,
+    denoiserVarianceMeanTile[index] = uvec2(
+            packHalf2x16(clamp(source.maxEntY.xy,
                     vec2(-65504.0), vec2(65504.0))),
-            packHalf2x16(clamp(independentCurrent.maxEntY.zw,
+            packHalf2x16(clamp(source.maxEntY.zw,
                     vec2(-65504.0), vec2(65504.0))));
-    denoiserVarianceCurrentMeanY2Tile[index] = min(independentCurrent.rootMeanY2 * independentCurrent.rootMeanY2, 65504.0 * 65504.0);
+    denoiserVarianceMomentTile[index] = packHalf2x16(vec2(
+            effectiveSamples, min(source.rootMeanY2, 65504.0)));
 }
 
 void denoiserVarianceLoadTile(uint index, ivec2 pixel, ivec2 imageMax) {
@@ -142,10 +145,8 @@ void denoiserVarianceLoadTile(uint index, ivec2 pixel, ivec2 imageMax) {
     bool inBounds = all(equal(pixel, clampedPixel));
     DenoiserVarianceGeometry geometry = denoiserVarianceLoadGeometry(clampedPixel);
     bool valid = inBounds && geometry.valid;
-    DenoiserVarianceSource independentCurrent = valid
-        ? denoiserVarianceLoadIndependentCurrentSource(clampedPixel)
-        : denoiserVarianceEmptySource();
-    denoiserVarianceWriteTile(index, geometry, independentCurrent, valid);
+    DenoiserVarianceSource source = valid ? denoiserVarianceLoadSource(clampedPixel) : denoiserVarianceEmptySource();
+    denoiserVarianceWriteTile(index, geometry, source, valid);
 }
 
 bool denoiserVarianceTileValid(uint index) {
@@ -164,24 +165,24 @@ float denoiserVarianceTilePdfDirectionExponent(uint index, vec3 centerPdfDirecti
         centerPdfDirection, decodeNormalU(denoiserVariancePdfDirectionTile[index]));
 }
 
-vec4 denoiserVarianceTileCurrentMean(uint index) {
-    uvec2 words = denoiserVarianceCurrentMeanTile[index];
+vec4 denoiserVarianceTileMean(uint index) {
+    uvec2 words = denoiserVarianceMeanTile[index];
     return vec4(unpackHalf2x16(words.x), unpackHalf2x16(words.y));
 }
 
-float denoiserVariancePreparedCurrentMonteCarloVariance(uint centerX, uint centerY, DenoiserVarianceGeometry centerGeometry,
+vec2 denoiserVarianceTileRootMeanY2EffectiveSamples(uint index) {
+    return unpackHalf2x16(denoiserVarianceMomentTile[index]).yx;
+}
+
+float denoiserVariancePreparedSpatialMonteCarloVariance(uint centerX, uint centerY, DenoiserVarianceGeometry centerGeometry,
         float centerPlaneOffset, float surfaceRejectionScale) {
-    // TODO: Calibrate variance preparation. This Raw RT fallback still assumes
-    // local stationarity, so spatial signal variation can enter the estimated
-    // Monte Carlo variance even though temporal-history boundaries no longer do.
     float sumWeight = 0.0;
-    float sumSquaredWeight = 0.0;
+    float sumSquaredWeightOverEffectiveSamples = 0.0;
     vec4 sumMean = vec4(0.0);
     float sumMeanY2 = 0.0;
 
-    // This is the only spatial variance estimate. Every tap is one Raw RT
-    // observation from the current frame, so no history N_eff or reprojected
-    // temporal moment can imprint a history-validity boundary on the result.
+    // Linear moments use normalized spatial weights. Kish N_eff alone uses
+    // the nonlinear weighted-estimator reconstruction W^2/sum(w_i^2/N_i).
     for (int offsetY = -3; offsetY <= 3; ++offsetY) {
         for (int offsetX = -3; offsetX <= 3; ++offsetX) {
             uint sampleIndex = uint(int(centerY) + offsetY) * MAXENT_VARIANCE_SHARED_WIDTH + uint(int(centerX) + offsetX);
@@ -190,22 +191,21 @@ float denoiserVariancePreparedCurrentMonteCarloVariance(uint centerX, uint cente
             float spatialWeight = MAXENT_VARIANCE_KERNEL_1D[abs(offsetX)] * MAXENT_VARIANCE_KERNEL_1D[abs(offsetY)]
                 * exp(-(denoiserVarianceTileSurfacePlaneExponent(sampleIndex, centerPlaneOffset, centerGeometry.geometryNormal, surfaceRejectionScale)
                     + denoiserVarianceTilePdfDirectionExponent(sampleIndex, centerGeometry.pdfDirection)));
+            vec2 rootMeanY2EffectiveSamples = denoiserVarianceTileRootMeanY2EffectiveSamples(sampleIndex);
+            float sampleEffectiveSamples = rootMeanY2EffectiveSamples.y;
             sumWeight += spatialWeight;
-            sumSquaredWeight += spatialWeight * spatialWeight;
-            sumMean += spatialWeight * denoiserVarianceTileCurrentMean(sampleIndex);
-            sumMeanY2 += spatialWeight * denoiserVarianceCurrentMeanY2Tile[sampleIndex];
+            sumSquaredWeightOverEffectiveSamples += spatialWeight * spatialWeight / sampleEffectiveSamples;
+            sumMean += spatialWeight * denoiserVarianceTileMean(sampleIndex);
+            sumMeanY2 += spatialWeight * rootMeanY2EffectiveSamples.x * rootMeanY2EffectiveSamples.x;
         }
     }
 
     if (!(sumWeight > 1e-8)) return 0.0;
     float inverseWeight = 1.0 / sumWeight;
-    float squaredWeightMass = sumSquaredWeight * inverseWeight * inverseWeight;
-    if (!(1.0 - squaredWeightMass > 1e-6)) return 0.0;
     vec4 pooledMean = sumMean * inverseWeight;
     float pooledRootMeanY2 = sqrt(sumMeanY2 * inverseWeight);
-    float pooledEffectiveSamples = 1.0 / squaredWeightMass;
-    return statisticsObservationVarianceFromBiasedCentralMoment(
-        denoiserVarianceBiasedMetricMoment(pooledMean, pooledRootMeanY2), pooledEffectiveSamples);
+    float pooledEffectiveSamples = statisticsKishEffectiveSampleCount(sumWeight, sumSquaredWeightOverEffectiveSamples);
+    return denoiserMonteCarloVarianceFromTemporalMoments(pooledMean, pooledRootMeanY2, pooledEffectiveSamples);
 }
 
 void denoiserVariancePrepare() {
@@ -214,10 +214,8 @@ void denoiserVariancePrepare() {
     uint lane = gl_LocalInvocationIndex;
     ivec2 imageSize = ivec2(resolution_global);
     ivec2 imageMax = imageSize - 1;
-    // Begin is nonnegative by its setting range. End is an independent
-    // setting, so preserve an ordered smoothstep interval.
-    float varianceHistoryBegin = MAXENT_VARIANCE_HISTORY_BEGIN;
-    float varianceHistoryEnd = max(MAXENT_VARIANCE_HISTORY_END, varianceHistoryBegin + 1e-3);
+    float spatialOnlySamples = MAXENT_VARIANCE_SPATIAL_ONLY_SAMPLES;
+    float varianceTransitionEnd = spatialOnlySamples + max(MAXENT_VARIANCE_TRANSITION_SAMPLES, 1e-3);
 
     uint centerX = localPixel.x + MAXENT_VARIANCE_HALO;
     uint centerY = localPixel.y + MAXENT_VARIANCE_HALO;
@@ -240,9 +238,10 @@ void denoiserVariancePrepare() {
     centerSource = denoiserVarianceSanitizeSource(centerSource);
     centerIndependentCurrent = denoiserVarianceSanitizeSource(
         centerIndependentCurrent);
-    denoiserVarianceWriteTile(centerIndex, centerGeometry, centerIndependentCurrent, centerValid);
+    denoiserVarianceWriteTile(centerIndex, centerGeometry, centerSource, centerValid);
 
-    // The independent-current branch always needs the current-frame halo.
+    // Interior invocations publish their temporal moment states; cooperative
+    // loads only have to fill the three-pixel halo.
     ivec2 tileOrigin = ivec2(gl_WorkGroupID.xy * MAXENT_VARIANCE_TILE_SIZE) - ivec2(MAXENT_VARIANCE_HALO);
     for (uint index = lane; index < MAXENT_VARIANCE_SHARED_AREA; index += MAXENT_VARIANCE_TILE_SIZE * MAXENT_VARIANCE_TILE_SIZE) {
         uint tileX = index % MAXENT_VARIANCE_SHARED_WIDTH;
@@ -256,14 +255,14 @@ void denoiserVariancePrepare() {
     float standardDeviation = 0.0;
     float independentCurrentStandardDeviation = 0.0;
     if (centerValid) {
-        float currentSpatialVariance = denoiserVariancePreparedCurrentMonteCarloVariance(
+        float spatialVariance = denoiserVariancePreparedSpatialMonteCarloVariance(
             centerX, centerY, centerGeometry, centerPlaneOffset, surfaceRejectionScale);
         float temporalVariance = denoiserMonteCarloVarianceFromTemporalMoments(
             centerSource.maxEntY, centerSource.rootMeanY2, centerSource.historyEffectiveSamples);
-        float spatialTrust = 1.0 - smoothstep(varianceHistoryBegin, varianceHistoryEnd, centerSource.historyEffectiveSamples);
-        float preparedVariance = mix(temporalVariance, currentSpatialVariance, spatialTrust);
+        float temporalTrust = smoothstep(spatialOnlySamples, varianceTransitionEnd, centerSource.historyEffectiveSamples);
+        float preparedVariance = mix(spatialVariance, temporalVariance, temporalTrust);
         standardDeviation = sqrt(preparedVariance);
-        independentCurrentStandardDeviation = sqrt(currentSpatialVariance);
+        independentCurrentStandardDeviation = sqrt(spatialVariance);
     }
 
     if (!centerInBounds) return;

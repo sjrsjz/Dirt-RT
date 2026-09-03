@@ -25,6 +25,7 @@ struct MaxEntReprojectedHistory {
     uint normalWord;
     float roughness;
     float historyEffectiveSamples;
+    float denoisedEffectiveSamples;
     float footprintQuality;
     bool found;
 };
@@ -38,6 +39,7 @@ MaxEntReprojectedHistory maxentEmptyHistory() {
     h.normalWord = encodeNormalU(vec3(0.0, 1.0, 0.0));
     h.roughness = 1.0;
     h.historyEffectiveSamples = 0.0;
+    h.denoisedEffectiveSamples = 0.0;
     h.footprintQuality = 0.0;
     h.found = false;
     return h;
@@ -79,8 +81,8 @@ MaxEntReprojectedHistory maxentLoadHistory(
     float validBilinearWeight = 0.0;
     SpecularMaxEnt signalSum = emptySpecularMaxEnt();
     SpecularMaxEnt denoisedSum = emptySpecularMaxEnt();
-    float denoisedSquaredWeightVariance = 0.0;
-    float denoisedWeightedStdDev = 0.0;
+    float denoisedWeightedMonteCarloVariance = 0.0;
+    float denoisedWeightOverRootSamples = 0.0;
     vec3 normalSum = vec3(0.0);
     float depthThreshold = MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD *
         max(length(currentSurfacePosition), 1.0);
@@ -97,7 +99,7 @@ MaxEntReprojectedHistory maxentLoadHistory(
         vec2 denoisedMetadata = unpackHalf2x16(denoisedWords.w);
         if (!(surfaceDistance >= 0.0) || isnan(surfaceDistance) || isinf(surfaceDistance)
                 || !(momentHistory.x >= 0.0)
-                || !(momentHistory.y >= 1.0) || denoisedMetadata.y != -2.0
+                || !(momentHistory.y >= 1.0) || !(denoisedMetadata.y >= 1.0)
                 || !(denoisedMetadata.x >= 0.0) || any(isnan(momentHistory))
                 || any(isinf(momentHistory)) || any(isnan(denoisedMetadata))
                 || any(isinf(denoisedMetadata))) continue;
@@ -127,9 +129,8 @@ MaxEntReprojectedHistory maxentLoadHistory(
         signalSum.CoCg += unpackHalf2x16(signalWords.z) * w;
         denoisedSum.maxEntY += vec4(unpackHalf2x16(denoisedWords.x), unpackHalf2x16(denoisedWords.y)) * w;
         denoisedSum.CoCg += unpackHalf2x16(denoisedWords.z) * w;
-        denoisedSquaredWeightVariance += denoisedMetadata.x
-            * denoisedMetadata.x * w * w;
-        denoisedWeightedStdDev += denoisedMetadata.x * w;
+        denoisedWeightedMonteCarloVariance += denoisedMetadata.x * denoisedMetadata.x * w;
+        denoisedWeightOverRootSamples += w * inversesqrt(denoisedMetadata.y);
         vec2 hitRoughness = unpackHalf2x16(geometryWords.w);
         outHistory.hitDistance += hitRoughness.x * w;
         outHistory.roughness += (hitRoughness.y - 1.0) * w;
@@ -151,21 +152,21 @@ MaxEntReprojectedHistory maxentLoadHistory(
     signalSum = maxentScaleMaxEnt(signalSum, invWeight);
     outHistory.signalWords = packSpecularMaxEnt(signalSum);
     denoisedSum = maxentScaleMaxEnt(denoisedSum, invWeight);
-    float denoisedPropagatedStandardDeviation =
-        statisticsWeightedMeanStandardDeviation(
-        denoisedSquaredWeightVariance, denoisedWeightedStdDev, invWeight,
-        MAXENT_TEMPORAL_REPROJECTION_CORRELATION);
+    float denoisedMonteCarloStandardDeviation = sqrt(denoisedWeightedMonteCarloVariance * invWeight);
     outHistory.denoisedWords = uvec4(packSpecularMaxEnt(denoisedSum),
-        floatBitsToUint(denoisedPropagatedStandardDeviation));
+        floatBitsToUint(denoisedMonteCarloStandardDeviation));
     outHistory.hitDistance *= invWeight;
     outHistory.roughness = clamp(1.0 +
         (outHistory.roughness - 1.0) * invWeight, 0.0, 1.0);
     outHistory.historyEffectiveSamples = statisticsReconstructedEffectiveSampleCount(
         sumWeight, weightOverRootSamples);
+    outHistory.denoisedEffectiveSamples = statisticsReconstructedEffectiveSampleCount(
+        sumWeight, denoisedWeightOverRootSamples);
     outHistory.meanY2 = weightedMeanY2 * invWeight;
     outHistory.normalWord = encodeNormalU(maxentSafeNormalize(normalSum * invWeight, currentNormal));
     outHistory.footprintQuality = clamp(validBilinearWeight, 0.0, 1.0);
-    outHistory.found = true;
+    outHistory.found = statisticsValidEffectiveSampleCount(outHistory.historyEffectiveSamples)
+        && statisticsValidEffectiveSampleCount(outHistory.denoisedEffectiveSamples);
     return outHistory;
 }
 
@@ -216,17 +217,14 @@ MaxEntReprojectedHistory maxentCombineReprojectedHistories(
     SpecularMaxEnt denoised = maxentScaleMaxEnt(maxentWeightedMaxEnt(
         surfaceDenoised, surfaceWeight, virtualDenoised, virtualWeight),
         inverseHistoryWeight);
-    float surfacePropagatedStandardDeviation = surface.found
+    float surfaceMonteCarloStandardDeviation = surface.found
         ? uintBitsToFloat(surface.denoisedWords.w) : 0.0;
-    float virtualPropagatedStandardDeviation = virtualHistory.found
+    float virtualMonteCarloStandardDeviation = virtualHistory.found
         ? uintBitsToFloat(virtualHistory.denoisedWords.w) : 0.0;
-    float denoisedPropagatedStandardDeviation = statisticsWeightedMeanStandardDeviation(
-        surfaceWeight * surfaceWeight * surfacePropagatedStandardDeviation * surfacePropagatedStandardDeviation
-            + virtualWeight * virtualWeight * virtualPropagatedStandardDeviation * virtualPropagatedStandardDeviation,
-        surfaceWeight * surfacePropagatedStandardDeviation + virtualWeight * virtualPropagatedStandardDeviation,
-        inverseHistoryWeight, MAXENT_SPECULAR_BRANCH_CORRELATION);
+    float denoisedMonteCarloVariance = (surfaceWeight * surfaceMonteCarloStandardDeviation * surfaceMonteCarloStandardDeviation
+        + virtualWeight * virtualMonteCarloStandardDeviation * virtualMonteCarloStandardDeviation) * inverseHistoryWeight;
     combined.denoisedWords = uvec4(packSpecularMaxEnt(denoised),
-        floatBitsToUint(denoisedPropagatedStandardDeviation));
+        floatBitsToUint(sqrt(denoisedMonteCarloVariance)));
     combined.hitDistance = (surfaceWeight * surface.hitDistance
         + virtualWeight * virtualHistory.hitDistance)
         * inverseHistoryWeight;
@@ -242,12 +240,19 @@ MaxEntReprojectedHistory maxentCombineReprojectedHistories(
         surfaceWeight * inversesqrt(surfaceEffectiveSamples)
             + virtualWeight * inversesqrt(virtualEffectiveSamples),
         MAXENT_SPECULAR_BRANCH_CORRELATION);
+    float surfaceDenoisedEffectiveSamples = max(surface.denoisedEffectiveSamples, 1.0);
+    float virtualDenoisedEffectiveSamples = max(virtualHistory.denoisedEffectiveSamples, 1.0);
+    combined.denoisedEffectiveSamples = statisticsCorrelatedEffectiveSampleCount(historyMass,
+        surfaceWeight * surfaceWeight / surfaceDenoisedEffectiveSamples
+            + virtualWeight * virtualWeight / virtualDenoisedEffectiveSamples,
+        surfaceWeight * inversesqrt(surfaceDenoisedEffectiveSamples)
+            + virtualWeight * inversesqrt(virtualDenoisedEffectiveSamples), MAXENT_SPECULAR_BRANCH_CORRELATION);
     combined.meanY2 = (surfaceWeight * surface.meanY2 + virtualWeight * virtualHistory.meanY2) * inverseHistoryWeight;
     combined.footprintQuality = (surfaceWeight * surface.footprintQuality
         + virtualWeight * virtualHistory.footprintQuality)
         * inverseHistoryWeight;
-    combined.found = statisticsValidEffectiveSampleCount(
-        combined.historyEffectiveSamples);
+    combined.found = statisticsValidEffectiveSampleCount(combined.historyEffectiveSamples)
+        && statisticsValidEffectiveSampleCount(combined.denoisedEffectiveSamples);
     return combined;
 }
 
@@ -261,7 +266,7 @@ void maxentPublishDenoisedReprojection(MaxEntReprojectedHistory history, float a
         history.denoisedWords.xyz);
     float standardDeviation = uintBitsToFloat(history.denoisedWords.w);
     writeMaxEntSpecularDenoisedReprojection(gl_GlobalInvocationID.xy,
-        denoised, standardDeviation, currentTrackingHitDistance,
+        denoised, standardDeviation, history.denoisedEffectiveSamples, currentTrackingHitDistance,
         alphaFloor);
 }
 

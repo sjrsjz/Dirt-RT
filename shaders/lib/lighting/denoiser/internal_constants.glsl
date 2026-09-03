@@ -2,41 +2,34 @@
 #define MAXENT_DENOISER_INTERNAL_CONSTANTS_GLSL
 
 // Fixed denoiser model and scheduling constants. These are not shader-pack options: changing them alters the
-// estimator, provisional pipeline, or fixed-kernel covariance model and therefore requires code-level validation.
+// estimator or provisional pipeline and therefore requires code-level validation.
 const float MAXENT_TEMPORAL_DENOISER_INTRINSIC_VARIANCE = 1e-10;
 const float MAXENT_TEMPORAL_FIXED_ALPHA = 0.01;
 // 1-dot(A,B) approximates half the squared angular separation without acos.
 const float MAXENT_SPATIAL_PDF_DIRECTION_EXPONENT_SCALE = 64.0;
 
-// Diffuse reprojection expands its bilinear reconstruction footprint under screen-space minification. Bounding
-// each Jacobian singular value prevents an unbounded history gather at grazing angles or near clip singularities.
-const float MAXENT_DIFFUSE_TEMPORAL_MAX_JACOBIAN_STRETCH = 2.0;
+// Cumulative spatial confidence entering each A-Trous pass. These fixed-kernel factors approximate the previous
+// flat, fully accepted estimator-variance contraction without changing the linearly propagated MC variance field.
+// Difference covariance is intentionally not folded into them.
+const float MAXENT_SPATIAL_REJECTION_CONFIDENCE_STEP_1 = 1.00000000;
+const float MAXENT_SPATIAL_REJECTION_CONFIDENCE_STEP_2 = 2.88235658;
+const float MAXENT_SPATIAL_REJECTION_CONFIDENCE_STEP_4 = 6.23648076;
+const float MAXENT_SPATIAL_REJECTION_CONFIDENCE_STEP_8 = 12.61065131;
+const float MAXENT_SPATIAL_REJECTION_CONFIDENCE_STEP_16 = 25.90473642;
+const float MAXENT_SPATIAL_REJECTION_CONFIDENCE_STEP_32 = 52.46326890;
 
-// Trace-error correlations induced by the fixed A-Trous kernels. They depend on the pass footprint, not on phi,
-// scene geometry, MaxEnt decoding, the light distribution, or N_eff.
-const float MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_1 = 0.0;
-const float MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_2 = 0.1633;
-const float MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_4 = 0.2171;
-const float MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_8 = 0.2508;
-const float MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_16 = 0.2585;
-const float MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_32 = 0.2665;
-const float MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_1 = 0.0;
-const float MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_2 = 0.1060;
-const float MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_4 = 0.1412;
-const float MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_8 = 0.1394;
-const float MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_16 = 0.1471;
-const float MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_32 = 0.1525;
+// Constant-correlation closure for the overlap between estimators entering each A-Trous pass. These values depend
+// only on the fixed sampling kernels accumulated before the pass. They affect Kish N_eff, never linear moments or MC
+// variance propagation.
+const float MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_1 = 0.0;
+const float MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_2 = 0.1060;
+const float MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_4 = 0.1412;
+const float MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_8 = 0.1394;
+const float MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_16 = 0.1471;
+const float MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_32 = 0.1525;
 
-// The fixed final kernel gives about 0.9446 axial and 0.9443 diagonal adjacent correlation. Uniform bilinear
-// phases weight these 0.8 and 0.2. Surface and virtual histories use that adjacent value as a local-overlap model.
-// const float MAXENT_TEMPORAL_REPROJECTION_CORRELATION = 0.9446;
-// const float MAXENT_SPECULAR_BRANCH_CORRELATION = 0.9446;
-const float MAXENT_TEMPORAL_REPROJECTION_CORRELATION = 0.0;
+// Surface and virtual specular histories can overlap. This closure affects only their reconstructed Kish N_eff;
+// MC variance remains a linearly reconstructed field.
 const float MAXENT_SPECULAR_BRANCH_CORRELATION = 1.0;
-
-// Keep the propagation correlation fixed during the 3x3-versus-5x5 support test so the experiment changes only
-// the robust reconstruction neighborhood rather than simultaneously changing its variance model.
-// const float MAXENT_TEMPORAL_ROBUST_PROPAGATION_CORRELATION = 0.9913;
-const float MAXENT_TEMPORAL_ROBUST_PROPAGATION_CORRELATION = 1.0;
 
 #endif // MAXENT_DENOISER_INTERNAL_CONSTANTS_GLSL

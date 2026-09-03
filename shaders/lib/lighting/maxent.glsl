@@ -315,7 +315,7 @@ float maxent_guiding_pdf(vec3 wi, vec3 axis, float kappa)
     float norm = 3.0 * pow(max(0.0, 1.0 - k2), 3.0)
             / (4.0 * PI * (3.0 + k2));
     float d2 = d * d;
-    return norm / max(1e-6, d2 * d2);
+    return norm / max(1e-30, d2 * d2);
 }
 
 // ------------------------------------------------------------
@@ -327,11 +327,11 @@ vec3 sample_maxent_guiding(vec3 axis, float kappa, vec2 xi)
     vec3 B = cross(axis, T);
 
     float mu;
-    if (kappa < 1e-4) {
+    if (kappa < 1e-10) {
         mu = 1.0 - 2.0 * xi.x;
     } else {
         float a = 1.0 / pow(1.0 + kappa, 3.0);
-        float b = 1.0 / pow(max(1e-4, 1.0 - kappa), 3.0);
+        float b = 1.0 / pow(max(1e-30, 1.0 - kappa), 3.0);
         float invCube = mix(a, b, xi.x);
         float t = pow(invCube, -1.0 / 3.0);
         mu = clamp((1.0 - t) / kappa, -1.0, 1.0);

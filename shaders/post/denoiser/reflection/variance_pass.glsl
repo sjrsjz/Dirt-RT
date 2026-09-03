@@ -1,6 +1,6 @@
 // Purpose: prepare reflection Monte Carlo observation variance and the independent-current branch for A-Trous.
 // Dispatch: 16x16.
-// Reads: colortex4 temporal proposal, colortex6 Raw RT observation, compact primary geometry.
+// Reads: colortex4 temporal proposal moments, colortex6 Raw RT independent-current signal, compact primary geometry.
 // Writes: colortex3 geometry/center N_eff, colorimg5 prepared proposal, shared scratch plane A.
 // Persistent side effects: prepared specular Monte Carlo-variance diagnostic only.
 // Invalid representation: negative standardDeviation in signal metadata and negative geometry distance.
@@ -66,6 +66,8 @@ void denoiserVarianceStorePrepared(ivec2 pixel, DenoiserMaxEntSignal signal, Den
     imageStore(colorimg3, pixel, denoiserVariancePackSpatialGeometry(primaryGeometryWords, geometry, effectiveSamples));
     imageStore(colorimg5, pixel, denoiserPackMaxEntSignal(signal));
     denoiserScratchStoreA(pixel, denoiserPackMaxEntSignal(independentCurrent));
+    denoiserScratchStoreEffectiveSamplesA(pixel, 1.0);
+    denoiserScratchStoreEffectiveSamplesB(pixel, 0.0);
 }
 
 void denoiserVarianceStoreInvalid(ivec2 pixel) {
@@ -73,6 +75,8 @@ void denoiserVarianceStoreInvalid(ivec2 pixel) {
     imageStore(colorimg3, pixel, uvec4(floatBitsToUint(-1.0), 0u, 0u, 0u));
     imageStore(colorimg5, pixel, invalidSignal);
     denoiserScratchStoreA(pixel, invalidSignal);
+    denoiserScratchStoreEffectiveSamplesA(pixel, 0.0);
+    denoiserScratchStoreEffectiveSamplesB(pixel, 0.0);
     denoiserVarianceDebugWrite(pixel, -1.0);
 }
 

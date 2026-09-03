@@ -8,32 +8,60 @@
 #include "/lib/lighting/denoiser/virtual_projection.glsl"
 #include "/lib/math/statistics.glsl"
 
-float maxentMomentDifferenceCorrelationForSpatialStep(int stepRadius) {
-    if (stepRadius <= 1) return MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_1;
-    if (stepRadius <= 2) return MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_2;
-    if (stepRadius <= 4) return MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_4;
-    if (stepRadius <= 8) return MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_8;
-    if (stepRadius <= 16) return MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_16;
-    return MAXENT_SPATIAL_DIFFERENCE_CORRELATION_STEP_32;
-}
-
-float maxentMomentPropagationCorrelationForSpatialStep(int stepRadius) {
-    if (stepRadius <= 1) return MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_1;
-    if (stepRadius <= 2) return MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_2;
-    if (stepRadius <= 4) return MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_4;
-    if (stepRadius <= 8) return MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_8;
-    if (stepRadius <= 16) return MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_16;
-    return MAXENT_SPATIAL_PROPAGATION_CORRELATION_STEP_32;
-}
-
 struct DenoiserSpatialAccumulator {
     vec4 maxEntY;
     vec2 CoCg;
-    vec2 varianceEnergy;
+    float monteCarloVariance;
     float weight;
     float virtualDistance;
     float virtualWeight;
 };
+
+struct DenoiserSpatialEffectiveSampleAccumulator {
+    float squaredWeightOverEffectiveSamples;
+    float weightOverRootEffectiveSamples;
+};
+
+float denoiserSpatialRejectionConfidenceForStep(int stepRadius) {
+    if (stepRadius <= 1) return MAXENT_SPATIAL_REJECTION_CONFIDENCE_STEP_1;
+    if (stepRadius <= 2) return MAXENT_SPATIAL_REJECTION_CONFIDENCE_STEP_2;
+    if (stepRadius <= 4) return MAXENT_SPATIAL_REJECTION_CONFIDENCE_STEP_4;
+    if (stepRadius <= 8) return MAXENT_SPATIAL_REJECTION_CONFIDENCE_STEP_8;
+    if (stepRadius <= 16) return MAXENT_SPATIAL_REJECTION_CONFIDENCE_STEP_16;
+    return MAXENT_SPATIAL_REJECTION_CONFIDENCE_STEP_32;
+}
+
+float denoiserSpatialEffectiveSampleCorrelationForStep(int stepRadius) {
+    if (stepRadius <= 1) return MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_1;
+    if (stepRadius <= 2) return MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_2;
+    if (stepRadius <= 4) return MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_4;
+    if (stepRadius <= 8) return MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_8;
+    if (stepRadius <= 16) return MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_16;
+    return MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_32;
+}
+
+DenoiserSpatialEffectiveSampleAccumulator denoiserSpatialBeginEffectiveSampleAccumulation(float effectiveSamples) {
+    float inverseRootSamples = inversesqrt(max(effectiveSamples, 1.0));
+    DenoiserSpatialEffectiveSampleAccumulator accum;
+    accum.squaredWeightOverEffectiveSamples = inverseRootSamples * inverseRootSamples;
+    accum.weightOverRootEffectiveSamples = inverseRootSamples;
+    return accum;
+}
+
+void denoiserSpatialAccumulateEffectiveSamples(inout DenoiserSpatialEffectiveSampleAccumulator accum,
+        float effectiveSamples, float weight) {
+    float inverseRootSamples = inversesqrt(max(effectiveSamples, 1.0));
+    accum.squaredWeightOverEffectiveSamples += weight * weight * inverseRootSamples * inverseRootSamples;
+    accum.weightOverRootEffectiveSamples += weight * inverseRootSamples;
+}
+
+float denoiserSpatialResolveEffectiveSamples(DenoiserSpatialEffectiveSampleAccumulator accum, float weightSum,
+        int stepRadius) {
+    float effectiveSamples = statisticsCorrelatedEffectiveSampleCount(weightSum,
+        accum.squaredWeightOverEffectiveSamples, accum.weightOverRootEffectiveSamples,
+        denoiserSpatialEffectiveSampleCorrelationForStep(stepRadius));
+    return clamp(effectiveSamples, 1.0, DENOISER_SPATIAL_FP16_MAX);
+}
 
 vec3 denoiserSpatialVirtualWorldPosition(
     vec3 primaryRay, float virtualDistance) {
@@ -65,7 +93,6 @@ float denoiserSpatialVirtualPlaneDepthExponent(
 
 float denoiserSpatialWeight(DenoiserMaxEntSignal centerSignal,
     DenoiserMaxEntSignal sampleSignal,
-    float momentCorrelation,
     vec3 samplePrimaryRay, float surfaceGeometryExponent,
     float kernelWeight,
     float phiLuminance,
@@ -79,13 +106,11 @@ float denoiserSpatialWeight(DenoiserMaxEntSignal centerSignal,
             sampleSignal.virtualDistance, virtualRejectionScale);
     float distanceSq = maxentLightSampleDistanceSq(
             centerSignal.maxEntY, sampleSignal.maxEntY);
-    float variance = statisticsDifferenceVarianceFromStandardDeviations(
-            centerSignal.standardDeviation,
-            sampleSignal.standardDeviation,
-            momentCorrelation);
-    // Both variances may be exactly zero; without the floor, identical
-    // signals produce 0/0 and poison the exponential with NaN.
-    signalExponent += phiLuminance * sqrt(distanceSq / max(variance, 1e-20));
+    // Difference noise uses both MC variance fields. phiLuminance already contains sqrt(N_eff_center), so the
+    // complete ratio is N_eff_center*distanceSq/(V_MC_center+V_MC_sample); the sample N_eff is intentionally absent.
+    float combinedMonteCarloVariance = centerSignal.standardDeviation * centerSignal.standardDeviation
+        + sampleSignal.standardDeviation * sampleSignal.standardDeviation;
+    signalExponent += phiLuminance * sqrt(distanceSq / max(combinedMonteCarloVariance, 1e-20));
     float surfaceWeight = kernelWeight * exp(-signalExponent);
     virtualDistanceWeight = kernelWeight * virtualDistanceAlpha
         * exp(-surfaceGeometryExponent / max(virtualDistanceAlpha, 1e-5));
@@ -97,11 +122,9 @@ DenoiserSpatialAccumulator denoiserSpatialBeginAccumulation(
     DenoiserSpatialAccumulator accum;
     accum.maxEntY = center.maxEntY;
     accum.CoCg = center.CoCg;
-    // x = sum w_i^2 V_i, y = sum w_i sqrt(V_i).  These are the two
-    // sufficient accumulators for the constant-correlation expansion.
-    accum.varianceEnergy = vec2(
-        center.standardDeviation * center.standardDeviation,
-        center.standardDeviation);
+    // MC variance is an independently supplied field. It is filtered with the
+    // signal weights and is never inverted into an assumed second moment.
+    accum.monteCarloVariance = center.standardDeviation * center.standardDeviation;
     accum.weight = 1.0;
     accum.virtualDistance = center.virtualDistance;
     accum.virtualWeight = 1.0;
@@ -113,24 +136,20 @@ void denoiserSpatialAccumulate(inout DenoiserSpatialAccumulator accum,
     float virtualDistanceWeight) {
     accum.maxEntY += neighbor.maxEntY * weight;
     accum.CoCg += neighbor.CoCg * weight;
-    accum.varianceEnergy += vec2(
-            weight * weight * neighbor.standardDeviation * neighbor.standardDeviation,
-            weight * neighbor.standardDeviation);
+    accum.monteCarloVariance += weight * neighbor.standardDeviation * neighbor.standardDeviation;
     accum.weight += weight;
     accum.virtualDistance += neighbor.virtualDistance
         * virtualDistanceWeight;
     accum.virtualWeight += virtualDistanceWeight;
 }
 
-DenoiserMaxEntSignal denoiserSpatialResolve(
-    DenoiserSpatialAccumulator accum, float propagationCorrelation) {
+DenoiserMaxEntSignal denoiserSpatialResolve(DenoiserSpatialAccumulator accum) {
     // Both sums start at one and only receive nonnegative exponential weights.
     float invWeight = 1.0 / accum.weight;
     DenoiserMaxEntSignal outputSignal;
     outputSignal.maxEntY = accum.maxEntY * invWeight;
     outputSignal.CoCg = accum.CoCg * invWeight;
-    outputSignal.standardDeviation = statisticsWeightedMeanStandardDeviation(
-        accum.varianceEnergy.x, accum.varianceEnergy.y, invWeight, propagationCorrelation);
+    outputSignal.standardDeviation = sqrt(accum.monteCarloVariance * invWeight);
     outputSignal.virtualDistance = accum.virtualDistance
         / accum.virtualWeight;
     return denoiserSanitizeMaxEntSignal(outputSignal);

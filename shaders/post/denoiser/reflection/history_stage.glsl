@@ -26,11 +26,11 @@ void main() {
     MaxEntTemporalSignal temporal = maxentUnpackTemporal(
         texelFetch(colortex5, ivec2(pixel), 0));
     SpecularMaxEnt denoisedSignal;
-    float denoisedPropagatedStandardDeviation, reprojectionAlphaFloor;
+    float denoisedMonteCarloStandardDeviation, denoisedEffectiveSamples, reprojectionAlphaFloor;
     float currentTrackingHitDistance;
     if (!statisticsValidEffectiveSampleCount(temporal.historyEffectiveSamples)
             || !readMaxEntSpecularDenoisedReprojection(pixel,
-                denoisedSignal, denoisedPropagatedStandardDeviation, reprojectionAlphaFloor,
+                denoisedSignal, denoisedMonteCarloStandardDeviation, denoisedEffectiveSamples, reprojectionAlphaFloor,
                 currentTrackingHitDistance)) {
         reflectBuffer.data[addr(SPEC_N_HISTGEO, pixel)] = uvec4(0u);
         reflectBuffer.data[addr(SPEC_N_HISTLIGHT, pixel)] = uvec4(0u);

@@ -307,8 +307,8 @@ void readRefrHistLight(uvec2 xy, out vec3 color, out float vprojDist,
 
 // N1: primary surface geometry plus FP16 hit distance and roughness.
 // N2: the sole temporal MaxEnt6 history, rootMeanY2 and Kish N_eff.
-// N3: previous final denoised MaxEnt6 plus filtered standard deviation and a
-// negative layout stamp. It replaces the former secondary history in place.
+// N3: previous final denoised MaxEnt6 plus filtered MC standard deviation and
+// filtered-estimator Kish N_eff. It replaces the former secondary history in place.
 void writeMaxEntSpecularTemporalHistory(uvec2 xy, MaxEntSpecularHistory h) {
     if (!(h.historyEffectiveSamples >= 1.0) || h.historyEffectiveSamples > 65504.0
             || isnan(h.historyEffectiveSamples) || isinf(h.historyEffectiveSamples)) {
@@ -331,16 +331,18 @@ void writeMaxEntSpecularTemporalHistory(uvec2 xy, MaxEntSpecularHistory h) {
             h.historyEffectiveSamples));
 }
 
-void writeMaxEntSpecularDenoisedHistory(uvec2 xy, SpecularMaxEnt signal, float standardDeviation) {
+void writeMaxEntSpecularDenoisedHistory(uvec2 xy, SpecularMaxEnt signal, float monteCarloStandardDeviation,
+        float effectiveSamples) {
     signal = sanitizeSpecularMaxEnt(signal);
-    if (!(standardDeviation >= 0.0) || isnan(standardDeviation) || isinf(standardDeviation)) {
+    if (!(monteCarloStandardDeviation >= 0.0) || isnan(monteCarloStandardDeviation) || isinf(monteCarloStandardDeviation)
+            || !(effectiveSamples >= 1.0) || isnan(effectiveSamples) || isinf(effectiveSamples)) {
         reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)] = uvec4(0u, 0u, 0u,
             packHalf2x16(vec2(-1.0, 0.0)));
         return;
     }
     uvec3 denoised = packSpecularMaxEnt(signal);
     reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)] = uvec4(denoised,
-        packHalf2x16(vec2(min(standardDeviation, 65504.0), -2.0)));
+        packHalf2x16(min(vec2(monteCarloStandardDeviation, effectiveSamples), vec2(65504.0))));
 }
 
 void writeMaxEntSpecularDenoisedHistoryInvalid(uvec2 xy) {
@@ -351,18 +353,18 @@ void writeMaxEntSpecularDenoisedHistoryInvalid(uvec2 xy) {
 // Transient layout consumed by the final spatial pass:
 //   xy = reprojected previous denoised MaxEntY
 //   z  = reprojection alpha floor, current per-frame tracking hit distance
-//   w  = filtered standardDeviation, -2 layout stamp
+//   w  = filtered MC standardDeviation, filtered-estimator Kish N_eff
 //   N4.x = CoCg from that exact same denoised reprojection
 void writeMaxEntSpecularDenoisedReprojection(uvec2 xy, SpecularMaxEnt signal,
-        float standardDeviation, float trackingHitDistance, float alphaFloor) {
+        float monteCarloStandardDeviation, float effectiveSamples, float trackingHitDistance, float alphaFloor) {
     signal = sanitizeSpecularMaxEnt(signal);
     reflectBuffer.data[addr(SPEC_N_LIGHT, xy)] = uvec4(
         packHalf2x16(clamp(signal.maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(signal.maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(vec2(clamp(alphaFloor, 0.0, 1.0),
             clamp(trackingHitDistance, 0.0, 65504.0))),
-        packHalf2x16(vec2(clamp(standardDeviation, 0.0, 65504.0),
-            -2.0)));
+        packHalf2x16(vec2(clamp(monteCarloStandardDeviation, 0.0, 65504.0),
+            clamp(effectiveSamples, 1.0, 65504.0))));
     reflectBuffer.data[addr(SPEC_N_DENOISED_REPROJECTED_CHROMA, xy)] =
         uvec4(packHalf2x16(signal.CoCg), 0x43524742u, 0u, 0u);
 }
@@ -381,17 +383,18 @@ void writeMaxEntSpecularDenoisedReprojectionInvalid(uvec2 xy) {
 
 bool readMaxEntSpecularDenoisedReprojection(uvec2 xy,
         out SpecularMaxEnt signal,
-        out float standardDeviation, out float alphaFloor, out float hitDistance) {
+        out float monteCarloStandardDeviation, out float effectiveSamples, out float alphaFloor, out float hitDistance) {
     uvec4 words = reflectBuffer.data[addr(SPEC_N_LIGHT, xy)];
     uvec4 chromaWords = reflectBuffer.data[
         addr(SPEC_N_DENOISED_REPROJECTED_CHROMA, xy)];
     vec2 historyMeta = unpackHalf2x16(words.z);
     vec2 metadata = unpackHalf2x16(words.w);
-    standardDeviation = metadata.x;
+    monteCarloStandardDeviation = metadata.x;
+    effectiveSamples = metadata.y;
     alphaFloor = historyMeta.x;
     hitDistance = historyMeta.y;
-    bool valid = standardDeviation >= 0.0 && alphaFloor >= 0.0 && alphaFloor <= 1.0
-        && metadata.y == -2.0
+    bool valid = monteCarloStandardDeviation >= 0.0 && alphaFloor >= 0.0 && alphaFloor <= 1.0
+        && effectiveSamples >= 1.0
         && chromaWords.y == 0x43524742u
         && !any(isnan(historyMeta)) && !any(isinf(historyMeta))
         && !any(isnan(metadata)) && !any(isinf(metadata));
@@ -419,7 +422,7 @@ MaxEntSpecularHistory readMaxEntSpecularHistory(uvec2 xy) {
     h.signal = unpackSpecularMaxEnt(s.xyz);
     h.rootMeanY2 = sanitizeRootMeanSquareFP16(m2History.x);
     h.historyEffectiveSamples = max(m2History.y, 0.0);
-    bool denoisedValid = denoisedMetadata.x >= 0.0 && denoisedMetadata.y == -2.0
+    bool denoisedValid = denoisedMetadata.x >= 0.0 && denoisedMetadata.y >= 1.0
         && !any(isnan(denoisedMetadata)) && !any(isinf(denoisedMetadata));
     h.hitDistance = max(hitRoughness.x, 0.0);
     h.roughness = clamp(hitRoughness.y, 0.0, 1.0);

@@ -63,7 +63,7 @@
 #define RADIANCE_CACHE_RIS_GUIDING_KAPPA 0.75 // Concentration of the finite-width RIS proposal lobe. Higher values focus more tightly around the selected direction. [0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.95]
 
 // -- Shared MaxEnt temporal response (diffuse + specular) --
-#define MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE 0.001 // Moment-distance response strength. Higher values reject history more aggressively. [0.00001 0.000025 0.00005 0.0001 0.00025 0.0005 0.001 0.0025 0.005 0.01 0.025 0.05 0.1]
+#define MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE 0.01 // Moment-distance response strength. Higher values reject history more aggressively. [0.00001 0.000025 0.00005 0.0001 0.00025 0.0005 0.001 0.0025 0.005 0.01 0.025 0.05 0.1]
 
 // -- MaxEnt diffuse temporal accumulation --
 #define MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE 1.0 // Reprojection footprint depth tolerance. [0.25 0.5 0.75 1.0 1.5 2.0 3.0 4.0]
@@ -78,8 +78,8 @@
 
 // -- Shared MaxEnt variance preparation (diffuse + specular) --
 #define MAXENT_VARIANCE_KERNEL_SIGMA 1.0 // Gaussian kernel sigma (pixels) for short-history spatial variance pooling. Higher = wider support. [0.5 0.75 1.0 1.25 1.5 2.0 2.5]
-#define MAXENT_VARIANCE_HISTORY_BEGIN 2.0 // N_eff at which spatial→temporal MC observation-variance transition begins. [1.0 2.0 4.0 6.0 8.0]
-#define MAXENT_VARIANCE_HISTORY_END 4.0 // N_eff at which temporal MC observation variance becomes fully trusted. [4.0 6.0 8.0 12.0 16.0 24.0 32.0]
+#define MAXENT_VARIANCE_SPATIAL_ONLY_SAMPLES 1.0 // Effective frames forced to use spatially reconstructed temporal-moment MC variance. [1.0 2.0 4.0 6.0 8.0 12.0 16.0 24.0 32.0]
+#define MAXENT_VARIANCE_TRANSITION_SAMPLES 1.0 // Additional effective frames used to transition from spatial to temporal MC variance. [1.0 2.0 4.0 6.0 8.0 12.0 16.0 24.0 32.0]
 
 // -- Unified MaxEnt spatial filter --
 #define MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE 0.1 // Relative projected plane-depth tolerance, including MaxEnt virtual-image planes. [0.005 0.01 0.02 0.03 0.04 0.05 0.06 0.07 0.08 0.09 0.1 0.2 0.3 0.4 0.5]
@@ -110,7 +110,7 @@
 #define DEBUG_RT_FORCE_GEOMETRY_NORMAL 0 // Use face-forward geometry normals for all RT material evaluations and bypass RT POM. Raster G-buffer materials are unchanged. [0 1]
 #endif
 #ifndef DEBUG_VIEW
-#define DEBUG_VIEW 0 // Categorized debug output mode. IDs are declared in /lib/debug/view_ids.glsl. [0 1 2 3 4 5 6 7 10 11 12 13 20 21 22 23 24 30 31 32 33 34 35 36 37 40 41 50 51 52 53 54 55 60 61 62]
+#define DEBUG_VIEW 0 // Categorized debug output mode. IDs are declared in /lib/debug/view_ids.glsl. [0 1 2 3 4 5 6 7 10 11 12 13 20 21 22 23 24 25 30 31 32 33 34 35 36 37 38 40 41 50 51 52 53 54 55 60 61 62]
 #endif
 
 /*

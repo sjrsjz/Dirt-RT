@@ -39,17 +39,17 @@ uniform vec2 resolution;
 
 // Reprojection footprints.
 
-struct TemporalFootprintFast {
+struct TemporalFootprint {
     vec3 origin;
     vec3 geometryNormal;
+    vec3 tangent;
+    vec3 bitangent;
+    vec2 plane0;
+    vec2 plane1;
+    vec2 plane2;
+    vec2 plane3;
     float depthHalfExtent;
-};
-
-struct TemporalJacobianKernel {
-    mat2 currentFromPrevious;
-    mat2 geometryCurrentFromPrevious;
-    vec2 previousExtent;
-    float currentRadius;
+    float planeEdgeEpsilon;
 };
 
 vec3 prevScreenPos;
@@ -75,26 +75,7 @@ void unpackCurrentLight(out MaxEntEncoding maxEnt, out float meanY2) {
 
 // Footprint geometry.
 
-bool buildTemporalFootprintFast(vec3 currentPos, vec3 surfaceNormal,
-    vec3 camDelta, out TemporalFootprintFast fp) {
-    float normalLengthSquared = dot(surfaceNormal, surfaceNormal);
-    if (normalLengthSquared < 1e-8) return false;
-
-    fp.geometryNormal = surfaceNormal * inversesqrt(normalLengthSquared);
-    fp.origin = currentPos + camDelta;
-
-    float positionLengthSquared = dot(currentPos, currentPos);
-    float positionLength = sqrt(max(positionLengthSquared, 1e-8));
-    float noV = abs(dot(currentPos, fp.geometryNormal)) / positionLength;
-    float pixelWorldSize = max(positionLength / max(float(resolution_global.y), 1.0), 1e-4);
-
-    fp.depthHalfExtent = max(
-            4.0 * MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS *
-                pixelWorldSize * MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE / max(noV, 0.05),
-            1e-5
-        );
-    return true;
-}
+float diffuseTemporalCross2(vec2 a, vec2 b) { return a.x * b.y - a.y * b.x; }
 
 vec3 diffuseTemporalPrimaryRay(vec2 pixel) {
     vec2 safeResolution = max(vec2(resolution_global), vec2(1.0));
@@ -104,8 +85,7 @@ vec3 diffuseTemporalPrimaryRay(vec2 pixel) {
     return transpose(mat3(rtModelView)) * normalize(vec3(viewSlope, -1.0));
 }
 
-bool projectDiffuseTemporalPlaneSample(vec2 pixel, vec3 currentPos, vec3 surfaceNormal,
-        vec3 camDelta, out vec2 previousPixel) {
+bool diffuseTemporalPlanePoint(vec2 pixel, vec3 currentPos, vec3 surfaceNormal, vec3 camDelta, out vec3 historySpacePoint) {
     vec3 rayDirection = diffuseTemporalPrimaryRay(pixel);
     float denominator = dot(surfaceNormal, rayDirection);
     if (abs(denominator) < 1e-6) return false;
@@ -113,86 +93,72 @@ bool projectDiffuseTemporalPlaneSample(vec2 pixel, vec3 currentPos, vec3 surface
     float rayDistance = dot(surfaceNormal, currentPos) / denominator;
     if (!(rayDistance > 0.0) || isnan(rayDistance) || isinf(rayDistance)) return false;
 
-    vec4 clip = rtPrevViewProjection * vec4(rayDirection * rayDistance + camDelta, 1.0);
-    if (!(clip.w > 1e-7) || isinf(clip.w)) return false;
-
-    previousPixel = (clip.xy / clip.w * 0.5 + 0.5) * vec2(resolution_global);
-    return !any(isnan(previousPixel)) && !any(isinf(previousPixel));
+    historySpacePoint = rayDirection * rayDistance + camDelta;
+    return !any(isnan(historySpacePoint)) && !any(isinf(historySpacePoint));
 }
 
-bool regularizeDiffuseTemporalJacobian(mat2 inputJacobian, out mat2 outputJacobian) {
-    vec2 columnX = inputJacobian[0];
-    vec2 columnY = inputJacobian[1];
-    float gramXX = dot(columnX, columnX);
-    float gramXY = dot(columnX, columnY);
-    float gramYY = dot(columnY, columnY);
-    float discriminant = sqrt(max((gramXX - gramYY) * (gramXX - gramYY) + 4.0 * gramXY * gramXY, 0.0));
-    float eigenvalueMax = 0.5 * (gramXX + gramYY + discriminant);
-    float eigenvalueMin = 0.5 * (gramXX + gramYY - discriminant);
-    if (!(eigenvalueMax > 1e-8) || eigenvalueMin < -1e-5 || isnan(eigenvalueMax) || isinf(eigenvalueMax)) return false;
+bool buildDiffuseTemporalFootprint(vec3 currentPos, vec3 surfaceNormal, vec3 camDelta, out TemporalFootprint fp) {
+    float normalLengthSquared = dot(surfaceNormal, surfaceNormal);
+    if (normalLengthSquared < 1e-8) return false;
 
-    vec2 rightMax = abs(gramXY) > 1e-6 ? normalize(vec2(gramXY, eigenvalueMax - gramXX))
-        : (gramXX >= gramYY ? vec2(1.0, 0.0) : vec2(0.0, 1.0));
-    vec2 rightMin = vec2(-rightMax.y, rightMax.x);
-    float singularMax = sqrt(max(eigenvalueMax, 1e-8));
-    float singularMin = sqrt(max(eigenvalueMin, 1e-8));
-    vec2 leftMax = inputJacobian * rightMax / singularMax;
-    vec2 leftMin = inputJacobian * rightMin / singularMin;
-    if (dot(leftMax, leftMax) < 1e-8) return false;
-
-    leftMax = normalize(leftMax);
-    leftMin -= leftMax * dot(leftMax, leftMin);
-    if (dot(leftMin, leftMin) < 1e-8) {
-        float orientation = determinant(inputJacobian) < 0.0 ? -1.0 : 1.0;
-        leftMin = orientation * vec2(-leftMax.y, leftMax.x);
+    fp.geometryNormal = surfaceNormal * inversesqrt(normalLengthSquared);
+    if (fp.geometryNormal.z < -0.999999) {
+        fp.tangent = vec3(0.0, -1.0, 0.0);
+        fp.bitangent = vec3(-1.0, 0.0, 0.0);
     } else {
-        leftMin = normalize(leftMin);
+        float a = 1.0 / (1.0 + fp.geometryNormal.z);
+        float c = -fp.geometryNormal.x * fp.geometryNormal.y * a;
+        fp.tangent = vec3(1.0 - fp.geometryNormal.x * fp.geometryNormal.x * a, c, -fp.geometryNormal.x);
+        fp.bitangent = vec3(c, 1.0 - fp.geometryNormal.y * fp.geometryNormal.y * a, -fp.geometryNormal.y);
     }
 
-    singularMax = clamp(singularMax, 1.0, MAXENT_DIFFUSE_TEMPORAL_MAX_JACOBIAN_STRETCH);
-    singularMin = clamp(singularMin, 1.0, MAXENT_DIFFUSE_TEMPORAL_MAX_JACOBIAN_STRETCH);
-    outputJacobian = mat2(leftMax * singularMax * rightMax.x + leftMin * singularMin * rightMin.x,
-        leftMax * singularMax * rightMax.y + leftMin * singularMin * rightMin.y);
-    return !any(isnan(outputJacobian[0])) && !any(isnan(outputJacobian[1]))
-        && !any(isinf(outputJacobian[0])) && !any(isinf(outputJacobian[1]));
-}
-
-bool buildDiffuseTemporalJacobianKernel(vec3 currentPos, vec3 surfaceNormal, vec3 camDelta,
-        out TemporalJacobianKernel kernel) {
+    float radius = max(float(MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS), 0.5);
     vec2 currentPixel = vec2(gl_GlobalInvocationID.xy);
-    vec2 previousLeft, previousRight, previousDown, previousUp;
-    if (!projectDiffuseTemporalPlaneSample(currentPixel - vec2(1.0, 0.0), currentPos, surfaceNormal, camDelta, previousLeft)) return false;
-    if (!projectDiffuseTemporalPlaneSample(currentPixel + vec2(1.0, 0.0), currentPos, surfaceNormal, camDelta, previousRight)) return false;
-    if (!projectDiffuseTemporalPlaneSample(currentPixel - vec2(0.0, 1.0), currentPos, surfaceNormal, camDelta, previousDown)) return false;
-    if (!projectDiffuseTemporalPlaneSample(currentPixel + vec2(0.0, 1.0), currentPos, surfaceNormal, camDelta, previousUp)) return false;
+    vec2 pixelMin = currentPixel - radius;
+    vec2 pixelMax = currentPixel + radius;
+    vec3 corner0, corner1, corner2, corner3;
+    if (!diffuseTemporalPlanePoint(vec2(pixelMin.x, pixelMin.y), currentPos, fp.geometryNormal, camDelta, corner0)) return false;
+    if (!diffuseTemporalPlanePoint(vec2(pixelMax.x, pixelMin.y), currentPos, fp.geometryNormal, camDelta, corner1)) return false;
+    if (!diffuseTemporalPlanePoint(vec2(pixelMax.x, pixelMax.y), currentPos, fp.geometryNormal, camDelta, corner2)) return false;
+    if (!diffuseTemporalPlanePoint(vec2(pixelMin.x, pixelMax.y), currentPos, fp.geometryNormal, camDelta, corner3)) return false;
 
-    mat2 exactPreviousFromCurrent = mat2(0.5 * (previousRight - previousLeft), 0.5 * (previousUp - previousDown));
-    float exactDeterminant = determinant(exactPreviousFromCurrent);
-    if (abs(exactDeterminant) < 1e-6 || isnan(exactDeterminant) || isinf(exactDeterminant)) return false;
+    fp.origin = currentPos + camDelta;
+    fp.plane0 = vec2(dot(corner0 - fp.origin, fp.tangent), dot(corner0 - fp.origin, fp.bitangent));
+    fp.plane1 = vec2(dot(corner1 - fp.origin, fp.tangent), dot(corner1 - fp.origin, fp.bitangent));
+    fp.plane2 = vec2(dot(corner2 - fp.origin, fp.tangent), dot(corner2 - fp.origin, fp.bitangent));
+    fp.plane3 = vec2(dot(corner3 - fp.origin, fp.tangent), dot(corner3 - fp.origin, fp.bitangent));
 
-    mat2 reconstructionPreviousFromCurrent;
-    if (!regularizeDiffuseTemporalJacobian(exactPreviousFromCurrent, reconstructionPreviousFromCurrent)) return false;
-
-    kernel.currentFromPrevious = inverse(reconstructionPreviousFromCurrent);
-    kernel.geometryCurrentFromPrevious = inverse(exactPreviousFromCurrent);
-    kernel.currentRadius = max(float(MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS), 1.0);
-    kernel.previousExtent = kernel.currentRadius * (abs(reconstructionPreviousFromCurrent[0]) + abs(reconstructionPreviousFromCurrent[1]));
-    return !any(isnan(kernel.previousExtent)) && !any(isinf(kernel.previousExtent));
+    float footprintDiameter = max(length(fp.plane2 - fp.plane0), length(fp.plane3 - fp.plane1));
+    fp.depthHalfExtent = footprintDiameter * MAXENT_DIFFUSE_TEMPORAL_DEPTH_SCALE;
+    fp.planeEdgeEpsilon = MAXENT_TEMPORAL_GEOMETRY_EPSILON * max(footprintDiameter, 1.0);
+    return true;
 }
 
-bool strictHistoryGeometryTestFast(vec3 historyPosition, TemporalFootprintFast fp,
-        vec2 expectedCurrentPixel, vec3 camDelta) {
+bool diffuseTemporalFootprintContains(vec3 historyPosition, TemporalFootprint fp) {
     vec3 historyDelta = historyPosition - fp.origin;
     if (abs(dot(historyDelta, fp.geometryNormal)) > fp.depthHalfExtent) return false;
 
-    vec3 historyCurrentSpace = historyPosition - camDelta;
-    vec4 clip = rtViewProjection * vec4(historyCurrentSpace, 1.0);
-    if (!(clip.w > 1e-7) || isinf(clip.w)) return false;
+    vec2 planePoint = vec2(dot(historyDelta, fp.tangent), dot(historyDelta, fp.bitangent));
+    float edge0 = diffuseTemporalCross2(fp.plane1 - fp.plane0, planePoint - fp.plane0);
+    float edge1 = diffuseTemporalCross2(fp.plane2 - fp.plane1, planePoint - fp.plane1);
+    float edge2 = diffuseTemporalCross2(fp.plane3 - fp.plane2, planePoint - fp.plane2);
+    float edge3 = diffuseTemporalCross2(fp.plane0 - fp.plane3, planePoint - fp.plane3);
+    float epsilon = fp.planeEdgeEpsilon;
+    bool positive = edge0 >= -epsilon && edge1 >= -epsilon && edge2 >= -epsilon && edge3 >= -epsilon;
+    bool negative = edge0 <= epsilon && edge1 <= epsilon && edge2 <= epsilon && edge3 <= epsilon;
+    return positive || negative;
+}
 
-    vec2 projectedPixel = (clip.xy / clip.w * 0.5 + 0.5) * vec2(resolution_global);
-    vec2 extent = vec2(MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS + MAXENT_TEMPORAL_GEOMETRY_EPSILON);
+float diffuseTemporalSurfaceSampleScale(vec3 historyPosition, TemporalFootprint fp) {
+    float previousDistanceSquared = dot(historyPosition, historyPosition);
+    vec3 historyCurrentSpace = historyPosition - cameraDelta;
+    float currentDistanceSquared = dot(historyCurrentSpace, historyCurrentSpace);
+    float centerDistanceSquared = dot(currentPosition, currentPosition);
+    if (!(previousDistanceSquared > 1e-8) || !(currentDistanceSquared > 1e-8) || !(centerDistanceSquared > 1e-8)) return 0.0;
 
-    return all(lessThanEqual(abs(projectedPixel - expectedCurrentPixel), extent));
+    float centerNoV = dot(currentPosition * inversesqrt(centerDistanceSquared), fp.geometryNormal);
+    float historyNoV = dot(historyCurrentSpace * inversesqrt(currentDistanceSquared), fp.geometryNormal);
+    return clamp(currentDistanceSquared * abs(historyNoV) / max(previousDistanceSquared * abs(centerNoV), 1e-3), 0.0, 1.0);
 }
 
 // Temporal proposal construction.
@@ -203,17 +169,15 @@ void resetToCurrentSample() {
 }
 
 void publishDenoisedReprojection(vec4 weightedMaxEntY, vec2 weightedCoCg,
-    float squaredWeightVarianceSum, float weightedStdDevSum,
-    float acceptedWeight, float validCoverage) {
+        float weightedMonteCarloVariance, float effectiveSamples, float acceptedWeight, float validCoverage) {
     float inverseWeight = 1.0 / acceptedWeight;
-    float standardDeviation = statisticsWeightedMeanStandardDeviation(
-        squaredWeightVarianceSum, weightedStdDevSum, inverseWeight,
-        MAXENT_TEMPORAL_REPROJECTION_CORRELATION);
+    float standardDeviation = sqrt(weightedMonteCarloVariance * inverseWeight);
     writeDiffuseDenoisedReprojection(
         gl_GlobalInvocationID.xy,
         weightedMaxEntY * inverseWeight,
         weightedCoCg * inverseWeight,
         standardDeviation,
+        effectiveSamples,
         validCoverage
     );
 }
@@ -227,8 +191,8 @@ void buildDiffuseTemporalProposal() {
         return;
     }
 
-    TemporalFootprintFast fp;
-    if (!buildTemporalFootprintFast(currentPosition, geometryNormal, cameraDelta, fp)) {
+    TemporalFootprint fp;
+    if (!buildDiffuseTemporalFootprint(currentPosition, geometryNormal, cameraDelta, fp)) {
         writeDiffuseDenoisedReprojectionInvalid(gl_GlobalInvocationID.xy);
         resetToCurrentSample();
         imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), uvec4(0u));
@@ -236,18 +200,8 @@ void buildDiffuseTemporalProposal() {
     }
 
     vec2 prevCoord = prevScreenPos.xy * vec2(resolution_global);
-    TemporalJacobianKernel kernel;
-    if (!buildDiffuseTemporalJacobianKernel(currentPosition, fp.geometryNormal, cameraDelta, kernel)) {
-        kernel.currentFromPrevious = mat2(1.0);
-        kernel.geometryCurrentFromPrevious = mat2(1.0);
-        kernel.currentRadius = max(float(MAXENT_DIFFUSE_TEMPORAL_REPROJECTION_RADIUS), 1.0);
-        kernel.previousExtent = vec2(kernel.currentRadius);
-    }
-
-    // Pull the separable tent kernel through the local tangent-plane Jacobian. It remains ordinary bilinear
-    // reconstruction when the mapping is one-to-one, and grows only when one current pixel covers more history.
-    ivec2 kernelMin = ivec2(floor(prevCoord - kernel.previousExtent)) + ivec2(1);
-    ivec2 kernelMax = ivec2(ceil(prevCoord + kernel.previousExtent)) - ivec2(1);
+    ivec2 prevBase = ivec2(floor(prevCoord));
+    vec2 prevFraction = fract(prevCoord);
 
     MaxEntEncoding accumMaxEnt = init_maxent();
     float totalKernelWeight = 0.0;
@@ -256,69 +210,66 @@ void buildDiffuseTemporalProposal() {
     float weightedMeanY2 = 0.0;
     vec4 denoisedMaxEntY = vec4(0.0);
     vec2 denoisedCoCg = vec2(0.0);
-    float denoisedSquaredWeightVariance = 0.0;
-    float denoisedWeightedStdDev = 0.0;
+    float denoisedWeightedMonteCarloVariance = 0.0;
+    float denoisedWeightOverRootSamples = 0.0;
 
-    for (int sampleY = kernelMin.y; sampleY <= kernelMax.y; sampleY++) {
-        for (int sampleX = kernelMin.x; sampleX <= kernelMax.x; sampleX++) {
-            ivec2 sampleTexel = ivec2(sampleX, sampleY);
-            vec2 previousOffset = vec2(sampleTexel) - prevCoord;
-            vec2 currentOffset = kernel.currentFromPrevious * previousOffset;
-            vec2 axisWeight = max(vec2(1.0) - abs(currentOffset) / kernel.currentRadius, vec2(0.0));
-            float reconstructionWeight = axisWeight.x * axisWeight.y;
-            if (reconstructionWeight <= 0.0) continue;
-            totalKernelWeight += reconstructionWeight;
+    for (int tapIndex = 0; tapIndex < 4; tapIndex++) {
+        ivec2 sampleTexel = prevBase + ivec2(tapIndex & 1, tapIndex >> 1);
+        float weightX = (tapIndex & 1) == 0 ? 1.0 - prevFraction.x : prevFraction.x;
+        float weightY = (tapIndex & 2) == 0 ? 1.0 - prevFraction.y : prevFraction.y;
+        float reconstructionWeight = weightX * weightY;
+        totalKernelWeight += reconstructionWeight;
 
-            if (any(lessThan(sampleTexel, ivec2(0))) || any(greaterThanEqual(sampleTexel, ivec2(resolution_global)))) continue;
+        if (any(lessThan(sampleTexel, ivec2(0))) || any(greaterThanEqual(sampleTexel, ivec2(resolution_global)))) continue;
 
-            uvec2 historyTexel = uvec2(sampleTexel);
-            uvec4 packedHistory = diffuseBuffer.data[addr(DIF_N_HIST, historyTexel)];
-            vec2 historyMeta = unpackHalf2x16(packedHistory.w);
+        uvec2 historyTexel = uvec2(sampleTexel);
+        uvec4 packedHistory = diffuseBuffer.data[addr(DIF_N_HIST, historyTexel)];
+        vec2 historyMeta = unpackHalf2x16(packedHistory.w);
 
-            if (!statisticsValidEffectiveSampleCount(historyMeta.x) || historyMeta.y < 0.0
-                    || isnan(historyMeta.y) || isinf(historyMeta.y)) continue;
+        if (!statisticsValidEffectiveSampleCount(historyMeta.x) || historyMeta.y < 0.0
+                || isnan(historyMeta.y) || isinf(historyMeta.y)) continue;
 
-            uvec4 packedGeometry = readDiffuseHistGeoRaw(historyTexel);
+        uvec4 packedGeometry = readDiffuseHistGeoRaw(historyTexel);
 
-            float geometryHistoryWeight;
-            if (!unpackDiffusePreviousHistoryWeight(packedGeometry.w, geometryHistoryWeight)) continue;
+        float geometryHistoryWeight;
+        if (!unpackDiffusePreviousHistoryWeight(packedGeometry.w, geometryHistoryWeight)) continue;
 
-            float historyDistance = uintBitsToFloat(packedGeometry.x);
-            vec3 historyPosition = decodeDiffuseHistoryNormalU(packedGeometry.y) * historyDistance;
+        float historyDistance = uintBitsToFloat(packedGeometry.x);
+        vec3 historyPosition = decodeDiffuseHistoryNormalU(packedGeometry.y) * historyDistance;
+        if (!diffuseTemporalFootprintContains(historyPosition, fp)) continue;
 
-            vec2 geometryCurrentOffset = kernel.geometryCurrentFromPrevious * previousOffset;
-            vec2 expectedCurrentPixel = vec2(gl_GlobalInvocationID.xy) + geometryCurrentOffset;
-            if (!strictHistoryGeometryTestFast(historyPosition, fp, expectedCurrentPixel, cameraDelta)) continue;
+        uvec4 denoisedWords = readDiffuseDenoisedPreviousRaw(historyTexel);
+        if (!denoiserSpatialSignalWordsValid(denoisedWords)) continue;
 
-            vec3 historyNormal = decodeDiffuseHistoryNormalU(packedGeometry.z);
-            float normalWeight = max(dot(fp.geometryNormal, historyNormal), 0.0);
-            if (normalWeight <= 0.0) continue;
+        vec2 denoisedMetadata = unpackHalf2x16(denoisedWords.w);
+        float tapDenoisedEffectiveSamples = -denoisedMetadata.y;
+        if (!statisticsValidEffectiveSampleCount(tapDenoisedEffectiveSamples)) continue;
 
-            uvec4 denoisedWords = readDiffuseDenoisedPreviousRaw(historyTexel);
-            if (!denoiserSpatialSignalWordsValid(denoisedWords)) continue;
+        float tapSamples = historyMeta.x;
+        // A surviving estimator still owns one Kish sample; the Jacobian discards only its accumulated excess.
+        float surfaceSampleScale = diffuseTemporalSurfaceSampleScale(historyPosition, fp);
+        float correctedTapSamples = max(tapSamples * surfaceSampleScale, 1.0);
+        float correctedDenoisedTapSamples = max(tapDenoisedEffectiveSamples * surfaceSampleScale, 1.0);
+        float tapWeight = reconstructionWeight;
 
-            float tapSamples = historyMeta.x;
-            float tapWeight = reconstructionWeight * normalWeight;
+        MaxEntEncoding tapMaxEnt;
+        tapMaxEnt.maxEntY = vec4(unpackHalf2x16(packedHistory.x), unpackHalf2x16(packedHistory.y));
+        tapMaxEnt.CoCg = unpackHalf2x16(packedHistory.z);
+        if (any(isnan(tapMaxEnt.maxEntY)) || any(isinf(tapMaxEnt.maxEntY))
+                || any(isnan(tapMaxEnt.CoCg)) || any(isinf(tapMaxEnt.CoCg))) continue;
 
-            MaxEntEncoding tapMaxEnt;
-            tapMaxEnt.maxEntY = vec4(unpackHalf2x16(packedHistory.x), unpackHalf2x16(packedHistory.y));
-            tapMaxEnt.CoCg = unpackHalf2x16(packedHistory.z);
-            if (any(isnan(tapMaxEnt.maxEntY)) || any(isinf(tapMaxEnt.maxEntY))
-                    || any(isnan(tapMaxEnt.CoCg)) || any(isinf(tapMaxEnt.CoCg))) continue;
+        vec4 tapDenoisedMaxEntY = vec4(unpackHalf2x16(denoisedWords.x), unpackHalf2x16(denoisedWords.y));
+        float tapDenoisedStdDev = denoisedMetadata.x;
+        denoisedMaxEntY += tapWeight * tapDenoisedMaxEntY;
+        denoisedCoCg += tapWeight * unpackHalf2x16(denoisedWords.z);
+        denoisedWeightedMonteCarloVariance += tapWeight * tapDenoisedStdDev * tapDenoisedStdDev;
+        denoisedWeightOverRootSamples += tapWeight * inversesqrt(correctedDenoisedTapSamples);
 
-            vec4 tapDenoisedMaxEntY = vec4(unpackHalf2x16(denoisedWords.x), unpackHalf2x16(denoisedWords.y));
-            float tapDenoisedStdDev = unpackHalf2x16(denoisedWords.w).x;
-            denoisedMaxEntY += tapWeight * tapDenoisedMaxEntY;
-            denoisedCoCg += tapWeight * unpackHalf2x16(denoisedWords.z);
-            denoisedSquaredWeightVariance += tapWeight * tapWeight * tapDenoisedStdDev * tapDenoisedStdDev;
-            denoisedWeightedStdDev += tapWeight * tapDenoisedStdDev;
-
-            accumulate_maxent(accumMaxEnt, tapMaxEnt, tapWeight);
-            float tapMeanY2 = historyMeta.y * historyMeta.y;
-            weightedMeanY2 += tapWeight * tapMeanY2;
-            validKernelWeight += tapWeight;
-            sumWeightOverRootSamples += tapWeight * inversesqrt(tapSamples);
-        }
+        accumulate_maxent(accumMaxEnt, tapMaxEnt, tapWeight);
+        float tapMeanY2 = historyMeta.y * historyMeta.y;
+        weightedMeanY2 += tapWeight * tapMeanY2;
+        validKernelWeight += tapWeight;
+        sumWeightOverRootSamples += tapWeight * inversesqrt(correctedTapSamples);
     }
 
     if (validKernelWeight < 1e-5) {
@@ -334,16 +285,19 @@ void buildDiffuseTemporalProposal() {
 
     float historyEffectiveSamples = statisticsReconstructedEffectiveSampleCount(
         validKernelWeight, sumWeightOverRootSamples);
+    float denoisedHistoryEffectiveSamples = statisticsReconstructedEffectiveSampleCount(
+        validKernelWeight, denoisedWeightOverRootSamples);
 
-    if (!statisticsValidEffectiveSampleCount(historyEffectiveSamples)) {
+    if (!statisticsValidEffectiveSampleCount(historyEffectiveSamples)
+            || !statisticsValidEffectiveSampleCount(denoisedHistoryEffectiveSamples)) {
         writeDiffuseDenoisedReprojectionInvalid(gl_GlobalInvocationID.xy);
         resetToCurrentSample();
         imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), uvec4(0u));
         return;
     }
 
-    // E[R u], E[R], CoCg and E[R^2] are all linear moments. Reprojection applies the same normalized Jacobian
-    // weights to each of them; only Kish N_eff has a separate nonlinear reconstruction rule.
+    // The surface-area Jacobian changes only each tap's N_eff before Kish reconstruction. E[R u], E[R], CoCg,
+    // E[R^2] and filtered MC variance use only the normalized bilinear weights.
     float histMeanY2 = weightedMeanY2 * inverseKernelWeight;
 
     MaxEntEncoding currentMaxEnt;
@@ -353,8 +307,8 @@ void buildDiffuseTemporalProposal() {
     publishDenoisedReprojection(
         denoisedMaxEntY,
         denoisedCoCg,
-        denoisedSquaredWeightVariance,
-        denoisedWeightedStdDev,
+        denoisedWeightedMonteCarloVariance,
+        denoisedHistoryEffectiveSamples,
         validKernelWeight,
         validFootprintCoverage
     );

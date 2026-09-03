@@ -98,19 +98,6 @@ float statisticsKishUpdateEffectiveSampleCount(float historyEffectiveSamples,
     return 1.0 / max(squaredWeightSum, 1e-12);
 }
 
-// Trace-variance closure when only two scalar standard deviations and one
-// correlation coefficient are retained.
-float statisticsDifferenceVarianceFromStandardDeviations(
-        float standardDeviationA, float standardDeviationB,
-        float correlation) {
-    standardDeviationA = max(standardDeviationA, 0.0);
-    standardDeviationB = max(standardDeviationB, 0.0);
-    float p = clamp(correlation, -1.0, 1.0);
-    return max(standardDeviationA * standardDeviationA
-        + standardDeviationB * standardDeviationB
-        - 2.0 * p * standardDeviationA * standardDeviationB, 0.0);
-}
-
 // Minimum-variance current weight V_H/(V_H+V_C) for two independent unbiased
 // estimators. This is exposed only as a diagnostic; temporal response uses its
 // separately tuned moment-distance function.
@@ -122,37 +109,6 @@ float statisticsMinimumVarianceIndependentCurrentWeight(float historyVariance, f
             || isinf(denominator))
         return 0.0;
     return clamp(historyVariance / denominator, 0.0, 1.0);
-}
-
-float statisticsIndependentBlendVariance(float historyVariance,
-        float currentVariance, float currentWeight) {
-    currentWeight = clamp(currentWeight, 0.0, 1.0);
-    float historyWeight = 1.0 - currentWeight;
-    return max(historyWeight * historyWeight
-            * max(historyVariance, 0.0)
-        + currentWeight * currentWeight
-            * max(currentVariance, 0.0), 0.0);
-}
-
-// Constant-correlation expansion for a normalized weighted mean. Callers
-// accumulate Q=sum(w_i^2 V_i), S=sum(w_i sqrt(V_i)), and W=sum(w_i).
-float statisticsWeightedMeanVariance(float squaredWeightVarianceSum,
-        float weightedStandardDeviationSum, float inverseWeightSum,
-        float correlation) {
-    float p = clamp(correlation, -1.0, 1.0);
-    float numerator = (1.0 - p) * max(squaredWeightVarianceSum, 0.0)
-        + p * weightedStandardDeviationSum
-            * weightedStandardDeviationSum;
-    return max(numerator * inverseWeightSum * inverseWeightSum, 0.0);
-}
-
-float statisticsWeightedMeanStandardDeviation(
-        float squaredWeightVarianceSum,
-        float weightedStandardDeviationSum, float inverseWeightSum,
-        float correlation) {
-    return sqrt(statisticsWeightedMeanVariance(
-        squaredWeightVarianceSum, weightedStandardDeviationSum,
-        inverseWeightSum, correlation));
 }
 
 float statisticsBiasedCentralSecondMoment(float expectedSquaredNorm,

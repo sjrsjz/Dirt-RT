@@ -20,149 +20,15 @@ uniform usampler2D colortex6;
 
 #include "/lib/lighting/denoiser/scratch_io.glsl"
 
-uvec4 maxentTemporalRobustLoadSignalWords(ivec2 pixel) {
-    return denoiserScratchLoadA(pixel);
-}
-
-ivec2 maxentTemporalRobustImageSize() { return textureSize(colortex5, 0); }
-uvec4 maxentTemporalRobustLoadGeometryWords(ivec2 pixel) { return readPrimaryGeometryWords(uvec2(pixel)); }
-
-#include "/lib/lighting/denoiser/robust_mean.glsl"
-
-vec3 maxentSpecularNeighborhoodVirtualPosition(
-        vec3 primaryRay, float virtualDistance) {
-    return primaryRay * virtualDistance;
-}
-
-float maxentSpecularNeighborhoodVirtualRejectionScale(
-        float ggxAlpha, float virtualDistance) {
-    if (virtualDistance <= 0.0) return 0.0;
-    return (1.0 - ggxAlpha) / max(
-        float(MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE) * virtualDistance,
-        1e-5);
-}
-
-vec3 maxentSpecularNeighborhoodVirtualNormal(
-        vec3 tangentX, vec3 tangentY, vec3 fallback) {
-    return denoiserSpatialSafeDirection(cross(tangentX, tangentY), fallback);
-}
-
-float maxentSpecularNeighborhoodVirtualPlaneExponent(
-        vec3 centerPosition, vec3 centerNormal, vec3 samplePrimaryRay,
-        float sampleVirtualDistance, float rejectionScale) {
-    vec3 samplePosition = maxentSpecularNeighborhoodVirtualPosition(
-        samplePrimaryRay, sampleVirtualDistance);
-    return rejectionScale
-        * abs(dot(centerNormal, samplePosition - centerPosition));
-}
-
-bool maxentSpecularRobustCurrentSignal(ivec2 offset,
-        out DenoiserMaxEntSignal signal) {
-    signal = denoiserEmptyMaxEntSignal();
-    uvec4 words = maxentTemporalRobustTileSignalWords(offset);
-    if (!denoiserSpatialSignalWordsValid(words)) return false;
-    signal = denoiserUnpackMaxEntSignal(words);
-    return true;
-}
-
-vec3 maxentSpecularFinalVirtualPosition(ivec2 centerPixel, ivec2 offset,
-        vec3 fallback) {
-    DenoiserMaxEntSignal signal;
-    if (!maxentSpecularRobustCurrentSignal(offset, signal))
-        return fallback;
-    return maxentSpecularNeighborhoodVirtualPosition(
-        reconstructPrimaryRay(uvec2(centerPixel + offset)),
-        signal.virtualDistance);
-}
-
-MaxEntTemporalRobustEstimate maxentSpecularCurrentRobustMomentEstimate(
-        ivec2 centerPixel,
-        DenoiserMaxEntSignal centerSignal, MaxEntGeometry centerGeometry) {
-    uint acceptedMask = maxentTemporalRobustNeighborhoodBit(ivec2(0));
-    int sampleCount = 1;
-    vec4 momentSum = centerSignal.maxEntY;
-
-    ivec2 imageSize = textureSize(colortex5, 0);
-    vec3 centerPrimaryRay = reconstructPrimaryRay(uvec2(centerPixel));
-    float centerPlaneOffset = centerGeometry.distance
-        * dot(centerGeometry.normal, centerPrimaryRay);
-    float surfaceRejectionScale = denoiserSpatialDistanceRejectionScale(
-        centerGeometry.distance, float(imageSize.y));
-
-    vec3 centerVirtualPosition = maxentSpecularNeighborhoodVirtualPosition(
-        centerPrimaryRay, centerSignal.virtualDistance);
-    vec3 virtualTangentX = -maxentSpecularFinalVirtualPosition(
-        centerPixel, ivec2(-1, 0), centerVirtualPosition);
-    virtualTangentX += maxentSpecularFinalVirtualPosition(
-        centerPixel, ivec2(1, 0), centerVirtualPosition);
-    vec3 virtualTangentY = -maxentSpecularFinalVirtualPosition(
-        centerPixel, ivec2(0, -1), centerVirtualPosition);
-    virtualTangentY += maxentSpecularFinalVirtualPosition(
-        centerPixel, ivec2(0, 1), centerVirtualPosition);
-    vec3 centerVirtualNormal = maxentSpecularNeighborhoodVirtualNormal(
-        virtualTangentX, virtualTangentY, centerPrimaryRay);
-    float ggxAlpha = centerGeometry.roughness * centerGeometry.roughness;
-    float virtualRejectionScale =
-        maxentSpecularNeighborhoodVirtualRejectionScale(
-        ggxAlpha, centerSignal.virtualDistance);
-
-    for (int offsetY = -MAXENT_TEMPORAL_ROBUST_RADIUS;
-            offsetY <= MAXENT_TEMPORAL_ROBUST_RADIUS; ++offsetY) {
-        for (int offsetX = -MAXENT_TEMPORAL_ROBUST_RADIUS;
-                offsetX <= MAXENT_TEMPORAL_ROBUST_RADIUS; ++offsetX) {
-            if (offsetX == 0 && offsetY == 0) continue;
-            ivec2 offset = ivec2(offsetX, offsetY);
-            ivec2 samplePixel = centerPixel + offset;
-            DenoiserMaxEntSignal sampleSignal;
-            if (!maxentSpecularRobustCurrentSignal(offset, sampleSignal))
-                continue;
-
-            MaxEntGeometry sampleGeometry = maxentDecodeGeometry(
-                maxentTemporalRobustTileGeometryWords(offset),
-                uvec2(samplePixel));
-            if (!sampleGeometry.valid
-                    || dot(centerGeometry.normal, sampleGeometry.normal) <= 0.0)
-                continue;
-
-            vec3 samplePrimaryRay = reconstructPrimaryRay(
-                uvec2(samplePixel));
-            float surfaceExponent = denoiserSpatialAxialDistanceExponent(
-                centerPlaneOffset, centerGeometry.normal, samplePrimaryRay,
-                sampleGeometry.distance, surfaceRejectionScale);
-            if (surfaceExponent
-                    > MAXENT_TEMPORAL_ROBUST_MAX_PLANE_EXPONENT)
-                continue;
-            float virtualExponent =
-                maxentSpecularNeighborhoodVirtualPlaneExponent(
-                    centerVirtualPosition, centerVirtualNormal, samplePrimaryRay,
-                    sampleSignal.virtualDistance, virtualRejectionScale);
-            if (virtualExponent
-                    > MAXENT_TEMPORAL_ROBUST_MAX_PLANE_EXPONENT)
-                continue;
-
-            acceptedMask |= maxentTemporalRobustNeighborhoodBit(offset);
-            momentSum += sampleSignal.maxEntY;
-            ++sampleCount;
-        }
-    }
-
-    return maxentTemporalGaussianReweightedTileEstimate(
-        acceptedMask, sampleCount, momentSum, centerSignal.maxEntY,
-        centerSignal.standardDeviation);
-}
-
 void main() {
-    maxentTemporalRobustLoadSharedTile();
     uvec2 pixel = gl_GlobalInvocationID.xy;
     if (any(greaterThanEqual(pixel, resolution_global))) return;
 
     uvec4 currentSignalWords = texelFetch(colortex5, ivec2(pixel), 0);
     DenoiserMaxEntSignal currentSignal =
         denoiserUnpackMaxEntSignal(currentSignalWords);
-    DenoiserMaxEntSignal independentCurrent =
-        denoiserEmptyMaxEntSignal();
     MaxEntGeometry currentGeometry = maxentDecodeGeometry(
-        maxentTemporalRobustTileGeometryWords(ivec2(0)), pixel);
+        readPrimaryGeometryWords(pixel), pixel);
     if (!currentGeometry.valid
             || !denoiserSpatialSignalWordsValid(currentSignalWords)) {
         debugWriteSpecularNoiseOnlyCurrentWeight(pixel, -1.0);
@@ -181,31 +47,29 @@ void main() {
 
     float noiseOnlyCurrentWeight = -1.0;
     SpecularMaxEnt historyDenoisedSignal;
-    float historyPropagatedStandardDeviation, reprojectionAlphaFloor, currentTrackingHitDistance;
+    float historyMonteCarloStandardDeviation, historyDenoisedEffectiveSamples;
+    float reprojectionAlphaFloor, currentTrackingHitDistance;
     bool denoisedReprojectionValid = readMaxEntSpecularDenoisedReprojection(pixel, historyDenoisedSignal,
-        historyPropagatedStandardDeviation, reprojectionAlphaFloor, currentTrackingHitDistance);
+        historyMonteCarloStandardDeviation, historyDenoisedEffectiveSamples,
+        reprojectionAlphaFloor, currentTrackingHitDistance);
     bool hasHistory = statisticsValidEffectiveSampleCount(reprojected.historyEffectiveSamples)
         && denoisedReprojectionValid;
 
     float currentAlpha = 1.0;
-    float proposalAlpha = 1.0;
-    bool independentCurrentValid = false;
+    uvec4 independentCurrentWords = denoiserScratchLoadA(ivec2(pixel));
+    float independentCurrentEffectiveSamples = denoiserScratchLoadEffectiveSamplesA(ivec2(pixel));
+    bool independentCurrentValid = denoiserSpatialSignalWordsValid(independentCurrentWords)
+        && statisticsValidEffectiveSampleCount(independentCurrentEffectiveSamples);
+    DenoiserMaxEntSignal independentCurrent = independentCurrentValid
+        ? denoiserUnpackMaxEntSignal(independentCurrentWords) : denoiserEmptyMaxEntSignal();
     if (hasHistory) {
-        proposalAlpha = clamp(
-            float(MAXENT_TEMPORAL_FIXED_ALPHA), 0.0, 1.0);
-        currentAlpha = max(proposalAlpha, reprojectionAlphaFloor);
-        independentCurrentValid = maxentSpecularRobustCurrentSignal(
-            ivec2(0), independentCurrent);
+        currentAlpha = max(clamp(float(MAXENT_TEMPORAL_FIXED_ALPHA), 0.0, 1.0), reprojectionAlphaFloor);
         if (independentCurrentValid) {
-            MaxEntTemporalRobustEstimate robustCurrent =
-                maxentSpecularCurrentRobustMomentEstimate(
-                    ivec2(pixel), independentCurrent, currentGeometry);
             float responseAlpha = maxentTemporalResponseAlpha(
-                reprojectionAlphaFloor, robustCurrent.moment,
-                robustCurrent.standardDeviation * robustCurrent.standardDeviation,
-                historyDenoisedSignal.maxEntY, historyPropagatedStandardDeviation,
-                reprojected.historyEffectiveSamples,
-                noiseOnlyCurrentWeight);
+                reprojectionAlphaFloor, independentCurrent.maxEntY,
+                independentCurrent.standardDeviation, independentCurrentEffectiveSamples,
+                historyDenoisedSignal.maxEntY, historyMonteCarloStandardDeviation,
+                historyDenoisedEffectiveSamples, reprojected.historyEffectiveSamples, noiseOnlyCurrentWeight);
             currentAlpha = responseAlpha;
         }
     }
@@ -237,21 +101,28 @@ void main() {
         committed.hitDistance, 1.0 - currentAlpha);
 
     SpecularMaxEnt filtered;
-    float resolvedStandardDeviation = sqrt(maxentTemporalCurrentVariance(currentSignal.standardDeviation));
-    if (hasHistory && independentCurrentValid) {
-        float correctionCurrentWeight = clamp((currentAlpha - proposalAlpha)
-            / max(1.0 - proposalAlpha, 1e-6), 0.0, 1.0);
-        filtered.maxEntY = mix(currentSignal.maxEntY,
-            independentCurrent.maxEntY, correctionCurrentWeight);
-        filtered.CoCg = mix(currentSignal.CoCg,
-            independentCurrent.CoCg, correctionCurrentWeight);
-        resolvedStandardDeviation = maxentTemporalProposalCorrectedStandardDeviation(
-            currentSignal.standardDeviation, independentCurrent.standardDeviation, correctionCurrentWeight);
+    float resolvedStandardDeviation = currentSignal.standardDeviation;
+    float resolvedDenoisedEffectiveSamples = hasHistory ? historyDenoisedEffectiveSamples : max(reprojected.historyEffectiveSamples, 1.0);
+    if (independentCurrentValid) {
+        // Commit the exact final A-Trous center estimator used to choose currentAlpha.
+        if (hasHistory) {
+            filtered.maxEntY = mix(historyDenoisedSignal.maxEntY, independentCurrent.maxEntY, currentAlpha);
+            filtered.CoCg = mix(historyDenoisedSignal.CoCg, independentCurrent.CoCg, currentAlpha);
+            resolvedStandardDeviation = maxentTemporalMixMonteCarloStandardDeviation(
+                historyMonteCarloStandardDeviation, independentCurrent.standardDeviation, currentAlpha);
+            resolvedDenoisedEffectiveSamples = statisticsKishBlendEffectiveSampleCounts(
+                historyDenoisedEffectiveSamples, independentCurrentEffectiveSamples, currentAlpha);
+        } else {
+            filtered.maxEntY = independentCurrent.maxEntY;
+            filtered.CoCg = independentCurrent.CoCg;
+            resolvedStandardDeviation = independentCurrent.standardDeviation;
+            resolvedDenoisedEffectiveSamples = independentCurrentEffectiveSamples;
+        }
     } else {
         filtered.maxEntY = currentSignal.maxEntY;
         filtered.CoCg = currentSignal.CoCg;
     }
-    writeMaxEntSpecularDenoisedHistory(pixel, filtered, resolvedStandardDeviation);
+    writeMaxEntSpecularDenoisedHistory(pixel, filtered, resolvedStandardDeviation, resolvedDenoisedEffectiveSamples);
     vec3 primaryRay = reconstructPrimaryRay(pixel);
     float virtualScale = denoiserSpatialSpecularVirtualScale(primaryRay,
         currentGeometry.normal, currentGeometry.roughness);

@@ -11,9 +11,11 @@
 //
 // maxEntY.xyz is the directional first moment, maxEntY.w is total luminance,
 // and CoCg carries chroma. The variance-preparation pass writes the Monte Carlo
-// observation standard deviation; each A-Trous pass then propagates the same
-// channel for its filtered output. Pack/unpack never performs a hidden sqrt or
-// square. Camera-relative radial virtual distance is propagated
+// observation standard deviation; each A-Trous pass linearly filters its
+// variance with the signal weights and writes the filtered center's local
+// Monte Carlo observation standard deviation. The channel is never assumed to
+// share an empirical sample set or N_eff with the signal moments. Pack/unpack
+// never performs a hidden sqrt or square. Camera-relative radial virtual distance is propagated
 // independently in the upper FP16 lane. Input and
 // output use the same layout, so every spatial pass may ping-pong the same
 // RGBA32UI resources.

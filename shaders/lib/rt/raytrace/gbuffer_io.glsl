@@ -173,7 +173,7 @@ void writeReflectionOutput(uvec2 xy, FirstBounceData fb,
         signal = specularMaxEntFromRgbDirection(incident, refl_R);
         SpecularMaxEnt directSignal = specularMaxEntFromRgbDirection(
             clamp(directIncident, vec3(0.0),
-                vec3(400.0 * div_avgExposure)), directIncidentDirection);
+                vec3(64000.0)), directIncidentDirection);
         signal.maxEntY += directSignal.maxEntY;
         signal.CoCg += directSignal.CoCg;
         signal = sanitizeSpecularMaxEnt(signal);

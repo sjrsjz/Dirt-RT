@@ -21,88 +21,7 @@ uniform usampler2D colortex4;
 uniform usampler2D colortex5;
 uniform usampler2D colortex6;
 
-uvec4 maxentTemporalRobustLoadSignalWords(ivec2 pixel) {
-    return denoiserScratchLoadA(pixel);
-}
-
-ivec2 maxentTemporalRobustImageSize() { return textureSize(colortex4, 0); }
-uvec4 maxentTemporalRobustLoadGeometryWords(ivec2 pixel) { return readPrimaryGeometryWords(uvec2(pixel)); }
-
-#include "/lib/lighting/denoiser/robust_mean.glsl"
-
-MaxEntTemporalRobustEstimate maxentDiffuseCurrentRobustMomentEstimate(ivec2 centerPixel, vec4 centerMoment,
-        float centerStandardDeviation) {
-    uint acceptedMask = maxentTemporalRobustNeighborhoodBit(ivec2(0));
-    int sampleCount = 1;
-    vec4 momentSum = centerMoment;
-
-    ivec2 imageSize = textureSize(colortex4, 0);
-    uvec4 centerGeometryWords =
-        maxentTemporalRobustTileGeometryWords(ivec2(0));
-    float centerSurfaceDistance = uintBitsToFloat(centerGeometryWords.w);
-    if (!(centerSurfaceDistance >= 0.0) || isnan(centerSurfaceDistance)
-            || isinf(centerSurfaceDistance)) {
-        MaxEntTemporalRobustEstimate centerEstimate;
-        centerEstimate.moment = centerMoment;
-        centerEstimate.standardDeviation = centerStandardDeviation;
-        return centerEstimate;
-    }
-
-    vec3 centerSurfaceNormal = decodeNormalU(centerGeometryWords.x);
-    vec3 centerPrimaryRay = reconstructPrimaryRay(uvec2(centerPixel));
-    float centerPlaneOffset = centerSurfaceDistance
-        * dot(centerSurfaceNormal, centerPrimaryRay);
-    float surfaceRejectionScale = denoiserSpatialDistanceRejectionScale(
-        centerSurfaceDistance, float(imageSize.y));
-
-    for (int offsetY = -MAXENT_TEMPORAL_ROBUST_RADIUS;
-            offsetY <= MAXENT_TEMPORAL_ROBUST_RADIUS; ++offsetY) {
-        for (int offsetX = -MAXENT_TEMPORAL_ROBUST_RADIUS;
-                offsetX <= MAXENT_TEMPORAL_ROBUST_RADIUS; ++offsetX) {
-            if (offsetX == 0 && offsetY == 0) continue;
-            ivec2 offset = ivec2(offsetX, offsetY);
-            ivec2 samplePixel = centerPixel + offset;
-            if (any(lessThan(samplePixel, ivec2(0)))
-                    || any(greaterThanEqual(samplePixel, imageSize)))
-                continue;
-
-            uvec4 sampleGeometryWords =
-                maxentTemporalRobustTileGeometryWords(offset);
-            float sampleSurfaceDistance = uintBitsToFloat(
-                sampleGeometryWords.w);
-            if (!(sampleSurfaceDistance >= 0.0)
-                    || isnan(sampleSurfaceDistance)
-                    || isinf(sampleSurfaceDistance))
-                continue;
-
-            vec3 sampleSurfaceNormal = decodeNormalU(sampleGeometryWords.x);
-            if (dot(centerSurfaceNormal, sampleSurfaceNormal) <= 0.0)
-                continue;
-            vec3 samplePrimaryRay = reconstructPrimaryRay(uvec2(samplePixel));
-            float planeExponent = denoiserSpatialAxialDistanceExponent(
-                centerPlaneOffset, centerSurfaceNormal, samplePrimaryRay,
-                sampleSurfaceDistance, surfaceRejectionScale);
-            if (planeExponent
-                    > MAXENT_TEMPORAL_ROBUST_MAX_PLANE_EXPONENT)
-                continue;
-
-            uvec4 sampleWords = maxentTemporalRobustTileSignalWords(offset);
-            if (!denoiserSpatialSignalWordsValid(sampleWords)) continue;
-            vec4 sampleMoment = maxentTemporalRobustTileMoment(offset);
-            if (any(isnan(sampleMoment)) || any(isinf(sampleMoment))) continue;
-            acceptedMask |= maxentTemporalRobustNeighborhoodBit(offset);
-            momentSum += sampleMoment;
-            ++sampleCount;
-        }
-    }
-
-    return maxentTemporalGaussianReweightedTileEstimate(
-        acceptedMask, sampleCount, momentSum, centerMoment,
-        centerStandardDeviation);
-}
-
 void main() {
-    maxentTemporalRobustLoadSharedTile();
     uvec2 gid = gl_GlobalInvocationID.xy;
     if (any(greaterThanEqual(gid, uvec2(resolution_global)))) return;
     ivec2 pix = ivec2(gid);
@@ -136,11 +55,11 @@ void main() {
 
     vec4 historyDenoisedMoment;
     vec2 historyDenoisedCoCg;
-    float historyDenoisedPropagatedStandardDeviation;
+    float historyDenoisedMonteCarloStandardDeviation, historyDenoisedEffectiveSamples;
     float validWeight;
     bool hasHistory = readDiffuseDenoisedReprojection(gxy,
         historyDenoisedMoment, historyDenoisedCoCg,
-        historyDenoisedPropagatedStandardDeviation, validWeight)
+        historyDenoisedMonteCarloStandardDeviation, historyDenoisedEffectiveSamples, validWeight)
         && statisticsValidEffectiveSampleCount(historyEffectiveSamples)
         && !any(isnan(reprojectedRaw.maxEntY))
         && !any(isinf(reprojectedRaw.maxEntY))
@@ -148,35 +67,21 @@ void main() {
         && !any(isinf(reprojectedRaw.CoCg));
 
     float currentAlpha = 1.0;
-    float proposalAlpha = 1.0;
     float noiseOnlyCurrentWeight = -1.0;
-    DenoiserMaxEntSignal independentCurrent =
-        denoiserEmptyMaxEntSignal();
-    bool independentCurrentValid = false;
+    uvec4 independentCurrentWords = denoiserScratchLoadA(pix);
+    float independentCurrentEffectiveSamples = denoiserScratchLoadEffectiveSamplesA(pix);
+    bool independentCurrentValid = denoiserSpatialSignalWordsValid(independentCurrentWords)
+        && statisticsValidEffectiveSampleCount(independentCurrentEffectiveSamples);
+    DenoiserMaxEntSignal independentCurrent = independentCurrentValid
+        ? denoiserUnpackMaxEntSignal(independentCurrentWords) : denoiserEmptyMaxEntSignal();
     if (hasHistory) {
-        proposalAlpha = clamp(
-            float(MAXENT_TEMPORAL_FIXED_ALPHA), 0.0, 1.0);
-        currentAlpha = proposalAlpha;
-        uvec4 independentCurrentWords =
-            maxentTemporalRobustTileSignalWords(ivec2(0));
-        independentCurrentValid =
-            denoiserSpatialSignalWordsValid(independentCurrentWords);
+        currentAlpha = clamp(float(MAXENT_TEMPORAL_FIXED_ALPHA), 0.0, 1.0);
         if (independentCurrentValid) {
-            independentCurrent =
-                denoiserUnpackMaxEntSignal(independentCurrentWords);
-            MaxEntTemporalRobustEstimate robustCurrent =
-                maxentDiffuseCurrentRobustMomentEstimate(pix,
-                    independentCurrent.maxEntY,
-                    independentCurrent.standardDeviation);
-            float reprojectionAlphaFloor =
-                1.0 - clamp(validWeight, 0.0, 1.0);
-            float responseAlpha = maxentTemporalResponseAlpha(
-                reprojectionAlphaFloor, robustCurrent.moment,
-                robustCurrent.standardDeviation * robustCurrent.standardDeviation,
-                historyDenoisedMoment, historyDenoisedPropagatedStandardDeviation,
-                historyEffectiveSamples,
-                noiseOnlyCurrentWeight);
-            currentAlpha = responseAlpha;
+            float reprojectionAlphaFloor = 1.0 - clamp(validWeight, 0.0, 1.0);
+            currentAlpha = maxentTemporalResponseAlpha(reprojectionAlphaFloor, independentCurrent.maxEntY,
+                independentCurrent.standardDeviation, independentCurrentEffectiveSamples, historyDenoisedMoment,
+                historyDenoisedMonteCarloStandardDeviation, historyDenoisedEffectiveSamples,
+                historyEffectiveSamples, noiseOnlyCurrentWeight);
         }
     }
     debugWriteDiffuseNoiseOnlyCurrentWeight(gxy, noiseOnlyCurrentWeight);
@@ -198,32 +103,30 @@ void main() {
 
     DenoiserMaxEntSignal resolvedSignal = filteredSignal;
     MaxEntEncoding filteredEncoding;
-    if (hasHistory && independentCurrentValid) {
-        // When currentAlpha exceeds proposalAlpha, correct the provisional
-        // P=(1-beta)H+beta C toward the independently filtered current C with
-        // correction=(currentAlpha-proposalAlpha)/(1-proposalAlpha). Raw RT updates only the moment history;
-        // currentAlpha=1 must still publish a spatially denoised current estimator.
-        float correctionCurrentWeight = clamp((currentAlpha - proposalAlpha)
-            / max(1.0 - proposalAlpha, 1e-6), 0.0, 1.0);
-        resolvedSignal.maxEntY = mix(filteredSignal.maxEntY,
-            independentCurrent.maxEntY, correctionCurrentWeight);
-        filteredEncoding.CoCg = mix(filteredSignal.CoCg,
-            independentCurrent.CoCg, correctionCurrentWeight);
-        resolvedSignal.standardDeviation =
-            maxentTemporalProposalCorrectedStandardDeviation(
-                filteredSignal.standardDeviation,
-                independentCurrent.standardDeviation,
-                correctionCurrentWeight);
+    float resolvedDenoisedEffectiveSamples = hasHistory ? historyDenoisedEffectiveSamples : max(committedEffectiveSamples, 1.0);
+    if (independentCurrentValid) {
+        // Temporal response and filtered history consume the exact same final A-Trous center estimator.
+        if (hasHistory) {
+            resolvedSignal.maxEntY = mix(historyDenoisedMoment, independentCurrent.maxEntY, currentAlpha);
+            filteredEncoding.CoCg = mix(historyDenoisedCoCg, independentCurrent.CoCg, currentAlpha);
+            resolvedSignal.standardDeviation = maxentTemporalMixMonteCarloStandardDeviation(
+                historyDenoisedMonteCarloStandardDeviation, independentCurrent.standardDeviation, currentAlpha);
+            resolvedDenoisedEffectiveSamples = statisticsKishBlendEffectiveSampleCounts(
+                historyDenoisedEffectiveSamples, independentCurrentEffectiveSamples, currentAlpha);
+        } else {
+            resolvedSignal = independentCurrent;
+            filteredEncoding.CoCg = independentCurrent.CoCg;
+            resolvedDenoisedEffectiveSamples = independentCurrentEffectiveSamples;
+        }
     } else {
         filteredEncoding.CoCg = filteredSignal.CoCg;
-        if (!hasHistory) resolvedSignal.standardDeviation = sqrt(maxentTemporalCurrentVariance(filteredSignal.standardDeviation));
     }
     filteredEncoding.maxEntY = resolvedSignal.maxEntY;
     // The ping-ponged denoised history must contain the exact same resolved
     // six-component estimator as DIF_N_SWAP.
     resolvedSignal.CoCg = filteredEncoding.CoCg;
     packedLight = denoiserPackMaxEntSignal(resolvedSignal);
-    writeDiffuseDenoisedCurrentRaw(gxy, packedLight);
+    writeDiffuseDenoisedCurrentRaw(gxy, packedLight, resolvedDenoisedEffectiveSamples);
 
     writeDiffuseHist(gxy, committedRaw, committedEffectiveSamples,
         committedRootMeanY2);

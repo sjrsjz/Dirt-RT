@@ -61,8 +61,8 @@ vec3 debugNoiseOnlyCurrentWeight(float currentWeight) {
 }
 #endif
 
-#if DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_PREPARED_MONTE_CARLO_VARIANCE || DEBUG_VIEW == DEBUG_VIEW_SPECULAR_PREPARED_MONTE_CARLO_VARIANCE
-vec3 debugPreparedMonteCarloVariance(float standardDeviation) {
+#if DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_PREPARED_MONTE_CARLO_VARIANCE || DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_FILTERED_MONTE_CARLO_VARIANCE || DEBUG_VIEW == DEBUG_VIEW_SPECULAR_PREPARED_MONTE_CARLO_VARIANCE || DEBUG_VIEW == DEBUG_VIEW_SPECULAR_FILTERED_MONTE_CARLO_VARIANCE
+vec3 debugMonteCarloVariance(float standardDeviation) {
     if (!(standardDeviation >= 0.0) || isnan(standardDeviation)
             || isinf(standardDeviation))
         return vec3(1.0, 0.0, 1.0);
@@ -246,13 +246,21 @@ void main() {
     return;
     #elif DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_PREPARED_MONTE_CARLO_VARIANCE
     fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0)
-        : debugPreparedMonteCarloVariance(
+        : debugMonteCarloVariance(
             debugReadDiffusePreparedMonteCarloStandardDeviation(xy));
+    return;
+    #elif DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_FILTERED_MONTE_CARLO_VARIANCE
+    fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0)
+        : debugMonteCarloVariance(debugReadDiffuseFilteredMonteCarloStandardDeviation(xy));
     return;
     #elif DEBUG_VIEW == DEBUG_VIEW_SPECULAR_PREPARED_MONTE_CARLO_VARIANCE
     fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0)
-        : debugPreparedMonteCarloVariance(
+        : debugMonteCarloVariance(
             debugReadSpecularPreparedMonteCarloStandardDeviation(xy));
+    return;
+    #elif DEBUG_VIEW == DEBUG_VIEW_SPECULAR_FILTERED_MONTE_CARLO_VARIANCE
+    fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0)
+        : debugMonteCarloVariance(debugReadSpecularFilteredMonteCarloStandardDeviation(xy));
     return;
     #endif
 
@@ -404,7 +412,7 @@ void main() {
     fragColor.xyz = vec3(rough);
 
     // ---------------------------------------------------------------------
-    // Diffuse denoiser (20-24). Views 23-24 return before this branch.
+    // Diffuse denoiser (20-25). Views 23-25 return before this branch.
     // ---------------------------------------------------------------------
     #elif DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_TEMPORAL_HISTORY_SIGNAL
     {
@@ -423,7 +431,7 @@ void main() {
     fragColor.xyz = debugKishEffectiveSamples(tmp.weight);
 
     // ---------------------------------------------------------------------
-    // Specular denoiser (30-37). Views 33, 36, and 37 return above.
+    // Specular denoiser (30-38). Views 33 and 36-38 return above.
     // ---------------------------------------------------------------------
     #elif DEBUG_VIEW == DEBUG_VIEW_SPECULAR_SAMPLED_DIRECTION
     fragColor.xyz = debugReadReflectionSampleDirection(xy) * 0.5 + 0.5;

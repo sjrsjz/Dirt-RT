@@ -16,6 +16,7 @@ layout(local_size_x = 8, local_size_y = 8) in;
 #endif
 
 #include "/lib/common.glsl"
+#include "/lib/buffers/debug_buffer.glsl"
 #include "/lib/lighting/denoiser/atrous_filter.glsl"
 #include "/lib/lighting/denoiser/scratch_io.glsl"
 
@@ -47,6 +48,14 @@ uvec4 denoiserSpatialLoadIndependentCurrentWords(ivec2 pixel) {
 #endif
 }
 
+float denoiserSpatialLoadIndependentCurrentEffectiveSamples(ivec2 pixel) {
+#ifdef MAXENT_ATROUS_WRITE_ALTERNATE
+    return denoiserScratchLoadEffectiveSamplesA(pixel);
+#else
+    return denoiserScratchLoadEffectiveSamplesB(pixel);
+#endif
+}
+
 void denoiserSpatialStoreSignalWords(ivec2 pixel, uvec4 words) {
 #ifdef MAXENT_ATROUS_WRITE_ALTERNATE
     imageStore(colorimg4, pixel, words);
@@ -63,15 +72,32 @@ void denoiserSpatialStoreIndependentCurrentWords(ivec2 pixel, uvec4 words) {
 #endif
 }
 
-void denoiserSpatialStore(ivec2 pixel, DenoiserMaxEntSignal signal, DenoiserMaxEntSignal independentCurrent) {
+void denoiserSpatialStoreIndependentCurrentEffectiveSamples(ivec2 pixel, float effectiveSamples) {
+#ifdef MAXENT_ATROUS_WRITE_ALTERNATE
+    denoiserScratchStoreEffectiveSamplesB(pixel, effectiveSamples);
+#else
+    denoiserScratchStoreEffectiveSamplesA(pixel, effectiveSamples);
+#endif
+}
+
+void denoiserSpatialStore(ivec2 pixel, DenoiserMaxEntSignal signal, DenoiserMaxEntSignal independentCurrent,
+        float independentCurrentEffectiveSamples) {
     denoiserSpatialStoreSignalWords(pixel, denoiserPackMaxEntSignalTrusted(signal));
     denoiserSpatialStoreIndependentCurrentWords(pixel, denoiserPackMaxEntSignalTrusted(independentCurrent));
+    denoiserSpatialStoreIndependentCurrentEffectiveSamples(pixel, independentCurrentEffectiveSamples);
+#if MAXENT_ATROUS_STEP == 32 && DEBUG_VIEW == DEBUG_VIEW_SPECULAR_FILTERED_MONTE_CARLO_VARIANCE
+    debugWriteSpecularFilteredMonteCarloStandardDeviation(uvec2(pixel), signal.standardDeviation);
+#endif
 }
 
 void denoiserSpatialStoreInvalid(ivec2 pixel) {
     uvec4 invalidWords = denoiserInvalidMaxEntSignalWords();
     denoiserSpatialStoreSignalWords(pixel, invalidWords);
     denoiserSpatialStoreIndependentCurrentWords(pixel, invalidWords);
+    denoiserSpatialStoreIndependentCurrentEffectiveSamples(pixel, 0.0);
+#if MAXENT_ATROUS_STEP == 32 && DEBUG_VIEW == DEBUG_VIEW_SPECULAR_FILTERED_MONTE_CARLO_VARIANCE
+    debugWriteSpecularFilteredMonteCarloStandardDeviation(uvec2(pixel), -1.0);
+#endif
 }
 
 #define DENOISER_SPATIAL_STEP MAXENT_ATROUS_STEP
@@ -84,11 +110,12 @@ void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     DenoiserMaxEntSignal signal;
     DenoiserMaxEntSignal independentCurrent;
-    if (!denoiserSpatialFilterLarge(pixel, signal, independentCurrent)) {
+    float independentCurrentEffectiveSamples;
+    if (!denoiserSpatialFilterLarge(pixel, signal, independentCurrent, independentCurrentEffectiveSamples)) {
         if (any(greaterThanEqual(gl_GlobalInvocationID.xy, resolution_global))) return;
         denoiserSpatialStoreInvalid(pixel);
         return;
     }
-    denoiserSpatialStore(pixel, signal, independentCurrent);
+    denoiserSpatialStore(pixel, signal, independentCurrent, independentCurrentEffectiveSamples);
 }
 #endif
