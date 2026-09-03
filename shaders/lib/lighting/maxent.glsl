@@ -27,14 +27,19 @@
 // ============================================================
 //
 // 基于同构凸锥编码的光照表示、合成、降噪重建全套工具。
+// 方向能量采用与一阶矩直接匹配的三次倒数闭包：
+//
+//   p(u) = (1-kappa^2)^2 / (4*pi*(1-kappa*dot(axis,u))^3)
+//
+// 因而 kappa = |v| / omega。线性矩接口 (v, omega) 与缓冲布局不变。
 // 数据约定:
 //   - 嵌入表示 vec4 encoded : xyz = 方向向量 v, w = 总能量 ω = |v| + I
 //   - 原始光照 L = (v, I)，I >= 0 为各向同性底光强度
 //
 // 核心性质:
 //   - 线性嵌入空间下 T* 算子退化为普通向量累加
-//   - 最终辐照度重建基于最大熵分布闭型逼近，误差 < 0.4%
-//   - 所有算法严格无偏，仅在数值边界做最小保护
+//   - 方向闭包严格保持总能量和一阶方向矩，并保持非负
+//   - Lambert 半球余弦查询和方向采样均有解析形式
 //
 // 命名空间前缀: maxent_
 // 性能策略: 无超前clamp, 多使用内联与代数化简, 尽量避免分支
@@ -93,16 +98,11 @@ vec4 maxent_accumulate(vec4 accum, vec4 new_sample, float sample_weight) {
 // 最大熵统计特征提取
 // ------------------------------------------------------------
 
-// 计算组合方向参数 kappa ∈ [0, 1)
-// 输入: len_v = |v|, omega = ω
-// 对于 n=3 的闭式解
+// 计算方向参数 kappa ∈ [0, 1)。该闭包的一阶矩恒等式为
+// E[u] = kappa * axis，因此无需非线性反演。
 float maxent_kappa(float len_v, float omega) {
-    // 防止退化: omega 极小或 rho >= 1
     if (omega < 1e-8) return 0.0;
-    float rho = min(len_v / omega, 0.98); // 留出微小非奇异空间
-    // ρ = |v|/ω
-    float sqrt_term = sqrt(max(0.0, 4.0 - 3.0 * rho * rho));
-    return (3.0 * rho) / (2.0 + sqrt_term);
+    return clamp(len_v / omega, 0.0, 1.0 - 1e-6);
 }
 
 
@@ -112,8 +112,8 @@ float maxent_kappa(float len_v, float omega) {
 float maxent_variance(vec4 encoded) {
     float v2 = dot(encoded.xyz, encoded.xyz);
     float omega2 = encoded.w * encoded.w;
-    float variance = (2.0 * omega2 + encoded.w * sqrt(max(4.0 * omega2 - 3.0 * v2, 0.0))) / 3.0 - 0.5 * v2;
-    return max(0.0, variance);
+    // E[R^2] = (3+kappa^2)*omega^2/2 and |v|^2=kappa^2*omega^2.
+    return max(0.0, 1.5 * omega2 - 0.5 * v2);
 }
 
 // ------------------------------------------------------------
@@ -123,10 +123,7 @@ float maxent_radial_variance(vec4 encoded) {
     float kappa = maxent_kappa(length(encoded.xyz), encoded.w);
     float kappa_sq = kappa * kappa;
     float omega2 = encoded.w * encoded.w;
-    float kappa2_3 = kappa_sq + 3.0;
-    kappa2_3 *= kappa2_3;
-    float radial_variance = omega2 / kappa2_3 * (3.0 + 6.0 * kappa_sq - kappa_sq * kappa_sq);
-    return max(0.0, radial_variance);
+    return max(0.0, 0.5 * (1.0 + kappa_sq) * omega2);
 }
 
 // 估计方差 (用于时域累积)
@@ -142,35 +139,31 @@ float maxent_radial_estimator_variance(vec4 encoded, float N) {
 // ------------------------------------------------------------
 // 从已存储的标量估计量方差提取径向估计量方差
 // stored_var 为 swap2 预滤波后的 Var_scalar/N_eff
-// Var(|X|)/N_eff = stored_var × [3+6κ²-κ⁴] / [4(3-κ²)]
+// Var(|X|)/N_eff = stored_var × (1+κ²)/(3-κ²)
 // ------------------------------------------------------------
 float maxent_radial_est_var_from_scalar(float stored_scalar_var, float kappa) {
     float k2 = kappa * kappa;
-    float ratio = (3.0 + 6.0 * k2 - k2 * k2) / max(4.0 * (3.0 - k2), 1e-8);
+    float ratio = (1.0 + k2) / max(3.0 - k2, 1e-8);
     return stored_scalar_var * ratio;
 }
 
 // 计算最大熵分布的自然参数 (θ, β) 用于散度计算
-// 返回 vec4(theta.xyz, beta), 其中 θ = ( (3+κ²)² / (4 ω² (1-κ²)) ) * v
+// beta = 2/[omega(1-kappa^2)]，theta = beta*kappa*axis。
 // 如果 ω 太小或 κ 趋近 1 会导致 β 发散, 调用方需注意上限
 vec4 maxent_theta_beta(vec4 encoded) {
     vec3 v = encoded.xyz;
     float omega = encoded.w;
+    if (omega <= 1e-20) {
+        return vec4(0.0);
+    }
     float len_v = length(v);
 
     float kappa = maxent_kappa(len_v, omega);
     float kappa_sq = kappa * kappa;
     float one_minus_kappa_sq = max(0.0, 1.0 - kappa_sq);
-    // 避免除零: one_minus_kappa_sq 很小则参数很大，但 kappa 被限制在 0.999999，分母仍安全
     float denom = omega * one_minus_kappa_sq;
-    float three_plus_kappa_sq = 3.0 + kappa_sq;
-
-    // β = (3+κ²) / (ω * (1-κ²))
-    float beta = three_plus_kappa_sq / max(denom, 1e-20);
-
-    // θ = ((3+κ²)² / (4 ω² (1-κ²))) * v / ? 见文档: θ = (3+κ²)²/(4 ω² (1-κ²)) * v
-    // 等价于 beta * (3+κ²)/(4 ω) * v
-    float theta_scale = beta * three_plus_kappa_sq / (4.0 * max(omega, 1e-20));
+    float beta = 2.0 / max(denom, 1e-20);
+    float theta_scale = beta / max(omega, 1e-20);
     vec3 theta = theta_scale * v;
 
     return vec4(theta, beta);
@@ -204,8 +197,8 @@ float maxent_weighted_jeffreys_fast(vec4 sample1, vec4 sample2, vec4 maxent_thet
     float cross_term = beta1 * omega2 + beta2 * omega1
             - dot(theta1, v2) - dot(theta2, v1);
 
-    // 散度公式: cross_term - 2n, 对于 n=3 常数为 6.0
-    float d = cross_term - 6.0;
+    // 径向参考测度的 Gamma 形状为 2，故对称散度常数为 2*2。
+    float d = cross_term - 4.0;
 
     // 数值保护: 理论上 d >= 0, 但因精度可能出现微小负值
     return max(0.0, d);
@@ -247,7 +240,7 @@ float maxent_distance_fast(vec4 sample1, vec4 sample2, vec4 dual1, vec4 dual2, f
     float W_eff = (N1 * N2) / max(N1 + N2, 1e-20);
 
     // 经黎曼锥度规映射，将无量纲散度拉回绝对辐射度尺度
-    return sqrt(W_eff * D_J * sample1.w * sample2.w * (2.0 / 3.0));
+    return sqrt(W_eff * D_J * sample1.w * sample2.w);
 }
 
 float maxent_normalized_distance_fast(vec4 sample1, vec4 sample2, vec4 dual1, vec4 dual2, float N1, float N2) {
@@ -258,12 +251,12 @@ float maxent_normalized_distance_fast(vec4 sample1, vec4 sample2, vec4 dual1, ve
 
     float v1 = maxent_estimator_variance(sample1, N1);
     float v2 = maxent_estimator_variance(sample2, N2);
-    return sqrt(W_eff * D_J * sample1.w * sample2.w * (2.0 / 3.0) / max(v1 + v2, 1e-6));
+    return sqrt(W_eff * D_J * sample1.w * sample2.w / max(v1 + v2, 1e-6));
 }
 
 // ------------------------------------------------------------
 // 漫反射辐照度重建 (核心)
-// 基于三维最大熵分布的半球余弦投影解析逼近
+// 三次倒数方向能量密度的精确半球余弦投影
 // ------------------------------------------------------------
 float maxent_irradiance(vec4 encoded, vec3 n)
 {
@@ -274,24 +267,21 @@ float maxent_irradiance(vec4 encoded, vec3 n)
     float lenV = length(v);
     if (lenV <= 1e-6) return 0.25 * omega;
 
-    float rho = clamp(lenV / omega, 0.0, 1.0);
-    float kappa = (3.0 * rho) / 
-        (2.0 + sqrt(max(0.0, 4.0 - 3.0 * rho * rho)));
+    float kappa = maxent_kappa(lenV, omega);
     float mu = clamp(dot(v / lenV, n), -1.0, 1.0);
-
-    // kappa = 1 时一般闭式在 mu = 0 处呈 0/0，直接采用其连续极限。
-    if (1.0 - kappa <= 1e-5)
-        return omega * max(mu, 0.0);
-
-    float k2 = kappa * kappa;
-    float mu2 = mu * mu;
-    float d = max(1e-12, 1.0 - k2 + k2 * mu2);
-    float d32 = d * sqrt(d);
-    float nSym = 3.0 + 6.0 * k2 * (-1.0 + 2.0 * mu2)
-        + k2 * k2 * (3.0 - 12.0 * mu2 + 8.0 * mu2 * mu2);
-    float e = (nSym + 8.0 * kappa * mu * d32)
-        / (4.0 * (3.0 + k2) * d32);
-    return omega * max(e, 0.0);
+    float oneMinusK2 = (1.0 - kappa) * (1.0 + kappa);
+    float kMu = kappa * mu;
+    float denominator = sqrt(max(oneMinusK2 + kMu * kMu, 1e-20));
+    float response;
+    if (kMu < 0.0) {
+        float sumTerm = denominator - kMu;
+        response = oneMinusK2 * oneMinusK2
+            / (4.0 * denominator * sumTerm * sumTerm);
+    } else {
+        response = (oneMinusK2 + 2.0 * kMu * kMu)
+            / (4.0 * denominator) + 0.5 * kMu;
+    }
+    return omega * response;
 }
 
 // ------------------------------------------------------------
@@ -312,10 +302,10 @@ float maxent_guiding_pdf(vec3 wi, vec3 axis, float kappa)
 {
     float k2 = kappa * kappa;
     float d = 1.0 - kappa * dot(axis, wi);
-    float norm = 3.0 * pow(max(0.0, 1.0 - k2), 3.0)
-            / (4.0 * PI * (3.0 + k2));
+    float oneMinusK2 = max(0.0, 1.0 - k2);
+    float norm = oneMinusK2 * oneMinusK2 / (4.0 * PI);
     float d2 = d * d;
-    return norm / max(1e-30, d2 * d2);
+    return norm / max(1e-30, d2 * d);
 }
 
 // ------------------------------------------------------------
@@ -327,13 +317,14 @@ vec3 sample_maxent_guiding(vec3 axis, float kappa, vec2 xi)
     vec3 B = cross(axis, T);
 
     float mu;
-    if (kappa < 1e-10) {
-        mu = 1.0 - 2.0 * xi.x;
+    if (kappa < 1e-6) {
+        mu = 2.0 * xi.x - 1.0;
     } else {
-        float a = 1.0 / pow(1.0 + kappa, 3.0);
-        float b = 1.0 / pow(max(1e-30, 1.0 - kappa), 3.0);
-        float invCube = mix(a, b, xi.x);
-        float t = pow(invCube, -1.0 / 3.0);
+        float a = 1.0 / ((1.0 + kappa) * (1.0 + kappa));
+        float oneMinusKappa = max(1e-15, 1.0 - kappa);
+        float b = 1.0 / (oneMinusKappa * oneMinusKappa);
+        float inverseSquare = mix(a, b, xi.x);
+        float t = inversesqrt(max(inverseSquare, 1e-30));
         mu = clamp((1.0 - t) / kappa, -1.0, 1.0);
     }
 

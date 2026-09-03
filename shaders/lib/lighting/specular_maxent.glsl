@@ -19,8 +19,8 @@
 const int SPECULAR_MAXENT_QUADRATURE_SAMPLES = 16;
 
 float specularMaxEntKappa(float rho) {
-    rho = clamp(rho, 0.0, 1.0 - 1e-6);
-    return 3.0 * rho / (2.0 + sqrt(max(4.0 - 3.0 * rho * rho, 1e-12)));
+    // The cubic reciprocal energy closure has E[u] = kappa * axis.
+    return clamp(rho, 0.0, 1.0 - 1e-6);
 }
 
 vec3 specularMaxEntSample(vec3 axis, float kappa, vec2 xi) {
@@ -28,11 +28,13 @@ vec3 specularMaxEntSample(vec3 axis, float kappa, vec2 xi) {
     if (kappa < 1e-5) {
         mu = 2.0 * xi.x - 1.0;
     } else {
-        float inverseCubeMin = pow(1.0 + kappa, -3.0);
-        float inverseCubeMax = pow(1.0 - kappa, -3.0);
-        float inverseCube = mix(inverseCubeMin, inverseCubeMax, xi.x);
-        mu = (1.0 - pow(max(inverseCube, 1e-20), -1.0 / 3.0))
-            / kappa;
+        float onePlusKappa = 1.0 + kappa;
+        float oneMinusKappa = max(1.0 - kappa, 1e-15);
+        float inverseSquareMin = 1.0 / (onePlusKappa * onePlusKappa);
+        float inverseSquareMax = 1.0 / (oneMinusKappa * oneMinusKappa);
+        float inverseSquare = mix(
+            inverseSquareMin, inverseSquareMax, xi.x);
+        mu = (1.0 - inversesqrt(max(inverseSquare, 1e-30))) / kappa;
         mu = clamp(mu, -1.0, 1.0);
     }
 

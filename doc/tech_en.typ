@@ -17,7 +17,7 @@
     "Real-time Path Tracing",
     "Spatiotemporal Denoising",
     "Maximum Entropy Principle",
-    "Maxwell-Jüttner Distribution",
+    "Directional Moment Closure",
     "Path Guiding",
     "Information Geometry",
   ),
@@ -184,13 +184,13 @@ After spatial filtering and accumulation of multiple samples, due to the dispers
 
 $ "multi-sample:" quad omega = E[ |bold(x)| ] > |E[bold(x)]| = |bold(v)| quad "(cone interior)" $
 
-=== Physical Meaning of the Jensen Gap
+=== Statistical Meaning of the Jensen Gap
 
 Define the Jensen gap:
 
 $ I = omega - |bold(v)| = E[ |bold(x)| ] - |E[bold(x)]| >= 0 $
 
-$I$ measures the degree to which the signal distribution deviates from the Dirac state (perfectly directional). In the physical correspondence, $I$ is equivalent to the "thermal energy" of the photon gas — $I = 0$ corresponds to absolute zero (purely directional light), $I > 0$ corresponds to finite temperature (an isotropic diffuse scattering component is present).
+$I$ measures how far the signal distribution is from a Dirac state (perfectly directional). In the current implementation it is the linear cone coordinate that enforces $omega >= |bold(v)|$: $I = 0$ denotes a pure directional state on the cone boundary, while $I > 0$ denotes directional spread.
 
 == Algorithmic Significance
 
@@ -200,272 +200,106 @@ In computer graphics and real-time rendering, spatial filtering and denoising al
 
 The mathematical derivation above provides a powerful proof: *the synthesis operator $T$ is pure vector addition in the augmented signal space*. In a real-world pipeline, we only need to perform extremely low-cost ordinary linear blending of samples in the augmented representation $tilde(bold(x)) = (bold(x), |bold(x)|)$ (computing $T_"avg"$), and the final filtered result will rigorously conform to all algebraic axioms and the Radiance Conservation law.
 
-Because $T$ is inherently linear, *no post-hoc nonlinear correction is needed* — every operation in the filtering loop is a strict linear combination, and irradiance reconstruction $E(hat(arrow(n)))$ is deferred to a single pass at the shading output stage. This lays a solid theoretical foundation for designing lighting denoising pipelines that achieve both "mathematically rigorous unbiasedness" and "extremely high shading execution efficiency."
+Because $T$ is inherently linear, *no post-hoc nonlinear correction is needed* — every operation in the filtering loop is a strict linear combination, and irradiance reconstruction $E(hat(arrow(n)))$ is deferred to a single pass at the shading output stage. This supports a lighting-denoising pipeline that combines linear moment preservation with efficient shading.
 
 = Statistical Model
 
-== Monte Carlo Representation and Maximum Entropy Encoding
+== Runtime Closure
 
-The first principles of the synthesis operator $T$ only constrain the algebraic structure and contain no statistical semantics themselves. However, a real-world denoising pipeline inherently needs to process random signals based on Monte Carlo (MC) sampling. In order to connect it to the denoising pipeline while introducing the minimum amount of ad-hoc prior bias at the statistical level, we adopt the Maximum Entropy Principle @jaynes1957information from information theory to construct, for a single lighting state $L$, the probability distribution that it implicitly encodes.
+The ALICE buffer state remains the linear first moment
+$ arrow(L) = (bold(v), omega), quad |bold(v)| <= omega $,
+where $omega$ is total incident energy and $bold(v)$ is the directional first moment. Blending, temporal accumulation, and spatial filtering all operate directly in this four-dimensional cone.
 
-In a real-world MC sampling pipeline, the output $bold(x)_i = hat(bold(d))_i dot E_i$ of a single ray bounce corresponds to the lighting state $(bold(x)_i, |bold(x)_i|)$, lying strictly on the boundary of the cone $cal(C)$ — because the empirical distribution of a single sample is a Dirac $delta$ function, Jensen's inequality takes equality. After operator filtering (accumulation), the resulting internal local lighting state $(bold(v), omega)$ has $omega > |bold(v)|$ due to the dispersion of the multi-sample empirical distribution, with Jensen's inequality holding strictly.
-
-We treat $(bold(v), omega) = (E[bold(x)], E[ |bold(x)| ])$ as a sufficient observational constraint on the local lighting field. Based on the Maximum Entropy Principle, we seek a maximum-entropy probability density distribution $p(bold(x))$ defined on the continuous momentum space $bold(x) in RR^n$, satisfying:
-
+The runtime closure uses the radial reference measure $d nu = r d r d Omega$.
+Let $kappa = rho = |bold(v)| / omega$ and
+$hat(bold(v)) = bold(v) / |bold(v)|$. The joint density is
 $
-    "Maximize" quad & H[p] = - integral_(RR^n) p(bold(x)) log p(bold(x)) d bold(x) \
-  "Subject to" quad & integral_(RR^n) p(bold(x)) d bold(x) = 1 \
-                    & integral_(RR^n) bold(x) p(bold(x)) d bold(x) = bold(v) \
-                    & integral_(RR^n) |bold(x)| p(bold(x)) d bold(x) = omega
+  p_L(r, arrow(u)) =
+  (beta^2 (1-kappa^2)) / (4 pi)
+  exp(-beta r (1-kappa hat(bold(v)) dot arrow(u))),
+  quad beta = 2 / (omega(1-kappa^2)).
 $
-
-=== Analytic Distribution Form and Boundary Handling
-
-Using variational calculus (Lagrange multiplier method), in the non-singular domain $omega > |bold(v)| > 0$, the unique analytic solution of this maximum entropy problem can be rigorously derived, belonging to the Exponential Family:
-
+After integrating out the radius, the normalized spherical energy density is
 $
-  p_L (bold(x)) = (beta^n (1 - kappa^2)^((n+1)/2)) / (|S^(n-1)| Gamma(n)) exp(-beta(|bold(x)| - kappa hat(bold(v)) dot bold(x)))
+  p_E(arrow(u)) =
+  (1-kappa^2)^2 /
+  (4 pi (1-kappa hat(bold(v)) dot arrow(u))^3).
 $
+It satisfies $integral_(S^2) p_E d Omega = 1$ and
+$integral_(S^2) arrow(u) p_E d Omega = kappa hat(bold(v))$ exactly.
+Therefore $kappa$ is the normalized first-moment length and requires no numerical inversion. The $kappa = 0$ state is uniform on the sphere; as
+$kappa arrow.r 1$, the closure converges to a directional atom on its axis.
 
-where $|S^(n-1)|$ is the surface area of the $(n-1)$-dimensional unit sphere (for 3D space $n=3$, we always have $|S^2| Gamma(3) = 8pi$). The parameter analytic forms are completely determined by the first-order observation matrix:
+== Second-Order Statistics and Dual Parameters
 
-$ rho = (|bold(v)|) / omega $
-$ kappa = (2n rho) / ( (n+1) + sqrt((n+1)^2 - 4 n rho^2) ) $
-$ beta = (n + kappa^2) / (omega (1 - kappa^2)) $
+Along and perpendicular to the principal axis, the single-sample spatial covariance components are
 $
-  hat(bold(v)) = cases(
-    bold(v) / (|bold(v)|) & "if" bold(v) != bold(0),
-    bold(h)_("any") & "if" bold(v) = bold(0)
-  )
+  sigma_"perp"^2 &= (1-kappa^2) omega^2 / 2,   sigma_"parallel"^2 &= (1+kappa^2) omega^2 / 2.
 $
-
-*Numerical Safeguards for Boundary Asymptotic Behavior:* In natural physics, the following degenerate limits of the above continuous distribution occur:
-1. *Zero-vector unbiased decay ($bold(v) = bold(0)$)*: Here $rho = 0, kappa = 0$, and the distribution degenerates into an isotropic Laplace decay field $p(bold(x)) prop exp(-beta |bold(x)|)$.
-2. *Absolute darkness state ($omega = 0$)*: The system is in a strict energy-extinguished state, and the variance collapses entirely to a point-mass distribution (i.e., the Dirac $delta(bold(x))$ function). In Shader implementation, evaluation is directly bypassed via an `omega` division-by-zero guard.
-3. *Un-denoised raw ray state ($omega = |bold(v)|$)*: Here the connected manifold boundary $rho=1, kappa=1$ causes $beta$ to tend to infinity, making the distribution an extremely narrow distribution along the $hat(bold(v))$ axis (Dirac degeneration). This precisely reflects the fact that a single sample, without any spatial fusion, is extremely impoverished in low-frequency information. In practical applications, a hard threshold clamp can ensure it always falls within the non-singular measure domain: $rho < 1 - epsilon$.
-
-=== Variance Structure in the Original Sample Space $RR^n$
-
-The covariance matrix $op("Cov")(bold(X))$ of the non-singular maximum entropy distribution in the original space $RR^n$ possesses a perfectly axisymmetric geometric character (an uncertainty ellipsoid of revolution):
-
+The scalar and radial variances used by the implementation are
 $
-  op("Cov")(bold(X)) = sigma_(perp, bold(X))^2 (bold(I)_n - hat(bold(v))hat(bold(v))^T) + sigma_(parallel, bold(X))^2 hat(bold(v))hat(bold(v))^T
+  "Var"_"scalar" &= (3-kappa^2) omega^2 / 2
+    = 3 omega^2 / 2 - |bold(v)|^2 / 2,   "Var"(R) &= (1+kappa^2) omega^2 / 2.
+$
+If the buffer stores $"Var"_"scalar" / N_"eff"$, the radial estimator variance is recovered as
+$
+  ("Var"(R)) / N_"eff" =
+  ("Var"_"scalar") / N_"eff" dot
+  (1+kappa^2) / (3-kappa^2).
 $
 
-where the eigen-variances in the perpendicular and parallel principal directions are, respectively:
-$ sigma_(perp, bold(X))^2 = ((n+1) omega^2 (1 - kappa^2)) / (n + kappa^2)^2 $
-$ sigma_(parallel, bold(X))^2 = ((n+1) omega^2 (1 + kappa^2)) / (n + kappa^2)^2 $
-
-The corresponding systemic eigen-homogeneous total scalar variance is:
-$ "Var"_("scalar")(bold(X)) = op("tr")(op("Cov")(bold(X))) = ((n+1) omega^2) / (n+kappa^2)^2 [ n + (2-n)kappa^2 ] $
-
-After eliminating the intermediate parameter $kappa$, its pure closed-form analytic expression, determined solely by the input first-order statistics, is:
+The natural parameters used by the divergence metric are
 $
-  "Var"_("scalar")(bold(X)) = (omega ( (n+1)omega + sqrt((n+1)^2 omega^2 - 4 n |bold(v)|^2) )) / (2n) - (n-1)/(n+1) |bold(v)|^2
+  bold(theta) = beta kappa hat(bold(v)) = beta bold(v) / omega,
+  quad beta = 2 / (omega(1-kappa^2)).
 $
-
-For 3D rendering scenarios ($n=3$), the scalar variance simplifies maximally to:
-$ "Var"_("scalar")(bold(X)) = (2omega^2 + omega sqrt(4omega^2 - 3|bold(v)|^2)) / 3 - 1/2 |bold(v)|^2 $
-
-In a Shader, considering the amortization effect, if the expected effective temporal accumulation frame count of a sample is $N_("eff")$, then the residual variance of the current pixel's estimator is $"Var"_("estimator") = "Var"_("scalar")(bold(X)) / N_("eff")$. This term can directly serve as the adaptive dynamic bandwidth $sigma_c^2$ equivalently implemented by a bilateral filter.
-
-=== Joint Variance in the Augmented Signal Space $(bold(X), |bold(X)|)$
-
-Since the algorithmic carrier of lighting synthesis actually operates in the augmented signal space $bold(Y) = (bold(X), R) = (bold(X), |bold(X)|)$, its complete joint covariance block matrix is crucial for the spatiotemporal filter (it supports more complex covariance evaluation via the $delta$-method):
-
-$ op("Cov")(bold(Y)) = mat(op("Cov")(bold(X)), op("Cov")(bold(X), R); op("Cov")(R, bold(X)), op("Var")(R)) $
-
-where the cross-covariance vector between direction and energy is:
-$ op("Cov")(bold(X), R) = (2(n+1) kappa omega^2) / (n + kappa^2)^2 hat(bold(v)) $
-
-and the radial energy uncertainty variance is:
-$ op("Var")(|bold(X)|) = omega^2 / (n+kappa^2)^2 [ n + (n+3) kappa^2 - kappa^4 ] $
-
-
-=== Information-Geometric Dual Space and Divergence Measure
-
-To measure the core similarity between two lighting states $L_1(bold(v)_1, omega_1, N_1)$ and $L_2(bold(v)_2, omega_2, N_2)$ in a spatial neighborhood or temporal history, we embed the lighting states into the information-geometric surface of the continuous probability manifold @amari2016information. Based on Legendre Duality, a single lighting state $L = (bold(v), omega)$ possesses a unique bidirectional dual representation axis system in the hyperspace $RR^(n+1)$:
-
-- *Primal coordinate vector (expectation parameter space / breadth distribution):*
-  $ bold(psi)(L) := vec(bold(v), omega) in RR^(n+1) $
-
-- *Dual coordinate vector (natural parameter space / intensity distribution):*
-  $
-    bold(phi)(L) := vec(bold(theta), -beta) = (n+kappa^2) / (omega(1-kappa^2)) vec((n+kappa^2) / ((n+1)omega) bold(v), -1) in RR^(n+1)
-  $
-
-The above dual coordinates strictly equal the gradient of the system's negative Shannon entropy with respect to the primal coordinates: $bold(phi)(L) = - nabla_(bold(psi)) H(p)$. Under the standard inner product, this model exhibits an elegant *zero-sum conservation theorem*:
-$ bold(phi)(L) dot bold(psi)(L) = bold(theta) dot bold(v) - beta omega equiv -n $
-
-According to the Legendre coordinate inner product theorem for symmetric Bregman divergences, the two-sample Jeffreys Divergence of an exponential family distribution — with no partition function residual cancellation — equals the pairwise inner product of the pure coordinate differences:
-$ D_J(L_1, L_2) = (bold(phi)(L_1) - bold(phi)(L_2)) dot (bold(psi)(L_1) - bold(psi)(L_2)) $
-
-The theoretical divergence does not encompass sample reliability in denoising algorithms. When used for bilateral rejection weights in a denoising pipeline, we additionally introduce the harmonically accumulated effective estimator $W_("eff") = (N_1 N_2) / (N_1 + N_2)$ based on the effective signal-to-noise ratio (Fisher information diagonal weighting), thereby deriving a weighted similarity distance measure suitable for real-world implementation with branchless evaluation (Weighted Jeffreys Divergence):
-
+Writing $bold(phi) = (bold(theta), -beta)$ and
+$bold(psi) = (bold(v), omega)$ gives
+$bold(phi) dot bold(psi) = -2$. The symmetric Jeffreys divergence between two states is evaluated as
 $
-  D_("WJ")(L_1, L_2) &= W_("eff") dot D_J(L_1, L_2) \
-  &= - (N_1 N_2) / (N_1 + N_2) [ bold(phi)(L_1) dot bold(psi)(L_2) + bold(phi)(L_2) dot bold(psi)(L_1) + 2n ]
+  D_J = beta_1 omega_2 + beta_2 omega_1
+    - bold(theta)_1 dot bold(v)_2
+    - bold(theta)_2 dot bold(v)_1 - 4.
 $
+Spatiotemporal filtering weights it by
+$W_"eff" = N_1 N_2 / (N_1+N_2)$.
 
-Expanding the antipodal scalar components based on the above harmonically weighted cross terms yields:
+== Lambert Query
+
+Let $mu = hat(bold(v)) dot arrow(n)$ and
+$d = sqrt(1-kappa^2+kappa^2 mu^2)$. The normalized clamped-cosine response is analytic:
 $
-  D_("WJ")(L_1, L_2) = (N_1 N_2) / (N_1 + N_2) [ beta_1 omega_2 + beta_2 omega_1 - bold(theta)_1 dot bold(v)_2 - bold(theta)_2 dot bold(v)_1 - 2n ]
+  e(kappa, mu) =
+  (1-kappa^2+2 kappa^2 mu^2) / (4 d)
+  + kappa mu / 2,
+  quad E = omega e.
 $
-
-For 3D rendering space ($n=3$), the constant term $-2n$ is always $-6$. In actual pipeline execution, this measurer possesses a dual algebraic dynamic range characteristic: during the low spatiotemporal SPP accumulation phase, the measure value naturally has a relatively high degree of adaptive soft tolerance, enabling rapid signal fusion and reconstruction; while at high SPP or when structural contrast is pronounced, the distance measure becomes extremely strict and rapidly transitions to a hard partitioning strategy to prevent ghosting artifacts.
-
-= Lighting Reconstruction
-
-== Integral Modeling and Hemispherical Projection
-
-In a 3D rendering scenario ($n=3$), let the unit normal vector of the local shading point surface be $arrow(n) in S^2$. Assuming an ideal diffuse (Lambertian) material, according to the definition of irradiance, we need to perform a cosine-weighted projection integral of the previously derived maximum entropy distribution $p_L (bold(x))$ over the hemispherical space.
-
-We define $E(arrow(n))$ as the mathematical expectation of the hemispherical cosine projection:
+To avoid cancellation for back-facing, highly concentrated states, the implementation uses the equivalent branch
 $
-  E(arrow(n)) = E_(p_L) [ max(0, bold(x) dot arrow(n)) ] = integral_(RR^3) max(0, bold(x) dot arrow(n)) p_L (bold(x)) d bold(x)
+  e(kappa, mu) =
+  (1-kappa^2)^2 /
+  (4 d (d-kappa mu)^2)
 $
+when $kappa mu < 0$. Its boundary behavior is
+$e(0,mu)=1/4$ and
+$lim_(kappa arrow.r 1) e(kappa,mu)=max(mu,0)$.
 
-Substituting the analytic form of the 3D maximum entropy distribution (where the unit sphere area and gamma function product $|S^2| Gamma(3) = 8pi$):
-$
-  E(arrow(n)) = (beta^3 (1 - kappa^2)^2) / (8 pi) integral_(RR^3) max(0, bold(x) dot arrow(n)) exp(-beta (abs(bold(x)) - kappa hat(bold(v)) dot bold(x))) d bold(x)
-$
+== EON Query
 
-== Analytic Azimuthal Integration and One-Dimensional Reduction
+The rough-diffuse path consumes the same $(bold(v), omega)$ state. The implementation separates the EON response into the analytic Lambert term, the Fujii--Oren--Nayar directional partition, and the multiple-scattering compensation. An Iris custom 3D `RGBA16F` LUT reconstructs the directional partition, with its four channels holding piecewise cubic Bernstein controls over transformed $kappa$; stable closed-form branches evaluate the missing-energy term without a second texture access. Uniform and directional-atom states use exact boundary paths.
 
-To simplify this 3D spatial integral, we introduce spherical coordinates. Let $bold(x) = r arrow(u)$, where $r = abs(bold(x)) in [0, oo)$ and $arrow(u) in S^2$ is the unit direction vector (volume element satisfies $d bold(x) = r^2 d r d arrow(u)$).
+== GLSL Interface
 
-Using positive homogeneity to peel the integral into radial and angular double form:
-$
-  E(arrow(n)) = (beta^3 (1 - kappa^2)^2) / (8 pi) integral_(S^2) max(0, arrow(u) dot arrow(n)) [ integral_0^oo r^3 exp(-beta (1 - kappa hat(bold(v)) dot arrow(u)) r) d r ] d arrow(u)
-$
+The core implementation lives in
+`shaders/lib/lighting/maxent.glsl` and
+`shaders/lib/lighting/eon.glsl`. Callers continue to pass
+`vec4(v, omega)`; the buffer layout is unchanged:
 
-Using the definite integral relation $integral_0^oo r^3 e^(-a r) d r = Gamma(4) / a^4 = 6 / a^4$ (since $kappa in [0, 1)$, the radial convergence factor $a = beta(1 - kappa hat(bold(v)) dot arrow(u)) > 0$ always holds), the radial distribution in the integral expression is rigorously integrated out:
-$
-  E(arrow(n)) = (3 (1 - kappa^2)^2) / (4 pi beta) integral_(S^2) (max(0, arrow(u) dot arrow(n))) / ((1 - kappa hat(bold(v)) dot arrow(u))^4) d arrow(u)
-$
-
-Eliminating the intermediate parameter $beta = (3 + kappa^2) / (omega (1 - kappa^2))$, we obtain a projection integral that depends only on the macroscopic total energy $omega$ and the directional distribution characteristics:
-$
-  E(arrow(n)) = omega dot (3 (1 - kappa^2)^3) / (4 pi (3 + kappa^2)) integral_(S^2) (max(0, arrow(u) dot arrow(n))) / ((1 - kappa hat(bold(v)) dot arrow(u))^4) d arrow(u)
-$
-
-We establish a local coordinate system with the normal $arrow(n)$ as the $z$-axis, so $cos theta = arrow(u) dot arrow(n)$. The hemispherical truncation operator $max(0, cos theta)$ strictly restricts the integration domain to the upward-facing hemisphere $Omega_+ = { arrow(u) in S^2 | cos theta >= 0 }$.
-
-Let $mu_0 = hat(bold(v)) dot arrow(n)$. In this basis, we represent the principal optical axis direction $hat(bold(v))$ projected as $(sin theta_0, 0, mu_0)^T$. Integrating over the azimuthal angle $phi in [0, 2pi]$ (applying first-order derivative recursion):
-$ integral_0^(2pi) d phi / (A - B cos phi)^4 = pi (2A^3 + 3A B^2) / (A^2 - B^2)^(7/2) $
-
-where the auxiliary elements are defined as:
-$ A(z) = 1 - kappa mu_0 z, quad B(z)^2 = kappa^2 (1 - mu_0^2)(1 - z^2) $
-$ A(z)^2 - B(z)^2 = kappa^2 z^2 - 2 kappa mu_0 z + (1 - kappa^2 + kappa^2 mu_0^2) $
-
-Let $z = cos theta in [0, 1]$. After substitution and simplification, the azimuthal angle can be eliminated, yielding the *most simplified univariate analytic integral form* with respect to the zenith cosine $z$:
-$
-  E(arrow(n)) = omega dot (3 (1 - kappa^2)^3) / (4 (3 + kappa^2)) integral_0^1 (z (1 - kappa mu_0 z) [ 2 (1 - kappa mu_0 z)^2 + 3 kappa^2 (1 - mu_0^2)(1 - z^2) ]) / ([ kappa^2 z^2 - 2 kappa mu_0 z + (1 - kappa^2 + kappa^2 mu_0^2) ]^(7/2)) d z
-$
-
-== Boundary Behavior Analysis and Symmetric/Antisymmetric Decoupling
-
-Since the denominator of the above expression contains the fractional-order algebraic term $Q(z)^(7/2)$, its antiderivative form is extremely cumbersome in the general domain. To construct an efficient real-time reconstruction scheme, we define the normalized irradiance response function as $e(mu_0, kappa) := E(arrow(n)) / omega$, and decompose it into a symmetric component $e_S$ and an antisymmetric component $e_A$ with respect to the cosine angle $mu_0$:
-$
-  e_S (mu_0, kappa) = (e(mu_0, kappa) + e(-mu_0, kappa)) / 2, quad e_A (mu_0, kappa) = (e(mu_0, kappa) - e(-mu_0, kappa)) / 2
-$
-
-By performing boundary limit derivations on the above one-dimensional integral, the system exhibits the following extremely elegant and symmetric mathematical boundary closed-form solutions:
-
-1. *Omnidirectional Isotropic Limit ($kappa arrow.r 0$)*:
-  $ e(mu_0, 0) equiv 1/4 $
-2. *Extreme Directional Limit ($kappa arrow.r 1$)*:
-  $ e(mu_0, 1) = max(0, mu_0) $
-3. *Optical Axis and Normal Perfectly Co-aligned ($mu_0 = 1$)*:
-  $ e(1, kappa) = ((1+kappa)^3 (3 - kappa)) / (4 (3 + kappa^2)) $
-4. *Optical Axis and Normal Perfectly Anti-aligned ($mu_0 = -1$)*:
-  $ e(-1, kappa) = ((1-kappa)^3 (3 + kappa)) / (4 (3 + kappa^2)) $
-5. *Optical Axis Coplanar with Surface Tangent Plane ($mu_0 = 0$)*:
-  $ e(0, kappa) = (3 sqrt(1 - kappa^2)) / (4 (3 + kappa^2)) $
-
-*Analytic Uniqueness Theorem for the Antisymmetric Component:*
-Further analysis reveals that the physical essence of the antisymmetric component $e_A$ is to restore the hemispherical projection to a full-sphere projection. By performing the untruncated integral over the unit sphere $S^2$, one can rigorously prove that this component is a *strictly linear function* of $mu_0$ and $kappa$ for arbitrary values, with absolutely no approximation error:
-$ e_A (mu_0, kappa) equiv mu_0 dot (2 kappa) / (3 + kappa^2) $
-
-Since $e_A$ has been rigorously integrated out, the entire fitting error of the lighting reconstruction collapses and retracts entirely onto the symmetric part $e_S$.
-
-== Physical Smoothness Correction and High-Precision Approximation
-
-The symmetric component $e_S$ describes the evolution process from the isotropic edge $e_S(0, kappa)$ to the collinear-aligned edge $e_S(1, kappa)$. Since for $kappa < 1$, the maximum entropy probability density field is smoothly differentiable ($C^oo$ continuous) on the local manifold, the lighting response it produces must have a strictly zero first-order derivative at $mu_0 = 0$.
-
-Only when the system degenerates to the extreme Dirac limit ($kappa arrow.r 1$) does the discontinuous first-order characteristic of the kink term $| \mu_0 |$ emerge. Based on this physical prior, the blending weight of the kink term in the linear transition function $t$ should not be linear, but should exhibit higher-order decay characteristics as $kappa$ weakens.
-
-We introduce the higher-order characteristic weight $kappa^4$ to suppress the kink response in the mid-to-low frequency band, constructing the following transition function $t$ and symmetric part approximation:
-$ t = (1 - kappa^4) mu_0^2 + kappa^4 | mu_0 | $
-$ e_S (mu_0, kappa) approx e_S (0, kappa) + (e_S (1, kappa) - e_S (0, kappa)) dot t $
-
-Substituting the boundary analytic values of $e_S (0, kappa)$ and $e_S (1, kappa)$ and combining, we obtain the *final reconstruction formula that simultaneously guarantees rigorous exactness at all limiting boundaries, physical field smoothness and continuity, and a global maximum relative error controlled within $0.4%$*:
-
-$
-  E(arrow(n)) approx (omega) / (4(3+kappa^2)) [ 3 sqrt(1 - kappa^2) + (3 + 6 kappa^2 - kappa^4 - 3 sqrt(1 - kappa^2)) dot ((1 - kappa^4) mu_0^2 + kappa^4 | mu_0 |) + 8 kappa mu_0 ]
-$
-
-#image("./assets/image.png")
-
-#text(size: 10pt, fill: luma(100))[
-  *Normalization note:* the above reconstruction formula outputs irradiance values under the ALICE convention. Because single-sample probe encoding does not incorporate the MC integrator's sampling PDF factor (for cosine-weighted sampling $p(omega) = cos theta / pi$, each sample represents a solid angle of $pi / (N cos theta)$), the isotropic limit yields $E_"ALICE" = omega / 4$ versus the physical irradiance $E_"physical" = pi bar(L)$ — a calibration ratio of $4pi$. In the full rendering pipeline this constant factor is absorbed by tone mapping and exposure control; if physical-unit alignment with the specular reflection channel is desired, the calibration coefficient should be applied at the compositing stage.
-]
-
-== Irradiance Reconstruction — HLSL Implementation
-
-The above algebraically restructured formula contains only basic arithmetic instructions, avoiding expensive transcendental functions (such as $sin, cos$) or numerical integration overhead, making it highly suitable for modern GPU rendering architectures. The following is the core logic executed in the actual Shader:
-
-```hlsl
-// High-precision O(1) diffuse irradiance reconstruction based on maximum entropy distribution
-// Parameters:
-//   v     - direction vector of the lighting after spatial filtering (v = L.v)
-//   omega - total incident radiance after spatial filtering
-//   N     - surface unit normal vector of the current pixel
-float ReconstructDiffuseLighting(float3 v, float omega, float3 N)
-{
-    // 0. Minimal energy boundary protection
-    if (omega < 1e-6f) return 0.0f;
-
-    float len_v = length(v);
-    if (len_v < 1e-6f)
-    {
-        // Corresponds to the isotropic limit case (e_isotropic = 0.25)
-        return omega * 0.25f;
-    }
-
-    float3 v_hat = v / len_v;
-    float rho = min(len_v / omega, 0.999f); // Clamp to prevent division by zero
-
-    // 1. Fast fitting of the characteristic parameter kappa (for 3D measure space n = 3)
-    float sqrt_term = sqrt(16.0f - 12.0f * rho * rho);
-    float kappa = (6.0f * rho) / (4.0f + sqrt_term);
-
-    // 2. Cosine projection relation
-    float mu_0 = dot(v_hat, N);
-    float abs_mu_0 = abs(mu_0);
-
-    // 3. Extract characteristic terms and common denominator
-    float kappa_sq = kappa * kappa;
-    float one_minus_kappa_sq = max(0.0f, 1.0f - kappa_sq);
-    float sqrt_one_minus_kappa_sq = sqrt(one_minus_kappa_sq);
-
-    float denom_shared = 3.0f + kappa_sq;
-
-    // 4. Compute boundary components of the symmetric part
-    float e_S0_num = 3.0f * sqrt_one_minus_kappa_sq;
-    float e_S1_num = 3.0f + 6.0f * kappa_sq - kappa_sq * kappa_sq;
-
-    // 5. Apply higher-order smooth interpolation function transition (guarantees physical C1/C2 continuity)
-    float kappa_fourth = kappa_sq * kappa_sq;
-    float t = (1.0f - kappa_fourth) * mu_0 * mu_0 + kappa_fourth * abs_mu_0;
-
-    // 6. Combine symmetric part with unbiased antisymmetric part, compute final irradiance
-    float e_S_num = lerp(e_S0_num, e_S1_num, t);
-    float final_numerator = e_S_num + 8.0f * kappa * mu_0;
-    float irradiance = omega * (final_numerator / (4.0f * denom_shared));
-
-    return max(0.0f, irradiance);
-}
+```glsl
+float kappa = clamp(length(v) / omega, 0.0, 1.0 - 1e-6);
+float response = maxent_irradiance(vec4(v, omega), normal);
+vec3 outgoing = eon_project_maxent(
+    maxEntY, CoCg, normal, wo, roughness, albedo);
 ```
 
 = Denoising Pipeline Implementation
@@ -804,44 +638,15 @@ Integrating the three passes above, the complete data flow of the ALICE denoisin
 
 In compressed representation, the spatial filtering stage of the ALICE denoiser requires only two $"vec4"$s (32 bytes total) to fully represent all necessary geometric information (one $"vec4"$) and lighting information (one $"vec4"$).
 
-= Naming
-This lighting encoding scheme is named Asymmetric Laplace Isomorphic Conic Encoding (abbreviated as ALICE). The name reflects its core mathematical and physical structure:
+= Naming and Scope
 
-- *Asymmetric Laplace*: the probability distribution derived from the maximum entropy principle belongs to the asymmetric Laplace distribution family;
-- *Isomorphic*: the encoding space $cal(C)$ is strictly isomorphic to the thermodynamic state space of a drifting massless photon gas in natural units ($c = 1$) — ALICE's directional moment is the photon gas's collective momentum, radiance is the photon gas's total energy, and the maximum entropy distribution is the Maxwell-Jüttner distribution;
-- *Conic*: the state space is the convex cone $cal(C) = {(bold(v), omega) | omega >= |bold(v)|}$, whose cone constraint is naturally guaranteed by Jensen's inequality $E[ |bold(x)| ] >= |E[bold(x)]|$.
+The lighting encoding retains the name Asymmetric Laplace Isomorphic Conic Encoding (ALICE). “Conic” denotes the linear state space
+$cal(C) = {(bold(v), omega) | omega >= |bold(v)|}$.
+“Isomorphic” denotes the reversible mapping between the source representation
+$(bold(v), I)$ and the embedded representation
+$(bold(v), omega=|bold(v)|+I)$.
 
-= Physical Correspondence
-Although ALICE is derived entirely from first principles, it is strictly equivalent to the *Relativistic Statistical Mechanics* model in physics. Specifically, the maximum entropy distribution of ALICE corresponds exactly, in physical terms, to a *Drifting Massless Gas* (i.e., a drifting photon gas) in local thermodynamic equilibrium.
-
-== Maxwell-Jüttner Distribution
-When we do not impose a monochromatic (fixed-wavelength) constraint on the photons, but instead allow them to distribute freely in the 3D continuous momentum space $RR^3$, applying the maximum entropy constraints on their macroscopic energy $omega$ and macroscopic momentum $bold(v)$ exactly yields the *Maxwell-Jüttner distribution with a drift velocity* from special relativity @juttner1911maxwellsche.
-
-Within ALICE's mathematical formulas, there exists an extremely rigorous and elegant physical quantity mapping dictionary:
-
-+ *Phase Space and Momentum* \
-  The mathematical state vector $bold(x)$ strictly corresponds to a single photon's momentum $bold(p)$ (or equivalently, the energy $E/c$).
-
-+ *Collective Drift Velocity* \
-  The anisotropy $rho = (|bold(v)|) / omega$ and the maximum entropy characteristic parameter $kappa$ are physically equivalent. They represent the *dimensionless collective drift velocity (Drift Velocity Ratio, $v_"drift" / c$)* of this photon gas ensemble moving through space as a whole.
-
-+ *Thermodynamic Temperature* \
-  The natural parameter $beta$ corresponds to the inverse of the *effective kinetic temperature* of the photon gas in the laboratory (camera) reference frame, i.e., $beta = c / (k_B T_"lab")$.
-
-+ *Relativistic Doppler Effect* \
-  The core algebraic term $1 - kappa hat(bold(v)) dot arrow(u)$ appearing in the angular integral is precisely the *Relativistic Doppler Factor* from special relativity. Due to the high-speed collective drift of the photon gas, the light field energy undergoes extreme relativistic concentration in the forward direction (Relativistic Beaming).
-
-== Morphological Evolution of the Light Field and Thermodynamic Interpretation
-Through this physical mapping, various complex macroscopic lighting phenomena encountered in real-time rendering can be endowed with intuitive and rigorous microscopic thermodynamic interpretations:
-
-- *Perfectly Diffuse Ambient Light ($rho = 0, kappa = 0$)* \
-  The drift velocity is zero, and the system is in a globally thermally equilibrated, isotropic state. Here $bold(v) = E[bold(x)] = bold(0)$, the Jensen gap reaches its maximum $I = omega$, and all energy manifests as random thermal motion. This is equivalent to directionless uniform skylight or extremely well-converged multi-bounce low-frequency GI.
-
-- *Perfectly Directional Light ($rho arrow.r 1, kappa arrow.r 1$)* \
-  The collective drift velocity of the photon gas approaches the speed of light. Here the Jensen gap $I = omega - |bold(v)| arrow.r 0$, the system temperature contracts toward absolute zero, the distribution degenerates into a Dirac $delta$ function along the drift direction, and all energy is converted into uniform directional kinetic energy. Macroscopically, this manifests as an absolutely parallel, intense direct beam of light (such as a high-frequency solar beam or laser).
-
-- *Soft Shadows and Penumbra Transitions ($0 < kappa < 1$)* \
-  At the edges of soft shadows in practical scenes, the light field is in an intermediate non-equilibrium state between directional flow and thermal scattering. ALICE, through the parameter $kappa$, can extremely smoothly bridge these two extreme regimes, achieving physically self-consistent Contact Hardening and smooth soft-shadow gradients.
+The current runtime closure is a statistical model selected for directional-energy reconstruction. Its reference measure is not three-dimensional Cartesian Lebesgue measure, so this document no longer identifies it with a Maxwell--Jüttner photon-gas model. Here $kappa$ denotes only normalized first-moment length and directional concentration, while $beta$ is a closure scale parameter rather than a physical drift velocity or thermodynamic temperature.
 
 
 = Screen-Space Path Rebuilding Importance Sampling
@@ -858,55 +663,37 @@ In real-time path tracing, although Next Event Estimation (NEE) can effectively 
 
 Since we have already extracted and reconstructed the maximum entropy distribution state $(bold(v), omega)$ of the light field in the spatiotemporal domain using ALICE encoding within the denoising pipeline, we can naturally use it as *prior knowledge (Prior)* to perform Path Guiding over the hemispherical space when casting rays in the next frame.
 
-Based on the maximum entropy angular energy density, we construct a guiding probability density function (PDF) defined on the full unit sphere $S^2$:
-$ p_"ALICE" (arrow(u)) = C / ((1 - kappa hat(bold(v)) dot arrow(u))^4) $
-where $hat(bold(v))$ is the guiding principal axis reconstructed from the previous frame, and $kappa$ is the corresponding characteristic parameter.
-
-== Full-Sphere Integral and Normalization Constant
-
-To make it a strict probability density function, we need to solve for the normalization constant $C$ over the full solid angle. Let $mu = hat(bold(v)) dot arrow(u) = cos theta$ and let the azimuthal angle be $phi$. The integral proceeds as follows:
+The closure's angular energy density is used directly as the guiding PDF:
 $
-                      integral_(S^2) p_"ALICE" (arrow(u)) d arrow(u) & = 1 \
-  C integral_0^(2pi) d phi integral_(-1)^1 1 / (1 - kappa mu)^4 d mu & = 1
+  p_"ALICE"(arrow(u)) =
+  (1-kappa^2)^2 /
+  (4 pi (1-kappa hat(bold(v)) dot arrow(u))^3).
 $
+This expression is already normalized over the full sphere $S^2$, and its first moment is exactly $kappa hat(bold(v))$.
 
-The azimuthal integral yields $2pi$, and evaluating the definite integral over $mu$:
-$ 2pi C [ 1 / (3 kappa (1 - kappa mu)^3) ]_(-1)^1 = 1 $
-$ (2pi C) / (3 kappa) ( 1 / (1 - kappa)^3 - 1 / (1 + kappa)^3 ) = 1 $
+== Analytic Inverse Transform Sampling
 
-Simplifying the bracketed term through common denominators:
+Let $mu = hat(bold(v)) dot arrow(u)$. The marginal distribution obeys
 $
-  ((1+kappa)^3 - (1-kappa)^3) / ((1-kappa^2)^3) = (2kappa^3 + 6kappa) / ((1-kappa^2)^3) = (2kappa(kappa^2 + 3)) / ((1-kappa^2)^3)
+  (1-kappa mu)^(-2) =
+  op("lerp")((1+kappa)^(-2), (1-kappa)^(-2), xi_1).
 $
+For $kappa > 0$, it can therefore be sampled directly with
+$
+  mu =
+  (1 -
+    [op("lerp")((1+kappa)^(-2), (1-kappa)^(-2), xi_1)]^(-1/2))
+  / kappa.
+$
+When $kappa$ is close to zero the implementation uses
+$mu=2 xi_1-1$; the azimuth remains $phi=2 pi xi_2$. This sampler is paired exactly with the PDF above and requires no rejection.
 
-Substituting back yields the algebraic normalization constant:
-$ C = (3(1-kappa^2)^3) / (4pi(3+kappa^2)) $
-
-
-== Rigorous Analytic Inverse Transform Sampling
-
-To achieve efficient importance sampling with zero rejection rate on the GPU, we solve for the cumulative distribution function (CDF) of the marginal probability density distribution $p(mu) = 2pi C / (1 - kappa mu)^4$:
-$ F(mu) = integral_(-1)^mu p(x) d x = (2pi C) / (3 kappa) ( 1 / (1 - kappa mu)^3 - 1 / (1 + kappa)^3 ) $
-
-The normalization condition yields $F(1) = 1$. To generate the sampling angle $mu$ from a uniformly distributed random number $xi_1 in [0, 1)$, we set $F(mu) / F(1) = xi_1$:
-$ ( 1 / (1 - kappa mu)^3 - 1 / (1 + kappa)^3 ) / ( 1 / (1 - kappa)^3 - 1 / (1 + kappa)^3 ) = xi_1 $
-
-For efficient evaluation in a Shader, we define the boundary constants $a$ and $b$:
-$ a = 1 / (1 + kappa)^3, quad b = 1 / (1 - kappa)^3 $
-Substituting and simplifying:
-$ ( (1-kappa mu)^(-3) - a ) / (b - a) = xi_1 $
-$ (1 - kappa mu)^(-3) = a + xi_1 (b - a) = op("lerp")(a, b, xi_1) $
-
-Taking the $-1/3$ power of both sides yields the analytic inverse mapping equation, implementable on the GPU in just two lines of code:
-$ mu = (1 - [ op("lerp")(a, b, xi_1) ]^(-1/3)) / kappa $
-
-Combined with the azimuthal angle $phi = 2pi xi_2$ uniformly generated from $xi_2$, we can directly sample a ray direction that conforms exactly to the ALICE probability distribution in $O(1)$ time.
 
 == Dynamic Multiple Importance Sampling
 
 Although ALICE provides guidance that approximates the true light field extremely closely, in dynamic scenes with drastic occlusion changes, the prior guidance from the previous frame may become invalid (e.g., sudden light source movement or camera teleportation). To guarantee the absolute unbiasedness of the rendering equation and avoid division-by-zero variance explosions, we blend ALICE sampling with classical cosine-weighted sampling via Multiple Importance Sampling (MIS) @veach1995optimally.
 
-Algebraically and physically, the dimensionless drift velocity of ALICE, $rho = (|bold(v)|) / omega$, reflects the "directional confidence" of the light field. Therefore, we directly couple ALICE's mixture probability weight $P_"guide"$ to $rho$:
+Within the closure, the normalized first-moment length $rho = (|bold(v)|) / omega$ reflects the light field's "directional confidence." Therefore, we directly couple ALICE's mixture probability weight $P_"guide"$ to $rho$:
 $
   P_"guide" = cases(
     0.975 dot rho & "if" |bold(v)| > 10^(-8),

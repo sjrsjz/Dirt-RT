@@ -17,7 +17,7 @@
     "Real-time Path Tracing",
     "Spatiotemporal Denoising",
     "Maximum Entropy Principle",
-    "Maxwell-Jüttner Distribution",
+    "Directional Moment Closure",
     "Path Guiding",
     "Information Geometry",
   ),
@@ -191,13 +191,13 @@ $ "单样本: " quad (bold(v), omega) = (bold(x)_i, |bold(x)_i|), quad omega = |
 
 $ "多样本: " quad omega = E[ |bold(x)| ] > |E[bold(x)]| = |bold(v)| quad "（锥内部）" $
 
-=== Jensen 差的物理含义
+=== Jensen 差的统计含义
 
 定义 Jensen 差：
 
 $ I = omega - |bold(v)| = E[ |bold(x)| ] - |E[bold(x)]| >= 0 $
 
-$I$ 度量了信号分布偏离 Dirac 态（完全定向）的弥散程度。在物理对应中，$I$ 等价于光子气的”热运动能量”——$I = 0$ 对应绝对零度（纯定向光），$I > 0$ 对应有限温度（存在各向同性漫散射分量）。
+$I$ 度量信号分布偏离 Dirac 态（完全定向）的弥散程度。在当前实现中它是保证 $omega >= |bold(v)|$ 的线性锥坐标：$I = 0$ 表示锥边界上的纯方向状态，$I > 0$ 表示存在方向弥散。
 
 
 == 算法意义
@@ -208,272 +208,103 @@ $I$ 度量了信号分布偏离 Dirac 态（完全定向）的弥散程度。在
 
 本建模的数学推导给出了强有力的证明：*合成算子 $T$ 在增广信号空间中即为纯向量加法*。在实机管线中，我们仅需在增广表示 $tilde(bold(x)) = (bold(x), |bold(x)|)$ 下对样本执行极低成本的常规线性混合（求取 $T_"avg"$），即可严格保证最终的滤波结果绝对吻合所有的代数公理与辐射率守恒律。
 
-由于 $T$ 本身就是线性的，*无需任何后置非线性修正*——滤波循环中的每一步操作都是严格的线性组合，辐照度重建 $E(hat(arrow(n)))$ 延迟至着色输出阶段一次性完成。这为设计兼顾”数学严格无偏性”与”极高着色执行效率”的光照降噪管线奠定了坚实的理论基石。
+由于 $T$ 本身就是线性的，*无需任何后置非线性修正*——滤波循环中的每一步操作都是严格的线性组合，辐照度重建 $E(hat(arrow(n)))$ 延迟至着色输出阶段一次性完成。这为兼顾线性矩保持与着色执行效率的光照降噪管线提供了基础。
 
 = 统计模型
 
-== 蒙特卡洛表示与最大熵编码
+== 运行时闭包
 
-合成算子 $T$ 的第一性原理只约束代数结构，本身不包含任何统计学语义。然而，实机降噪管线在本质上需要处理基于蒙特卡洛（Monte Carlo, MC）采样的随机信号，为了将其接入降噪管线，并在统计层面最少地引入人为偏见先验（Ad-hoc），我们从信息论角度采用最大熵原理（Maximum Entropy Principle）@jaynes1957information 为单个光照状态 $L$ 构造其所隐式编码的概率分布。
+ALICE 的缓冲状态仍为线性一阶矩
+$ arrow(L) = (bold(v), omega), quad |bold(v)| <= omega $，
+其中 $omega$ 是总入射能量，$bold(v)$ 是方向一阶矩。混合、时域累积与空间滤波都直接在该四维锥中执行。
 
-在实机 MC 采样管线中，单次射线弹射的输出 $bold(x)_i = hat(bold(d))_i dot E_i$ 对应光照状态 $(bold(x)_i, |bold(x)_i|)$，严格位于锥 $cal(C)$ 的边界上——这是因为单样本的经验分布为 Dirac $delta$ 函数，Jensen 不等式取等。而在经过算子滤波（累汇）后得到的内部局部光照状态 $(bold(v), omega)$，由于多样本经验分布的弥散性，Jensen 不等式严格成立，$omega > |bold(v)|$。
-
-我们将 $(bold(v), omega) = (E[bold(x)], E[ |bold(x)| ])$ 视作对局部光照场的充分观测约束。基于最大熵原理，我们寻找一个定义在连续动量空间 $bold(x) in RR^n$ 上的最高熵概率密度分布 $p(bold(x))$，使其满足：
-
+运行时闭包采用径向参考测度 $d nu = r d r d Omega$。令
+$kappa = rho = |bold(v)| / omega$、$hat(bold(v)) = bold(v) / |bold(v)|$，则联合密度为
 $
-    "Maximize" quad & H[p] = - integral_(RR^n) p(bold(x)) log p(bold(x)) d bold(x) \
-  "Subject to" quad & integral_(RR^n) p(bold(x)) d bold(x) = 1 \
-                    & integral_(RR^n) bold(x) p(bold(x)) d bold(x) = bold(v) \
-                    & integral_(RR^n) |bold(x)| p(bold(x)) d bold(x) = omega
+  p_L(r, arrow(u)) =
+  (beta^2 (1-kappa^2)) / (4 pi)
+  exp(-beta r (1-kappa hat(bold(v)) dot arrow(u))),
+  quad beta = 2 / (omega(1-kappa^2)).
 $
-
-=== 解析分布形式与边界处理
-
-利用变分法（拉格朗日乘子法），在非奇异域 $omega > |bold(v)| > 0$ 内可严格导出该最大熵问题的唯一解析解，属于指数族分布（Exponential Family）：
-
+对半径积分后得到单位球面上的归一化能量密度
 $
-  p_L (bold(x)) = (beta^n (1 - kappa^2)^((n+1)/2)) / (|S^(n-1)| Gamma(n)) exp(-beta(|bold(x)| - kappa hat(bold(v)) dot bold(x)))
+  p_E(arrow(u)) =
+  (1-kappa^2)^2 /
+  (4 pi (1-kappa hat(bold(v)) dot arrow(u))^3).
 $
+它严格满足 $integral_(S^2) p_E d Omega = 1$ 与
+$integral_(S^2) arrow(u) p_E d Omega = kappa hat(bold(v))$，因此
+$kappa$ 直接等于归一化一阶矩长度，不需要数值反演。$kappa = 0$ 是均匀球面分布；$kappa arrow.r 1$ 时闭包收敛到沿主轴的方向原子。
 
-其中 $|S^(n-1)|$ 为 $n-1$ 维单位球面面积（对于三维空间 $n=3$，恒有 $|S^2| Gamma(3) = 8pi$）。参数解析形式完全由一阶观测矩阵确定：
+== 二阶统计与对偶参数
 
-$ rho = (|bold(v)|) / omega $
-$ kappa = (2n rho) / ( (n+1) + sqrt((n+1)^2 - 4 n rho^2) ) $
-$ beta = (n + kappa^2) / (omega (1 - kappa^2)) $
+以主轴为平行方向，单样本的空间协方差分量为
 $
-  hat(bold(v)) = cases(
-    bold(v) / (|bold(v)|) & "if" bold(v) != bold(0),
-    bold(h)_("any") & "if" bold(v) = bold(0)
-  )
+  sigma_"perp"^2 &= (1-kappa^2) omega^2 / 2,   sigma_"parallel"^2 &= (1+kappa^2) omega^2 / 2.
 $
-
-*边界极限行为的数值保障*：自然物理下会出现以上连续分布的退化极限：
-1. *零向量无偏衰减（$bold(v) = bold(0)$）*：此时 $rho = 0, kappa = 0$，分布退化为各向同性的拉普拉斯衰减场 $p(bold(x)) prop exp(-beta |bold(x)|)$。
-2. *绝对黑暗态（$omega = 0$）*：系统处于严格能量断绝态，方差彻底收缩为点质量分布（即狄拉克 $delta(bold(x))$ 函数），在 Shader 实现时以 `omega` 防除零机制直接越过评估。
-3. *未被降噪的原始射线态（$omega = |bold(v)|$）*：此时 Jensen 不等式取等，经验分布退化为 Dirac $delta$ 函数，对应 $rho = 1$, $kappa = 1$, $beta arrow.r oo$。这精确反映了单样本未经任何空间融合时极度缺乏低频信息的事实。在实机应用中可硬性阈值截断使其始终落在非奇异测度域内：$rho < 1 - epsilon$。
-
-=== 原始样本空间 $RR^n$ 的方差结构
-
-非奇异极大熵分布在原始空间 $RR^n$ 中的协方差矩阵 $op("Cov")(bold(X))$ 具有完美的轴对称几何特征（不确定度旋转体）：
-
+代码中使用的标量方差与径向方差分别为
 $
-  op("Cov")(bold(X)) = sigma_(perp, bold(X))^2 (bold(I)_n - hat(bold(v))hat(bold(v))^T) + sigma_(parallel, bold(X))^2 hat(bold(v))hat(bold(v))^T
+  "Var"_"scalar" &= (3-kappa^2) omega^2 / 2
+    = 3 omega^2 / 2 - |bold(v)|^2 / 2,   "Var"(R) &= (1+kappa^2) omega^2 / 2.
 $
-
-其中垂直主方向与平行主方向的本征方差分别为：
-$ sigma_(perp, bold(X))^2 = ((n+1) omega^2 (1 - kappa^2)) / (n + kappa^2)^2 $
-$ sigma_(parallel, bold(X))^2 = ((n+1) omega^2 (1 + kappa^2)) / (n + kappa^2)^2 $
-
-其对应的系统本征均质总标量方差（Scalar Variance）为：
-$ "Var"_("scalar")(bold(X)) = op("tr")(op("Cov")(bold(X))) = ((n+1) omega^2) / (n+kappa^2)^2 [ n + (2-n)kappa^2 ] $
-
-在消除中间参数 $kappa$ 后，其仅由输入一阶统计量决定的纯闭合解析式为：
+若缓冲存储的是 $"Var"_"scalar" / N_"eff"$，则径向估计量方差通过
 $
-  "Var"_("scalar")(bold(X)) = (omega ( (n+1)omega + sqrt((n+1)^2 omega^2 - 4 n |bold(v)|^2) )) / (2n) - (n-1)/(n+1) |bold(v)|^2
+  ("Var"(R)) / N_"eff" =
+  ("Var"_"scalar") / N_"eff" dot
+  (1+kappa^2) / (3-kappa^2)
 $
+恢复。
 
-对于三维渲染场景（$n=3$），标量方差可极简化求值为：
-$ "Var"_("scalar")(bold(X)) = (2omega^2 + omega sqrt(4omega^2 - 3|bold(v)|^2)) / 3 - 1/2 |bold(v)|^2 $
-
-在 Shader 中，考虑平摊效应后，若样本的时域有效累积期望帧数为 $N_("eff")$，则当前像素 Estimator 的残留方差为 $"Var"_("estimator") = "Var"_("scalar")(bold(X)) / N_("eff")$。此项可直接作为双边滤波器（Bilateral Filter）等价执行的自适应动态带宽 $sigma_c^2$。
-
-=== 增广信号空间 $(bold(X), |bold(X)|)$ 的联合方差
-
-由于光照合成的算法载体实际在增广信号空间 $bold(Y) = (bold(X), R) = (bold(X), |bold(X)|)$ 中执行运算，其完整的联合协方差块矩阵对时空滤波器至关重要（其通过 $delta$-method 支持更复杂的协方差评估）：
-
-$ op("Cov")(bold(Y)) = mat(op("Cov")(bold(X)), op("Cov")(bold(X), R); op("Cov")(R, bold(X)), op("Var")(R)) $
-
-其中，方向与能量的交叉协方差向量为：
-$ op("Cov")(bold(X), R) = (2(n+1) kappa omega^2) / (n + kappa^2)^2 hat(bold(v)) $
-
-径向能量不确定度方差为：
-$ op("Var")(|bold(X)|) = omega^2 / (n+kappa^2)^2 [ n + (n+3) kappa^2 - kappa^4 ] $
-
-
-=== 信息几何对偶空间与散度测度
-
-为了度量空间邻域或时域历史中两个光照状态 $L_1(bold(v)_1, omega_1, N_1)$ 与 $L_2(bold(v)_2, omega_2, N_2)$ 之间的核心相似度，我们将光照状态嵌入至连续概率流形的信息几何表面中@amari2016information。基于勒让德对偶性（Legendre Duality），单个光照状态 $L = (bold(v), omega)$ 在超空间 $RR^(n+1)$ 存在唯一的双向对偶表示轴系：
-
-- *原始坐标向量（期望参数空间 / 广度分布）：*
-  $ bold(psi)(L) := vec(bold(v), omega) in RR^(n+1) $
-
-- *对偶坐标向量（自然参数空间 / 强度分布）：*
-  $
-    bold(phi)(L) := vec(bold(theta), -beta) = (n+kappa^2) / (omega(1-kappa^2)) vec((n+kappa^2) / ((n+1)omega) bold(v), -1) in RR^(n+1)
-  $
-
-上述对偶坐标严格等于系统负香农熵关于原始坐标的梯度：$bold(phi)(L) = - nabla_(bold(psi)) H(p)$。在标准内积作用下，此模型存在优雅的*零和守恒定理*：
-$ bold(phi)(L) dot bold(psi)(L) = bold(theta) dot bold(v) - beta omega equiv -n $
-
-根据对称 Bregman 散度的勒让德坐标内积定理，指数族分布的双样本杰弗里斯散度（Jeffreys Divergence）无配分函数抵消残片，等于其纯净坐标差的对向内积：
-$ D_J(L_1, L_2) = (bold(phi)(L_1) - bold(phi)(L_2)) dot (bold(psi)(L_1) - bold(psi)(L_2)) $
-
-理论散度并未囊括降噪算法中的样本信度。当用于降噪管线中的双边拒绝权重时，我们额外引入基于有效信噪比（Fisher 信息量对角线加权）的调和累积估计算子 $W_("eff") = (N_1 N_2) / (N_1 + N_2)$，由此导出了一套适合实机且无分支求值的加权相似度测距量（Weighted Jeffreys Divergence）：
-
+用于散度计算的自然参数是
 $
-  D_("WJ")(L_1, L_2) &= W_("eff") dot D_J(L_1, L_2) \
-  &= - (N_1 N_2) / (N_1 + N_2) [ bold(phi)(L_1) dot bold(psi)(L_2) + bold(phi)(L_2) dot bold(psi)(L_1) + 2n ]
+  bold(theta) = beta kappa hat(bold(v)) = beta bold(v) / omega,
+  quad beta = 2 / (omega(1-kappa^2)).
 $
-
-展开上述基于调和权重交叉项的对跖标量分量即为：
+记 $bold(phi) = (bold(theta), -beta)$、$bold(psi) = (bold(v), omega)$，则
+$bold(phi) dot bold(psi) = -2$。两个状态的对称 Jeffreys 散度在实现中写为
 $
-  D_("WJ")(L_1, L_2) = (N_1 N_2) / (N_1 + N_2) [ beta_1 omega_2 + beta_2 omega_1 - bold(theta)_1 dot bold(v)_2 - bold(theta)_2 dot bold(v)_1 - 2n ]
+  D_J = beta_1 omega_2 + beta_2 omega_1
+    - bold(theta)_1 dot bold(v)_2
+    - bold(theta)_2 dot bold(v)_1 - 4.
 $
+时空滤波再以
+$W_"eff" = N_1 N_2 / (N_1+N_2)$
+对其加权。
 
-对于三维渲染空间（$n=3$），常数项 $-2n$ 恒为 $-6$。在实际管线执行中，该量测器兼具严把关的代数动态范围特质：即在低时空 SPP 积累期，测度值天然具备较高度自适应软包容使得信号快速融合重建，而在高 SPP 或结构反差明显时，测距量极其严苛迅速转为硬核分治策略防残影伪像。
+== Lambert 查询
 
-= 光照重建
-
-== 积分建模与半球投影
-
-在三维渲染场景（$n=3$）中，设局部着色点表面的单位法向量为 $arrow(n) in S^2$。假设材质为理想漫反射（Lambertian）材质，根据辐照度（Irradiance）的定义，我们需要对前文推导出的最大熵分布 $p_L (bold(x))$ 在半球空间进行余弦加权投影积分。
-
-我们将 $E(arrow(n))$ 定义为半球夹角余弦投影的数学期望：
+令 $mu = hat(bold(v)) dot arrow(n)$，
+$d = sqrt(1-kappa^2+kappa^2 mu^2)$。归一化半球余弦响应具有解析形式
 $
-  E(arrow(n)) = E_(p_L) [ max(0, bold(x) dot arrow(n)) ] = integral_(RR^3) max(0, bold(x) dot arrow(n)) p_L (bold(x)) d bold(x)
+  e(kappa, mu) =
+  (1-kappa^2+2 kappa^2 mu^2) / (4 d)
+  + kappa mu / 2,
+  quad E = omega e.
 $
-
-代入三维极大熵分布的解析形式（其中单位球面面积与伽马函数乘积 $|S^2| Gamma(3) = 8pi$）：
+为避免背向、高集中状态下的消减误差，$kappa mu < 0$ 时实现改用等价表达式
 $
-  E(arrow(n)) = (beta^3 (1 - kappa^2)^2) / (8 pi) integral_(RR^3) max(0, bold(x) dot arrow(n)) exp(-beta (abs(bold(x)) - kappa hat(bold(v)) dot bold(x))) d bold(x)
+  e(kappa, mu) =
+  (1-kappa^2)^2 /
+  (4 d (d-kappa mu)^2).
 $
+边界行为为 $e(0,mu)=1/4$，以及
+$lim_(kappa arrow.r 1) e(kappa,mu)=max(mu,0)$。
 
-== 方位角解析积出与一维化简
+== EON 查询
 
-为简化该三维空间积分，我们引入球坐标系。令 $bold(x) = r arrow(u)$，其中 $r = abs(bold(x)) in [0, oo)$，而 $arrow(u) in S^2$ 为单位方向向量（体积元满足 $d bold(x) = r^2 d r d arrow(u)$）。
+粗糙漫反射路径沿用同一 $(bold(v), omega)$ 状态。实现把 EON 响应拆成解析 Lambert 项、Fujii--Oren--Nayar 方向分区和多次散射补偿。方向分区由 Iris 自定义的三维 `RGBA16F` LUT 重建，四个通道存储变换后 $kappa$ 的分段三次 Bernstein 控制值；缺失能量项使用闭式稳定分支，避免第二次纹理访问。均匀态与方向原子态直接走精确边界路径。
 
-利用正齐次性将积分剥离为径向与角向的双重形式：
-$
-  E(arrow(n)) = (beta^3 (1 - kappa^2)^2) / (8 pi) integral_(S^2) max(0, arrow(u) dot arrow(n)) [ integral_0^oo r^3 exp(-beta (1 - kappa hat(bold(v)) dot arrow(u)) r) d r ] d arrow(u)
-$
+== GLSL 接口
 
-利用定积分关系 $integral_0^oo r^3 e^(-a r) d r = Gamma(4) / a^4 = 6 / a^4$（由于 $kappa in [0, 1)$，其径向收敛因子 $a = beta(1 - kappa hat(bold(v)) dot arrow(u)) > 0$ 恒成立），积分式中的径向分布被严格积出：
-$
-  E(arrow(n)) = (3 (1 - kappa^2)^2) / (4 pi beta) integral_(S^2) (max(0, arrow(u) dot arrow(n))) / ((1 - kappa hat(bold(v)) dot arrow(u))^4) d arrow(u)
-$
+核心实现在 `shaders/lib/lighting/maxent.glsl` 与
+`shaders/lib/lighting/eon.glsl`。调用者继续传入
+`vec4(v, omega)`，无需修改缓冲布局：
 
-消去中间参数 $beta = (3 + kappa^2) / (omega (1 - kappa^2))$，可得仅与宏观总能量 $omega$ 及方向分布特征相关的投影积分：
-$
-  E(arrow(n)) = omega dot (3 (1 - kappa^2)^3) / (4 pi (3 + kappa^2)) integral_(S^2) (max(0, arrow(u) dot arrow(n))) / ((1 - kappa hat(bold(v)) dot arrow(u))^4) d arrow(u)
-$
-
-我们建立局部坐标系，令法线 $arrow(n)$ 为 $z$ 轴，则 $cos theta = arrow(u) dot arrow(n)$。半球截断算子 $max(0, cos theta)$ 将积分域严格限制在朝上的半球 $Omega_+ = { arrow(u) in S^2 | cos theta >= 0 }$。
-
-令 $mu_0 = hat(bold(v)) dot arrow(n)$。在此基底下，我们将主要光轴方向 $hat(bold(v))$ 投影表示为 $(sin theta_0, 0, mu_0)^T$。对方位角 $phi in [0, 2pi]$ 进行积分（应用一阶导数递推）：
-$ integral_0^(2pi) d phi / (A - B cos phi)^4 = pi (2A^3 + 3A B^2) / (A^2 - B^2)^(7/2) $
-
-其中辅元定义为：
-$ A(z) = 1 - kappa mu_0 z, quad B(z)^2 = kappa^2 (1 - mu_0^2)(1 - z^2) $
-$ A(z)^2 - B(z)^2 = kappa^2 z^2 - 2 kappa mu_0 z + (1 - kappa^2 + kappa^2 mu_0^2) $
-
-令 $z = cos theta in [0, 1]$，带入整理后，即可消去方位角，得到关于天顶角余弦 $z$ 的*最简化一元解析积分形式*：
-$
-  E(arrow(n)) = omega dot (3 (1 - kappa^2)^3) / (4 (3 + kappa^2)) integral_0^1 (z (1 - kappa mu_0 z) [ 2 (1 - kappa mu_0 z)^2 + 3 kappa^2 (1 - mu_0^2)(1 - z^2) ]) / ([ kappa^2 z^2 - 2 kappa mu_0 z + (1 - kappa^2 + kappa^2 mu_0^2) ]^(7/2)) d z
-$
-
-== 边界行为分析与对称/反对称解耦
-
-由于上式分母含有分数阶代数项 $Q(z)^(7/2)$，其原函数形式在一般域内极其繁琐。为了构造高效的实时重建方案，我们定义归一化辐照度响应函数为 $e(mu_0, kappa) := E(arrow(n)) / omega$，并将其拆解为关于余弦角 $mu_0$ 的对称分量 $e_S$ 与反对称分量 $e_A$：
-$
-  e_S (mu_0, kappa) = (e(mu_0, kappa) + e(-mu_0, kappa)) / 2, quad e_A (mu_0, kappa) = (e(mu_0, kappa) - e(-mu_0, kappa)) / 2
-$
-
-通过对上述一维积分进行边界极限推导，该系统表现出以下极为高雅且对称的数学边界闭合解：
-
-1. *全向各向同性极限 ($kappa arrow.r 0$)*：
-  $ e(mu_0, 0) equiv 1/4 $
-2. *极致定向极限 ($kappa arrow.r 1$)*：
-  $ e(mu_0, 1) = max(0, mu_0) $
-3. *光轴与法线完全同向共线 ($mu_0 = 1$)*：
-  $ e(1, kappa) = ((1+kappa)^3 (3 - kappa)) / (4 (3 + kappa^2)) $
-4. *光轴与法线完全反向共线 ($mu_0 = -1$)*：
-  $ e(-1, kappa) = ((1-kappa)^3 (3 + kappa)) / (4 (3 + kappa^2)) $
-5. *光轴与表面切面完全平行共面 ($mu_0 = 0$)*：
-  $ e(0, kappa) = (3 sqrt(1 - kappa^2)) / (4 (3 + kappa^2)) $
-
-*反对称部分的解析唯一性定理：*
-进一步分析表明，反对称分量 $e_A$ 的物理本质是将半球投影还原为全球投影。通过在单位球 $S^2$ 上进行无截断积分，可严格证明该分量对任意 $mu_0$ 与 $kappa$ 均呈*严格线性关系*，且完全不存在近似误差：
-$ e_A (mu_0, kappa) equiv mu_0 dot (2 kappa) / (3 + kappa^2) $
-
-由于 $e_A$ 已被严格积出，整个光照重建的拟合误差将完全退化并收拢至对称部分 $e_S$。
-
-== 物理光滑性修正与高精度逼近
-
-对称分量 $e_S$ 描述了从各向同性边缘 $e_S(0, kappa)$ 演变至共线对齐边缘 $e_S(1, kappa)$ 的过程。由于当 $kappa < 1$ 时，极大熵概率密度场在局部流形上光滑可微（$C^oo$ 连续），其产生的光照响应在 $\mu_0 = 0$ 处的一阶导数必须严格为 $0$。
-
-只有当系统退化至极端的狄拉克极限（$kappa arrow.r 1$）时，折角项 $| \mu_0 |$ 的非连续一阶特征才会显现。基于此物理先验，线性过渡函数 $t$ 中对折角项的混合权重不应是线性的，而应随着 $kappa$ 的弱化呈现出高阶衰减特征。
-
-我们引入高阶特征权重 $kappa^4$ 来压制中低频段的折角响应，构造以下过渡函数 $t$ 与对称部分近似：
-$ t = (1 - kappa^4) mu_0^2 + kappa^4 | mu_0 | $
-$ e_S (mu_0, kappa) approx e_S (0, kappa) + (e_S (1, kappa) - e_S (0, kappa)) dot t $
-
-我们将 $e_S (0, kappa)$ 与 $e_S (1, kappa)$ 的边界解析值带入并合并，即可得到*兼顾各极限边界严格精确、物理场光滑连续且全域最大相对误差控制在 $0.4%$ 以内*的最终重建公式：
-
-$
-  E(arrow(n)) approx (omega) / (4(3+kappa^2)) [ 3 sqrt(1 - kappa^2) + (3 + 6 kappa^2 - kappa^4 - 3 sqrt(1 - kappa^2)) dot ((1 - kappa^4) mu_0^2 + kappa^4 | mu_0 |) + 8 kappa mu_0 ]
-$
-
-#image("./assets/image.png")
-
-#text(size: 10pt, fill: luma(100))[
-  *归一化注记：* 上述重建公式的输出为 ALICE 约定下的辐照度值。由于单样本探针编码时未计入 MC 积分器的采样 PDF 因子（对于余弦加权采样 $p(omega) = cos theta / pi$，每个样本代表的立体角为 $pi / (N cos theta)$），各项同性极限下 $E_"ALICE" = omega / 4$ 与物理辐照度 $E_"physical" = pi bar(L)$ 之间存在 $4pi$ 倍的标定关系。在完整渲染管线中，该常量因子被色调映射与曝光控制所吸收；若需与镜面反射通道的物理单位对齐，应在合图阶段乘以标定系数。
-]
-
-== 辐照度重建 HLSL 实现
-
-上述代数重组公式仅包含基础算术指令，避免了昂贵的超越函数（如 $sin, cos$）或数值积分开销，非常契合现代 GPU 渲染架构。以下为实机 Shader 执行的核心逻辑：
-
-```hlsl
-// 基于最大熵分布的高精度 O(1) 漫反射光照重建 (Irradiance Reconstruction)
-// 参数说明:
-//   v     - 空间滤波后得到的光照方向向量 (v = L.v)
-//   omega - 空间滤波后得到的总入射辐射率
-//   N     - 当前像素的表面单位法向量
-float ReconstructDiffuseLighting(float3 v, float omega, float3 N)
-{
-    // 0. 极小能量边界保护
-    if (omega < 1e-6f) return 0.0f;
-
-    float len_v = length(v);
-    if (len_v < 1e-6f)
-    {
-        // 对应各向同性极限情况 (e_isotropic = 0.25)
-        return omega * 0.25f;
-    }
-
-    float3 v_hat = v / len_v;
-    float rho = min(len_v / omega, 0.999f); // 截断防除零
-
-    // 1. 快速拟合特征参数 kappa (针对三维测度空间 n = 3)
-    float sqrt_term = sqrt(16.0f - 12.0f * rho * rho);
-    float kappa = (6.0f * rho) / (4.0f + sqrt_term);
-
-    // 2. 余弦投影关系
-    float mu_0 = dot(v_hat, N);
-    float abs_mu_0 = abs(mu_0);
-
-    // 3. 提取特征项与公共分母
-    float kappa_sq = kappa * kappa;
-    float one_minus_kappa_sq = max(0.0f, 1.0f - kappa_sq);
-    float sqrt_one_minus_kappa_sq = sqrt(one_minus_kappa_sq);
-
-    float denom_shared = 3.0f + kappa_sq;
-
-    // 4. 计算对称部分的边界分量
-    float e_S0_num = 3.0f * sqrt_one_minus_kappa_sq;
-    float e_S1_num = 3.0f + 6.0f * kappa_sq - kappa_sq * kappa_sq;
-
-    // 5. 应用高阶光滑插值函数过渡 (物理 C1/C2 连续保障)
-    float kappa_fourth = kappa_sq * kappa_sq;
-    float t = (1.0f - kappa_fourth) * mu_0 * mu_0 + kappa_fourth * abs_mu_0;
-
-    // 6. 合并对称部分与无偏反对称部分，计算最终辐照度
-    float e_S_num = lerp(e_S0_num, e_S1_num, t);
-    float final_numerator = e_S_num + 8.0f * kappa * mu_0;
-    float irradiance = omega * (final_numerator / (4.0f * denom_shared));
-
-    return max(0.0f, irradiance);
-}
+```glsl
+float kappa = clamp(length(v) / omega, 0.0, 1.0 - 1e-6);
+float response = maxent_irradiance(vec4(v, omega), normal);
+vec3 outgoing = eon_project_maxent(
+    maxEntY, CoCg, normal, wo, roughness, albedo);
 ```
 
 = 降噪管线实现
@@ -812,44 +643,14 @@ $ "data" = "mix"("data", "blurred_alice", "clamp"(1 / max(w, 1.0), 0, 1)) $
 
 在压缩表示下，ALICE 降噪器的空间滤波阶段仅需要两个 $"vec4"$（共 32 字节）即可完整表示所有必要的几何信息（一个 $"vec4"$）与光照信息（一个 $"vec4"$）
 
-= 命名
-该光照编码方案命名为 Asymmetric Laplace Isomorphic Conic Encoding（简称 ALICE）。该名称反映了其核心数学与物理结构：
+= 命名与适用范围
 
-- *Asymmetric Laplace*：最大熵原理导出的概率分布属于非对称拉普拉斯分布族；
-- *Isomorphic*：编码空间 $cal(C)$ 与自然单位制（$c = 1$）下无静止质量漂移光子气的热力学状态空间严格同构——ALICE 的方向矩即光子气集体动量，辐射率即光子气总能量，最大熵分布即 Maxwell-Jüttner 分布；
-- *Conic*：状态空间为凸锥 $cal(C) = {(bold(v), omega) | omega >= |bold(v)|}$，其锥约束由 Jensen 不等式 $E[ |bold(x)| ] >= |E[bold(x)]|$ 自然保证。
+该光照编码继续称为 Asymmetric Laplace Isomorphic Conic Encoding（ALICE）。其中 “Conic” 指线性状态空间
+$cal(C) = {(bold(v), omega) | omega >= |bold(v)|}$；
+“Isomorphic” 指原始表示 $(bold(v), I)$ 与嵌入表示
+$(bold(v), omega=|bold(v)|+I)$ 之间的可逆映射。
 
-= 物理对应
-虽然 ALICE 完全由第一性原理推导而来，但其严格等效于物理学中的*相对论统计力学*（Relativistic Statistical Mechanics）模型。具体而言，ALICE 的极大熵分布在物理上精确对应于处于局部热力学平衡态的*无静止质量漂移气体*（Drifting Massless Gas，即漂移光子气）。
-
-== 麦克斯韦-朱特纳分布 (Maxwell-Jüttner Distribution)
-当我们不对光子施加单色（固定波长）约束，而是允许其在三维连续动量空间 $RR^3$ 中自由分布时，对其宏观能量 $omega$ 与宏观动量 $bold(v)$ 施加最大熵约束，所导出的分布正是狭义相对论中的*带有漂移速度的麦克斯韦-朱特纳分布*（Maxwell-Jüttner Distribution）@juttner1911maxwellsche。
-
-在 ALICE 的数学公式中，存在着一套极其严密且优美的物理量映射字典：
-
-+ *相空间与动量* \
-  数学状态向量 $bold(x)$ 严格对应于单个光子的动量 $bold(p)$（或等效的能量 $E/c$）。
-
-+ *集体漂移速度* \
-  各向异性度 $rho = (|bold(v)|) / omega$ 与极大熵特征参数 $kappa$ 在物理上等价。它们代表了这群光子气体作为整体在空间中运动的*无量纲集体漂移速度（Drift Velocity Ratio, $v_"drift" / c$）*。
-
-+ *热力学温度* \
-  自然参数 $beta$ 对应于实验室（摄像机）参考系下该光子气的*有效运动温度的倒数*，即 $beta = c / (k_B T_"lab")$。
-
-+ *相对论多普勒效应* \
-  角向积分中出现的核心代数项 $1 - kappa hat(bold(v)) dot arrow(u)$，正是狭义相对论中的*多普勒收缩因子（Relativistic Doppler Factor）*。由于光子气的高速集体漂移，使得光场能量在前方产生了相对论性的极度汇聚（Relativistic Beaming）。
-
-== 光场的形态演化与热力学解释
-通过这套物理映射，实机渲染中各种复杂的宏观光照现象，都可以被赋予直观且严密的微观热力学解释：
-
-- *完全漫反射环境光 ($rho = 0, kappa = 0$)* \
-  此时漂移速度为零，系统处于全局热平衡的各向同性状态。此时 $bold(v) = E[bold(x)] = bold(0)$，Jensen 差达到最大值 $I = omega$，全部能量均表现为无规则热运动。这等价于无向的均匀天光或极其充分的多次反弹低频 GI。
-
-- *完全定向光 ($rho arrow.r 1, kappa arrow.r 1$)* \
-  光子气的集体漂移速度趋近于光速。此时 Jensen 差 $I = omega - |bold(v)| arrow.r 0$，系统温度向绝对零度收缩，分布退化为沿漂移方向的 Dirac $delta$ 函数，全部能量转化为一致的定向动能。这在宏观上表现为一束绝对平行的强直射光（如高频太阳光束或激光）。
-
-- *软阴影与半影过渡 ($0 < kappa < 1$)* \
-  在实际场景的软阴影边缘，光场处于定向流动与热散射的中间非平衡态。ALICE 能够通过参数 $kappa$ 极其平滑地桥接这两种极端状态，实现物理自洽的接触硬化（Contact Hardening）与软阴影平滑渐变。
+当前运行时闭包是针对方向能量重建所选择的统计模型。由于其参考测度不是三维笛卡尔 Lebesgue 测度，本文不再把它解释为 Maxwell--Jüttner 光子气模型。$kappa$ 仅表示归一化一阶矩长度和方向集中度；$beta$ 是闭包的尺度参数，不作为物理漂移速度或热力学温度使用。
 
 
 = 屏幕空间光路重建重要性采样
@@ -866,55 +667,38 @@ $ "data" = "mix"("data", "blurred_alice", "clamp"(1 / max(w, 1.0), 0, 1)) $
 
 既然我们在降噪管线中已经利用 ALICE 编码在时空域上提取并重构了光场的最大熵分布状态 $(bold(v), omega)$，我们自然可以将其作为*先验知识（Prior）*，在下一帧发射光线时对半球空间进行路径引导（Path Guiding）。
 
-基于极大熵的角向能量密度，我们构造定义在完整单位球面 $S^2$ 上的引导概率密度函数（PDF）：
-$ p_"ALICE" (arrow(u)) = C / ((1 - kappa hat(bold(v)) dot arrow(u))^4) $
-其中 $hat(bold(v))$ 为上一帧重建的引导主轴，$kappa$ 为对应的特征参数。
-
-== 全球面积分与规范化常数
-
-为了使其成为一个严格的概率密度函数，我们需要在全立体角上求解规范化常数 $C$。令 $mu = hat(bold(v)) dot arrow(u) = cos theta$，方位角为 $phi$，积分如下：
+基于闭包的角向能量密度，引导 PDF 直接取为
 $
-                      integral_(S^2) p_"ALICE" (arrow(u)) d arrow(u) & = 1 \
-  C integral_0^(2pi) d phi integral_(-1)^1 1 / (1 - kappa mu)^4 d mu & = 1
+  p_"ALICE"(arrow(u)) =
+  (1-kappa^2)^2 /
+  (4 pi (1-kappa hat(bold(v)) dot arrow(u))^3).
 $
+该表达式已经在完整单位球面 $S^2$ 上归一化，并且其一阶矩正好是
+$kappa hat(bold(v))$。
 
-对方位角积分得到 $2pi$，对 $mu$ 求定积分：
-$ 2pi C [ 1 / (3 kappa (1 - kappa mu)^3) ]_(-1)^1 = 1 $
-$ (2pi C) / (3 kappa) ( 1 / (1 - kappa)^3 - 1 / (1 + kappa)^3 ) = 1 $
+== 解析逆变换采样
 
-通分化简括号内的项：
+令 $mu = hat(bold(v)) dot arrow(u)$，则边缘分布满足
 $
-  ((1+kappa)^3 - (1-kappa)^3) / ((1-kappa^2)^3) = (2kappa^3 + 6kappa) / ((1-kappa^2)^3) = (2kappa(kappa^2 + 3)) / ((1-kappa^2)^3)
+  (1-kappa mu)^(-2) =
+  op("lerp")((1+kappa)^(-2), (1-kappa)^(-2), xi_1).
 $
+因此在 $kappa > 0$ 时可直接计算
+$
+  mu =
+  (1 -
+    [op("lerp")((1+kappa)^(-2), (1-kappa)^(-2), xi_1)]^(-1/2))
+  / kappa.
+$
+$kappa$ 接近零时使用 $mu=2 xi_1-1$；方位角仍为
+$phi=2 pi xi_2$。该采样器与上式 PDF 完全配对，无需拒绝采样。
 
-代回原式解得代数规范化常数：
-$ C = (3(1-kappa^2)^3) / (4pi(3+kappa^2)) $
-
-
-== 严格解析逆变换采样
-
-为了在 GPU 中实现零舍弃率（Zero-Rejection）的高效重要性采样，我们对边缘概率密度分布 $p(mu) = 2pi C / (1 - kappa mu)^4$ 求解累积分布函数（CDF）：
-$ F(mu) = integral_(-1)^mu p(x) d x = (2pi C) / (3 kappa) ( 1 / (1 - kappa mu)^3 - 1 / (1 + kappa)^3 ) $
-
-由归一化条件可知 $F(1) = 1$。为了通过均匀分布的随机数 $xi_1 in [0, 1)$ 生成采样角 $mu$，我们令 $F(mu) / F(1) = xi_1$：
-$ ( 1 / (1 - kappa mu)^3 - 1 / (1 + kappa)^3 ) / ( 1 / (1 - kappa)^3 - 1 / (1 + kappa)^3 ) = xi_1 $
-
-为了在 Shader 中高效求解，我们定义边界常数 $a$ 与 $b$：
-$ a = 1 / (1 + kappa)^3, quad b = 1 / (1 - kappa)^3 $
-代入化简可得：
-$ ( (1-kappa mu)^(-3) - a ) / (b - a) = xi_1 $
-$ (1 - kappa mu)^(-3) = a + xi_1 (b - a) = op("lerp")(a, b, xi_1) $
-
-对方程两边取 $-1/3$ 次幂，即可得到仅需两行代码即可在 GPU 上完成的解析逆映射方程：
-$ mu = (1 - [ op("lerp")(a, b, xi_1) ]^(-1/3)) / kappa $
-
-结合由 $xi_2$ 均匀生成的方位角 $phi = 2pi xi_2$，我们能够在 $O(1)$ 时间内直接采样出完全符合 ALICE 概率分布的射线方向。
 
 == 动态多重重要性采样
 
 虽然 ALICE 提供了极其逼近真实光场的引导，但在遮挡剧烈变化的动态场景中，前一帧的引导先验可能失效（例如光源突然移动或相机瞬移）。为了保证渲染方程的绝对无偏性（Unbiasedness）并避免除零方差爆炸，我们将 ALICE 采样与经典的余弦重要性采样（Cosine-weighted Sampling）进行多重重要性采样（MIS）@veach1995optimally 混合。
 
-在代数物理上，ALICE 的无量纲漂移速度 $rho = (|bold(v)|) / omega$ 反映了光场的“定向确信度”。因此，我们将 ALICE 的混合概率权重 $P_"guide"$ 直接与 $rho$ 挂钩：
+在闭包中，归一化一阶矩长度 $rho = (|bold(v)|) / omega$ 反映光场的“定向确信度”。因此，我们将 ALICE 的混合概率权重 $P_"guide"$ 直接与 $rho$ 挂钩：
 $
   P_"guide" = cases(
     0.975 dot rho & "if" |bold(v)| > 10^(-8),

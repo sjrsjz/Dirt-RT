@@ -33,7 +33,9 @@
 #include "/lib/pbr/material.glsl"
 #include "/lib/common.glsl"
 #if EON_ENABLED
+#define EON_RT_CUSTOM_TEXTURES
 #include "/lib/lighting/eon.glsl"
+#undef EON_RT_CUSTOM_TEXTURES
 #endif
 
 // ray0 builds the primary-surface cache. Continuation entries define exactly

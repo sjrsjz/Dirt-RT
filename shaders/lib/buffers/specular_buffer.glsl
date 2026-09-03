@@ -21,7 +21,7 @@
 #define REFR_N_META      2u
 #define REFR_N_TRANSPORT 3u
 
-// MaxEnt-4 stores the energy weighted first directional moment in xyz and
+// The four-parameter MaxEnt state stores the energy-weighted first directional moment in xyz and
 // total luminance energy in w. CoCg is deliberately scalar/angularly shared.
 struct SpecularMaxEnt {
     vec4 maxEntY;
@@ -218,7 +218,7 @@ void readRefrGeo(uvec2 xy, out vec3 pos, out vec3 T) {
     T = decodeNormalU(v.w);
 }
 
-// N=0 is MaxEnt-4 Y, CoCg and radial metadata. Before temporal/spatial
+// N=0 is the four-parameter MaxEnt Y state, CoCg and radial metadata. Before temporal/spatial
 // processing the lower half is ray hit distance; the final spatial resolve
 // replaces it with filtered virtual distance. Diagnostics live in DebugBuffer
 // and never change this production layout.

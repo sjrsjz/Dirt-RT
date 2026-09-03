@@ -2,23 +2,25 @@
 #define LIGHTING_EON_GLSL
 
 // ============================================================================
-// EON rough diffuse BRDF + four-parameter MaxEnt convolution
+// EON rough diffuse BRDF + four-parameter directional convolution
 // ============================================================================
 //
 // EON is the energy-preserving Oren--Nayar model by Portsmouth, Kutz and Hill.
 // It consists of a Fujii Oren--Nayar single-scattering lobe plus a reciprocal
 // multiple-scattering compensation lobe.
 //
-// This file also supplies a positive, no-ringing convolution of EON with the
-// four-parameter MaxEnt/MaxEnt incident-light representation
+// This file also supplies a LUT-assisted convolution of EON with the
+// four-parameter incident-light representation
 //
 //     maxEntY = vec4(v, omega),  |v| <= omega .
 //
-// The convolution samples the normalized MaxEnt *energy* density (g^-4) with
-// its analytic inverse CDF. Every summand is non-negative, so unlike a finite
-// SH reconstruction this runtime path cannot introduce negative ringing.
-// The deterministic quadrature is approximate; increase
-// EON_MAXENT_QUADRATURE_SAMPLES when the extra cost is acceptable.
+// Its normalized directional energy density is
+//
+//   p(u) = (1-kappa^2)^2 / (4*pi*(1-kappa*dot(axis,u))^3),
+//
+// where kappa is exactly the normalized first-moment length. The Lambert
+// term is closed form. The view-dependent FON partition and the
+// multiple-scattering residual are reconstructed from Iris custom textures.
 //
 // Important conventions
 // ---------------------
@@ -33,15 +35,16 @@
 // - The MaxEnt overload assumes CoCg is angularly shared, as in
 //   project_maxent_irradiance().
 //
-// The degree-8 directional-albedo polynomial below was fitted in
-// temp/lighting/fit_fon_albedo.wls. It is constrained to be exact at grazing
-// incidence and exact in the projected-hemisphere average. Its maximum error
-// against the analytic FON directional albedo is 5.67e-5 on 100001 test points
-// (the published degree-4 EON fit is about 6.02e-4 on the same grid).
+// The FON directional-albedo polynomial is the approximation used by EON.
 // ============================================================================
 
-#ifndef EON_MAXENT_QUADRATURE_SAMPLES
-#define EON_MAXENT_QUADRATURE_SAMPLES 16
+// Vulkanite exposes Iris custom textures in descriptor set 2, sorted by
+// sampler name. aaaRtBlueNoise occupies binding 0, so this sampler occupies
+// binding 1 in ray-tracing programs. Ordinary Iris programs bind it by name.
+#ifdef EON_RT_CUSTOM_TEXTURES
+layout(set = 2, binding = 1) uniform sampler3D aabEonKappaLut;
+#else
+uniform sampler3D aabEonKappaLut;
 #endif
 
 const float EON_PI = 3.14159265358979323846;
@@ -49,24 +52,13 @@ const float EON_INV_PI = 1.0 / EON_PI;
 const float EON_C1 = 0.5 - 2.0 / (3.0 * EON_PI);
 const float EON_C2 = 2.0 / 3.0 - 28.0 / (15.0 * EON_PI);
 
-// Constrained approximation of G_F(mu) / pi, expressed in t = 1-mu.
-// Horner evaluation matters: the alternating high-order coefficients are not
-// suitable for an FP16 polynomial evaluation.
 float eon_fon_g_over_pi(float mu) {
-    float t = 1.0 - clamp(mu, 0.0, 1.0);
-    float p = 2.466759312119113;
-    p = -10.456272593424314 + t * p;
-    p = 18.308971828815313 + t * p;
-    p = -17.165026239689762 + t * p;
-    p = 9.377275496109155 + t * p;
-    p = -3.2405670832887474 + t * p;
-    p = 0.9701930884155742 + t * p;
-    p = 0.02645960015447481 + t * p;
-    return t * p;
+    float x = 1.0 - clamp(mu, 0.0, 1.0);
+    return x * (0.0571085289 + x * (0.491881867
+        + x * (-0.332181442 + x * 0.0714429953)));
 }
 
-// Unit-albedo FON directional albedo E_F(mu). The degree-8 fit is used here
-// rather than acos/sqrt-heavy exact G_F.
+// Unit-albedo FON directional albedo E_F(mu).
 float eon_fon_directional_albedo(float mu, float roughness) {
     float r = clamp(roughness, 0.0, 1.0);
     float AF = 1.0 / (1.0 + EON_C1 * r);
@@ -79,11 +71,8 @@ float eon_fon_average_albedo(float roughness) {
     return AF * (1.0 + EON_C2 * r);
 }
 
-// Missing unit-albedo FON energy, with a clamp that only suppresses the last
-// few float32 ulps at grazing incidence. The constrained polynomial is
-// non-negative in double precision over mu in [0,1].
 float eon_fon_missing(float mu) {
-    return max(EON_C1 - eon_fon_g_over_pi(mu), 0.0);
+    return EON_C1 - eon_fon_g_over_pi(mu);
 }
 
 // Evaluate the EON BRDF. This returns f_r, not f_r * NoL.
@@ -121,7 +110,7 @@ vec3 eon_brdf(vec3 wi, vec3 wo, vec3 normal,
 }
 
 // Directional albedo of the complete EON BRDF under uniform illumination.
-// This gives an exact white-furnace result for rho=1 up to the P8 fit error.
+// This gives the matching white-furnace result for the same FON fit.
 vec3 eon_directional_albedo(vec3 rho, float roughness, float mu) {
     float r = clamp(roughness, 0.0, 1.0);
     rho = clamp(rho, vec3(0.0), vec3(1.0));
@@ -291,143 +280,299 @@ float eon_direction_pdf(vec3 wo, vec3 wi, vec3 normal,
         transpose(frame) * wi, roughness);
 }
 
-float eon_maxent_kappa(float momentLength, float omega) {
-    if (omega <= 1e-8)
-        return 0.0;
-    float rho = clamp(momentLength / omega, 0.0, 1.0 - 1e-6);
-    return 3.0 * rho
-        / (2.0 + sqrt(max(4.0 - 3.0 * rho * rho, 1e-12)));
-}
-
-// Exact normalized cosine moment of the four-parameter MaxEnt energy lobe.
-// Used to make the r=0 (Lambert) limit analytic rather than quadrature-limited.
-float eon_maxent_cosine_moment(float kappa, float axisNoN) {
-    if (kappa <= 1e-6)
-        return 0.25;
-    if (1.0 - kappa <= 1e-5)
-        return max(axisNoN, 0.0);
-
-    float k2 = kappa * kappa;
-    float u = clamp(axisNoN, -1.0, 1.0);
-    float u2 = u * u;
-    float d = max(1.0 - k2 + k2 * u2, 1e-12);
-    float d32 = d * sqrt(d);
-    float symmetric = 3.0 + 6.0 * k2 * (-1.0 + 2.0 * u2)
-        + k2 * k2 * (3.0 - 12.0 * u2 + 8.0 * u2 * u2);
-    return max((symmetric + 8.0 * kappa * u * d32)
-        / (4.0 * (3.0 + k2) * d32), 0.0);
-}
-
-float eon_radical_inverse(uint bits) {
-    bits = (bits << 16u) | (bits >> 16u);
-    bits = ((bits & 0x55555555u) << 1u)
-        | ((bits & 0xAAAAAAAAu) >> 1u);
-    bits = ((bits & 0x33333333u) << 2u)
-        | ((bits & 0xCCCCCCCCu) >> 2u);
-    bits = ((bits & 0x0F0F0F0Fu) << 4u)
-        | ((bits & 0xF0F0F0F0u) >> 4u);
-    bits = ((bits & 0x00FF00FFu) << 8u)
-        | ((bits & 0xFF00FF00u) >> 8u);
-    return float(bits) * 2.3283064365386963e-10;
-}
-
-// Sample the normalized angular energy density proportional to
-// (1-kappa*dot(axis,wi))^-4. The cube-root inverse is different from the
-// square-root inverse used for the g^-3 directional probability density.
-vec3 eon_sample_maxent_energy(vec3 axis, float kappa, vec2 xi,
-        vec3 tangent, vec3 bitangent) {
-    float mu;
-    if (kappa <= 1e-5) {
-        mu = 2.0 * xi.x - 1.0;
-    } else {
-        float inverseCubeMin = pow(1.0 + kappa, -3.0);
-        float inverseCubeMax = pow(max(1.0 - kappa, 1e-6), -3.0);
-        float inverseCube = mix(inverseCubeMin, inverseCubeMax, xi.x);
-        mu = (1.0 - pow(max(inverseCube, 1e-20), -1.0 / 3.0))
-            / kappa;
-        mu = clamp(mu, -1.0, 1.0);
+// Exact clamped-cosine response of the cubic-reciprocal closure.
+float eon_cosine_response(float kappa, float cosine) {
+    float oneMinusK2 = (1.0 - kappa) * (1.0 + kappa);
+    float kCosine = kappa * cosine;
+    float denominator = sqrt(max(
+        oneMinusK2 + kCosine * kCosine, 1.0e-20));
+    if (kCosine < 0.0) {
+        float sumTerm = denominator - kCosine;
+        return oneMinusK2 * oneMinusK2
+            / (4.0 * denominator * sumTerm * sumTerm);
     }
-
-    float phi = 2.0 * EON_PI * xi.y;
-    float sinTheta = sqrt(max(1.0 - mu * mu, 0.0));
-    return normalize(axis * mu + sinTheta
-        * (tangent * cos(phi) + bitangent * sin(phi)));
+    return (oneMinusK2 + 2.0 * kCosine * kCosine)
+        / (4.0 * denominator) + 0.5 * kCosine;
 }
 
-// Convolve a total RGB incident-light energy with EON using the MaxEnt-4
-// moments in maxEntY. totalRgb and maxEntY.w must describe the same signal;
-// only their ratio/chroma differs.
+float eon_cubic_bernstein(vec4 control, float t) {
+    float a = mix(control.x, control.y, t);
+    float b = mix(control.y, control.z, t);
+    float c = mix(control.z, control.w, t);
+    return mix(mix(a, b, t), mix(b, c, t), t);
+}
+
+// The RGBA channels are cubic Bernstein controls in transformed kappa.
+// Texture axes are axis polar angle, outgoing cosine, and four packed
+// relative-azimuth segments.
+float eon_lut_fon_partition(float kappa, vec3 axis,
+        float muO, float sineO, float irradiance) {
+    const float KAPPA_MAX = 0.999;
+    const float INVERSE_ATANH_KAPPA_MAX = 0.2631439642;
+    const float SEGMENT_COUNT = 4.0;
+
+    float boundedKappa = clamp(kappa, 0.0, KAPPA_MAX);
+    float transformedKappa = 0.5
+        * log((1.0 + boundedKappa) / (1.0 - boundedKappa))
+        * INVERSE_ATANH_KAPPA_MAX;
+    float segment = min(floor(SEGMENT_COUNT * transformedKappa),
+        SEGMENT_COUNT - 1.0);
+    float localKappa = SEGMENT_COUNT * transformedKappa - segment;
+
+    ivec3 size = textureSize(aabEonKappaLut, 0);
+    float axisCoordinate = 1.0
+        - acos(clamp(axis.z, -1.0, 1.0)) / EON_PI;
+    float axisTexel = (0.5 + axisCoordinate * float(size.x - 1))
+        / float(size.x);
+    float outgoingTexel = (0.5 + muO * float(size.y - 1))
+        / float(size.y);
+
+    float transverse = sqrt(max(
+        (1.0 - axis.z) * (1.0 + axis.z), 0.0));
+    float relativeCosine = transverse > 1.0e-7
+        ? clamp(axis.x / transverse, -1.0, 1.0) : 0.0;
+    float relativeCoordinate = 0.5 * (relativeCosine + 1.0);
+    float relativeResolution = float(size.z) / SEGMENT_COUNT;
+    float packedTexel = segment * relativeResolution
+        + relativeCoordinate * (relativeResolution - 1.0);
+    float packedCoordinate = (packedTexel + 0.5) / float(size.z);
+
+    vec4 control = textureLod(aabEonKappaLut,
+        vec3(axisTexel, outgoingTexel, packedCoordinate), 0.0);
+    return irradiance * sineO
+        * eon_cubic_bernstein(control, localKappa);
+}
+
+// Closed missing-energy residual; kept arithmetic-only to avoid a second
+// incoherent texture access.
+float eon_missing_shape_integral_small_k(float kappa, float cosine)
+{
+    float c2 = cosine * cosine;
+    float q0 = 0.05380804990;
+    float q1 = cosine * 0.1194479670;
+    float q2 = -0.04071064876 + c2 * 0.1221319463;
+    float q3 = cosine * (-0.03198186694 + c2 * 0.05330311157);
+    float q4 = -0.007239172103 + c2
+        * (0.03168107227 - c2 * 0.01660592660);
+    float q5 = cosine * (-0.01774579306 + c2
+        * (0.05083183402 - c2 * 0.02975771714));
+    float q6 = -0.002621532148 + c2 * (0.01161714248 + c2
+        * (-0.003170355181 - c2 * 0.004317443507));
+    float q7 = cosine * (-0.01108880632 + c2 * (0.04064661330 + c2
+        * (-0.03859071524 + c2 * 0.009719148892)));
+    float q8 = -0.001230165015 + c2 * (0.004962958342 + c2
+        * (0.001746585325 + c2 * (-0.006197769745
+        + c2 * 0.001007317627)));
+    float q9 = cosine * (-0.007560696613 + c2 * (0.03326857278 + c2
+        * (-0.04438954593 + c2 * (0.02482292180
+        - c2 * 0.006052431775))));
+    float q10 = -0.0006675136980 + c2 * (0.002268632956 + c2
+        * (0.003498986647 + c2 * (-0.007236667336 + c2
+        * (0.002589612020 - c2 * 0.0004666163294))));
+    float result = q10;
+    result = result * kappa + q9;
+    result = result * kappa + q8;
+    result = result * kappa + q7;
+    result = result * kappa + q6;
+    result = result * kappa + q5;
+    result = result * kappa + q4;
+    result = result * kappa + q3;
+    result = result * kappa + q2;
+    result = result * kappa + q1;
+    return result * kappa + q0;
+}
+
+float eon_missing_shape_integral_axis(float kappa, float cosine)
+{
+    float k2 = kappa * kappa;
+    float one_minus_k2 = (1.0 - kappa) * (1.0 + kappa);
+    float k6 = k2 * k2 * k2;
+    if (cosine >= 0.0)
+    {
+        float p = 42865797180.0 + kappa * (-47591289882.0 + kappa
+            * (-24453317468.0 + kappa * (9856501519.0 + kappa
+            * (27969867127.0 - 13756200.0 * kappa))));
+        float q = -7144299530.0 + kappa * (-2784567648.0 + kappa
+            * (2280134616.0 + 3300999181.0 * kappa));
+        float one_plus_k = 1.0 + kappa;
+        return (one_plus_k * one_plus_k * kappa * p
+            - 6.0 * one_minus_k2 * one_minus_k2 * q
+            * log(max(1.0 - kappa, 1.0e-20)))
+            / (120000000000.0 * k6);
+    }
+    float p = 42865797180.0 + kappa * (47591289882.0 + kappa
+        * (-24453317468.0 + kappa * (-9856501519.0 + kappa
+        * (27969867127.0 + 13756200.0 * kappa))));
+    float q = 7144299530.0 + kappa * (-2784567648.0 + kappa
+        * (-2280134616.0 + 3300999181.0 * kappa));
+    float one_minus_k = 1.0 - kappa;
+    return (-one_minus_k * one_minus_k * kappa * p
+        + 6.0 * one_minus_k2 * one_minus_k2 * q * log(1.0 + kappa))
+        / (120000000000.0 * k6);
+}
+
+float eon_asinh_endpoint_difference(float z1, float z0, float s2)
+{
+    float root1 = sqrt(max(z1 * z1 + s2, 1.0e-30));
+    float root0 = sqrt(max(z0 * z0 + s2, 1.0e-30));
+    if (z0 >= 0.0)
+        return log((z1 + root1) / (z0 + root0));
+    if (z1 <= 0.0)
+        return log((-z0 + root0) / (-z1 + root1));
+    return log(z1 + root1) + log(-z0 + root0) - log(s2);
+}
+
+float eon_missing_shape_integral_closed(float kappa, float cosine)
+{
+    if (kappa <= 0.4)
+        return eon_missing_shape_integral_small_k(kappa, cosine);
+
+    float c2 = cosine * cosine;
+    float one_minus_c2 = max((1.0 - abs(cosine))
+        * (1.0 + abs(cosine)), 0.0);
+    if (one_minus_c2 < 1.0e-4)
+        return eon_missing_shape_integral_axis(kappa, cosine);
+
+    const float s0 = -0.0004585400;
+    const float s1 = 0.3300999181;
+    const float s2m = 0.0760044872;
+    const float s3 = -0.0464094608;
+    const float s4 = -0.0714429953;
+    float k2 = kappa * kappa;
+    float n0 = 2.0 + k2 * (1.0 - c2);
+    float n1 = -4.0 * kappa * cosine;
+    float n2 = k2 * (3.0 * c2 - 1.0);
+    float pm1 = s0 * n0;
+    float pm2 = s0 * n1 + s1 * n0;
+    float pm3 = s0 * n2 + s1 * n1 + s2m * n0;
+    float pm4 = s1 * n2 + s2m * n1 + s3 * n0;
+    float pm5 = s2m * n2 + s3 * n1 + s4 * n0;
+    float pm6 = s3 * n2 + s4 * n1;
+    float pm7 = s4 * n2;
+
+    float inverse_k = 1.0 / kappa;
+    float inverse2 = inverse_k * inverse_k;
+    float inverse3 = inverse2 * inverse_k;
+    float inverse4 = inverse3 * inverse_k;
+    float inverse5 = inverse4 * inverse_k;
+    float inverse6 = inverse5 * inverse_k;
+    float inverse7 = inverse6 * inverse_k;
+    float inverse8 = inverse7 * inverse_k;
+    float v1 = pm1 * inverse2;
+    float v2 = pm2 * inverse3;
+    float v3 = pm3 * inverse4;
+    float v4 = pm4 * inverse5;
+    float v5 = pm5 * inverse6;
+    float v6 = pm6 * inverse7;
+    float v7 = pm7 * inverse8;
+
+    float p0 = cosine * (v1 + cosine * (v2 + cosine * (v3 + cosine
+        * (v4 + cosine * (v5 + cosine * (v6 + cosine * v7))))));
+    float p1 = v1 + cosine * (2.0 * v2 + cosine * (3.0 * v3 + cosine
+        * (4.0 * v4 + cosine * (5.0 * v5 + cosine
+        * (6.0 * v6 + cosine * 7.0 * v7)))));
+    float p2 = v2 + cosine * (3.0 * v3 + cosine * (6.0 * v4 + cosine
+        * (10.0 * v5 + cosine * (15.0 * v6 + cosine * 21.0 * v7))));
+    float p3 = v3 + cosine * (4.0 * v4 + cosine * (10.0 * v5
+        + cosine * (20.0 * v6 + cosine * 35.0 * v7)));
+    float p4 = v4 + cosine * (5.0 * v5 + cosine
+        * (15.0 * v6 + cosine * 35.0 * v7));
+    float p5 = v5 + cosine * (6.0 * v6 + cosine * 21.0 * v7);
+    float p6 = v6 + cosine * 7.0 * v7;
+    float p7 = v7;
+
+    float one_minus_k2 = (1.0 - kappa) * (1.0 + kappa);
+    float ss = one_minus_k2 * one_minus_c2;
+    float ss2 = ss * ss;
+    float ss3 = ss2 * ss;
+    float r0 = (-p1 - 2.0 * ss * p3 + 8.0 * ss2 * p5
+        - 16.0 * ss3 * p7) / 3.0;
+    float r1 = (2.0 * p0 - 2.0 * ss2 * p4 + 5.0 * ss3 * p6)
+        / (2.0 * ss);
+    float r2 = -p3 + 4.0 * ss * p5 - 8.0 * ss2 * p7;
+    float r3 = (2.0 * p0 + ss * p2 - 4.0 * ss2 * p4
+        + 10.0 * ss3 * p6) / (3.0 * ss2);
+    float r4 = p5 - 2.0 * ss * p7;
+    float r5 = 0.5 * p6;
+    float r6 = p7 / 3.0;
+    float a = p4 - 2.5 * ss * p6;
+
+    float z0 = -cosine;
+    float z1 = kappa - cosine;
+    float polynomial0 = r0 + z0 * (r1 + z0 * (r2 + z0 * (r3
+        + z0 * (r4 + z0 * (r5 + z0 * r6)))));
+    float polynomial1 = r0 + z1 * (r1 + z1 * (r2 + z1 * (r3
+        + z1 * (r4 + z1 * (r5 + z1 * r6)))));
+    float q0 = z0 * z0 + ss;
+    float q1 = z1 * z1 + ss;
+    float rational = polynomial1 / (q1 * sqrt(q1))
+        - polynomial0 / (q0 * sqrt(q0));
+    float transcendental = a * eon_asinh_endpoint_difference(z1, z0, ss);
+    return 0.25 * one_minus_k2 * one_minus_k2
+        * (rational + transcendental);
+}
+
+
+vec3 eon_channel_response(float kappa, vec3 axis,
+        float muO, float sineO, float roughness, vec3 rho) {
+    float irradiance = eon_cosine_response(kappa, axis.z);
+    float fonPartition = eon_lut_fon_partition(
+        kappa, axis, muO, sineO, irradiance);
+
+    float AF = 1.0 / (1.0 + EON_C1 * roughness);
+    vec3 single = rho * (AF * EON_INV_PI)
+        * (irradiance + roughness * fonPartition);
+
+    float average = AF * (1.0 + EON_C2 * roughness);
+    vec3 rhoMS = rho * rho * average
+        / max(vec3(1.0) - rho * (1.0 - average), vec3(1.0e-6));
+    float shapeIntegral = eon_missing_shape_integral_closed(kappa, axis.z);
+    vec3 multiple = rhoMS * EON_INV_PI * (roughness * AF)
+        * (eon_fon_missing(muO) * shapeIntegral / (EON_C1 - EON_C2));
+    return single + multiple;
+}
+
+// Convolve a total RGB incident-light energy with EON. totalRgb and
+// maxEntY.w must describe the same signal; only their ratio/chroma differs.
 vec3 eon_project_maxent(vec4 maxEntY, vec3 totalRgb,
         vec3 normal, vec3 wo, float roughness, vec3 rho) {
     float omega = maxEntY.w;
-    if (omega <= 1e-8 || dot(normal, wo) <= 0.0)
+    float NoO = dot(normal, wo);
+    if (omega <= 1e-8 || NoO <= 0.0)
         return vec3(0.0);
 
     totalRgb = max(totalRgb, vec3(0.0));
+    rho = clamp(rho, vec3(0.0), vec3(1.0));
+    float r = clamp(roughness, 0.0, 1.0);
     float momentLength = length(maxEntY.xyz);
     vec3 axis = momentLength > 1e-8
         ? maxEntY.xyz / momentLength : normal;
-    float momentRho = clamp(momentLength / omega, 0.0, 1.0);
-    float kappa = eon_maxent_kappa(momentLength, omega);
-    float r = clamp(roughness, 0.0, 1.0);
+    float kappa = clamp(momentLength / omega, 0.0, 1.0);
 
-    // Lambert has a known analytic MaxEnt convolution. Besides being faster,
-    // this branch guarantees bit-stable continuity with maxent_irradiance().
-    if (r <= 1e-5) {
-        float cosineMoment = eon_maxent_cosine_moment(
-            kappa, dot(axis, normal));
-        return totalRgb * clamp(rho, vec3(0.0), vec3(1.0))
-            * (EON_INV_PI * cosineMoment);
-    }
-
-    // Isotropic MaxEnt is uniform over the full sphere. Its convolution is
-    // totalRgb/(4*pi) times EON's directional albedo, so no quadrature is
-    // required and the white-furnace case remains exact to the P8 fit.
-    if (momentRho <= 1e-5) {
-        return totalRgb * eon_directional_albedo(
-            rho, r, max(dot(normal, wo), 0.0)) / (4.0 * EON_PI);
-    }
-
-    // A cone-boundary state is a directional atom. FP16 storage moves a true
-    // atom slightly inside the cone, hence the small representable tolerance.
-    if (1.0 - momentRho <= 2e-3) {
+    // FP16 storage moves directional atoms slightly inside the cone.
+    if (1.0 - kappa <= 2e-3) {
         float NoI = max(dot(normal, axis), 0.0);
         return totalRgb * eon_brdf(axis, wo, normal, r, rho) * NoI;
     }
 
-    // Align phi=0 with the surface normal projected around the MaxEnt axis.
-    // This removes arbitrary world-axis orientation from the deterministic
-    // quadrature. The outgoing direction is the secondary fallback for the
-    // coaxial axis/normal case.
-    vec3 tangent = normal - axis * dot(axis, normal);
-    float tangentLength2 = dot(tangent, tangent);
-    if (tangentLength2 <= 1e-8) {
-        tangent = wo - axis * dot(axis, wo);
-        tangentLength2 = dot(tangent, tangent);
-    }
-    if (tangentLength2 <= 1e-8) {
-        tangent = abs(axis.y) < 0.999
-            ? cross(vec3(0.0, 1.0, 0.0), axis)
-            : cross(vec3(1.0, 0.0, 0.0), axis);
-        tangentLength2 = dot(tangent, tangent);
-    }
-    tangent *= inversesqrt(max(tangentLength2, 1e-12));
-    vec3 bitangent = cross(axis, tangent);
+    // Uniform directional energy has an exact response.
+    if (kappa <= 1e-5)
+        return totalRgb * eon_directional_albedo(rho, r, NoO)
+            / (4.0 * EON_PI);
 
-    vec3 integral = vec3(0.0);
-    for (int i = 0; i < EON_MAXENT_QUADRATURE_SAMPLES; ++i) {
-        // Midpoint stratification avoids evaluating either singular CDF end.
-        vec2 xi = vec2((float(i) + 0.5)
-                / float(EON_MAXENT_QUADRATURE_SAMPLES),
-            eon_radical_inverse(uint(i)));
-        vec3 wi = eon_sample_maxent_energy(axis, kappa, xi,
-            tangent, bitangent);
-        float NoI = max(dot(normal, wi), 0.0);
-        integral += eon_brdf(wi, wo, normal, r, rho) * NoI;
-    }
+    float muO = clamp(NoO, 0.0, 1.0);
+    float sineO = sqrt(max((1.0 - muO) * (1.0 + muO), 0.0));
+    vec3 tangent;
+    if (sineO > 1.0e-6)
+        tangent = (wo - normal * muO) / sineO;
+    else
+        tangent = eon_surface_frame(normal)[0];
+    vec3 bitangent = cross(normal, tangent);
+    vec3 localAxis = vec3(
+        dot(axis, tangent), dot(axis, bitangent), dot(axis, normal));
 
-    return max(totalRgb * integral
-        / float(EON_MAXENT_QUADRATURE_SAMPLES), vec3(0.0));
+    return totalRgb * eon_channel_response(
+        kappa, localAxis, muO, sineO, r, rho);
 }
 
 // Convert the MaxEnt shared-chroma representation back to its total RGB energy
