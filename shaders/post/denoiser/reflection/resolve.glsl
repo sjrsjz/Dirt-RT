@@ -79,7 +79,8 @@ void main() {
     committed.surfacePosition = currentGeometry.position;
     committed.geometryNormal = currentGeometry.normal;
     committed.roughness = currentGeometry.roughness;
-    committed.materialID = currentGeometry.materialID;
+    committed.materialID = maxentReflectionHistoryMaterialID(
+        currentGeometry.materialID);
     committed.hitDistance = currentTrackingHitDistance;
     if (hasHistory) {
         committed.signal = maxentMixMaxEnt(reprojected.signal,

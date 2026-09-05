@@ -6,7 +6,7 @@
 const float MAXENT_TEMPORAL_DENOISER_INTRINSIC_VARIANCE = 1e-10;
 const float MAXENT_TEMPORAL_FIXED_ALPHA = 0.01;
 // 1-dot(A,B) approximates half the squared angular separation without acos.
-const float MAXENT_SPATIAL_PDF_DIRECTION_EXPONENT_SCALE = 64.0;
+const float MAXENT_SPATIAL_PDF_DIRECTION_EXPONENT_SCALE = 0.0; //64.0;
 
 // Cumulative spatial confidence entering each A-Trous pass. These fixed-kernel factors approximate the previous
 // flat, fully accepted estimator-variance contraction without changing the linearly propagated MC variance field.

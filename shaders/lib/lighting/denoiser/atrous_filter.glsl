@@ -95,7 +95,8 @@ float denoiserSpatialWeight(DenoiserMaxEntSignal centerSignal,
     DenoiserMaxEntSignal sampleSignal,
     vec3 samplePrimaryRay, float surfaceGeometryExponent,
     float kernelWeight,
-    float phiLuminance,
+    float phiLuminance, float centerEffectiveSamples,
+    float sampleEffectiveSamples,
     float virtualDistanceAlpha, vec3 centerVirtualPosition,
     vec3 centerVirtualNormal, float virtualRejectionScale,
     out float virtualDistanceWeight) {
@@ -106,11 +107,15 @@ float denoiserSpatialWeight(DenoiserMaxEntSignal centerSignal,
             sampleSignal.virtualDistance, virtualRejectionScale);
     float distanceSq = maxentLightSampleDistanceSq(
             centerSignal.maxEntY, sampleSignal.maxEntY);
-    // Difference noise uses both MC variance fields. phiLuminance already contains sqrt(N_eff_center), so the
-    // complete ratio is N_eff_center*distanceSq/(V_MC_center+V_MC_sample); the sample N_eff is intentionally absent.
-    float combinedMonteCarloVariance = centerSignal.standardDeviation * centerSignal.standardDeviation
-        + sampleSignal.standardDeviation * sampleSignal.standardDeviation;
-    signalExponent += phiLuminance * sqrt(distanceSq / max(combinedMonteCarloVariance, 1e-20));
+    // The uncertainty of the center-sample difference is the sum of the two
+    // estimator variances: V_c/N_eff,c + V_s/N_eff,s.
+    float differenceEstimatorVariance =
+        centerSignal.standardDeviation * centerSignal.standardDeviation
+            / max(centerEffectiveSamples, 1.0)
+        + sampleSignal.standardDeviation * sampleSignal.standardDeviation
+            / max(sampleEffectiveSamples, 1.0);
+    signalExponent += phiLuminance
+        * sqrt(distanceSq / max(differenceEstimatorVariance, 1e-20));
     float surfaceWeight = kernelWeight * exp(-signalExponent);
     virtualDistanceWeight = kernelWeight * virtualDistanceAlpha
         * exp(-surfaceGeometryExponent / max(virtualDistanceAlpha, 1e-5));

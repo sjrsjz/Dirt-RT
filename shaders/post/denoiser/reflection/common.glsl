@@ -12,6 +12,12 @@ float maxentPerceptualRoughness(float ggxAlpha) {
     return sqrt(clamp(ggxAlpha, 0.0, 1.0));
 }
 
+// Version the reflection-history signature whenever the stored lighting
+// measure changes, so persistent data cannot cross incompatible pipelines.
+uint maxentReflectionHistoryMaterialID(uint materialID) {
+    return materialID ^ 0x4000u;
+}
+
 struct MaxEntGeometry {
     vec3 position;
     vec3 normal;

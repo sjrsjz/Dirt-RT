@@ -58,7 +58,8 @@ void main() {
     DenoiserMaxEntSignal centerCurrent =
         denoiserUnpackMaxEntSignalTrusted(centerCurrentWords);
     float centerCurrentEffectiveSamples = denoiserSpatialLoadIndependentCurrentEffectiveSamples(pixel);
-    if (!statisticsValidEffectiveSampleCount(centerCurrentEffectiveSamples)) {
+    if (!statisticsValidEffectiveSampleCount(centerGeometry.effectiveSamples)
+            || !statisticsValidEffectiveSampleCount(centerCurrentEffectiveSamples)) {
         denoiserSpatialStoreInvalid(pixel);
         return;
     }
@@ -70,7 +71,8 @@ void main() {
             centerGeometry.primaryRay, centerSignal.virtualDistance);
     float virtualRejectionScale = denoiserSpatialVirtualRejectionScale(
             centerGeometry.ggxAlpha, centerSignal.virtualDistance);
-    float lightDifferenceScale = DENOISER_SPATIAL_PHI_LUMINANCE * sqrt(centerGeometry.effectiveSamples) * denoiserSpatialRejectionConfidenceForStep(DENOISER_SPATIAL_STEP);
+    float lightDifferenceScale = DENOISER_SPATIAL_PHI_LUMINANCE
+        * denoiserSpatialRejectionConfidenceForStep(DENOISER_SPATIAL_STEP);
     // Accumulate tangents in place so four decoded positions do not have to
     // remain live across the last neighbor fetch.
     vec3 virtualTangentX = -denoiserSpatialLoadVirtualPosition(pixel + ivec2(-1, 0), size, centerVirtualPosition);
@@ -101,8 +103,12 @@ void main() {
         vec3 samplePrimaryRay;
         vec3 samplePdfDirection;
         float sampleSurfaceDistance;
+        float sampleEffectiveSamples;
         denoiserSpatialDecodeSampleGeometry(sampleGeometryWords, samplePixel,
-            samplePrimaryRay, samplePdfDirection, sampleSurfaceDistance);
+            samplePrimaryRay, samplePdfDirection, sampleSurfaceDistance,
+            sampleEffectiveSamples);
+        if (!statisticsValidEffectiveSampleCount(sampleEffectiveSamples))
+            continue;
         vec3 sampleSurfacePosition = samplePrimaryRay
                 * sampleSurfaceDistance;
         float surfaceGeometryExponent = surfaceRejectionScale
@@ -121,7 +127,8 @@ void main() {
                 sampleSignal, samplePrimaryRay,
                 surfaceGeometryExponent,
                 DENOISER_SPATIAL_GRID_WEIGHT[i],
-                lightDifferenceScale,
+                lightDifferenceScale, centerGeometry.effectiveSamples,
+                sampleEffectiveSamples,
                 virtualDistanceAlpha, centerVirtualPosition,
                 centerVirtualNormal, virtualRejectionScale,
                 virtualDistanceWeight);

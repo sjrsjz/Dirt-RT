@@ -231,10 +231,8 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                         L_direct_0 = misLightContribution(
                                 fSpecTimesNoL, sunLi, lightPdf, pdfNDF);
                         float misWeight = powerHeuristic(lightPdf, pdfNDF);
-                        // The MaxEnt buffer represents q_vndf(wi) * Li(wi),
-                        // not bare incident radiance.  A light-proposal sample
-                        // therefore needs q_vndf / p_light before it can share
-                        // moments with the VNDF-proposal path sample.
+                        // Convert the light-proposal sample to the same q*Li
+                        // measure as the VNDF continuation sample.
                         L_direct_0_incident = max(vec3(0.0), sunLi *
                             (pdfNDF * misWeight
                                 / max(lightPdf, 1e-20)));
@@ -408,8 +406,8 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                         L_direct_0 = misLightContribution(
                                 fSpecTimesNoL, sunLi, lightPdf, pdfNDF);
                         float misWeight = powerHeuristic(lightPdf, pdfNDF);
-                        // Convert the light-proposal estimator to the same
-                        // q_vndf(wi) * Li(wi) measure as the path sample.
+                        // Convert the light proposal to the same q*Li measure
+                        // as the VNDF continuation sample.
                         L_direct_0_incident = max(vec3(0.0), sunLi *
                             (pdfNDF * misWeight
                                 / max(lightPdf, 1e-20)));

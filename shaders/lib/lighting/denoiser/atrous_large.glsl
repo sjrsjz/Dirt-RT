@@ -101,7 +101,9 @@ bool denoiserSpatialFilterLarge(ivec2 pixel,
     DenoiserMaxEntSignal centerCurrent =
         denoiserUnpackMaxEntSignalTrusted(centerCurrentWords);
     float centerCurrentEffectiveSamples = denoiserSpatialLoadIndependentCurrentEffectiveSamples(pixel);
-    if (!statisticsValidEffectiveSampleCount(centerCurrentEffectiveSamples)) return false;
+    if (!statisticsValidEffectiveSampleCount(centerGeometry.effectiveSamples)
+            || !statisticsValidEffectiveSampleCount(centerCurrentEffectiveSamples))
+        return false;
     float surfaceRejectionScale = denoiserSpatialDistanceRejectionScale(
         centerGeometry.surfaceDistance, float(size.y));
     float virtualDistanceAlpha = centerGeometry.ggxAlpha;
@@ -109,7 +111,8 @@ bool denoiserSpatialFilterLarge(ivec2 pixel,
         denoiserSpatialLargeTileVirtualPosition[centerIndex].xyz;
     float virtualRejectionScale = denoiserSpatialVirtualRejectionScale(
             centerGeometry.ggxAlpha, centerSignal.virtualDistance);
-    float lightDifferenceScale = DENOISER_SPATIAL_PHI_LUMINANCE * sqrt(centerGeometry.effectiveSamples) * denoiserSpatialRejectionConfidenceForStep(DENOISER_SPATIAL_STEP);
+    float lightDifferenceScale = DENOISER_SPATIAL_PHI_LUMINANCE
+        * denoiserSpatialRejectionConfidenceForStep(DENOISER_SPATIAL_STEP);
     uint rowStride = uint(DENOISER_SPATIAL_LARGE_TILE_SIZE);
 
     vec3 virtualTangentX = -denoiserSpatialLargeReadVirtualPosition(centerIndex - 1u, centerVirtualPosition);
@@ -151,8 +154,12 @@ bool denoiserSpatialFilterLarge(ivec2 pixel,
         vec3 samplePrimaryRay;
         vec3 samplePdfDirection;
         float sampleSurfaceDistance;
+        float sampleEffectiveSamples;
         denoiserSpatialDecodeSampleGeometry(sampleGeometryWords, samplePixel,
-            samplePrimaryRay, samplePdfDirection, sampleSurfaceDistance);
+            samplePrimaryRay, samplePdfDirection, sampleSurfaceDistance,
+            sampleEffectiveSamples);
+        if (!statisticsValidEffectiveSampleCount(sampleEffectiveSamples))
+            continue;
         float surfaceGeometryExponent =
             denoiserSpatialAxialDistanceExponent(
                 centerGeometry.surfacePlaneOffset,
@@ -172,7 +179,8 @@ bool denoiserSpatialFilterLarge(ivec2 pixel,
                 sampleSignal, samplePrimaryRay,
                 surfaceGeometryExponent,
                 DENOISER_SPATIAL_POISSON_8[i].w,
-                lightDifferenceScale,
+                lightDifferenceScale, centerGeometry.effectiveSamples,
+                sampleEffectiveSamples,
                 virtualDistanceAlpha, centerVirtualPosition,
                 centerVirtualNormal, virtualRejectionScale,
                 virtualDistanceWeight);

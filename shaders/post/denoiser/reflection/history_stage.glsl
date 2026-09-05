@@ -44,6 +44,7 @@ void main() {
     history.hitDistance = currentTrackingHitDistance;
     history.roughness = geometry.roughness;
     history.historyEffectiveSamples = temporal.historyEffectiveSamples;
-    history.materialID = geometry.materialID;
+    history.materialID = maxentReflectionHistoryMaterialID(
+        geometry.materialID);
     writeMaxEntSpecularTemporalHistory(pixel, history);
 }

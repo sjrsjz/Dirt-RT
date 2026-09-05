@@ -290,7 +290,8 @@ void main() {
 
     vec3 currentPos = currentGeometry.position;
     vec3 currentNormal = currentGeometry.normal;
-    uint currentMaterial = currentGeometry.materialID;
+    uint currentMaterial = maxentReflectionHistoryMaterialID(
+        currentGeometry.materialID);
     float currentRoughness = currentGeometry.roughness;
 
     vec3 cameraDelta = camPos - prevRaytracingCamPos;

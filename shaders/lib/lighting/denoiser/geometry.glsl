@@ -48,10 +48,11 @@ DenoiserSpatialCenterGeometry denoiserSpatialDecodeCenterGeometry(
 
 void denoiserSpatialDecodeSampleGeometry(uvec4 words, ivec2 pixel,
         out vec3 primaryRay, out vec3 pdfDirection,
-        out float surfaceDistance) {
+        out float surfaceDistance, out float effectiveSamples) {
     primaryRay = reconstructPrimaryRay(uvec2(pixel));
     pdfDirection = decodeNormalU(words.z);
     surfaceDistance = uintBitsToFloat(words.x);
+    effectiveSamples = unpackHalf2x16(words.w).y;
 }
 
 bool denoiserSpatialTryVirtualWorldPositionFromWords(

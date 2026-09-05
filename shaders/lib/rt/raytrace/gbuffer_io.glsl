@@ -154,9 +154,10 @@ vec3 recoverFirstBounceIncident(vec3 pathContribution,
         incident.y = pathContribution.y / firstBsdfWeight.y;
     if (abs(firstBsdfWeight.z) > 1e-8)
         incident.z = pathContribution.z / firstBsdfWeight.z;
-    // firstBsdfWeight is f / q for a finite VNDF lobe and F for a delta
-    // mirror. Dividing the traced contribution by that weight recovers Li in
-    // both cases. Do not divide by q again.
+    // firstBsdfWeight is f/q for a finite VNDF lobe and F for a delta
+    // mirror. Dividing the traced contribution by that weight recovers Li.
+    // A VNDF path sample therefore contributes an atom whose expectation is
+    // q(wi)*Li(wi), matching the decoder's f/q response.
     if (any(isnan(incident)) || any(isinf(incident))) return vec3(0.0);
     return clamp(incident, vec3(0.0), vec3(400.0 * div_avgExposure));
 }
