@@ -6,10 +6,9 @@
 //   uvec4 denoiserSpatialLoadGeometryWords(ivec2 pixel)
 //   uvec4 denoiserSpatialLoadSignalWords(ivec2 pixel)
 //   uvec4 denoiserSpatialLoadIndependentCurrentWords(ivec2 pixel)
-//   float denoiserSpatialLoadIndependentCurrentEffectiveSamples(ivec2 pixel)
 //   DenoiserSpatialCenterGeometry denoiserSpatialDecodeCenterGeometry(words, pixel)
 //   void denoiserSpatialStore(ivec2 pixel, DenoiserMaxEntSignal signal,
-//       DenoiserMaxEntSignal independentCurrent, float independentCurrentEffectiveSamples)
+//       DenoiserMaxEntSignal independentCurrent)
 //   void denoiserSpatialStoreInvalid(ivec2 pixel)
 // Required macros:
 //   DENOISER_SPATIAL_STEP, DENOISER_SPATIAL_PHI_LUMINANCE
@@ -57,9 +56,7 @@ void main() {
     DenoiserMaxEntSignal centerSignal = denoiserUnpackMaxEntSignalTrusted(centerSignalWords);
     DenoiserMaxEntSignal centerCurrent =
         denoiserUnpackMaxEntSignalTrusted(centerCurrentWords);
-    float centerCurrentEffectiveSamples = denoiserSpatialLoadIndependentCurrentEffectiveSamples(pixel);
-    if (!statisticsValidEffectiveSampleCount(centerGeometry.effectiveSamples)
-            || !statisticsValidEffectiveSampleCount(centerCurrentEffectiveSamples)) {
+    if (!statisticsValidEffectiveSampleCount(centerGeometry.effectiveSamples)) {
         denoiserSpatialStoreInvalid(pixel);
         return;
     }
@@ -71,8 +68,7 @@ void main() {
             centerGeometry.primaryRay, centerSignal.virtualDistance);
     float virtualRejectionScale = denoiserSpatialVirtualRejectionScale(
             centerGeometry.ggxAlpha, centerSignal.virtualDistance);
-    float lightDifferenceScale = DENOISER_SPATIAL_PHI_LUMINANCE
-        * denoiserSpatialRejectionConfidenceForStep(DENOISER_SPATIAL_STEP);
+    float lightDifferenceScale = DENOISER_SPATIAL_PHI_LUMINANCE;
     // Accumulate tangents in place so four decoded positions do not have to
     // remain live across the last neighbor fetch.
     vec3 virtualTangentX = -denoiserSpatialLoadVirtualPosition(pixel + ivec2(-1, 0), size, centerVirtualPosition);
@@ -84,8 +80,6 @@ void main() {
     DenoiserSpatialAccumulator accum = denoiserSpatialBeginAccumulation(centerSignal);
     DenoiserSpatialAccumulator currentAccum =
         denoiserSpatialBeginAccumulation(centerCurrent);
-    DenoiserSpatialEffectiveSampleAccumulator currentEffectiveSampleAccum =
-        denoiserSpatialBeginEffectiveSampleAccumulation(centerCurrentEffectiveSamples);
 
     for (int i = 0; i < 8; ++i) {
         ivec2 samplePixel = pixel + DENOISER_SPATIAL_GRID_8[i] * DENOISER_SPATIAL_STEP;
@@ -120,15 +114,12 @@ void main() {
         DenoiserMaxEntSignal sampleSignal = denoiserUnpackMaxEntSignalTrusted(sampleSignalWords);
         DenoiserMaxEntSignal sampleCurrent =
             denoiserUnpackMaxEntSignalTrusted(sampleCurrentWords);
-        float sampleCurrentEffectiveSamples = denoiserSpatialLoadIndependentCurrentEffectiveSamples(samplePixel);
-        if (!statisticsValidEffectiveSampleCount(sampleCurrentEffectiveSamples)) continue;
         float virtualDistanceWeight;
         float weight = denoiserSpatialWeight(centerSignal,
                 sampleSignal, samplePrimaryRay,
                 surfaceGeometryExponent,
                 DENOISER_SPATIAL_GRID_WEIGHT[i],
-                lightDifferenceScale, centerGeometry.effectiveSamples,
-                sampleEffectiveSamples,
+                lightDifferenceScale,
                 virtualDistanceAlpha, centerVirtualPosition,
                 centerVirtualNormal, virtualRejectionScale,
                 virtualDistanceWeight);
@@ -136,13 +127,9 @@ void main() {
             virtualDistanceWeight);
         denoiserSpatialAccumulate(currentAccum, sampleCurrent, weight,
             virtualDistanceWeight);
-        denoiserSpatialAccumulateEffectiveSamples(currentEffectiveSampleAccum, sampleCurrentEffectiveSamples, weight);
     }
 
-    float outputCurrentEffectiveSamples = denoiserSpatialResolveEffectiveSamples(
-        currentEffectiveSampleAccum, currentAccum.weight, DENOISER_SPATIAL_STEP);
-    denoiserSpatialStore(pixel, denoiserSpatialResolve(accum), denoiserSpatialResolve(currentAccum),
-        outputCurrentEffectiveSamples);
+    denoiserSpatialStore(pixel, denoiserSpatialResolve(accum, DENOISER_SPATIAL_STEP), denoiserSpatialResolve(currentAccum, DENOISER_SPATIAL_STEP));
 }
 
 #endif // MAXENT_DENOISER_ATROUS_SMALL_GLSL

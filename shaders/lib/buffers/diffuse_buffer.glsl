@@ -5,6 +5,7 @@
 #include "/lib/buffers/debug_buffer.glsl"
 #include "/lib/buffers/gbuffer.glsl"
 #include "/lib/common/pack_half.glsl"
+#include "/lib/math/denoiser_uncertainty.glsl"
 #include "/lib/lighting/maxent_encode.glsl"
 
 // ===========================================================================
@@ -14,17 +15,11 @@
 // N=1: History Light  — MaxEnt6 + Kish N_eff/rootMeanY2.
 // N=2: History Geo A  — F32 distance + oct ray + oct normal + N_eff/frame stamp.
 // N=3: Swap Light     — MaxEnt6 + Kish N_eff/rootMeanY2.
-// N=4: Path Guide     — MaxEnt4 + F32 reservoir W/M.
-// N=5: ReSTIR GI first-hit direct-light MaxEnt atom.
-// N=6: ReSTIR GI endpoint distance/direction + signed first-direction PDF.
-// N=7: Current-frame biased ReSTIR GI path-guide prewarm MaxEnt atom.
-// N=8: Macro normal, diffuse material, motion and denoised-history difference.
-// N=9: Alternate history geometry for race-free frame ping-pong.
-// N=10..11: Exact previous/current denoiser RGBA32UI output ping-pong.
-// N=12..13: Shared independent-current spatial-filter ping-pong. Diffuse and
-// reflection execute serially and reuse these transient planes.
-// N=14: Shared scalar metadata: x/y are FP32 spatial N_eff ping-pong and z is
-// the FP32 diffuse filtered-history N_eff reconstructed for the current pixel.
+// N=4: Denoised Path Guide -- packed directional/energy moments + validity tags.
+// N=5: Macro normal, diffuse material, motion and denoised-history difference.
+// N=6: Alternate history geometry for race-free frame ping-pong.
+// N=7..8: Exact previous/current denoiser output ping-pong.
+// N=9..10: Shared independent-current ping-pong, reused serially by domains.
 //
 // .w lane uses packHalf2x16: Kish N_eff:f16 + rootMeanY2:f16.
 // Storage APIs accept sqrt(E[Y²]) directly. Arithmetic code squares it only
@@ -43,26 +38,21 @@ MaxEntEncoding sanitizeDiffuseMaxEntEncoding(MaxEntEncoding maxent) {
     return maxent;
 }
 
-// Active fifteen-plane layout. Current geometry is owned by geomBuffer and is
+// Active eleven-plane layout. Current geometry is owned by geomBuffer and is
 // reconstructed from pixel + RT projection and F32 distance; it is not
 // duplicated here.
 // DIF_N_HISTGEO/ALT = F32 distance + oct ray + oct normal + N_eff/frame stamp.
-// DIF_N_RESTIR_ENDPOINT = F32 distance + oct direction + F32 signed PDF.
 #define DIF_N_LIGHT    0u
 #define DIF_N_HIST     1u
 #define DIF_N_HISTGEO  2u
 #define DIF_N_SWAP     3u
 #define DIF_N_PATHGUIDE 4u
-#define DIF_N_RESTIR_DIRECT   5u
-#define DIF_N_RESTIR_ENDPOINT 6u
-#define DIF_N_RESTIR_PREWARM  7u
-#define DIF_N_SURFACE          8u
-#define DIF_N_HISTGEO_ALT      9u
-#define DIF_N_DENOISED_A      10u
-#define DIF_N_DENOISED_B      11u
-#define DIF_N_CURRENT_A       12u
-#define DIF_N_CURRENT_B       13u
-#define DIF_N_DENOISER_META   14u
+#define DIF_N_SURFACE          5u
+#define DIF_N_HISTGEO_ALT      6u
+#define DIF_N_DENOISED_A      7u
+#define DIF_N_DENOISED_B      8u
+#define DIF_N_CURRENT_A       9u
+#define DIF_N_CURRENT_B       10u
 
 uint diffuseHistoryGeometryWritePlane() {
     return (uint(frame_id) & 1u) == 0u ? DIF_N_HISTGEO : DIF_N_HISTGEO_ALT;
@@ -83,12 +73,19 @@ uint diffuseDenoisedReadPlane() {
 uint packDiffuseHistoryWeightStamp(float historyWeight) {
     if (!(historyWeight >= 0.0) || isinf(historyWeight)) historyWeight = 0.0;
     uint packedWeight = packHalf2x16(vec2(historyWeight, 0.0)) & 0xffffu;
-    return packedWeight | ((uint(frame_id) & 0xffffu) << 16u);
+    uint stamp = (uint(frame_id) & 0xffffu) ^ 0x2500u;
+#if MAXENT_TEMPORAL_CONFIDENCE_CLAMP == 1
+    stamp ^= 0x5a00u;
+#endif
+    return packedWeight | (stamp << 16u);
 }
 
 bool unpackDiffusePreviousHistoryWeight(uint packed_, out float historyWeight) {
     historyWeight = unpackHalf2x16(packed_).x;
-    uint expectedStamp = (uint(frame_id) - 1u) & 0xffffu;
+    uint expectedStamp = ((uint(frame_id) - 1u) & 0xffffu) ^ 0x2500u;
+#if MAXENT_TEMPORAL_CONFIDENCE_CLAMP == 1
+    expectedStamp ^= 0x5a00u;
+#endif
     return (packed_ >> 16u) == expectedStamp && historyWeight > 0.0 && !isnan(historyWeight) && !isinf(historyWeight);
 }
 
@@ -129,51 +126,25 @@ uvec4 readDiffuseIndependentCurrentB(uvec2 xy) {
     return diffuseBuffer.data[addr(DIF_N_CURRENT_B, xy)];
 }
 
-float readDenoiserIndependentCurrentEffectiveSamplesA(ivec2 pixel) {
-    return uintBitsToFloat(diffuseBuffer.data[addr(DIF_N_DENOISER_META, pixel)].x);
-}
-
-float readDenoiserIndependentCurrentEffectiveSamplesB(ivec2 pixel) {
-    return uintBitsToFloat(diffuseBuffer.data[addr(DIF_N_DENOISER_META, pixel)].y);
-}
-
-void writeDenoiserIndependentCurrentEffectiveSamplesA(ivec2 pixel, float effectiveSamples) {
-    atomicExchange(diffuseBuffer.data[addr(DIF_N_DENOISER_META, pixel)].x, floatBitsToUint(effectiveSamples));
-}
-
-void writeDenoiserIndependentCurrentEffectiveSamplesB(ivec2 pixel, float effectiveSamples) {
-    atomicExchange(diffuseBuffer.data[addr(DIF_N_DENOISER_META, pixel)].y, floatBitsToUint(effectiveSamples));
-}
-
-void writeDiffuseDenoisedReprojectedEffectiveSamples(uvec2 xy, float effectiveSamples) {
-    atomicExchange(diffuseBuffer.data[addr(DIF_N_DENOISER_META, xy)].z, floatBitsToUint(effectiveSamples));
-}
-
-float readDiffuseDenoisedReprojectedEffectiveSamples(uvec2 xy) {
-    return uintBitsToFloat(diffuseBuffer.data[addr(DIF_N_DENOISER_META, xy)].z);
-}
-
 // Before history resolve, the current parity is scratch for the previous
 // denoised signal reprojected by the real diffuse temporal pass. Resolve reads
 // it once, then replaces it with the exact current colortex4 words. Scratch z
 // stores the CoCg belonging to the same denoised estimator as maxEntY; w stores
-// (filtered MC standardDeviation, valid reprojection mass). The denoised estimator N_eff is reconstructed separately
-// into DIF_N_DENOISER_META.z because Raw history owns an independent N_eff.
+// (estimator standardDeviation, valid reprojection mass). The legacy sample-count
+// argument is reserved; filtered uncertainty is carried entirely by sigma.
 void writeDiffuseDenoisedReprojection(uvec2 xy, vec4 maxEntY, vec2 CoCg,
         float monteCarloStandardDeviation, float effectiveSamples, float validWeight) {
     diffuseBuffer.data[addr(diffuseDenoisedWritePlane(), xy)] = uvec4(
         packHalf2x16(clamp(maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(CoCg, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(vec2(clamp(monteCarloStandardDeviation, 0.0, 65504.0),
+        packHalf2x16(vec2(denoiserSigmaOrUnknown(monteCarloStandardDeviation),
             clamp(validWeight, 0.0, 1.0))));
-    writeDiffuseDenoisedReprojectedEffectiveSamples(xy, effectiveSamples);
 }
 
 void writeDiffuseDenoisedReprojectionInvalid(uvec2 xy) {
     diffuseBuffer.data[addr(diffuseDenoisedWritePlane(), xy)] = uvec4(
         0u, 0u, 0u, packHalf2x16(vec2(-1.0, 0.0)));
-    writeDiffuseDenoisedReprojectedEffectiveSamples(xy, 0.0);
 }
 
 bool readDiffuseDenoisedReprojection(uvec2 xy, out vec4 maxEntY,
@@ -183,7 +154,7 @@ bool readDiffuseDenoisedReprojection(uvec2 xy, out vec4 maxEntY,
     vec2 deviationWeight = unpackHalf2x16(words.w);
     monteCarloStandardDeviation = deviationWeight.x;
     validWeight = deviationWeight.y;
-    bool valid = monteCarloStandardDeviation >= 0.0 && validWeight > 0.0
+    bool valid = denoiserSigmaUsable(monteCarloStandardDeviation) && validWeight > 0.0
         && !any(isnan(CoCg)) && !any(isinf(CoCg))
         && !any(isnan(deviationWeight)) && !any(isinf(deviationWeight));
     maxEntY = valid
@@ -197,12 +168,17 @@ bool readDiffuseDenoisedReprojection(uvec2 xy, out vec4 maxEntY,
 bool readDiffuseDenoisedReprojection(uvec2 xy, out vec4 maxEntY, out vec2 CoCg,
         out float monteCarloStandardDeviation, out float effectiveSamples, out float validWeight) {
     bool valid = readDiffuseDenoisedReprojection(xy, maxEntY, CoCg, monteCarloStandardDeviation, validWeight);
-    effectiveSamples = readDiffuseDenoisedReprojectedEffectiveSamples(xy);
+    effectiveSamples = 1.0; // Reserved legacy ABI, no metadata fetch.
     return valid && effectiveSamples >= 1.0 && !isnan(effectiveSamples) && !isinf(effectiveSamples);
 }
 
 uvec4 packDiffuseTemporalState(MaxEntEncoding maxent,
         float effectiveSamples, float rootMeanY2) {
+    // Do not clear only the mean and keep a seemingly valid orphaned RMS.
+    if (!denoiserTemporalMomentsFinite(maxent.maxEntY, maxent.CoCg, rootMeanY2)) {
+        effectiveSamples = 0.0;
+        rootMeanY2 = 0.0;
+    }
     maxent = sanitizeDiffuseMaxEntEncoding(maxent);
     effectiveSamples = effectiveSamples >= 1.0
             && effectiveSamples <= 65504.0
@@ -239,7 +215,8 @@ void unpackDiffuseTemporalState(uvec4 words, out MaxEntEncoding maxent,
 void writeDiffuseLightRT(uvec2 xy, MaxEntEncoding maxent,
         float rootMeanY2) {
     maxent = sanitizeDiffuseMaxEntEncoding(maxent);
-    rootMeanY2 = sanitizeRootMeanSquareFP16(rootMeanY2);
+    // One RT packet: RMS=abs(R), paired with the same sanitized packet.
+    rootMeanY2 = max(maxent.maxEntY.w, 0.0);
     diffuseBuffer.data[addr(DIF_N_LIGHT, xy)] = uvec4(
         packHalf2x16(clamp(maxent.maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(maxent.maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
@@ -282,7 +259,7 @@ float readDiffuseSurfaceMask(uvec2 xy) {
 }
 
 // ===========================================================================
-// N=8 -- current diffuse-domain material and motion state
+// N=5 -- current diffuse-domain material and motion state
 // ===========================================================================
 
 uint encodeDiffuseNormalOct8(vec3 n) {
@@ -433,34 +410,22 @@ void readDiffuseSwap(uvec2 xy, out MaxEntEncoding maxent, out float weight,
 }
 
 // ===========================================================================
-// N=4 — ReSTIR temporal reservoir (Path Guide Reservoir)
+// N=4 -- Final denoised path-guide moments
 // ===========================================================================
 // Layout: uvec4(
 //   packHalf2x16(maxEntY.xy),   // sample direction × luminance
 //   packHalf2x16(maxEntY.zw),   // total energy
-//   floatBitsToUint(W),        // reservoir reciprocal-proposal normalization
-//   floatBitsToUint(M))        // effective sample count
+//   floatBitsToUint(1.0),      // valid-state tag
+//   floatBitsToUint(1.0))      // valid-state tag
 
-void writePathGuide(uvec2 xy, vec4 maxEntY, float W, float M) {
-    diffuseBuffer.data[addr(DIF_N_PATHGUIDE, xy)] = uvec4(
-        packHalf2x16(clamp(maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(clamp(maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
-        floatBitsToUint(W),
-        floatBitsToUint(M));
-}
-void readPathGuide(uvec2 xy, out vec4 maxEntY, out float W, out float M) {
+bool readPathGuide(uvec2 xy, out vec4 maxEntY) {
     uvec4 v = diffuseBuffer.data[addr(DIF_N_PATHGUIDE, xy)];
-    vec2 ay_xy = unpackHalf2x16(v.x);
-    vec2 ay_zw = unpackHalf2x16(v.y);
-    maxEntY = vec4(ay_xy, ay_zw);
-    W = uintBitsToFloat(v.z);
-    M = uintBitsToFloat(v.w);
-}
-
-bool pathGuideReservoirValid(vec4 maxEntY, float W, float M) {
-    return W > 0.0 && M > 0.0
-        && !isnan(W) && !isinf(W) && !isnan(M) && !isinf(M)
-        && !any(isnan(maxEntY)) && !any(isinf(maxEntY));
+    maxEntY = vec4(unpackHalf2x16(v.x), unpackHalf2x16(v.y));
+    // Fixed tags preserve the tested direct-guide layout; no W/M state.
+    bool valid = v.z == floatBitsToUint(1.0) && v.w == floatBitsToUint(1.0)
+        && maxEntY.w > 1e-8 && !any(isnan(maxEntY)) && !any(isinf(maxEntY));
+    if (!valid) maxEntY = vec4(0.0);
+    return valid;
 }
 
 // 2×2 bilinear path guide sampling with validity mask
@@ -469,17 +434,11 @@ vec4 samplePathGuide(vec2 prevCoord) {
     vec2  pf = prevCoord - vec2(p0);
 
     vec4 y00, y10, y01, y11;
-    float W00, W10, W01, W11;
-    float M00, M10, M01, M11;
-    readPathGuide(uvec2(clamp(p0 + ivec2(0, 0), ivec2(0), ivec2(resolution_global) - 1)), y00, W00, M00);
-    readPathGuide(uvec2(clamp(p0 + ivec2(1, 0), ivec2(0), ivec2(resolution_global) - 1)), y10, W10, M10);
-    readPathGuide(uvec2(clamp(p0 + ivec2(0, 1), ivec2(0), ivec2(resolution_global) - 1)), y01, W01, M01);
-    readPathGuide(uvec2(clamp(p0 + ivec2(1, 1), ivec2(0), ivec2(resolution_global) - 1)), y11, W11, M11);
+    bool v00 = readPathGuide(uvec2(clamp(p0 + ivec2(0, 0), ivec2(0), ivec2(resolution_global) - 1)), y00);
+    bool v10 = readPathGuide(uvec2(clamp(p0 + ivec2(1, 0), ivec2(0), ivec2(resolution_global) - 1)), y10);
+    bool v01 = readPathGuide(uvec2(clamp(p0 + ivec2(0, 1), ivec2(0), ivec2(resolution_global) - 1)), y01);
+    bool v11 = readPathGuide(uvec2(clamp(p0 + ivec2(1, 1), ivec2(0), ivec2(resolution_global) - 1)), y11);
 
-    bool v00 = pathGuideReservoirValid(y00, W00, M00);
-    bool v10 = pathGuideReservoirValid(y10, W10, M10);
-    bool v01 = pathGuideReservoirValid(y01, W01, M01);
-    bool v11 = pathGuideReservoirValid(y11, W11, M11);
 
     float w00 = v00 ? (1.0 - pf.x) * (1.0 - pf.y) : 0.0;
     float w10 = v10 ? pf.x * (1.0 - pf.y) : 0.0;
@@ -490,112 +449,6 @@ vec4 samplePathGuide(vec2 prevCoord) {
     if (sumW < 1e-8) return vec4(0.0);
 
     return (y00 * w00 + y10 * w10 + y01 * w01 + y11 * w11) / sumW;
-}
-
-// ===========================================================================
-// N=5..7 -- low-history ReSTIR GI path-guiding prewarm scratch
-// ===========================================================================
-
-struct RestirGIFreshCandidate {
-    vec3 endpointRelative;
-    float firstPdf;
-    bool environment;
-};
-
-void writeRestirGIMaxEntPlane(uint plane, uvec2 xy,
-        MaxEntEncoding encoded, float rootMeanY2) {
-    // Never allow a bad donor or color transform to poison the finalize and
-    // temporal passes. The biased prewarm itself performs no density division.
-    if (any(isnan(encoded.maxEntY)) || any(isinf(encoded.maxEntY))
-            || any(isnan(encoded.CoCg)) || any(isinf(encoded.CoCg)))
-        encoded = init_maxent();
-    rootMeanY2 = sanitizeRootMeanSquareFP16(rootMeanY2);
-    diffuseBuffer.data[addr(plane, xy)] = uvec4(
-        packHalf2x16(clamp(encoded.maxEntY.xy,
-            vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(clamp(encoded.maxEntY.zw,
-            vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(clamp(encoded.CoCg,
-            vec2(-65504.0), vec2(65504.0))),
-        packHalf2x16(vec2(0.0, rootMeanY2)));
-}
-
-void readRestirGIMaxEntPlane(uint plane, uvec2 xy,
-        out MaxEntEncoding encoded, out float rootMeanY2) {
-    uvec4 packedValue = diffuseBuffer.data[addr(plane, xy)];
-    vec2 xyValue = unpackHalf2x16(packedValue.x);
-    vec2 zwValue = unpackHalf2x16(packedValue.y);
-    encoded.maxEntY = vec4(xyValue, zwValue);
-    encoded.CoCg = unpackHalf2x16(packedValue.z);
-    rootMeanY2 = unpackHalf2x16(packedValue.w).y;
-    if (any(isnan(encoded.maxEntY)) || any(isinf(encoded.maxEntY))
-            || any(isnan(encoded.CoCg)) || any(isinf(encoded.CoCg)))
-        encoded = init_maxent();
-    if (isnan(rootMeanY2) || isinf(rootMeanY2) || rootMeanY2 < 0.0)
-        rootMeanY2 = 0.0;
-}
-
-void clearRestirGIScratch(uvec2 xy) {
-    diffuseBuffer.data[addr(DIF_N_RESTIR_DIRECT, xy)] = uvec4(0u);
-    diffuseBuffer.data[addr(DIF_N_RESTIR_ENDPOINT, xy)] = uvec4(0u);
-    diffuseBuffer.data[addr(DIF_N_RESTIR_PREWARM, xy)] = uvec4(0u);
-}
-
-void writeRestirGIDirect(uvec2 xy, MaxEntEncoding direct) {
-    writeRestirGIMaxEntPlane(DIF_N_RESTIR_DIRECT, xy, direct,
-        max(direct.maxEntY.w, 0.0));
-}
-
-void readRestirGIDirect(uvec2 xy, out MaxEntEncoding direct) {
-    float unusedRootMeanY2;
-    readRestirGIMaxEntPlane(DIF_N_RESTIR_DIRECT, xy,
-        direct, unusedRootMeanY2);
-}
-
-void writeRestirGIPrewarm(uvec2 xy, MaxEntEncoding indirect) {
-    writeRestirGIMaxEntPlane(DIF_N_RESTIR_PREWARM, xy, indirect,
-        max(indirect.maxEntY.w, 0.0));
-}
-
-void readRestirGIPrewarm(uvec2 xy, out MaxEntEncoding indirect) {
-    float unusedRootMeanY2;
-    readRestirGIMaxEntPlane(DIF_N_RESTIR_PREWARM, xy,
-        indirect, unusedRootMeanY2);
-}
-
-void writeRestirGIFreshCandidate(uvec2 xy,
-        RestirGIFreshCandidate candidate) {
-    float signedPdf = candidate.environment
-        ? -abs(candidate.firstPdf) : abs(candidate.firstPdf);
-    float endpointDistance = length(candidate.endpointRelative);
-    vec3 endpointDirection = endpointDistance > 1e-8
-        ? candidate.endpointRelative / endpointDistance
-        : vec3(0.0, 0.0, -1.0);
-    diffuseBuffer.data[addr(DIF_N_RESTIR_ENDPOINT, xy)] = uvec4(
-        floatBitsToUint(endpointDistance),
-        encodeDiffuseHistoryNormalU(endpointDirection),
-        floatBitsToUint(signedPdf),
-        0u);
-}
-
-RestirGIFreshCandidate readRestirGIFreshCandidate(uvec2 xy) {
-    uvec4 endpointData =
-        diffuseBuffer.data[addr(DIF_N_RESTIR_ENDPOINT, xy)];
-    float endpointDistance = uintBitsToFloat(endpointData.x);
-    float signedPdf = uintBitsToFloat(endpointData.z);
-    RestirGIFreshCandidate candidate;
-    candidate.endpointRelative =
-        decodeDiffuseHistoryNormalU(endpointData.y) * endpointDistance;
-    candidate.firstPdf = abs(signedPdf);
-    candidate.environment = signedPdf < 0.0;
-    return candidate;
-}
-
-bool restirGIFreshCandidateValid(RestirGIFreshCandidate candidate) {
-    return candidate.firstPdf > 1e-8
-        && !isnan(candidate.firstPdf) && !isinf(candidate.firstPdf)
-        && !any(isnan(candidate.endpointRelative))
-        && !any(isinf(candidate.endpointRelative));
 }
 
 #endif // BUFFERS_DIFFUSE_BUFFER_GLSL

@@ -46,12 +46,6 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     float lastBsdfStrategyPdf = 0.0;
     bool lastBsdfDelta = false;
     bool lastNeeCompatible = false;
-    #if defined(RESTIR_GI_INITIAL_PASS)
-    float restirGIFirstProposalPdf = 0.0;
-    bool restirGIFreshEnvironment = false;
-    bool restirGIFreshFiniteHit = false;
-    vec3 restirGIFreshSecondPosition = vec3(0.0);
-    #endif
 
     vec4 fogColor = (isEyeInWater == 2u) ? vec4(0, 0.05, 0.075, 0.1) * 5.0 : vec4(0, 0.325, 0.295, 0.3);
     vec3 globalEmission = (isEyeInWater == 2u) ? vec3(1, 0.25, 0.05) * 10.0 : vec3(0);
@@ -178,9 +172,6 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             geometryNormal, surf, lobes, rtBlueNoise2D(xy, 0u),
             bsdf_weight, next_rd,
             lastBsdfStrategyPdf);
-        #if defined(RESTIR_GI_INITIAL_PASS)
-        restirGIFirstProposalPdf = lastBsdfStrategyPdf;
-        #endif
         lastBsdfDelta = false;
         lastNeeCompatible = true;
         #endif
@@ -204,13 +195,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                             * (1.0 / (2.0 * PI));
                     proposalPdf += directGuide.prob * maxent_guiding_pdf(
                                 sunWi, directGuide.axis, directGuide.kappa);
-                    #if defined(RESTIR_GI_INITIAL_PASS)
-                    // ReSTIR changes the first-direction proposal set. Keep
-                    // the primary sun in a disjoint pure-NEE estimator.
-                    float misWeight = 1.0;
-                    #else
                     float misWeight = powerHeuristic(lightPdf, proposalPdf);
-                    #endif
                     #if EON_ENABLED
                     // The deferred EON projection supplies f_r * NoL * rho.
                     L_direct_0 = max(vec3(0.0), sunLi
@@ -350,9 +335,6 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             handleFirstBounce_Diffuse(rd_i, ro_o, macroNormal, geometryNormal,
                 surf, lobes, rtBlueNoise2D(xy, 0u), bsdf_weight, next_rd,
                 lastBsdfStrategyPdf);
-            #if defined(RESTIR_GI_INITIAL_PASS)
-            restirGIFirstProposalPdf = lastBsdfStrategyPdf;
-            #endif
             lastBsdfDelta = false;
             lastNeeCompatible = true;
         }
@@ -379,11 +361,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                             * (1.0 / (2.0 * PI));
                     proposalPdf += directGuide.prob * maxent_guiding_pdf(
                                 sunWi, directGuide.axis, directGuide.kappa);
-                    #if defined(RESTIR_GI_INITIAL_PASS)
-                    float misWeight = 1.0;
-                    #else
                     float misWeight = powerHeuristic(lightPdf, proposalPdf);
-                    #endif
                     #if EON_ENABLED
                     // The deferred EON projection supplies f_r * NoL * rho.
                     L_direct_0 = max(vec3(0.0), sunLi
@@ -454,10 +432,6 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             // --- Ray cast ---
             float t2 = raycast(ro_i, rd_i, ro_o, rd_o, !inside, false);
 
-            #if defined(RESTIR_GI_INITIAL_PASS)
-            if (depth == 1 && t2 < -0.5)
-                restirGIFreshEnvironment = true;
-            #endif
 
             // Distance of the actual noisy specular sample. This replaces the
             // unrelated extra ray previously traced along a fitted direction.
@@ -469,14 +443,8 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             if (t2 < -0.5) {
                 vec3 sky = sampleSkyNoSun(ro_i.y, rd_i, lightDir).xyz;
                 vec3 sunDisc = vec3(0.0);
-                #if !defined(RESTIR_GI_INITIAL_PASS)
                 sunDisc = sampleSkySunDisc(
                     ro_i.y, rd_i, lightDir).xyz;
-                #else
-                if (depth > 1)
-                    sunDisc = sampleSkySunDisc(
-                        ro_i.y, rd_i, lightDir).xyz;
-                #endif
                 float discWeight = 1.0;
                 float lightPdf = sunDirectionPdf(rd_i, lightDir);
                 if (lastNeeCompatible && !lastBsdfDelta
@@ -500,12 +468,6 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                 uint(depth));
             vec3 geomN = payload_unpackGeomNormal(tmp_Payload.data);
             vec3 geometryNormal = faceforward(geomN, geomN, rd_i);
-            #if defined(RESTIR_GI_INITIAL_PASS)
-            if (depth == 1) {
-                restirGIFreshFiniteHit = true;
-                restirGIFreshSecondPosition = ro_o;
-            }
-            #endif
             #if defined(FIRST_LOBE_DIFFUSE)
             markRadianceCacheGeometryHit(xy, ro_o, geometryNormal);
             #endif
@@ -683,40 +645,13 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     if (any(isnan(L_direct_0)) || any(isinf(L_direct_0)))
         L_direct_0 = vec3(0.0);
 
-    #if defined(RESTIR_GI_INITIAL_PASS)
-    MaxEntEncoding directAtom = radiance_to_maxent(
-        clamp(L_direct_0, vec3(0.0), vec3(32000.0)),
-        L_direct_0_dir);
-    writeRestirGIDirect(xy, directAtom);
-    diffuseBuffer.data[addr(DIF_N_RESTIR_PREWARM, xy)] = uvec4(0u);
-
-    bool validFresh = restirGIFirstProposalPdf > 1e-8
-        && (restirGIFreshEnvironment || restirGIFreshFiniteHit);
-    if (validFresh) {
-        RestirGIFreshCandidate candidate;
-        candidate.endpointRelative = restirGIFreshEnvironment
-            ? normalize(fb.rd_o) * VPROJDIST_SKY
-            : restirGIFreshSecondPosition - ro;
-        candidate.firstPdf = restirGIFirstProposalPdf;
-        candidate.environment = restirGIFreshEnvironment;
-        writeRestirGIFreshCandidate(xy, candidate);
-    } else {
-        diffuseBuffer.data[addr(DIF_N_RESTIR_ENDPOINT, xy)] = uvec4(0u);
-    }
-    #elif defined(FIRST_LOBE_DIFFUSE)
-    clearRestirGIScratch(xy);
-    #endif
     vec3 totalIllumination = clamp(
             L_indirect + L_direct_0, 0.0, 65504.0);
 
     #if defined(FIRST_LOBE_DIFFUSE)
     writeDiffuseOutput(
         xy, fb, L_indirect,
-        #if defined(RESTIR_GI_INITIAL_PASS)
-        vec3(0.0),
-        #else
         L_direct_0,
-        #endif
         L_direct_0_dir, ro);
     #elif defined(FIRST_LOBE_REFLECTION)
     writeReflectionOutput(xy, fb, L_indirect,

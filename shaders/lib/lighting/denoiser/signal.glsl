@@ -1,6 +1,8 @@
 #ifndef MAXENT_DENOISER_SIGNAL_GLSL
 #define MAXENT_DENOISER_SIGNAL_GLSL
 
+#include "/lib/math/denoiser_uncertainty.glsl"
+
 // Canonical input/output ABI for the MaxEnt spatial denoiser.
 //
 // Image format: RGBA32UI
@@ -10,18 +12,21 @@
 //   w = packHalf2x16(standardDeviation, virtualDistance)
 //
 // maxEntY.xyz is the directional first moment, maxEntY.w is total luminance,
-// and CoCg carries chroma. The variance-preparation pass writes the Monte Carlo
-// observation standard deviation; each A-Trous pass linearly filters its
-// variance with the signal weights and writes the filtered center's local
-// Monte Carlo observation standard deviation. The channel is never assumed to
-// share an empirical sample set or N_eff with the signal moments. Pack/unpack
-// never performs a hidden sqrt or square. Camera-relative radial virtual distance is propagated
-// independently in the upper FP16 lane. Input and
+// and CoCg carries chroma. standardDeviation stores sqrt(estimator variance)
+// in the local Bures metric: preparation divides observation variance by the
+// center's raw temporal N_eff once (independent-current starts at N=1).
+// Each A-Trous pass propagates uncertainty with its actual squared weights and
+// a per-step overlap-correlation closure. No spatial N_eff is propagated.
+// Pack/unpack never performs a hidden sqrt or square.
+// Camera-relative radial virtual distance is independent. Input and
 // output use the same layout, so every spatial pass may ping-pong the same
 // RGBA32UI resources.
 //
-// A negative FP16 standard deviation is the invalid/no-surface sentinel.
+// sigma=-1 marks invalid light; sigma=-2 preserves light with unknown variance.
 // Geometry is supplied separately by the signal policy.
+// Persistent filtered history in confidence-resolve mode reuses the packing
+// with sigma=sqrt(linear-moment estimator trace variance) and tagged N=1.
+// That history ABI is consumed by reprojection/resolve only, never A-Trous.
 
 const float DENOISER_SPATIAL_FP16_MAX = 65504.0;
 struct DenoiserMaxEntSignal {
@@ -42,7 +47,7 @@ DenoiserMaxEntSignal denoiserEmptyMaxEntSignal() {
 
 bool denoiserSpatialSignalWordsValid(uvec4 words) {
     float standardDeviation = unpackHalf2x16(words.w).x;
-    return standardDeviation >= 0.0 && !isnan(standardDeviation) && !isinf(standardDeviation);
+    return denoiserSigmaUsable(standardDeviation);
 }
 
 uvec4 denoiserInvalidMaxEntSignalWords() {
@@ -51,15 +56,18 @@ uvec4 denoiserInvalidMaxEntSignalWords() {
 
 DenoiserMaxEntSignal denoiserSanitizeMaxEntSignal(
         DenoiserMaxEntSignal signal) {
-    if (any(isnan(signal.maxEntY)) || any(isinf(signal.maxEntY)))
+    if (any(isnan(signal.maxEntY)) || any(isinf(signal.maxEntY))) {
         signal.maxEntY = vec4(0.0);
+        signal.standardDeviation = DENOISER_UNKNOWN_UNCERTAINTY;
+    }
     if (any(isnan(signal.CoCg)) || any(isinf(signal.CoCg)))
         signal.CoCg = vec2(0.0);
-    if (isnan(signal.standardDeviation) || isinf(signal.standardDeviation)) signal.standardDeviation = 0.0;
+    // Invalid uncertainty must not become a valid zero-noise estimate.
+    if (signal.standardDeviation != -1.0)
+        signal.standardDeviation = denoiserSigmaOrUnknown(signal.standardDeviation);
     if (isnan(signal.virtualDistance) || isinf(signal.virtualDistance))
         signal.virtualDistance = 0.0;
 
-    signal.standardDeviation = clamp(signal.standardDeviation, 0.0, DENOISER_SPATIAL_FP16_MAX);
     signal.virtualDistance = clamp(signal.virtualDistance, 0.0,
         DENOISER_SPATIAL_FP16_MAX);
     return signal;
@@ -82,7 +90,7 @@ DenoiserMaxEntSignal denoiserUnpackMaxEntSignalTrusted(uvec4 words) {
 DenoiserMaxEntSignal denoiserUnpackMaxEntSignal(uvec4 words) {
     DenoiserMaxEntSignal signal = denoiserUnpackMaxEntSignalTrusted(words);
     vec2 standardDeviationVirtualDistance = unpackHalf2x16(words.w);
-    signal.standardDeviation = max(standardDeviationVirtualDistance.x, 0.0);
+    signal.standardDeviation = standardDeviationVirtualDistance.x;
     signal.virtualDistance = max(standardDeviationVirtualDistance.y, 0.0);
     return denoiserSanitizeMaxEntSignal(signal);
 }

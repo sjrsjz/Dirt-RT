@@ -30,32 +30,6 @@ option.RAY_BOUNCES.comment = Maximum surfaces visited by each camera path. More 
 option.PATH_GUIDING_STRENGTH = Path Guiding Strength
 option.PATH_GUIDING_STRENGTH.comment = MaxEnt guiding strength for diffuse paths and the total MaxEnt+RIS guided probability for radiance-cache probes. Cache probes always retain at least 10% uniform-sphere sampling. Higher values can converge faster in stable scenes; excessive values can increase lag or variance after lighting changes.
 
-option.RESTIR_GI_ENABLED = Biased Low-History ReSTIR GI Path-Guide Prewarm
-option.RESTIR_GI_ENABLED.comment = While validated diffuse history is low, luminance-resamples directions and bounds their energy by the local mean to give MaxEnt a low-variance starting guide. The bias is cleared as history matures. Requires EON.
-value.RESTIR_GI_ENABLED.1 = Enabled
-value.RESTIR_GI_ENABLED.0 = Disabled
-
-option.RESTIR_GI_SPATIAL_SAMPLES = Prewarm Spatial Samples
-option.RESTIR_GI_SPATIAL_SAMPLES.comment = Number of current-frame neighbouring proposals considered per pixel. Candidates are buffer-only; just the selected shifted donor emits one geometry visibility ray.
-
-option.RESTIR_GI_SPATIAL_RADIUS = Prewarm Spatial Radius
-option.RESTIR_GI_SPATIAL_RADIUS.comment = Current-frame neighbour radius in pixels. Larger radii explore less correlated paths but more candidates fail the primary-plane compatibility test.
-
-option.RESTIR_GI_VISIBILITY_MAX_DISTANCE = Prewarm Visibility Distance
-option.RESTIR_GI_VISIBILITY_MAX_DISTANCE.comment = Maximum distance in blocks for spatial support rays. These rays test opaque triangle geometry only and skip alpha, transmission, textures and all closest-hit material evaluation. Lower values are faster but do not query blockers beyond the cap.
-
-option.RESTIR_GI_HISTORY_FADE_START = Prewarm Fade Start
-option.RESTIR_GI_HISTORY_FADE_START.comment = Keep full ReSTIR bootstrap contribution below this geometrically validated previous-frame diffuse history length.
-
-option.RESTIR_GI_HISTORY_FADE_END = Prewarm Fade End
-option.RESTIR_GI_HISTORY_FADE_END.comment = Clear the biased prewarm signal and switch fully to the canonical MaxEnt path sample at this diffuse history length. Stable pixels skip candidate processing and visibility rays.
-
-option.RESTIR_GI_NORMAL_COS = Prewarm Normal Cosine
-option.RESTIR_GI_NORMAL_COS.comment = Minimum geometry-normal cosine for a neighbour to join the proposal set. Raise it to isolate block faces more aggressively and reduce biased prewarm leakage across sharp corners.
-
-option.RESTIR_GI_PLANE_DISTANCE = Prewarm Plane Distance
-option.RESTIR_GI_PLANE_DISTANCE.comment = Maximum neighbour distance from the target tangent plane in blocks. Lower values reject adjacent block faces and steps more aggressively.
-
 option.SUN_PATH_ROTATION = Sun Path Rotation
 option.SUN_PATH_ROTATION.comment = Tilts the apparent sun and moon path around the world X axis like latitude. This changes lighting direction, not day length. 30° is the spring clear-sky calibration reference for the atmosphere.
 
@@ -69,12 +43,6 @@ option.FIREFLY_SUPPRESSION_MULTIPLIER.comment = Per-sample brightness cap multip
 
 option.GI_CLAMP_MAX = GI Hard Clamp
 option.GI_CLAMP_MAX.comment = Hard ceiling on indirect lighting (per-channel) before MaxEnt encoding. Prevents individual path outliers from destabilising the light-field history. Higher values give more headroom for bright indirect light; lower values suppress extreme fireflies more aggressively.
-
-option.PATHGUIDE_SPATIAL_RADIUS = Path Guide Spatial Radius
-option.PATHGUIDE_SPATIAL_RADIUS.comment = Poisson disk sampling radius (pixels) for the path-guide ReSTIR reservoir. Higher values probe farther neighbours for more diverse candidates but increase incoherent memory access.
-
-option.PATHGUIDE_MAX_TEMPORAL_M = Path Guide Max Temporal M
-option.PATHGUIDE_MAX_TEMPORAL_M.comment = Maximum effective sample count carried forward by the path-guide ReSTIR temporal reservoir. Limits how many past samples influence the current guide. Higher values retain more history but respond more slowly to lighting changes.
 
 # ===========================================================================
 # Material
@@ -153,6 +121,10 @@ option.RADIANCE_CACHE_RIS_GUIDING_KAPPA.comment = Concentration of the continuou
 # Shared MaxEnt Temporal Response
 # ===========================================================================
 option.MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE = Bures Response Scale
+option.MAXENT_TEMPORAL_CONFIDENCE_CLAMP = Experimental Confidence Resolve
+option.MAXENT_TEMPORAL_CONFIDENCE_CLAMP.comment = Uses disjoint raw 5x5 sample groups, confidence projection and variance-weighted resolve. 0 restores the legacy A-Trous temporal response. Switching rejects incompatible histories. No additional SSBO storage.
+option.MAXENT_TEMPORAL_CONFIDENCE_FAILURE_PROBABILITY = Nominal Failure Probability
+option.MAXENT_TEMPORAL_CONFIDENCE_FAILURE_PROBABILITY.comment = Confidence mode only. Larger values allow more history projection; 0 disables projection while retaining split-sample variance-weighted accumulation. Runtime estimated variances make this a nominal threshold, not a guaranteed false-alarm rate.
 option.MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE.comment = Shared by diffuse and specular temporal accumulation. It scales squared Bures distance relative to the matching combined estimator variance. Higher values give the current frame more weight for the same difference and reject history more aggressively.
 
 # ===========================================================================
@@ -175,11 +147,6 @@ option.MAXENT_SPECULAR_TEMPORAL_LOBE_FRACTION.comment = Portion of the GGX lobe 
 
 option.MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS = Specular Reprojection Radius
 option.MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS.comment = Specular temporal footprint radius in pixels. Larger values accept wider reflection reprojection motion.
-
-
-
-
-
 
 # ===========================================================================
 # MaxEnt Variance Preparation

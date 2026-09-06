@@ -81,8 +81,7 @@ MaxEntReprojectedHistory maxentLoadHistory(
     float validBilinearWeight = 0.0;
     SpecularMaxEnt signalSum = emptySpecularMaxEnt();
     SpecularMaxEnt denoisedSum = emptySpecularMaxEnt();
-    float denoisedWeightedMonteCarloVariance = 0.0;
-    float denoisedWeightOverRootSamples = 0.0;
+    DenoiserEstimatorVarianceAccumulator denoisedUncertainty = denoiserBeginEstimatorVariance();
     vec3 normalSum = vec3(0.0);
     float depthThreshold = MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD *
         max(length(currentSurfacePosition), 1.0);
@@ -100,7 +99,7 @@ MaxEntReprojectedHistory maxentLoadHistory(
         if (!(surfaceDistance >= 0.0) || isnan(surfaceDistance) || isinf(surfaceDistance)
                 || !(momentHistory.x >= 0.0)
                 || !(momentHistory.y >= 1.0) || !(denoisedMetadata.y >= 1.0)
-                || !(denoisedMetadata.x >= 0.0) || any(isnan(momentHistory))
+                || !denoiserSigmaUsable(denoisedMetadata.x) || any(isnan(momentHistory))
                 || any(isinf(momentHistory)) || any(isnan(denoisedMetadata))
                 || any(isinf(denoisedMetadata))) continue;
 
@@ -121,6 +120,13 @@ MaxEntReprojectedHistory maxentLoadHistory(
             continue;
 
         float w = bilinear[i];
+        vec4 rawTap = vec4(unpackHalf2x16(signalWords.x), unpackHalf2x16(signalWords.y));
+        vec2 rawChroma = unpackHalf2x16(signalWords.z);
+        vec4 filteredTap = vec4(unpackHalf2x16(denoisedWords.x), unpackHalf2x16(denoisedWords.y));
+        vec2 filteredChroma = unpackHalf2x16(denoisedWords.z);
+        if (!denoiserTemporalMomentsFinite(rawTap, rawChroma, momentHistory.x)
+                || any(isnan(filteredTap)) || any(isinf(filteredTap))
+                || any(isnan(filteredChroma)) || any(isinf(filteredChroma))) continue;
         validBilinearWeight += w;
         if (w <= 0.0) continue;
         vec4 tapMaxEntY = vec4(unpackHalf2x16(signalWords.x),
@@ -129,8 +135,7 @@ MaxEntReprojectedHistory maxentLoadHistory(
         signalSum.CoCg += unpackHalf2x16(signalWords.z) * w;
         denoisedSum.maxEntY += vec4(unpackHalf2x16(denoisedWords.x), unpackHalf2x16(denoisedWords.y)) * w;
         denoisedSum.CoCg += unpackHalf2x16(denoisedWords.z) * w;
-        denoisedWeightedMonteCarloVariance += denoisedMetadata.x * denoisedMetadata.x * w;
-        denoisedWeightOverRootSamples += w * inversesqrt(denoisedMetadata.y);
+        denoiserAccumulateEstimatorVariance(denoisedUncertainty, denoisedMetadata.x, w);
         vec2 hitRoughness = unpackHalf2x16(geometryWords.w);
         outHistory.hitDistance += hitRoughness.x * w;
         outHistory.roughness += (hitRoughness.y - 1.0) * w;
@@ -152,7 +157,7 @@ MaxEntReprojectedHistory maxentLoadHistory(
     signalSum = maxentScaleMaxEnt(signalSum, invWeight);
     outHistory.signalWords = packSpecularMaxEnt(signalSum);
     denoisedSum = maxentScaleMaxEnt(denoisedSum, invWeight);
-    float denoisedMonteCarloStandardDeviation = sqrt(denoisedWeightedMonteCarloVariance * invWeight);
+    float denoisedMonteCarloStandardDeviation = denoiserResolveEstimatorSigma(denoisedUncertainty, 1.0);
     outHistory.denoisedWords = uvec4(packSpecularMaxEnt(denoisedSum),
         floatBitsToUint(denoisedMonteCarloStandardDeviation));
     outHistory.hitDistance *= invWeight;
@@ -160,8 +165,7 @@ MaxEntReprojectedHistory maxentLoadHistory(
         (outHistory.roughness - 1.0) * invWeight, 0.0, 1.0);
     outHistory.historyEffectiveSamples = statisticsReconstructedEffectiveSampleCount(
         sumWeight, weightOverRootSamples);
-    outHistory.denoisedEffectiveSamples = statisticsReconstructedEffectiveSampleCount(
-        sumWeight, denoisedWeightOverRootSamples);
+    outHistory.denoisedEffectiveSamples = 1.0; // Reserved legacy metadata.
     outHistory.meanY2 = weightedMeanY2 * invWeight;
     outHistory.normalWord = encodeNormalU(maxentSafeNormalize(normalSum * invWeight, currentNormal));
     outHistory.footprintQuality = clamp(validBilinearWeight, 0.0, 1.0);
@@ -221,10 +225,11 @@ MaxEntReprojectedHistory maxentCombineReprojectedHistories(
         ? uintBitsToFloat(surface.denoisedWords.w) : 0.0;
     float virtualMonteCarloStandardDeviation = virtualHistory.found
         ? uintBitsToFloat(virtualHistory.denoisedWords.w) : 0.0;
-    float denoisedMonteCarloVariance = (surfaceWeight * surfaceMonteCarloStandardDeviation * surfaceMonteCarloStandardDeviation
-        + virtualWeight * virtualMonteCarloStandardDeviation * virtualMonteCarloStandardDeviation) * inverseHistoryWeight;
+    float combinedSigma = denoiserMixEstimatorSigma(surfaceMonteCarloStandardDeviation,
+        virtualMonteCarloStandardDeviation, virtualWeight * inverseHistoryWeight,
+        MAXENT_SPECULAR_BRANCH_CORRELATION);
     combined.denoisedWords = uvec4(packSpecularMaxEnt(denoised),
-        floatBitsToUint(sqrt(denoisedMonteCarloVariance)));
+        floatBitsToUint(combinedSigma));
     combined.hitDistance = (surfaceWeight * surface.hitDistance
         + virtualWeight * virtualHistory.hitDistance)
         * inverseHistoryWeight;
@@ -240,13 +245,7 @@ MaxEntReprojectedHistory maxentCombineReprojectedHistories(
         surfaceWeight * inversesqrt(surfaceEffectiveSamples)
             + virtualWeight * inversesqrt(virtualEffectiveSamples),
         MAXENT_SPECULAR_BRANCH_CORRELATION);
-    float surfaceDenoisedEffectiveSamples = max(surface.denoisedEffectiveSamples, 1.0);
-    float virtualDenoisedEffectiveSamples = max(virtualHistory.denoisedEffectiveSamples, 1.0);
-    combined.denoisedEffectiveSamples = statisticsCorrelatedEffectiveSampleCount(historyMass,
-        surfaceWeight * surfaceWeight / surfaceDenoisedEffectiveSamples
-            + virtualWeight * virtualWeight / virtualDenoisedEffectiveSamples,
-        surfaceWeight * inversesqrt(surfaceDenoisedEffectiveSamples)
-            + virtualWeight * inversesqrt(virtualDenoisedEffectiveSamples), MAXENT_SPECULAR_BRANCH_CORRELATION);
+    combined.denoisedEffectiveSamples = 1.0;
     combined.meanY2 = (surfaceWeight * surface.meanY2 + virtualWeight * virtualHistory.meanY2) * inverseHistoryWeight;
     combined.footprintQuality = (surfaceWeight * surface.footprintQuality
         + virtualWeight * virtualHistory.footprintQuality)

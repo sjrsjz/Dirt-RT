@@ -20,6 +20,15 @@ uniform usampler2D colortex6;
 
 #include "/lib/lighting/denoiser/scratch_io.glsl"
 
+#if MAXENT_TEMPORAL_CONFIDENCE_CLAMP == 1
+#include "/lib/lighting/denoiser/temporal_confidence.glsl"
+void maxentConfidenceLoadRaw(ivec2 pixel, out vec4 moment, out vec2 chroma) {
+    SpecularMaxEnt raw = unpackSpecularMaxEnt(texelFetch(colortex6, pixel, 0).xyz);
+    moment = raw.maxEntY;
+    chroma = raw.CoCg;
+}
+#endif
+
 void main() {
     uvec2 pixel = gl_GlobalInvocationID.xy;
     if (any(greaterThanEqual(pixel, resolution_global))) return;
@@ -46,9 +55,9 @@ void main() {
         readMaxEntSpecularHistory(pixel);
 
     float noiseOnlyCurrentWeight = -1.0;
-    SpecularMaxEnt historyDenoisedSignal;
-    float historyMonteCarloStandardDeviation, historyDenoisedEffectiveSamples;
-    float reprojectionAlphaFloor, currentTrackingHitDistance;
+    SpecularMaxEnt historyDenoisedSignal = emptySpecularMaxEnt();
+    float historyMonteCarloStandardDeviation = 0.0, historyDenoisedEffectiveSamples = 1.0;
+    float reprojectionAlphaFloor = 1.0, currentTrackingHitDistance = noisy.hitDistance;
     bool denoisedReprojectionValid = readMaxEntSpecularDenoisedReprojection(pixel, historyDenoisedSignal,
         historyMonteCarloStandardDeviation, historyDenoisedEffectiveSamples,
         reprojectionAlphaFloor, currentTrackingHitDistance);
@@ -57,23 +66,29 @@ void main() {
 
     float currentAlpha = 1.0;
     uvec4 independentCurrentWords = denoiserScratchLoadA(ivec2(pixel));
-    float independentCurrentEffectiveSamples = denoiserScratchLoadEffectiveSamplesA(ivec2(pixel));
-    bool independentCurrentValid = denoiserSpatialSignalWordsValid(independentCurrentWords)
-        && statisticsValidEffectiveSampleCount(independentCurrentEffectiveSamples);
+    bool independentCurrentValid = denoiserSpatialSignalWordsValid(independentCurrentWords);
     DenoiserMaxEntSignal independentCurrent = independentCurrentValid
         ? denoiserUnpackMaxEntSignal(independentCurrentWords) : denoiserEmptyMaxEntSignal();
     if (hasHistory) {
         currentAlpha = max(clamp(float(MAXENT_TEMPORAL_FIXED_ALPHA), 0.0, 1.0), reprojectionAlphaFloor);
+#if MAXENT_TEMPORAL_CONFIDENCE_CLAMP == 0
         if (independentCurrentValid) {
             float responseAlpha = maxentTemporalResponseAlpha(
                 reprojectionAlphaFloor, independentCurrent.maxEntY,
-                independentCurrent.standardDeviation, independentCurrentEffectiveSamples,
+                independentCurrent.standardDeviation,
                 historyDenoisedSignal.maxEntY, historyMonteCarloStandardDeviation,
-                historyDenoisedEffectiveSamples, reprojected.historyEffectiveSamples, noiseOnlyCurrentWeight);
+                reprojected.historyEffectiveSamples, noiseOnlyCurrentWeight);
             currentAlpha = responseAlpha;
         }
+#endif
     }
     debugWriteSpecularNoiseOnlyCurrentWeight(pixel, noiseOnlyCurrentWeight);
+
+#if MAXENT_TEMPORAL_CONFIDENCE_CLAMP == 1
+    hasHistory = hasHistory && denoiserSigmaKnown(historyMonteCarloStandardDeviation);
+    currentAlpha = hasHistory ? max(float(MAXENT_TEMPORAL_FIXED_ALPHA),
+        clamp(reprojectionAlphaFloor, 0.0, 1.0)) : 1.0;
+#endif
 
     MaxEntSpecularHistory committed;
     committed.surfacePosition = currentGeometry.position;
@@ -103,26 +118,46 @@ void main() {
 
     SpecularMaxEnt filtered;
     float resolvedStandardDeviation = currentSignal.standardDeviation;
-    float resolvedDenoisedEffectiveSamples = hasHistory ? historyDenoisedEffectiveSamples : max(reprojected.historyEffectiveSamples, 1.0);
+    float resolvedDenoisedEffectiveSamples = 1.0; // Reserved history ABI; sigma is estimator uncertainty.
+#if MAXENT_TEMPORAL_CONFIDENCE_CLAMP == 0
     if (independentCurrentValid) {
         // Commit the exact final A-Trous center estimator used to choose currentAlpha.
         if (hasHistory) {
             filtered.maxEntY = mix(historyDenoisedSignal.maxEntY, independentCurrent.maxEntY, currentAlpha);
             filtered.CoCg = mix(historyDenoisedSignal.CoCg, independentCurrent.CoCg, currentAlpha);
-            resolvedStandardDeviation = maxentTemporalMixMonteCarloStandardDeviation(
+            resolvedStandardDeviation = maxentTemporalMixEstimatorStandardDeviation(
                 historyMonteCarloStandardDeviation, independentCurrent.standardDeviation, currentAlpha);
-            resolvedDenoisedEffectiveSamples = statisticsKishBlendEffectiveSampleCounts(
-                historyDenoisedEffectiveSamples, independentCurrentEffectiveSamples, currentAlpha);
         } else {
             filtered.maxEntY = independentCurrent.maxEntY;
             filtered.CoCg = independentCurrent.CoCg;
             resolvedStandardDeviation = independentCurrent.standardDeviation;
-            resolvedDenoisedEffectiveSamples = independentCurrentEffectiveSamples;
         }
     } else {
         filtered.maxEntY = currentSignal.maxEntY;
         filtered.CoCg = currentSignal.CoCg;
     }
+#endif
+#if MAXENT_TEMPORAL_CONFIDENCE_CLAMP == 1
+    MaxentConfidenceGroup pilot, checkA, checkB, splitCurrent;
+    maxentConfidenceGather(ivec2(pixel), pilot, checkA, checkB, splitCurrent);
+    if (splitCurrent.valid) {
+        float priorVariance = hasHistory ? maxentConfidencePriorObservationVariance(
+            reprojected.signal.maxEntY, reprojected.rootMeanY2,
+            reprojected.historyEffectiveSamples) : 0.0;
+        float estimatorVariance, confidenceGain;
+        maxentConfidenceResolve(pilot, checkA, checkB, splitCurrent, historyDenoisedSignal.maxEntY,
+            historyDenoisedSignal.CoCg, historyMonteCarloStandardDeviation
+                * historyMonteCarloStandardDeviation, hasHistory, priorVariance, reprojected.historyEffectiveSamples,
+            hasHistory ? reprojectionAlphaFloor : 1.0,
+            filtered.maxEntY, filtered.CoCg, estimatorVariance, confidenceGain);
+        resolvedStandardDeviation = sqrt(estimatorVariance);
+        debugWriteSpecularNoiseOnlyCurrentWeight(pixel, confidenceGain);
+    } else {
+        filtered = noisy.signal;
+        resolvedStandardDeviation = DENOISER_UNKNOWN_UNCERTAINTY;
+    }
+    resolvedDenoisedEffectiveSamples = 1.0;
+#endif
     writeMaxEntSpecularDenoisedHistory(pixel, filtered, resolvedStandardDeviation, resolvedDenoisedEffectiveSamples);
     vec3 primaryRay = reconstructPrimaryRay(pixel);
     float virtualScale = denoiserSpatialSpecularVirtualScale(primaryRay,

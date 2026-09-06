@@ -169,15 +169,15 @@ void resetToCurrentSample() {
 }
 
 void publishDenoisedReprojection(vec4 weightedMaxEntY, vec2 weightedCoCg,
-        float weightedMonteCarloVariance, float effectiveSamples, float acceptedWeight, float validCoverage) {
+        DenoiserEstimatorVarianceAccumulator uncertainty, float acceptedWeight, float validCoverage) {
     float inverseWeight = 1.0 / acceptedWeight;
-    float standardDeviation = sqrt(weightedMonteCarloVariance * inverseWeight);
+    float standardDeviation = denoiserResolveEstimatorSigma(uncertainty, 1.0);
     writeDiffuseDenoisedReprojection(
         gl_GlobalInvocationID.xy,
         weightedMaxEntY * inverseWeight,
         weightedCoCg * inverseWeight,
         standardDeviation,
-        effectiveSamples,
+        1.0,
         validCoverage
     );
 }
@@ -210,8 +210,7 @@ void buildDiffuseTemporalProposal() {
     float weightedMeanY2 = 0.0;
     vec4 denoisedMaxEntY = vec4(0.0);
     vec2 denoisedCoCg = vec2(0.0);
-    float denoisedWeightedMonteCarloVariance = 0.0;
-    float denoisedWeightOverRootSamples = 0.0;
+    DenoiserEstimatorVarianceAccumulator denoisedUncertainty = denoiserBeginEstimatorVariance();
 
     for (int tapIndex = 0; tapIndex < 4; tapIndex++) {
         ivec2 sampleTexel = prevBase + ivec2(tapIndex & 1, tapIndex >> 1);
@@ -249,7 +248,6 @@ void buildDiffuseTemporalProposal() {
         // A surviving estimator still owns one Kish sample; the Jacobian discards only its accumulated excess.
         float surfaceSampleScale = diffuseTemporalSurfaceSampleScale(historyPosition, fp);
         float correctedTapSamples = max(tapSamples * surfaceSampleScale, 1.0);
-        float correctedDenoisedTapSamples = max(tapDenoisedEffectiveSamples * surfaceSampleScale, 1.0);
         float tapWeight = reconstructionWeight;
 
         MaxEntEncoding tapMaxEnt;
@@ -259,11 +257,16 @@ void buildDiffuseTemporalProposal() {
                 || any(isnan(tapMaxEnt.CoCg)) || any(isinf(tapMaxEnt.CoCg))) continue;
 
         vec4 tapDenoisedMaxEntY = vec4(unpackHalf2x16(denoisedWords.x), unpackHalf2x16(denoisedWords.y));
+        vec2 tapDenoisedChroma = unpackHalf2x16(denoisedWords.z);
+        if (any(isnan(tapDenoisedMaxEntY)) || any(isinf(tapDenoisedMaxEntY))
+                || any(isnan(tapDenoisedChroma)) || any(isinf(tapDenoisedChroma))) continue;
         float tapDenoisedStdDev = denoisedMetadata.x;
+        // Stored sigma is estimator uncertainty. Inflate for footprint loss.
+        if (denoiserSigmaKnown(tapDenoisedStdDev))
+            tapDenoisedStdDev /= sqrt(clamp(surfaceSampleScale, 1e-4, 1.0));
         denoisedMaxEntY += tapWeight * tapDenoisedMaxEntY;
-        denoisedCoCg += tapWeight * unpackHalf2x16(denoisedWords.z);
-        denoisedWeightedMonteCarloVariance += tapWeight * tapDenoisedStdDev * tapDenoisedStdDev;
-        denoisedWeightOverRootSamples += tapWeight * inversesqrt(correctedDenoisedTapSamples);
+        denoisedCoCg += tapWeight * tapDenoisedChroma;
+        denoiserAccumulateEstimatorVariance(denoisedUncertainty, tapDenoisedStdDev, tapWeight);
 
         accumulate_maxent(accumMaxEnt, tapMaxEnt, tapWeight);
         float tapMeanY2 = historyMeta.y * historyMeta.y;
@@ -285,19 +288,16 @@ void buildDiffuseTemporalProposal() {
 
     float historyEffectiveSamples = statisticsReconstructedEffectiveSampleCount(
         validKernelWeight, sumWeightOverRootSamples);
-    float denoisedHistoryEffectiveSamples = statisticsReconstructedEffectiveSampleCount(
-        validKernelWeight, denoisedWeightOverRootSamples);
 
-    if (!statisticsValidEffectiveSampleCount(historyEffectiveSamples)
-            || !statisticsValidEffectiveSampleCount(denoisedHistoryEffectiveSamples)) {
+    if (!statisticsValidEffectiveSampleCount(historyEffectiveSamples)) {
         writeDiffuseDenoisedReprojectionInvalid(gl_GlobalInvocationID.xy);
         resetToCurrentSample();
         imageStore(colorimg6, ivec2(gl_GlobalInvocationID.xy), uvec4(0u));
         return;
     }
 
-    // The surface-area Jacobian changes only each tap's N_eff before Kish reconstruction. E[R u], E[R], CoCg,
-    // E[R^2] and filtered MC variance use only the normalized bilinear weights.
+    // Raw moments use normalized bilinear weights; the Jacobian reduces raw
+    // N_eff and inflates filtered estimator variance. Overlap uses correlation=1.
     float histMeanY2 = weightedMeanY2 * inverseKernelWeight;
 
     MaxEntEncoding currentMaxEnt;
@@ -307,8 +307,7 @@ void buildDiffuseTemporalProposal() {
     publishDenoisedReprojection(
         denoisedMaxEntY,
         denoisedCoCg,
-        denoisedWeightedMonteCarloVariance,
-        denoisedHistoryEffectiveSamples,
+        denoisedUncertainty,
         validKernelWeight,
         validFootprintCoverage
     );

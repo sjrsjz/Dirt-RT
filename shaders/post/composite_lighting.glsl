@@ -63,6 +63,8 @@ vec3 debugNoiseOnlyCurrentWeight(float currentWeight) {
 
 #if DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_PREPARED_MONTE_CARLO_VARIANCE || DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_FILTERED_MONTE_CARLO_VARIANCE || DEBUG_VIEW == DEBUG_VIEW_SPECULAR_PREPARED_MONTE_CARLO_VARIANCE || DEBUG_VIEW == DEBUG_VIEW_SPECULAR_FILTERED_MONTE_CARLO_VARIANCE
 vec3 debugMonteCarloVariance(float standardDeviation) {
+    // Neutral gray is valid light without a usable uncertainty estimate.
+    if (standardDeviation == -2.0) return vec3(0.35);
     if (!(standardDeviation >= 0.0) || isnan(standardDeviation)
             || isinf(standardDeviation))
         return vec3(1.0, 0.0, 1.0);
@@ -495,10 +497,7 @@ void main() {
     #elif DEBUG_VIEW == DEBUG_VIEW_PATH_GUIDE_FINAL_DIRECTION
     {
         vec4 guideY;
-        float guideW;
-        float guideM;
-        readPathGuide(xy, guideY, guideW, guideM);
-        if (guideM < 1e-6) {
+        if (!readPathGuide(xy, guideY)) {
             fragColor.xyz = vec3(0.0);
         } else {
             vec3 dir = guideY.xyz / max(length(guideY.xyz), 1e-6);

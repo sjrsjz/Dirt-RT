@@ -14,8 +14,10 @@
 //   historyEffectiveSamples = Kish effective temporal sample count N_eff
 //
 // Outputs are returned through the including domain adapter. standardDeviation
-// stores the square root of the local Bures MC observation variance. The stored
-// E[Y^2] fixes radial noise exactly; the alpha=1 g^-3 joint closure supplies the
+// stores sqrt(local Bures estimator variance): observation variance divided by
+// the center temporal N_eff for the proposal, and N=1 for independent current.
+// The stored
+// E[Y^2] supplies the radial term; the alpha=1 g^-3 joint closure supplies the
 // otherwise unidentified R^2-weighted angular moments. The resulting scalar is
 // matched to maxentLightSampleDistanceSq and remains finite at kappa=0 and 1.
 //
@@ -77,17 +79,23 @@ vec4 denoiserVarianceFiniteMean(vec4 meanState) {
     return any(isnan(meanState)) || any(isinf(meanState)) ? vec4(0.0) : meanState;
 }
 
+bool denoiserVarianceMomentsValid(vec4 m, float rms) {
+    if (any(isnan(m)) || any(isinf(m)) || !(m.w >= 0.0)
+            || !(rms >= 0.0) || isnan(rms) || isinf(rms)
+            || rms > DENOISER_SPATIAL_FP16_MAX
+            || any(greaterThan(abs(m), vec4(DENOISER_SPATIAL_FP16_MAX)))) return false;
+    if (m.w == 0.0) return rms == 0.0 && all(equal(m.xyz, vec3(0.0)));
+    // Permit FP16 rounding at the cone/Jensen boundary, not arbitrary loss of
+    // the paired first or second moment. Zero mean + residual RMS stays unknown.
+    float tolerance = max(0.002 * m.w, 1.1920928955078125e-7);
+    return rms + tolerance >= m.w && length(m.xyz) <= m.w + tolerance;
+}
+
 float denoiserVarianceBiasedBuresG3Moment(vec4 meanState, float rootMeanY2) {
-    meanState = denoiserVarianceFiniteMean(meanState);
-    rootMeanY2 = denoiserVarianceSanitizeNonnegative(rootMeanY2);
+    if (!denoiserVarianceMomentsValid(meanState, rootMeanY2))
+        return DENOISER_UNKNOWN_UNCERTAINTY;
     float meanY = max(meanState.w, 0.0);
-    if (!(meanY > 0.0)) {
-        // A nonzero RMS with a zero FP16 mean is an under-resolved sparse
-        // event. Preserve uncertainty instead of turning it into zero noise.
-        return rootMeanY2 > 0.0
-            ? DENOISER_SPATIAL_FP16_MAX * DENOISER_SPATIAL_FP16_MAX
-            : 0.0;
-    }
+    if (meanY == 0.0) return 0.0;
 
     rootMeanY2 = max(rootMeanY2, meanY);
     float meanY2 = rootMeanY2 * rootMeanY2;
@@ -108,18 +116,27 @@ float denoiserVarianceBiasedBuresG3Moment(vec4 meanState, float rootMeanY2) {
 }
 
 float denoiserMonteCarloVarianceFromTemporalMoments(vec4 meanState, float rootMeanY2, float historyEffectiveSamples) {
-    // This weighted-sample factor is exact for the central radial terms and is
-    // the finite-history correction used for the g^-3 plug-in angular closure.
+    // Finite-history plug-in correction for the g^-3 angular closure.
     // Consumers divide the returned per-observation variance by estimator
     // N_eff exactly once.
-    return statisticsObservationVarianceFromBiasedCentralMoment(
-        denoiserVarianceBiasedBuresG3Moment(meanState, rootMeanY2), historyEffectiveSamples);
+    float biased = denoiserVarianceBiasedBuresG3Moment(meanState, rootMeanY2);
+    if (!denoiserVarianceKnown(biased)
+            || !statisticsValidEffectiveSampleCount(historyEffectiveSamples))
+        return DENOISER_UNKNOWN_UNCERTAINTY;
+    if (historyEffectiveSamples <= 1.0)
+        return meanState.w == 0.0 && rootMeanY2 == 0.0 ? 0.0 : DENOISER_UNKNOWN_UNCERTAINTY;
+    float variance = statisticsObservationVarianceFromBiasedCentralMoment(biased, historyEffectiveSamples);
+    return denoiserVarianceKnown(variance) ? variance : DENOISER_UNKNOWN_UNCERTAINTY;
 }
 
 DenoiserVarianceSource denoiserVarianceSanitizeSource(DenoiserVarianceSource source) {
+    bool momentsValid = denoiserVarianceMomentsValid(source.maxEntY, source.rootMeanY2)
+        && statisticsValidEffectiveSampleCount(source.historyEffectiveSamples);
     source.maxEntY = denoiserVarianceFiniteMean(source.maxEntY);
     if (any(isnan(source.CoCg)) || any(isinf(source.CoCg))) source.CoCg = vec2(0.0);
-    source.rootMeanY2 = denoiserVarianceSanitizeNonnegative(source.rootMeanY2);
+    if (!momentsValid) source.rootMeanY2 = DENOISER_UNKNOWN_UNCERTAINTY;
+    if (!statisticsValidEffectiveSampleCount(source.historyEffectiveSamples))
+        source.historyEffectiveSamples = 1.0;
     source.hitDistance = clamp(denoiserVarianceSanitizeNonnegative(source.hitDistance),
             0.0, DENOISER_SPATIAL_FP16_MAX);
     return source;
@@ -150,7 +167,8 @@ const float MAXENT_VARIANCE_KERNEL_1D[4] = {
     };
 
 void denoiserVarianceWriteTile(uint index, DenoiserVarianceGeometry geometry, DenoiserVarianceSource source, bool valid) {
-    valid = valid && statisticsValidEffectiveSampleCount(source.historyEffectiveSamples);
+    valid = valid && statisticsValidEffectiveSampleCount(source.historyEffectiveSamples)
+        && denoiserVarianceMomentsValid(source.maxEntY, source.rootMeanY2);
     source = denoiserVarianceSanitizeSource(source);
     float effectiveSamples = valid ? min(source.historyEffectiveSamples, 65504.0) : 1.0;
     denoiserVarianceSurfaceTile[index] = uvec2(floatBitsToUint(geometry.surfaceDistance),
@@ -217,6 +235,7 @@ float denoiserVariancePreparedSpatialMonteCarloVariance(uint centerX, uint cente
             float spatialWeight = MAXENT_VARIANCE_KERNEL_1D[abs(offsetX)] * MAXENT_VARIANCE_KERNEL_1D[abs(offsetY)]
                 * exp(-(denoiserVarianceTileSurfacePlaneExponent(sampleIndex, centerPlaneOffset, centerGeometry.geometryNormal, surfaceRejectionScale)
                     + denoiserVarianceTilePdfDirectionExponent(sampleIndex, centerGeometry.pdfDirection)));
+            if (!(spatialWeight > 0.0) || isnan(spatialWeight) || isinf(spatialWeight)) continue;
             vec2 rootMeanY2EffectiveSamples = denoiserVarianceTileRootMeanY2EffectiveSamples(sampleIndex);
             float sampleEffectiveSamples = rootMeanY2EffectiveSamples.y;
             sumWeight += spatialWeight;
@@ -226,7 +245,7 @@ float denoiserVariancePreparedSpatialMonteCarloVariance(uint centerX, uint cente
         }
     }
 
-    if (!(sumWeight > 1e-8)) return 0.0;
+    if (!(sumWeight > 1e-8)) return DENOISER_UNKNOWN_UNCERTAINTY;
     float inverseWeight = 1.0 / sumWeight;
     vec4 pooledMean = sumMean * inverseWeight;
     float pooledRootMeanY2 = sqrt(sumMeanY2 * inverseWeight);
@@ -278,17 +297,27 @@ void denoiserVariancePrepare() {
     }
     barrier();
 
-    float standardDeviation = 0.0;
-    float independentCurrentStandardDeviation = 0.0;
+    float standardDeviation = DENOISER_UNKNOWN_UNCERTAINTY;
+    float independentCurrentStandardDeviation = DENOISER_UNKNOWN_UNCERTAINTY;
     if (centerValid) {
         float spatialVariance = denoiserVariancePreparedSpatialMonteCarloVariance(
             centerX, centerY, centerGeometry, centerPlaneOffset, surfaceRejectionScale);
         float temporalVariance = denoiserMonteCarloVarianceFromTemporalMoments(
             centerSource.maxEntY, centerSource.rootMeanY2, centerSource.historyEffectiveSamples);
         float temporalTrust = smoothstep(spatialOnlySamples, varianceTransitionEnd, centerSource.historyEffectiveSamples);
-        float preparedVariance = mix(spatialVariance, temporalVariance, temporalTrust);
-        standardDeviation = sqrt(preparedVariance);
-        independentCurrentStandardDeviation = sqrt(spatialVariance);
+        bool spatialKnown = denoiserVarianceKnown(spatialVariance);
+        bool temporalKnown = denoiserVarianceKnown(temporalVariance);
+        float preparedVariance = spatialKnown && temporalKnown
+            ? mix(spatialVariance, temporalVariance, temporalTrust)
+            : (spatialKnown ? spatialVariance : temporalVariance);
+        // Convert the chosen observation variance exactly once. The pooled
+        // Kish count estimates the observation distribution; the proposal mean
+        // still has the center's temporal count.
+        standardDeviation = denoiserVarianceKnown(preparedVariance)
+            ? denoiserVarianceToSigma(preparedVariance / max(centerSource.historyEffectiveSamples, 1.0))
+            : DENOISER_UNKNOWN_UNCERTAINTY;
+        independentCurrentStandardDeviation = denoiserVarianceToSigma(
+            spatialKnown ? spatialVariance : temporalVariance);
     }
 
     if (!centerInBounds) return;

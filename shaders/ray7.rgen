@@ -1,4 +1,0 @@
-#version 460 core
-// Sparse voxel radiance update, separated from allocation by an
-// execution-group barrier.
-#include "/lib/rt/radiance_cache_rgen.glsl"

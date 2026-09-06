@@ -59,14 +59,14 @@ float debugReadSpecularNoiseOnlyCurrentWeight(uvec2 xy) {
 void debugWriteDiffuseMonteCarloStandardDeviation(uvec2 xy, float standardDeviation) {
     uint index = addr(DEBUG_N_COMMON, xy);
     vec2 standardDeviations = unpackHalf2x16(debugBuffer.data[index].w);
-    standardDeviations.x = clamp(standardDeviation, -1.0, 65504.0);
+    standardDeviations.x = clamp(standardDeviation, -2.0, 65504.0);
     debugBuffer.data[index].w = packHalf2x16(standardDeviations);
 }
 
 void debugWriteSpecularMonteCarloStandardDeviation(uvec2 xy, float standardDeviation) {
     uint index = addr(DEBUG_N_COMMON, xy);
     vec2 standardDeviations = unpackHalf2x16(debugBuffer.data[index].w);
-    standardDeviations.y = clamp(standardDeviation, -1.0, 65504.0);
+    standardDeviations.y = clamp(standardDeviation, -2.0, 65504.0);
     debugBuffer.data[index].w = packHalf2x16(standardDeviations);
 }
 

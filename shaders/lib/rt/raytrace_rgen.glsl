@@ -1,7 +1,6 @@
 // #version 460 core is declared by each enclosing rayN.rgen entry. ray0 owns
-// primary visibility, ray1..ray3 own the first lobes, and ray4/ray5 resolve
-// and commit the low-history biased ReSTIR GI path-guiding prewarm. This orchestration
-// file is never compiled alone.
+// primary visibility and ray1..ray3 own the first lobes.
+// This orchestration file is never compiled alone.
 #extension GL_EXT_ray_query : enable
 #extension GL_EXT_buffer_reference : enable
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : enable
@@ -45,14 +44,6 @@
 #define FIRST_LOBE_VAL 2
 #endif
 
-// ray1 creates one fresh proposal per pixel. ray4 resamples those proposals and
-// ray5 only commits the prewarm result, so only the original diffuse pass is
-// allowed to write proposal metadata.
-#if defined(FIRST_LOBE_DIFFUSE) && RESTIR_GI_ENABLED && EON_ENABLED \
-        && !defined(RESTIR_GI_RESOLVE_PASS) \
-        && !defined(RESTIR_GI_FINAL_PASS)
-#define RESTIR_GI_INITIAL_PASS
-#endif
 
 // ---------------------------------------------------------------------------
 // PSR (Primary Surface Replacement) — refraction virtual-image reprojection
@@ -93,11 +84,6 @@ layout(std430, set = 0, binding = 2, scalar) readonly buffer EntityMotionBuffer 
 #if !defined(RADIANCE_CACHE_TRACE)
 void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir);
 void TracePrimaryGBuffer(uvec2 coord, vec3 ro, vec3 rd);
-#if defined(RESTIR_GI_RESOLVE_PASS)
-void ResolveFirstBounceRestirGI(uvec2 coord, vec3 ro);
-#elif defined(RESTIR_GI_FINAL_PASS)
-void FinalizeFirstBounceRestirGI(uvec2 coord);
-#endif
 #endif
 
 bool isDarkened = false;
@@ -108,7 +94,6 @@ float rtCurrentConeSpread = 0.0;
 // types and helpers declared by the modules before them.
 Payload tmp_Payload;
 
-#if !defined(RESTIR_GI_RESOLVE_PASS) && !defined(RESTIR_GI_FINAL_PASS)
 #include "/lib/rt/raytrace/scene.glsl"
 #include "/lib/rt/raytrace/transport.glsl"
 #include "/lib/rt/raytrace/bounces.glsl"
@@ -116,8 +101,6 @@ Payload tmp_Payload;
 #include "/lib/rt/raytrace/gbuffer_io.glsl"
 #include "/lib/rt/raytrace/primary_pass.glsl"
 #include "/lib/rt/raytrace/path_trace.glsl"
-#endif
-#include "/lib/rt/raytrace/restir_gi.glsl"
 
 #if !defined(RADIANCE_CACHE_TRACE)
 
@@ -132,7 +115,6 @@ bool clearSkyContinuation(uvec2 pixel) {
     #if defined(FIRST_LOBE_DIFFUSE)
     diffuseBuffer.data[addr(DIF_N_LIGHT, pixel)] = uvec4(0u);
     diffuseBuffer.data[addr(DIF_N_SURFACE, pixel)] = uvec4(0u);
-    clearRestirGIScratch(pixel);
     #elif defined(FIRST_LOBE_REFLECTION)
     reflectBuffer.data[addr(SPEC_N_LIGHT, pixel)] = uvec4(0u);
     #else
@@ -151,15 +133,6 @@ void main() {
     if (clearSkyContinuation(pixel)) return;
     #endif
 
-    #if defined(RESTIR_GI_FINAL_PASS)
-    // Commit is buffer-only; avoid camera-ray reconstruction, RNG and sky
-    // setup in this full-screen RT dispatch.
-    FinalizeFirstBounceRestirGI(pixel);
-    #elif defined(RESTIR_GI_RESOLVE_PASS)
-    // Resolve needs the camera origin for world-space endpoint shifting, but
-    // no path-tracing RNG, material modules or sky state.
-    ResolveFirstBounceRestirGI(pixel, cam.viewInverse[3].xyz);
-    #else
     vec2 px = vec2(gl_LaunchIDEXT.xy);
     vec2 taaJitter = vec2(0.0);
     #if defined(PRIMARY_GBUFFER_PASS)
@@ -237,7 +210,6 @@ void main() {
             projection[0][0], projection[1][1],
             projection[2][0], projection[2][1]);
     }
-    #endif
     #endif
 }
 #endif

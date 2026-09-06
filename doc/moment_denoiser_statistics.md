@@ -1,5 +1,7 @@
 # Bures 矩降噪器的统计口径
 
+实景出现明显噪声回归后，实验性置信域 resolve 已默认关闭（`MAXENT_TEMPORAL_CONFIDENCE_CLAMP=0`），恢复本文原时域链。失败试验的接口、假设和测试结果保留于 [置信域解算说明](temporal_confidence_resolve.md)。
+
 本文档描述 encoder 与 decoder 之间的 latent 滤波。均值状态始终在线性矩空间中累积；距离使用该状态的 \(2\times2\) PSD Bures--Wasserstein 几何。alpha=1 的 \(g^{-3}\) 联合 MaxEnt 族只负责补全未存储的 \(R^2\) 加权角向矩，不参与最终光照解码。
 
 ## 1. 编码与可识别量

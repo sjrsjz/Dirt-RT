@@ -9,9 +9,5 @@ uvec4 denoiserScratchLoadA(ivec2 pixel) { return readDiffuseIndependentCurrentA(
 uvec4 denoiserScratchLoadB(ivec2 pixel) { return readDiffuseIndependentCurrentB(uvec2(pixel)); }
 void denoiserScratchStoreA(ivec2 pixel, uvec4 words) { writeDiffuseIndependentCurrentA(uvec2(pixel), words); }
 void denoiserScratchStoreB(ivec2 pixel, uvec4 words) { writeDiffuseIndependentCurrentB(uvec2(pixel), words); }
-float denoiserScratchLoadEffectiveSamplesA(ivec2 pixel) { return readDenoiserIndependentCurrentEffectiveSamplesA(pixel); }
-float denoiserScratchLoadEffectiveSamplesB(ivec2 pixel) { return readDenoiserIndependentCurrentEffectiveSamplesB(pixel); }
-void denoiserScratchStoreEffectiveSamplesA(ivec2 pixel, float effectiveSamples) { writeDenoiserIndependentCurrentEffectiveSamplesA(pixel, effectiveSamples); }
-void denoiserScratchStoreEffectiveSamplesB(ivec2 pixel, float effectiveSamples) { writeDenoiserIndependentCurrentEffectiveSamplesB(pixel, effectiveSamples); }
 
 #endif // MAXENT_DENOISER_SCRATCH_IO_GLSL

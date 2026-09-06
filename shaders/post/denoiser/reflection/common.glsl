@@ -15,7 +15,11 @@ float maxentPerceptualRoughness(float ggxAlpha) {
 // Version the reflection-history signature whenever the stored lighting
 // measure changes, so persistent data cannot cross incompatible pipelines.
 uint maxentReflectionHistoryMaterialID(uint materialID) {
-    return materialID ^ 0x4000u;
+#if MAXENT_TEMPORAL_CONFIDENCE_CLAMP == 1
+    return materialID ^ 0x7800u;
+#else
+    return materialID ^ 0x4800u;
+#endif
 }
 
 struct MaxEntGeometry {
@@ -126,6 +130,10 @@ struct MaxEntTemporalSignal {
 };
 
 uvec4 maxentPackTemporal(MaxEntTemporalSignal s) {
+    if (!denoiserTemporalMomentsFinite(s.signal.maxEntY, s.signal.CoCg, s.rootMeanY2)) {
+        s.historyEffectiveSamples = 0.0;
+        s.rootMeanY2 = 0.0;
+    }
     uvec3 p = packSpecularMaxEnt(s.signal);
     return uvec4(p, maxentPackHalf2(
         sanitizeRootMeanSquareFP16(s.rootMeanY2), s.historyEffectiveSamples));

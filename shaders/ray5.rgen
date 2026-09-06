@@ -1,7 +1,4 @@
 #version 460 core
-// ReSTIR GI path-guiding prewarm commit. Kept separate so ray4 sees a stable
-// ray1 snapshot; zero prewarm scratch falls back to the canonical path atom.
-#define FIRST_LOBE_DIFFUSE
-#define FIRST_LOBE_VAL 2
-#define RESTIR_GI_FINAL_PASS
-#include "/lib/rt/raytrace_rgen.glsl"
+// Sparse voxel radiance update, separated from allocation by an
+// execution-group barrier.
+#include "/lib/rt/radiance_cache_rgen.glsl"

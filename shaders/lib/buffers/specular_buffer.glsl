@@ -4,6 +4,7 @@
 #include "/lib/buffers/addr.glsl"
 #include "/lib/buffers/debug_buffer.glsl"
 #include "/lib/common/pack_half.glsl"
+#include "/lib/math/denoiser_uncertainty.glsl"
 #include "/lib/common/oct_encode.glsl"
 
 // Reflection has no current-frame position plane. Primary position is
@@ -310,7 +311,8 @@ void readRefrHistLight(uvec2 xy, out vec3 color, out float vprojDist,
 // N3: previous final denoised MaxEnt6 plus filtered MC standard deviation and
 // filtered-estimator Kish N_eff. It replaces the former secondary history in place.
 void writeMaxEntSpecularTemporalHistory(uvec2 xy, MaxEntSpecularHistory h) {
-    if (!(h.historyEffectiveSamples >= 1.0) || h.historyEffectiveSamples > 65504.0
+    if (!denoiserTemporalMomentsFinite(h.signal.maxEntY, h.signal.CoCg, h.rootMeanY2)
+            || !(h.historyEffectiveSamples >= 1.0) || h.historyEffectiveSamples > 65504.0
             || isnan(h.historyEffectiveSamples) || isinf(h.historyEffectiveSamples)) {
         reflectBuffer.data[addr(SPEC_N_HISTGEO, xy)] = uvec4(0u);
         reflectBuffer.data[addr(SPEC_N_HISTLIGHT, xy)] = uvec4(0u);
@@ -333,8 +335,11 @@ void writeMaxEntSpecularTemporalHistory(uvec2 xy, MaxEntSpecularHistory h) {
 
 void writeMaxEntSpecularDenoisedHistory(uvec2 xy, SpecularMaxEnt signal, float monteCarloStandardDeviation,
         float effectiveSamples) {
+    if (!denoiserTemporalMomentsFinite(signal.maxEntY, signal.CoCg, 0.0))
+        monteCarloStandardDeviation = DENOISER_UNKNOWN_UNCERTAINTY;
     signal = sanitizeSpecularMaxEnt(signal);
-    if (!(monteCarloStandardDeviation >= 0.0) || isnan(monteCarloStandardDeviation) || isinf(monteCarloStandardDeviation)
+    monteCarloStandardDeviation = denoiserSigmaOrUnknown(monteCarloStandardDeviation);
+    if (!denoiserSigmaUsable(monteCarloStandardDeviation)
             || !(effectiveSamples >= 1.0) || isnan(effectiveSamples) || isinf(effectiveSamples)) {
         reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)] = uvec4(0u, 0u, 0u,
             packHalf2x16(vec2(-1.0, 0.0)));
@@ -357,13 +362,15 @@ void writeMaxEntSpecularDenoisedHistoryInvalid(uvec2 xy) {
 //   N4.x = CoCg from that exact same denoised reprojection
 void writeMaxEntSpecularDenoisedReprojection(uvec2 xy, SpecularMaxEnt signal,
         float monteCarloStandardDeviation, float effectiveSamples, float trackingHitDistance, float alphaFloor) {
+    if (!denoiserTemporalMomentsFinite(signal.maxEntY, signal.CoCg, 0.0))
+        monteCarloStandardDeviation = DENOISER_UNKNOWN_UNCERTAINTY;
     signal = sanitizeSpecularMaxEnt(signal);
     reflectBuffer.data[addr(SPEC_N_LIGHT, xy)] = uvec4(
         packHalf2x16(clamp(signal.maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(clamp(signal.maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
         packHalf2x16(vec2(clamp(alphaFloor, 0.0, 1.0),
             clamp(trackingHitDistance, 0.0, 65504.0))),
-        packHalf2x16(vec2(clamp(monteCarloStandardDeviation, 0.0, 65504.0),
+        packHalf2x16(vec2(denoiserSigmaOrUnknown(monteCarloStandardDeviation),
             clamp(effectiveSamples, 1.0, 65504.0))));
     reflectBuffer.data[addr(SPEC_N_DENOISED_REPROJECTED_CHROMA, xy)] =
         uvec4(packHalf2x16(signal.CoCg), 0x43524742u, 0u, 0u);
@@ -393,7 +400,7 @@ bool readMaxEntSpecularDenoisedReprojection(uvec2 xy,
     effectiveSamples = metadata.y;
     alphaFloor = historyMeta.x;
     hitDistance = historyMeta.y;
-    bool valid = monteCarloStandardDeviation >= 0.0 && alphaFloor >= 0.0 && alphaFloor <= 1.0
+    bool valid = denoiserSigmaUsable(monteCarloStandardDeviation) && alphaFloor >= 0.0 && alphaFloor <= 1.0
         && effectiveSamples >= 1.0
         && chromaWords.y == 0x43524742u
         && !any(isnan(historyMeta)) && !any(isinf(historyMeta))
@@ -419,10 +426,12 @@ MaxEntSpecularHistory readMaxEntSpecularHistory(uvec2 xy) {
     float surfaceDistance = uintBitsToFloat(g.x);
     h.surfacePosition = decodeNormalU(g.y) * surfaceDistance;
     unpackMaxEntHistoryNormalMaterial(g.z, h.geometryNormal, h.materialID);
+    vec4 rawMoment = vec4(unpackHalf2x16(s.x), unpackHalf2x16(s.y));
+    vec2 rawChroma = unpackHalf2x16(s.z);
     h.signal = unpackSpecularMaxEnt(s.xyz);
     h.rootMeanY2 = sanitizeRootMeanSquareFP16(m2History.x);
     h.historyEffectiveSamples = max(m2History.y, 0.0);
-    bool denoisedValid = denoisedMetadata.x >= 0.0 && denoisedMetadata.y >= 1.0
+    bool denoisedValid = denoiserSigmaUsable(denoisedMetadata.x) && denoisedMetadata.y >= 1.0
         && !any(isnan(denoisedMetadata)) && !any(isinf(denoisedMetadata));
     h.hitDistance = max(hitRoughness.x, 0.0);
     h.roughness = clamp(hitRoughness.y, 0.0, 1.0);
@@ -430,7 +439,8 @@ MaxEntSpecularHistory readMaxEntSpecularHistory(uvec2 xy) {
         !isinf(surfaceDistance) && !any(isnan(m2History))
         && !any(isinf(m2History)) && m2History.x >= 0.0 &&
         h.historyEffectiveSamples >= 1.0 && h.historyEffectiveSamples <= 65504.0 &&
-        h.materialID != 0xffffffffu && denoisedValid;
+        h.materialID != 0xffffffffu && denoisedValid
+        && denoiserTemporalMomentsFinite(rawMoment, rawChroma, m2History.x);
     if (!valid) {
         h.surfacePosition = vec3(0.0);
         h.geometryNormal = vec3(0.0, 1.0, 0.0);
