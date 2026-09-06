@@ -29,11 +29,6 @@ float denoiserSpatialAxialDistanceExponent(
         * abs(sampleDirectionOffset - centerDirectionOffset);
 }
 
-float denoiserSpatialPdfDirectionExponent(vec3 centerDirection, vec3 sampleDirection) {
-    return MAXENT_SPATIAL_PDF_DIRECTION_EXPONENT_SCALE
-        * (1.0 - clamp(dot(centerDirection, sampleDirection), -1.0, 1.0));
-}
-
 // Same view-conditioned virtual-projection scale as specular temporal
 // reprojection. It is evaluated once during variance preparation.
 float denoiserSpatialSpecularVirtualScale(vec3 primaryRay,
@@ -47,17 +42,6 @@ float denoiserSpatialSpecularVirtualScale(vec3 primaryRay,
     float a = 0.298475 * log(39.4115 - 39.0029 * roughness);
     return clamp(pow(clamp(1.0 - NoV, 0.0, 1.0), 10.8649)
         * (1.0 - a) + a, 0.0, 1.0);
-}
-
-// Dominant direction of the view-conditioned GGX reflection PDF. primaryRay
-// points from the camera to the first surface, so reflect(primaryRay, N) is
-// the outgoing reflection direction. The fitted factor is the same GGX VNDF
-// dominant-direction fit used by the virtual projection.
-vec3 denoiserSpatialSpecularPdfDirectionFromFactor(vec3 primaryRay,
-        vec3 geometryNormal, float dominantFactor) {
-    vec3 ray = denoiserSpatialSafeDirection(primaryRay, vec3(0.0, 0.0, -1.0));
-    vec3 normal = denoiserSpatialSafeDirection(geometryNormal, vec3(0.0, 1.0, 0.0));
-    return denoiserSpatialSafeDirection(mix(normal, reflect(ray, normal), dominantFactor), normal);
 }
 
 #endif // MAXENT_DENOISER_VIRTUAL_PROJECTION_GLSL

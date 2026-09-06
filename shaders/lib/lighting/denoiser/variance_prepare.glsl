@@ -38,7 +38,6 @@ struct DenoiserVarianceSource {
 
 struct DenoiserVarianceGeometry {
     vec3 geometryNormal;
-    vec3 pdfDirection;
     vec3 primaryRay;
     float surfaceDistance;
     float virtualScale;
@@ -58,7 +57,8 @@ DenoiserVarianceSource denoiserVarianceEmptySource() {
 
 uvec4 denoiserVariancePackSpatialGeometry(uvec4 primaryWords, DenoiserVarianceGeometry geometry, float effectiveSamples) {
     uint packedRoughnessSamples = packHalf2x16(vec2(geometry.signalRoughness, effectiveSamples));
-    return uvec4(primaryWords.w, encodeNormalU(geometry.geometryNormal), encodeNormalU(geometry.pdfDirection), packedRoughnessSamples);
+    return uvec4(primaryWords.w, encodeNormalU(geometry.geometryNormal), 0u,
+        packedRoughnessSamples);
 }
 
 // Required adapter callbacks. Raw storage and image bindings remain outside this file.
@@ -148,11 +148,9 @@ const uint MAXENT_VARIANCE_SHARED_WIDTH = 22u;
 const uint MAXENT_VARIANCE_SHARED_AREA = 22u * 22u;
 
 // First-surface distance and primary-ray direction reconstruct the sample
-// position used by the geometry-normal plane test. The PDF direction supplies
-// an independent soft cosine weight. Variance pooling does not distinguish
-// materials.
+// position used by the geometry-normal plane test. Variance pooling does not
+// distinguish materials.
 shared uvec2 denoiserVarianceSurfaceTile[MAXENT_VARIANCE_SHARED_AREA];
-shared uint denoiserVariancePdfDirectionTile[MAXENT_VARIANCE_SHARED_AREA];
 shared uint denoiserVarianceMetadataTile[MAXENT_VARIANCE_SHARED_AREA];
 shared uvec2 denoiserVarianceMeanTile[MAXENT_VARIANCE_SHARED_AREA];
 shared uint denoiserVarianceMomentTile[MAXENT_VARIANCE_SHARED_AREA];
@@ -173,7 +171,6 @@ void denoiserVarianceWriteTile(uint index, DenoiserVarianceGeometry geometry, De
     float effectiveSamples = valid ? min(source.historyEffectiveSamples, 65504.0) : 1.0;
     denoiserVarianceSurfaceTile[index] = uvec2(floatBitsToUint(geometry.surfaceDistance),
             encodeNormalU(geometry.primaryRay));
-    denoiserVariancePdfDirectionTile[index] = encodeNormalU(geometry.pdfDirection);
     denoiserVarianceMetadataTile[index] = valid ? 0x80000000u : 0u;
     denoiserVarianceMeanTile[index] = uvec2(
             packHalf2x16(clamp(source.maxEntY.xy,
@@ -204,11 +201,6 @@ float denoiserVarianceTileSurfacePlaneExponent(uint index, float centerPlaneOffs
         decodeNormalU(words.y), uintBitsToFloat(words.x), surfaceRejectionScale);
 }
 
-float denoiserVarianceTilePdfDirectionExponent(uint index, vec3 centerPdfDirection) {
-    return denoiserSpatialPdfDirectionExponent(
-        centerPdfDirection, decodeNormalU(denoiserVariancePdfDirectionTile[index]));
-}
-
 vec4 denoiserVarianceTileMean(uint index) {
     uvec2 words = denoiserVarianceMeanTile[index];
     return vec4(unpackHalf2x16(words.x), unpackHalf2x16(words.y));
@@ -233,8 +225,9 @@ float denoiserVariancePreparedSpatialMonteCarloVariance(uint centerX, uint cente
             if (!denoiserVarianceTileValid(sampleIndex)) continue;
 
             float spatialWeight = MAXENT_VARIANCE_KERNEL_1D[abs(offsetX)] * MAXENT_VARIANCE_KERNEL_1D[abs(offsetY)]
-                * exp(-(denoiserVarianceTileSurfacePlaneExponent(sampleIndex, centerPlaneOffset, centerGeometry.geometryNormal, surfaceRejectionScale)
-                    + denoiserVarianceTilePdfDirectionExponent(sampleIndex, centerGeometry.pdfDirection)));
+                * exp(-denoiserVarianceTileSurfacePlaneExponent(sampleIndex,
+                    centerPlaneOffset, centerGeometry.geometryNormal,
+                    surfaceRejectionScale));
             if (!(spatialWeight > 0.0) || isnan(spatialWeight) || isinf(spatialWeight)) continue;
             vec2 rootMeanY2EffectiveSamples = denoiserVarianceTileRootMeanY2EffectiveSamples(sampleIndex);
             float sampleEffectiveSamples = rootMeanY2EffectiveSamples.y;

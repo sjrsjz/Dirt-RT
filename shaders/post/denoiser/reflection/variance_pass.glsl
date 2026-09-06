@@ -31,7 +31,6 @@ DenoiserVarianceGeometry denoiserVarianceLoadGeometry(ivec2 pixel) {
     geometry.surfaceDistance = uintBitsToFloat(words.w);
     geometry.signalRoughness = sqrt(ggxAlpha);
     geometry.virtualScale = denoiserSpatialSpecularVirtualScale(geometry.primaryRay, geometryNormal, geometry.signalRoughness);
-    geometry.pdfDirection = denoiserSpatialSpecularPdfDirectionFromFactor(geometry.primaryRay, geometryNormal, geometry.virtualScale);
     geometry.valid = geometry.surfaceDistance >= 0.0 && !isnan(geometry.surfaceDistance) && !isinf(geometry.surfaceDistance);
     return geometry;
 }

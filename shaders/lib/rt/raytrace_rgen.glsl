@@ -114,7 +114,7 @@ bool clearSkyContinuation(uvec2 pixel) {
 
     #if defined(FIRST_LOBE_DIFFUSE)
     diffuseBuffer.data[addr(DIF_N_LIGHT, pixel)] = uvec4(0u);
-    diffuseBuffer.data[addr(DIF_N_SURFACE, pixel)] = uvec4(0u);
+    writeDiffuseSurfaceInvalid(pixel);
     #elif defined(FIRST_LOBE_REFLECTION)
     reflectBuffer.data[addr(SPEC_N_LIGHT, pixel)] = uvec4(0u);
     #else

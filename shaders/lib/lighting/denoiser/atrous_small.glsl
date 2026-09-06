@@ -95,11 +95,10 @@ void main() {
             continue;
 
         vec3 samplePrimaryRay;
-        vec3 samplePdfDirection;
         float sampleSurfaceDistance;
         float sampleEffectiveSamples;
         denoiserSpatialDecodeSampleGeometry(sampleGeometryWords, samplePixel,
-            samplePrimaryRay, samplePdfDirection, sampleSurfaceDistance,
+            samplePrimaryRay, sampleSurfaceDistance,
             sampleEffectiveSamples);
         if (!statisticsValidEffectiveSampleCount(sampleEffectiveSamples))
             continue;
@@ -107,9 +106,7 @@ void main() {
                 * sampleSurfaceDistance;
         float surfaceGeometryExponent = surfaceRejectionScale
                 * abs(dot(centerGeometry.geometryNormal, sampleSurfacePosition)
-                        - centerGeometry.surfacePlaneOffset)
-                + denoiserSpatialPdfDirectionExponent(
-                        centerGeometry.pdfDirection, samplePdfDirection);
+                        - centerGeometry.surfacePlaneOffset);
 
         DenoiserMaxEntSignal sampleSignal = denoiserUnpackMaxEntSignalTrusted(sampleSignalWords);
         DenoiserMaxEntSignal sampleCurrent =

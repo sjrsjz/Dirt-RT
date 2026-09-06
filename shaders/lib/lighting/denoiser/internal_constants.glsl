@@ -5,8 +5,6 @@
 // estimator or provisional pipeline and therefore requires code-level validation.
 const float MAXENT_TEMPORAL_DENOISER_INTRINSIC_VARIANCE = 1e-10;
 const float MAXENT_TEMPORAL_FIXED_ALPHA = 0.01;
-// 1-dot(A,B) approximates half the squared angular separation without acos.
-const float MAXENT_SPATIAL_PDF_DIRECTION_EXPONENT_SCALE = 0.0; //64.0;
 
 // Historical calibration inputs, retained for reproducing the old scripts.
 // The estimator-variance runtime no longer applies these rejection multipliers.

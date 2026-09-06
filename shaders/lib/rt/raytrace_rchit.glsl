@@ -64,7 +64,7 @@ void main() {
         vec3 barys = vec3(1.0 - baryCoord.x - baryCoord.y, baryCoord.x, baryCoord.y);
         uv = getFragmentUV(quad, barys, isSideA);
         atlas = entityTextureIndex >= 0
-            ? vec4(0.0, 0.0, 1.0, 1.0)
+            ? getEntityTextureBox(quad)
             : getTextureAtlasBox(quad, isSideA);
         geomN = interpolateVertexNormal(quad, baryCoord, sideB);
         tangent = interpolateVertexTangent(quad, baryCoord, sideB);

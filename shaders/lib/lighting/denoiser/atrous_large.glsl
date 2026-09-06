@@ -145,11 +145,10 @@ bool denoiserSpatialFilterLarge(ivec2 pixel,
                 || !denoiserSpatialSignalWordsValid(sampleCurrentWords))
             continue;
         vec3 samplePrimaryRay;
-        vec3 samplePdfDirection;
         float sampleSurfaceDistance;
         float sampleEffectiveSamples;
         denoiserSpatialDecodeSampleGeometry(sampleGeometryWords, samplePixel,
-            samplePrimaryRay, samplePdfDirection, sampleSurfaceDistance,
+            samplePrimaryRay, sampleSurfaceDistance,
             sampleEffectiveSamples);
         if (!statisticsValidEffectiveSampleCount(sampleEffectiveSamples))
             continue;
@@ -157,9 +156,7 @@ bool denoiserSpatialFilterLarge(ivec2 pixel,
             denoiserSpatialAxialDistanceExponent(
                 centerGeometry.surfacePlaneOffset,
                 centerGeometry.geometryNormal, samplePrimaryRay,
-                sampleSurfaceDistance, surfaceRejectionScale)
-            + denoiserSpatialPdfDirectionExponent(
-                centerGeometry.pdfDirection, samplePdfDirection);
+                sampleSurfaceDistance, surfaceRejectionScale);
 
         DenoiserMaxEntSignal sampleSignal = denoiserUnpackMaxEntSignalTrusted(sampleSignalWords);
         DenoiserMaxEntSignal sampleCurrent =

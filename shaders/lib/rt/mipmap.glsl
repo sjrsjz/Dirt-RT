@@ -85,6 +85,16 @@ vec2 rtWrapAtlasCoordinate(vec2 uv, vec4 atlas) {
     return atlas.xy + fract((uv - atlas.xy) / atlas.zw) * atlas.zw;
 }
 
+float rtEntitySafeLod(ivec2 baseTextureSize, vec4 atlas) {
+    ivec2 low = ivec2(round(atlas.xy * vec2(baseTextureSize)));
+    ivec2 high = ivec2(round((atlas.xy + atlas.zw) * vec2(baseTextureSize)));
+    // A mip cell must be wholly inside this face. Only levels at which all
+    // four bounds remain integer texel edges satisfy that for an unpadded skin.
+    int edges = low.x | low.y | high.x | high.y;
+    int alignedLevel = edges != 0 ? max(findLSB(edges), 0) : 0;
+    return min(float(alignedLevel), rtMaxSpriteLod(baseTextureSize, atlas));
+}
+
 // Manual finite-anisotropy filtering is required because Vulkanite currently
 // creates the RT atlas sampler with maxAnisotropy=1. A gradient instruction by
 // itself would therefore still choose the major-axis mip and reproduce the old
@@ -105,6 +115,12 @@ vec4 rtSampleAnisotropic(sampler2D textureSampler, vec2 uv, vec4 atlas,
         ellipse.majorTexels / float(tapCount));
     float sampleLod = clamp(log2(perTapLength), 0.0,
         rtMaxSpriteLod(baseTextureSize, atlas));
+    if (!wrapWithinAtlasBox)
+        sampleLod = min(sampleLod, rtEntitySafeLod(baseTextureSize, atlas));
+    // Clamp against the coarser of the two trilinear levels. With a missing
+    // mip chain this is conservative; the sampler's base-level fallback is safe.
+    vec2 entityInset = min(0.5 * exp2(ceil(sampleLod)) / vec2(baseTextureSize),
+        0.5 * atlas.zw);
 
     vec4 result = vec4(0.0);
     for (int tap = 0; tap < MAX_TAPS; ++tap) {
@@ -113,6 +129,9 @@ vec4 rtSampleAnisotropic(sampler2D textureSampler, vec2 uv, vec4 atlas,
         vec2 sampleUv = uv + ellipse.majorUv * offset;
         if (wrapWithinAtlasBox)
             sampleUv = rtWrapAtlasCoordinate(sampleUv, atlas);
+        else
+            sampleUv = clamp(sampleUv, atlas.xy + entityInset,
+                atlas.xy + atlas.zw - entityInset);
         result += textureLod(textureSampler, sampleUv, sampleLod);
     }
     return result / float(tapCount);

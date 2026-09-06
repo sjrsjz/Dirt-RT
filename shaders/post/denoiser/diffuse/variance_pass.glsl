@@ -1,6 +1,6 @@
 // Purpose: prepare diffuse Monte Carlo observation variance and the independent-current branch for A-Trous.
 // Dispatch: 16x16.
-// Reads: diffuse temporal proposal moments, Raw RT independent-current signal, compact primary geometry.
+// Reads: diffuse temporal proposal moments, Raw RT independent-current signal, opaque diffuse geometry.
 // Writes: colortex3 geometry/center N_eff, colorimg4 prepared proposal, shared scratch plane A.
 // Persistent side effects: prepared diffuse Monte Carlo-variance diagnostic only.
 // Invalid representation: negative standardDeviation in signal metadata and negative geometry distance.
@@ -17,14 +17,13 @@ layout(rgba32ui) uniform writeonly uimage2D colorimg4;
 #include "/lib/lighting/denoiser/scratch_io.glsl"
 #include "/lib/lighting/denoiser/variance_prepare.glsl"
 
-uvec4 denoiserVarianceLoadPrimaryGeometryWords(ivec2 pixel) { return readPrimaryGeometryWords(uvec2(pixel)); }
+uvec4 denoiserVarianceLoadPrimaryGeometryWords(ivec2 pixel) { return readDiffuseGeometryWords(uvec2(pixel)); }
 
 DenoiserVarianceGeometry denoiserVarianceLoadGeometry(ivec2 pixel) {
     uvec4 words = denoiserVarianceLoadPrimaryGeometryWords(pixel);
     DenoiserVarianceGeometry geometry;
     geometry.primaryRay = reconstructPrimaryRay(uvec2(pixel));
     geometry.geometryNormal = decodeNormalU(words.x);
-    geometry.pdfDirection = geometry.geometryNormal;
     geometry.surfaceDistance = uintBitsToFloat(words.w);
     geometry.virtualScale = 0.0;
     geometry.signalRoughness = 1.0;

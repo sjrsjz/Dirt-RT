@@ -38,6 +38,19 @@ FragmentInfo getFragmentInfo(Quad quad, vec2 baryCoords) {
 }
 #endif
 
+// Entity skins pack unrelated faces next to each other without atlas gutters.
+// Use all four vertices so both triangles share exactly the same UV island.
+vec4 getEntityTextureBox(Quad quad) {
+    vec2 low = vec2(quad.vertices[0].block_texture);
+    vec2 high = low;
+    for (int i = 1; i < 4; ++i) {
+        vec2 uv = vec2(quad.vertices[i].block_texture);
+        low = min(low, uv);
+        high = max(high, uv);
+    }
+    return vec4(low, high - low) * (1.0 / 65536.0);
+}
+
 vec4 getTextureAtlasBox(Quad quad, bool isSideA) {
     // 获取三个顶点的UV
     vec2 t0 = quad.vertices[0].block_texture * 0.0000152587890625;

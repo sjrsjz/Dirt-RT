@@ -104,10 +104,28 @@ def tests():
         source = (ROOT/f'shaders/lib/lighting/denoiser/atrous_{pattern}.glsl').read_text()
         assert 'RejectionConfidenceForStep' not in source
         assert 'AccumulateEffectiveSamples' not in source
+    # The obsolete sampling-PDF dominant-direction weight had a zero runtime
+    # coefficient, yet still consumed one oct32 pixel lane and 1,936 bytes of
+    # variance-preparation LDS. Keep the RGBA32UI ABI while reserving z as zero.
+    denoiser_sources = '\n'.join(
+        p.read_text(encoding='utf-8')
+        for p in (ROOT/'shaders/lib/lighting/denoiser').glob('*.glsl'))
+    denoiser_sources += '\n' + '\n'.join(
+        p.read_text(encoding='utf-8')
+        for p in (ROOT/'shaders/post/denoiser').glob('**/*.glsl'))
+    for obsolete in ('pdfDirection', 'PdfDirection',
+                     'MAXENT_SPATIAL_PDF_DIRECTION_EXPONENT_SCALE'):
+        assert obsolete not in denoiser_sources
+    geometry_source = (ROOT/'shaders/lib/lighting/denoiser/geometry.glsl').read_text(encoding='utf-8')
+    variance_source = (ROOT/'shaders/lib/lighting/denoiser/variance_prepare.glsl').read_text(encoding='utf-8')
+    assert '//   z = reserved, zero' in geometry_source
+    assert 'encodeNormalU(geometry.geometryNormal), 0u,' in variance_source
+    assert 'shared uint denoiserVariancePdfDirectionTile' not in variance_source
     return dict(covariance_cases=10000, max_relative_error=max_relative_error,
                 heteroscedastic_variance=10.81, center_only_six_pass_variance=9.,
                 repeated_history_variance=9., monte_carlo_relative_errors=mc_errors,
                 fully_accepted_grid_overlap=plane,
+                removed_pdf_direction_lds_bytes=22*22*4,
                 limitations='Frozen scalar covariance; adaptive weights and changing Bures metric are not validated.')
 
 

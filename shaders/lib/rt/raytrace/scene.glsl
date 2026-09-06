@@ -132,7 +132,7 @@ Material evaluateMaterial(Payload pld, vec3 rayOrigin, vec3 rd_i,
         uint textureIndex = entityTextureId - 1u;
         ivec2 textureResolution = textureSize(
                 entityTextures[nonuniformEXT(textureIndex)], 0);
-        vec4 entityAtlas = vec4(0.0, 0.0, 1.0, 1.0);
+        vec4 entityAtlas = atlas;
         if (bounce == 0u) {
             footprint = rtPrimaryTextureFootprint(textureResolution,
                 entityAtlas, hitPosition, texturePlaneNormal,

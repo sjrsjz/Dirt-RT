@@ -61,7 +61,7 @@ void main() {
     int entityTextureIndex = quad.vertices[0].block_id.x == -2
         ? int(quad.vertices[0].block_id.y) - 1 : -1;
     vec4 atlas = entityTextureIndex >= 0
-        ? vec4(0.0, 0.0, 1.0, 1.0)
+        ? getEntityTextureBox(quad)
         : getTextureAtlasBox(quad, !sideB);
     vec3 geomN = interpolateVertexNormal(quad, baryCoord, sideB);
     vec3 tangent = interpolateVertexTangent(quad, baryCoord, sideB);
@@ -87,7 +87,9 @@ void main() {
     vec3 gradientU, gradientV;
     computeTriangleTextureGradients(position0, position1, position2,
         uv0, uv1, uv2, gradientU, gradientV);
-    vec3 texturePlaneNormal = normalize(cross(gradientU, gradientV));
+    vec3 texturePlaneNormal = cross(gradientU, gradientV);
+    texturePlaneNormal = dot(texturePlaneNormal, texturePlaneNormal) > 1e-20
+        ? normalize(texturePlaneNormal) : geomN;
 
     vec4 texColor;
     if (entityTextureIndex >= 0) {

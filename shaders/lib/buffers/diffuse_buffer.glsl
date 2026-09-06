@@ -16,7 +16,7 @@
 // N=2: History Geo A  — F32 distance + oct ray + oct normal + N_eff/frame stamp.
 // N=3: Swap Light     — MaxEnt6 + Kish N_eff/rootMeanY2.
 // N=4: Denoised Path Guide -- packed directional/energy moments + validity tags.
-// N=5: Macro normal, diffuse material, motion and denoised-history difference.
+// N=5: Oct8 macro/geometry normals, diffuse material, motion, F32 distance.
 // N=6: Alternate history geometry for race-free frame ping-pong.
 // N=7..8: Exact previous/current denoiser output ping-pong.
 // N=9..10: Shared independent-current ping-pong, reused serially by domains.
@@ -24,8 +24,8 @@
 // .w lane uses packHalf2x16: Kish N_eff:f16 + rootMeanY2:f16.
 // Storage APIs accept sqrt(E[Y²]) directly. Arithmetic code squares it only
 // where linear second-moment operations require E[Y²].
-// Current position, geometry normal and validity come from compact primary
-// geometry; a negative primary distance is the only sky/no-surface marker.
+// Diffuse geometry belongs to the first opaque hit, including behind water.
+// Its distance and background normal use previously reserved N=5 bits.
 
 MaxEntEncoding sanitizeDiffuseMaxEntEncoding(MaxEntEncoding maxent) {
     if (any(isnan(maxent.maxEntY)) || any(isinf(maxent.maxEntY))
@@ -38,9 +38,8 @@ MaxEntEncoding sanitizeDiffuseMaxEntEncoding(MaxEntEncoding maxent) {
     return maxent;
 }
 
-// Active eleven-plane layout. Current geometry is owned by geomBuffer and is
-// reconstructed from pixel + RT projection and F32 distance; it is not
-// duplicated here.
+// Active eleven-plane layout. Primary geometry remains in geomBuffer;
+// diffuse geometry uses the same camera ray and its own F32 hit distance.
 // DIF_N_HISTGEO/ALT = F32 distance + oct ray + oct normal + N_eff/frame stamp.
 #define DIF_N_LIGHT    0u
 #define DIF_N_HIST     1u
@@ -73,7 +72,7 @@ uint diffuseDenoisedReadPlane() {
 uint packDiffuseHistoryWeightStamp(float historyWeight) {
     if (!(historyWeight >= 0.0) || isinf(historyWeight)) historyWeight = 0.0;
     uint packedWeight = packHalf2x16(vec2(historyWeight, 0.0)) & 0xffffu;
-    uint stamp = (uint(frame_id) & 0xffffu) ^ 0x2500u;
+    uint stamp = (uint(frame_id) & 0xffffu) ^ 0x2600u;
 #if MAXENT_TEMPORAL_CONFIDENCE_CLAMP == 1
     stamp ^= 0x5a00u;
 #endif
@@ -82,7 +81,7 @@ uint packDiffuseHistoryWeightStamp(float historyWeight) {
 
 bool unpackDiffusePreviousHistoryWeight(uint packed_, out float historyWeight) {
     historyWeight = unpackHalf2x16(packed_).x;
-    uint expectedStamp = ((uint(frame_id) - 1u) & 0xffffu) ^ 0x2500u;
+    uint expectedStamp = ((uint(frame_id) - 1u) & 0xffffu) ^ 0x2600u;
 #if MAXENT_TEMPORAL_CONFIDENCE_CLAMP == 1
     expectedStamp ^= 0x5a00u;
 #endif
@@ -246,16 +245,18 @@ void writeDiffuseLightRTSky(uvec2 xy) {
 }
 
 // ===========================================================================
-// Current Geometry (shared compact primary G-buffer; no diffuse plane)
+// Current Geometry (first opaque hit along the primary camera ray)
 // ===========================================================================
 
 void readDiffusePrimaryGeometry(uvec2 xy, out vec3 position,
         out float distance) {
-    readPrimaryPosition(xy, position, distance);
+    distance = uintBitsToFloat(diffuseBuffer.data[addr(DIF_N_SURFACE, xy)].w);
+    position = reconstructPrimaryRelativePosition(xy, distance);
 }
 
 float readDiffuseSurfaceMask(uvec2 xy) {
-    return readPrimaryDistance(xy) >= 0.0 ? 1.0 : 0.0;
+    float distance = uintBitsToFloat(diffuseBuffer.data[addr(DIF_N_SURFACE, xy)].w);
+    return distance >= 0.0 && !isinf(distance) ? 1.0 : 0.0;
 }
 
 // ===========================================================================
@@ -280,20 +281,42 @@ vec3 decodeDiffuseNormalOct8(uint packedNormal) {
     return normalize(n);
 }
 
-void writeDiffuseSurface(uvec2 xy, vec3 macroNormal,
+vec3 readDiffuseGeometryNormal(uvec2 xy) {
+    uvec4 surface = diffuseBuffer.data[addr(DIF_N_SURFACE, xy)];
+    uvec4 primary = readPrimaryGeometryWords(xy);
+    // Preserve the original full-precision normal on ordinary primary hits.
+    return surface.w == primary.w ? decodeNormalU(primary.x)
+        : decodeDiffuseNormalOct8(surface.x >> 16u);
+}
+
+uvec4 readDiffuseGeometryWords(uvec2 xy) {
+    uvec4 surface = diffuseBuffer.data[addr(DIF_N_SURFACE, xy)];
+    uvec4 words = readPrimaryGeometryWords(xy);
+    if (surface.w != words.w)
+        words.x = encodeNormalU(decodeDiffuseNormalOct8(surface.x >> 16u));
+    words.w = surface.w;
+    return words;
+}
+
+void writeDiffuseSurfaceInvalid(uvec2 xy) {
+    diffuseBuffer.data[addr(DIF_N_SURFACE, xy)] =
+        uvec4(0u, 0u, 0u, floatBitsToUint(-1.0));
+}
+
+void writeDiffuseSurface(uvec2 xy, vec3 macroNormal, vec3 geometryNormal, float distance,
         vec3 diffuseAlbedo, float roughness, vec3 motion,
         float motionValid) {
     diffuseBuffer.data[addr(DIF_N_SURFACE, xy)] = uvec4(
-        encodeDiffuseNormalOct8(macroNormal),
+        encodeDiffuseNormalOct8(macroNormal) | (encodeDiffuseNormalOct8(geometryNormal) << 16u),
         packUnorm4x8(clamp(vec4(diffuseAlbedo, roughness), 0.0, 1.0)),
         packSnorm4x8(vec4(clamp(motion / 4.0, -1.0, 1.0),
-            motionValid >= 0.5 ? 1.0 : 0.0)), 0u);
+            motionValid >= 0.5 ? 1.0 : 0.0)), floatBitsToUint(distance));
 }
 
 void readDiffuseSurface(uvec2 xy, out vec3 geometryNormal,
         out vec3 macroNormal, out vec3 diffuseAlbedo, out float roughness) {
     uvec4 v = diffuseBuffer.data[addr(DIF_N_SURFACE, xy)];
-    geometryNormal = readPrimaryGeometryNormal(xy);
+    geometryNormal = readDiffuseGeometryNormal(xy);
     macroNormal = decodeDiffuseNormalOct8(v.x);
     vec4 materialState = unpackUnorm4x8(v.y);
     diffuseAlbedo = materialState.rgb;

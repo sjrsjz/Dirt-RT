@@ -6,10 +6,10 @@
 // RGBA32UI ABI produced by variance_prepare.glsl:
 //   x = floatBitsToUint(first-surface distance), negative means invalid/sky
 //   y = oct32 first-surface geometry normal
-//   z = oct32 estimated sampling-PDF direction
+//   z = reserved, zero
 //   w = half(perceptual roughness) | half(center Kish N_eff)
 // The primary ray is reconstructed from the pixel coordinate instead of being
-// stored, leaving both independent directions at full oct32 precision.
+// stored.
 //
 // The variance-preparation policy owns the signal roughness: diffuse writes
 // exactly 1.0, while specular writes sqrt(primary GGX alpha).
@@ -22,7 +22,6 @@ bool denoiserSpatialGeometryWordsValid(uvec4 words) {
 
 struct DenoiserSpatialCenterGeometry {
     vec3 geometryNormal;
-    vec3 pdfDirection;
     vec3 primaryRay;
     float surfaceDistance;
     float surfacePlaneOffset;
@@ -35,7 +34,6 @@ DenoiserSpatialCenterGeometry denoiserSpatialDecodeCenterGeometry(
     DenoiserSpatialCenterGeometry geometry;
     geometry.surfaceDistance = uintBitsToFloat(words.x);
     geometry.geometryNormal = decodeNormalU(words.y);
-    geometry.pdfDirection = decodeNormalU(words.z);
     geometry.primaryRay = reconstructPrimaryRay(uvec2(pixel));
     geometry.surfacePlaneOffset = geometry.surfaceDistance
         * dot(geometry.geometryNormal, geometry.primaryRay);
@@ -47,10 +45,9 @@ DenoiserSpatialCenterGeometry denoiserSpatialDecodeCenterGeometry(
 }
 
 void denoiserSpatialDecodeSampleGeometry(uvec4 words, ivec2 pixel,
-        out vec3 primaryRay, out vec3 pdfDirection,
-        out float surfaceDistance, out float effectiveSamples) {
+        out vec3 primaryRay, out float surfaceDistance,
+        out float effectiveSamples) {
     primaryRay = reconstructPrimaryRay(uvec2(pixel));
-    pdfDirection = decodeNormalU(words.z);
     surfaceDistance = uintBitsToFloat(words.x);
     effectiveSamples = unpackHalf2x16(words.w).y;
 }

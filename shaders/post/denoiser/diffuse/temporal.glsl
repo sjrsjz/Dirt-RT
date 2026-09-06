@@ -349,7 +349,7 @@ void main() {
         return;
     }
 
-    geometryNormal = readPrimaryGeometryNormal(pix);
+    geometryNormal = readDiffuseGeometryNormal(pix);
     cameraDelta = camPos - prevRaytracingCamPos;
 
     vec3 surfaceMotion;

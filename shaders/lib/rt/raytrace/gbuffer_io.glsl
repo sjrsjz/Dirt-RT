@@ -137,11 +137,11 @@ void writeDiffuseOutput(uvec2 xy, FirstBounceData fb, vec3 L_indirect,
     writeDiffuseLightRT(xy, combinedMaxEnt,
         max(combinedMaxEnt.maxEntY.w, 0.0));
     if (mask > 0.5) {
-        writeDiffuseSurface(xy, fb.macro_n,
+        writeDiffuseSurface(xy, fb.macro_n, fb.geometry_n, fb.t,
             fb.diffuseAlbedo, fb.roughness, fb.surfaceMotion,
             fb.motionValid);
     } else {
-        diffuseBuffer.data[addr(DIF_N_SURFACE, xy)] = uvec4(0u);
+        writeDiffuseSurfaceInvalid(xy);
     }
 }
 

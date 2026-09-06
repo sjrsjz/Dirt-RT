@@ -174,7 +174,7 @@ void main() {
     float primaryDistance;
     readDiffusePrimaryGeometry(gxy, currentPosition, primaryDistance);
     writeDiffuseHistGeo(gxy, currentPosition,
-        readPrimaryGeometryNormal(gxy), committedEffectiveSamples);
+        readDiffuseGeometryNormal(gxy), committedEffectiveSamples);
     writeDiffuseSwap(gxy, filteredEncoding, committedEffectiveSamples,
         committedRootMeanY2);
 

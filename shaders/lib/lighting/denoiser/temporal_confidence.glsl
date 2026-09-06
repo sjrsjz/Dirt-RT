@@ -33,10 +33,18 @@ MaxentConfidenceGroup maxentConfidenceFinishGroup(vec4 momentSum, vec2 chromaSum
     return g;
 }
 
+uvec4 maxentConfidenceGeometryWords(uvec2 pixel) {
+#ifdef REFLECT_BUFFER
+    return readPrimaryGeometryWords(pixel);
+#else
+    return readDiffuseGeometryWords(pixel);
+#endif
+}
+
 void maxentConfidenceGather(ivec2 pixel, out MaxentConfidenceGroup pilot,
         out MaxentConfidenceGroup checkA, out MaxentConfidenceGroup checkB,
         out MaxentConfidenceGroup current) {
-    uvec4 centerWords = readPrimaryGeometryWords(uvec2(pixel));
+    uvec4 centerWords = maxentConfidenceGeometryWords(uvec2(pixel));
     vec3 normal = decodeNormalU(centerWords.x);
     float distance = uintBitsToFloat(centerWords.w);
     float planeOffset = distance * dot(normal, reconstructPrimaryRay(uvec2(pixel)));
@@ -50,7 +58,7 @@ void maxentConfidenceGather(ivec2 pixel, out MaxentConfidenceGroup pilot,
         for (int x = -2; x <= 2; ++x) {
             ivec2 p = pixel + ivec2(x, y);
             if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, ivec2(resolution_global)))) continue;
-            uvec4 words = readPrimaryGeometryWords(uvec2(p));
+            uvec4 words = maxentConfidenceGeometryWords(uvec2(p));
             float tapDistance = uintBitsToFloat(words.w);
             if (!(tapDistance >= 0.0) || isinf(tapDistance)) continue;
             vec3 tapNormal = decodeNormalU(words.x);
