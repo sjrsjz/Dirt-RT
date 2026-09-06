@@ -24,6 +24,7 @@
 #define RAY_BOUNCES 5 // Max ray bounces before termination. Higher = better image quality, lower FPS. [2 3 4 5 6 7]
 #define ACCUMULATION_LENGTH 32 // Refraction history length. Higher = smoother refraction, more ghosting during motion. [1 2 4 8 16 32 64]
 #define PATH_GUIDING_STRENGTH 0.75 // Total guided mixture strength. Cache probes split this probability between stable MaxEnt and validated RIS proposals while retaining at least 10% uniform sampling. [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.925 0.95 0.975 0.99 0.999]
+#define SPECULAR_PATH_GUIDING_STRENGTH 0.5 // Previous denoised q*Li guiding strength for primary non-delta reflection paths. The actual probability is reduced by directional concentration and valid reprojection coverage, then capped at 0.75. [0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75]
 #define SUN_PATH_ROTATION 30.0 // Latitude-like sun path tilt. 30 degrees is the clear-sky spring reference used by the atmosphere calibration. [0 15 30 45 60 75 90]
 #define END_SKYBOX 1 // End skybox rendering. 1 = custom rune-ring skybox with FBM nebula background (higher GPU cost). 0 = fall back to atmospheric scattering + NEE (faster). [0 1]
 
@@ -94,7 +95,7 @@
 
 // -- Misc --
 #define FIREFLY_SUPPRESSION_MULTIPLIER 50.0 // Per-sample brightness cap multiplier (× average exposure). Lower values clamp fireflies more aggressively. [1.0 5.0 10.0 25.0 50.0 100.0 250.0 500.0]
-#define GI_CLAMP_MAX 100.0 // Hard ceiling on indirect lighting before MaxEnt encoding. Prevents individual path outliers from destabilising the light field. Higher = more headroom, lower = stronger clamping. [50.0 75.0 100.0 150.0 250.0 500.0 1000.0 2500.0 5000.0 10000.0 20000.0 32000.0]
+#define GI_CLAMP_MAX 32000.0 // Hard ceiling on indirect lighting before MaxEnt encoding. Prevents individual path outliers from destabilising the light field. Higher = more headroom, lower = stronger clamping. [50.0 75.0 100.0 150.0 250.0 500.0 1000.0 2500.0 5000.0 10000.0 20000.0 32000.0]
 #define VPROJDIST_SKY 60000.0 // Virtual projected distance assigned to sky hits (m). Used by specular/refraction denoiser to tag infinity. [5000.0 10000.0 25000.0 50000.0 60000.0 100000.0 250000.0]
 
 // -- Debug --

@@ -113,7 +113,7 @@ void loadPrimarySurfaceGBuffer(uvec2 xy, vec3 ro,
     readPrimaryMaterial(xy, Cs, Cd, S);
     surf = newMaterial(Cs, Cd, S, vec4(fb.roughness, 0.0, 0.0, 0.0),
             vec3(0.0));
-    #if defined(FIRST_LOBE_DIFFUSE)
+    #if defined(FIRST_LOBE_DIFFUSE) || defined(FIRST_LOBE_REFLECTION)
     readSurfaceMotion(xy, fb.surfaceMotion, fb.motionValid);
     #endif
 }
@@ -145,32 +145,32 @@ void writeDiffuseOutput(uvec2 xy, FirstBounceData fb, vec3 L_indirect,
     }
 }
 
-vec3 recoverFirstBounceIncident(vec3 pathContribution,
-        vec3 firstBsdfWeight) {
+vec3 recoverFirstBounceIncidentMeasure(vec3 pathContribution,
+        vec3 firstQLiResponse) {
     vec3 incident = vec3(0.0);
-    if (abs(firstBsdfWeight.x) > 1e-8)
-        incident.x = pathContribution.x / firstBsdfWeight.x;
-    if (abs(firstBsdfWeight.y) > 1e-8)
-        incident.y = pathContribution.y / firstBsdfWeight.y;
-    if (abs(firstBsdfWeight.z) > 1e-8)
-        incident.z = pathContribution.z / firstBsdfWeight.z;
-    // firstBsdfWeight is f/q for a finite VNDF lobe and F for a delta
-    // mirror. Dividing the traced contribution by that weight recovers Li.
-    // A VNDF path sample therefore contributes an atom whose expectation is
-    // q(wi)*Li(wi), matching the decoder's f/q response.
+    if (abs(firstQLiResponse.x) > 1e-8)
+        incident.x = pathContribution.x / firstQLiResponse.x;
+    if (abs(firstQLiResponse.y) > 1e-8)
+        incident.y = pathContribution.y / firstQLiResponse.y;
+    if (abs(firstQLiResponse.z) > 1e-8)
+        incident.z = pathContribution.z / firstQLiResponse.z;
+    // The path contribution is (f/p)*Li and firstQLiResponse is f/q.
+    // Their quotient is (q/p)*Li, whose expectation under the actual mixture
+    // proposal p is the q*Li measure consumed by the deferred decoder.
+    // Delta mirrors retain the existing Li convention with response F.
     if (any(isnan(incident)) || any(isinf(incident))) return vec3(0.0);
     return clamp(incident, vec3(0.0), vec3(400.0 * div_avgExposure));
 }
 
 void writeReflectionOutput(uvec2 xy, FirstBounceData fb,
         vec3 indirectContribution, vec3 directIncident,
-        vec3 directIncidentDirection, vec3 firstBsdfWeight, vec3 ro) {
+        vec3 directIncidentDirection, vec3 firstQLiResponse, vec3 ro) {
     vec3 refl_R = fb.rd_o;
     float refl_vprojdist = fb.reflectionHitDistance;
     SpecularMaxEnt signal = emptySpecularMaxEnt();
     if (fb.t > -0.5) {
-        vec3 incident = recoverFirstBounceIncident(indirectContribution,
-            firstBsdfWeight);
+        vec3 incident = recoverFirstBounceIncidentMeasure(
+            indirectContribution, firstQLiResponse);
         signal = specularMaxEntFromRgbDirection(incident, refl_R);
         SpecularMaxEnt directSignal = specularMaxEntFromRgbDirection(
             clamp(directIncident, vec3(0.0),

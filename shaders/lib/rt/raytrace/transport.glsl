@@ -50,6 +50,15 @@ struct GuideInfo {
     bool valid;
 };
 
+GuideInfo emptyGuideInfo() {
+    GuideInfo g;
+    g.axis = vec3(0.0, 1.0, 0.0);
+    g.kappa = 0.0;
+    g.prob = 0.0;
+    g.valid = false;
+    return g;
+}
+
 struct PSRResult {
     float virtualDist;
     float pathRoughness;
@@ -140,6 +149,29 @@ bool evaluateSpecularBRDF(
     }
 
     return valid;
+}
+
+// Analytic response of the GGX BRDF to the stored VNDF-weighted measure.
+// With q = D*G1(wo)/(4 NoV) and f*NoL = F*D*G2/(4 NoV), D cancels before
+// evaluation. Keeping this ratio analytic avoids a 0/0 loss when a separate
+// guide proposes a direction in the tail of a narrow VNDF lobe.
+vec3 evaluateSpecularQLiResponse(
+    vec3 wo, vec3 wi, vec3 macroNormal, vec3 Cs, float Sx,
+    float transmissionSelector, float etaRatio, float roughness
+) {
+    float NoV = dot(macroNormal, wo);
+    float NoL = dot(macroNormal, wi);
+    HalfVector hv = computeHalfVector(wo, wi);
+    if (!hv.valid || NoV <= 1e-5 || NoL <= 1e-5
+            || dot(macroNormal, hv.H) <= 1e-5
+            || dot(wo, hv.H) <= 1e-5)
+        return vec3(0.0);
+
+    vec3 Fh = evaluateSurfaceFresnel(
+        wo, hv.H, Cs, Sx, transmissionSelector, etaRatio);
+    // GGX_G2() is the conditional masking ratio G2/G1(wo), whereas
+    // GGX_G2_standard() is the full Smith G2 used by the BRDF evaluator.
+    return Fh * GGX_G2(NoV, NoL, max(roughness, 1e-4));
 }
 
 // Burley's Disney diffuse term. surf.R.x stores GGX alpha, while the Disney
@@ -388,11 +420,7 @@ MediumResult evalMedium(float t, vec3 rd_i, float ro_i_y, bool inside,
 // ===========================================================================
 
 GuideInfo computeMaxEntGuide(vec3 ro_o, float strengthMultiplier) {
-    GuideInfo g;
-    g.axis = vec3(0.0, 1.0, 0.0);
-    g.kappa = 0.0;
-    g.prob = 0.0;
-    g.valid = false;
+    GuideInfo g = emptyGuideInfo();
 
     vec2 prev_coord = reproject(ro_o).xy;
     bool validPrev = all(greaterThanEqual(prev_coord, vec2(0.0)))
@@ -410,6 +438,104 @@ GuideInfo computeMaxEntGuide(vec3 ro_o, float strengthMultiplier) {
     g.valid = length_x > 1e-8;
     g.prob = float(g.valid) * strengthMultiplier * rho;
     return g;
+}
+
+// Reproject and bilinearly gather the previous final denoised q*Li state.
+// Every tap is checked against the same surface/material contract as temporal
+// accumulation, so history from another reflector cannot steer this path.
+GuideInfo computeSpecularMaxEntGuide(vec3 previousSurfaceWorld,
+        vec3 currentGeometryNormal, float currentPerceptualRoughness,
+        uint currentMaterialID, float currentSurfaceDistance,
+        float motionValid, float strengthMultiplier) {
+    GuideInfo g = emptyGuideInfo();
+    if (motionValid < 0.5 || strengthMultiplier <= 0.0)
+        return g;
+
+    vec3 projected = reproject(previousSurfaceWorld);
+    if (any(isnan(projected)) || any(isinf(projected))
+            || projected.z < 0.0 || projected.z > 1.0
+            || any(lessThan(projected.xy, vec2(0.0)))
+            || any(greaterThan(projected.xy, vec2(1.0))))
+        return g;
+
+    ivec2 size = ivec2(resolution_global);
+    vec2 pixelPosition = projected.xy * vec2(size);
+    ivec2 origin = ivec2(floor(pixelPosition));
+    vec2 f = fract(pixelPosition);
+    vec4 bilinear = vec4((1.0 - f.x) * (1.0 - f.y),
+        f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
+    vec4 momentSum = vec4(0.0);
+    float sumWeight = 0.0;
+    float depthThreshold = MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD
+        * max(currentSurfaceDistance, 1.0);
+    uint expectedMaterial = specularHistoryMaterialSignature(
+        currentMaterialID);
+
+    for (int i = 0; i < 4; ++i) {
+        ivec2 p = origin + ivec2(i & 1, i >> 1);
+        if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, size)))
+            continue;
+
+        uvec2 historyPixel = uvec2(p);
+        uvec4 geometryWords = reflectBuffer.data[
+            addr(SPEC_N_HISTGEO, historyPixel)];
+        float historyDistance = uintBitsToFloat(geometryWords.x);
+        if (!(historyDistance >= 0.0) || isnan(historyDistance)
+                || isinf(historyDistance))
+            continue;
+
+        vec3 historyNormal;
+        uint historyMaterial;
+        unpackMaxEntHistoryNormalMaterial(geometryWords.z,
+            historyNormal, historyMaterial);
+        if (historyMaterial != expectedMaterial
+                || dot(currentGeometryNormal, historyNormal) <= 0.0)
+            continue;
+
+        vec3 historyWorld = prevRaytracingCamPos
+            + decodeNormalU(geometryWords.y) * historyDistance;
+        if (abs(dot(historyWorld - previousSurfaceWorld,
+                currentGeometryNormal)) > depthThreshold)
+            continue;
+
+        vec2 hitRoughness = unpackHalf2x16(geometryWords.w);
+        float roughnessCompatibility = exp(-8.0 * abs(
+            hitRoughness.y - currentPerceptualRoughness));
+        SpecularMaxEnt tap;
+        float tapSigma, tapEffectiveSamples;
+        if (!readMaxEntSpecularDenoisedHistory(historyPixel, tap,
+                tapSigma, tapEffectiveSamples))
+            continue;
+
+        float w = bilinear[i] * roughnessCompatibility;
+        momentSum += tap.maxEntY * w;
+        sumWeight += w;
+    }
+
+    if (sumWeight <= 1e-6)
+        return g;
+    vec4 moment = momentSum / sumWeight;
+    float directionalLength = length(moment.xyz);
+    float totalEnergy = max(moment.w, directionalLength);
+    if (!(totalEnergy > 1e-8) || !(directionalLength > 1e-8)
+            || any(isnan(moment)) || any(isinf(moment)))
+        return g;
+
+    float rho = clamp(directionalLength / totalEnergy, 0.0, 1.0);
+    g.axis = moment.xyz / directionalLength;
+    g.kappa = min(maxent_kappa(directionalLength, totalEnergy),
+        1.0 - 1e-6);
+    g.prob = min(0.75, strengthMultiplier * rho
+        * clamp(sumWeight, 0.0, 1.0));
+    g.valid = g.prob > 0.0;
+    return g;
+}
+
+float specularGuideMixturePdf(GuideInfo guide, float vndfPdf,
+        vec3 direction) {
+    float guidePdf = guide.prob > 0.0
+        ? maxent_guiding_pdf(direction, guide.axis, guide.kappa) : 0.0;
+    return (1.0 - guide.prob) * vndfPdf + guide.prob * guidePdf;
 }
 
 // ===========================================================================

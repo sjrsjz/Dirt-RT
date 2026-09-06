@@ -1,4 +1,6 @@
 # ===========================================================================
+option.SPECULAR_PATH_GUIDING_STRENGTH = 镜面路径引导
+option.SPECULAR_PATH_GUIDING_STRENGTH.comment = 将上一帧最终去噪的 qLi 分布混入首个非 delta GGX 反射采样。方向集中度和有效重投影覆盖率会自动降低引导概率，并始终保留至少 25% 的 VNDF 采样。设为 0 可恢复纯 VNDF 采样。
 # Dirt RT — 简体中文 (Simplified Chinese) Localization
 # ===========================================================================
 

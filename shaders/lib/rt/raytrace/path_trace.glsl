@@ -39,7 +39,9 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     vec3 L_direct_0 = vec3(0.0);
     vec3 L_direct_0_dir = -lightDir;
     vec3 L_direct_0_incident = vec3(0.0);
-    vec3 reflectionFirstBsdfWeight = vec3(1.0);
+    vec3 reflectionFirstQLiResponse = vec3(1.0);
+    GuideInfo reflectionGuide = emptyGuideInfo();
+    vec2 firstReflectionXi = vec2(0.5);
     float cascadedRoughness2 = 0.0;
     // Sampling metadata for MIS if the current continuation ray reaches the
     // solar disc. Delta/refraction events have no competing sun-NEE strategy.
@@ -125,10 +127,16 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         // The diffuse continuation never consumes a GGX micro-normal.
         vec3 microNormal = macroNormal;
         #elif defined(FIRST_LOBE_REFLECTION)
+        firstReflectionXi = rtBlueNoise2D(xy, 0u);
+        reflectionGuide = computeSpecularMaxEntGuide(
+            ro_o - fb.surfaceMotion, geometryNormal,
+            sqrt(clamp(surf.R.x, 0.0, 1.0)), uint(max(fb.materialID, 0)),
+            max(fb.t, 0.0), fb.motionValid,
+            SPECULAR_PATH_GUIDING_STRENGTH);
         vec3 microNormal = macroNormal;
         if (!isDeltaSpecular(surf.R.x))
             microNormal = GGXVNDFNormal(macroNormal, -fb.rd_i, surf.R.x,
-                rtBlueNoise2D(xy, 0u));
+                firstReflectionXi);
         #else
         vec3 microNormal = macroNormal;
         if (lobes.P_refr > 1e-8 && !isDeltaSpecular(surf.R.x))
@@ -149,11 +157,11 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         current_type = REFLECTION;
         bool firstDelta;
         handleFirstBounce_Reflection(fb.rd_i, ro_o, macroNormal,
-            geometryNormal, microNormal, surf, rs, bsdf_weight,
-            next_rd, lastBsdfStrategyPdf, firstDelta);
+            geometryNormal, microNormal, surf, rs, reflectionGuide,
+            firstReflectionXi, bsdf_weight, next_rd,
+            reflectionFirstQLiResponse, lastBsdfStrategyPdf, firstDelta);
         lastBsdfDelta = firstDelta;
         lastNeeCompatible = true;
-        reflectionFirstBsdfWeight = bsdf_weight;
         #elif defined(FIRST_LOBE_REFRACTION)
         current_type = REFRACTION;
         bool wasInside = inside;
@@ -213,9 +221,12 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                     if (evaluateSpecularBRDF(-fb.rd_i, sunWi, macroNormal,
                             surf.Cs, surf.S.x, surf.S.y, rs, surf.R.x,
                             fSpecTimesNoL, pdfNDF)) {
+                        float proposalPdf = specularGuideMixturePdf(
+                            reflectionGuide, pdfNDF, sunWi);
                         L_direct_0 = misLightContribution(
-                                fSpecTimesNoL, sunLi, lightPdf, pdfNDF);
-                        float misWeight = powerHeuristic(lightPdf, pdfNDF);
+                            fSpecTimesNoL, sunLi, lightPdf, proposalPdf);
+                        float misWeight = powerHeuristic(
+                            lightPdf, proposalPdf);
                         // Convert the light-proposal sample to the same q*Li
                         // measure as the VNDF continuation sample.
                         L_direct_0_incident = max(vec3(0.0), sunLi *
@@ -277,9 +288,17 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         #if defined(FIRST_LOBE_DIFFUSE)
         vec3 microNormal = macroNormal;
         #else
+        firstReflectionXi = rtBlueNoise2D(xy, 0u);
+        #if defined(FIRST_LOBE_REFLECTION)
+        reflectionGuide = computeSpecularMaxEntGuide(
+            ro_o - fb.surfaceMotion, geometryNormal,
+            sqrt(clamp(surf.R.x, 0.0, 1.0)), uint(max(maxentMaterialID, 0)),
+            max(t, 0.0), fb.motionValid,
+            SPECULAR_PATH_GUIDING_STRENGTH);
+        #endif
         vec3 microNormal = isDeltaSpecular(surf.R.x) ? macroNormal
             : GGXVNDFNormal(macroNormal, -rd_i, surf.R.x,
-                rtBlueNoise2D(xy, 0u));
+                firstReflectionXi);
         #endif
         float surfaceIor = transportIorFromMaterial(surf);
         float n_i = inside ? surfaceIor : 1.0;
@@ -309,11 +328,11 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             current_type = REFLECTION;
             bool firstDelta;
             handleFirstBounce_Reflection(rd_i, ro_o, macroNormal, geometryNormal, microNormal,
-                surf, rs, bsdf_weight, next_rd,
+                surf, rs, reflectionGuide, firstReflectionXi,
+                bsdf_weight, next_rd, reflectionFirstQLiResponse,
                 lastBsdfStrategyPdf, firstDelta);
             lastBsdfDelta = firstDelta;
             lastNeeCompatible = true;
-            reflectionFirstBsdfWeight = bsdf_weight;
         }
         #elif defined(FIRST_LOBE_REFRACTION)
         {
@@ -381,9 +400,12 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                             -rd_i, sunWi, macroNormal,
                             surf.Cs, surf.S.x, surf.S.y, rs, surf.R.x,
                             fSpecTimesNoL, pdfNDF)) {
+                        float proposalPdf = specularGuideMixturePdf(
+                            reflectionGuide, pdfNDF, sunWi);
                         L_direct_0 = misLightContribution(
-                                fSpecTimesNoL, sunLi, lightPdf, pdfNDF);
-                        float misWeight = powerHeuristic(lightPdf, pdfNDF);
+                            fSpecTimesNoL, sunLi, lightPdf, proposalPdf);
+                        float misWeight = powerHeuristic(
+                            lightPdf, proposalPdf);
                         // Convert the light proposal to the same q*Li measure
                         // as the VNDF continuation sample.
                         L_direct_0_incident = max(vec3(0.0), sunLi *
@@ -656,7 +678,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     #elif defined(FIRST_LOBE_REFLECTION)
     writeReflectionOutput(xy, fb, L_indirect,
         L_direct_0_incident, L_direct_0_dir,
-        reflectionFirstBsdfWeight, ro);
+        reflectionFirstQLiResponse, ro);
     #else
     writeRefractionOutput(xy, fb, totalIllumination, ro);
     #endif

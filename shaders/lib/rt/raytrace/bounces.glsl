@@ -8,13 +8,16 @@
 // ===========================================================================
 
 void handleFirstBounce_Reflection(
-    vec3 rd_i, vec3 ro_o, vec3 macroNormal, vec3 geometryNormal, vec3 microNormal,
-    material surf, float etaRatio,
+    vec3 rd_i, vec3 ro_o, vec3 macroNormal, vec3 geometryNormal,
+    inout vec3 microNormal, material surf, float etaRatio,
+    GuideInfo guide, vec2 xi,
     out vec3 bsdf_weight, out vec3 next_rd,
-    out float sampledStrategyPdf, out bool sampledDelta
+    out vec3 qLiResponse, out float sampledStrategyPdf,
+    out bool sampledDelta
 ) {
     vec3 wo = -rd_i;
     bsdf_weight = vec3(0.0);
+    qLiResponse = vec3(0.0);
     next_rd = rd_i;
     sampledStrategyPdf = 0.0;
     sampledDelta = isDeltaSpecular(surf.R.x);
@@ -27,15 +30,20 @@ void handleFirstBounce_Reflection(
             next_rd = reflect(next_rd, geometryNormal);
         bsdf_weight = evaluateSurfaceFresnel(wo, macroNormal, surf.Cs,
             surf.S.x, surf.S.y, etaRatio);
+        qLiResponse = bsdf_weight;
         return;
     }
 
-    // Keep the continuation strategy equal to the VNDF density returned by
-    // evaluateSpecularBRDF. Mixing a separate guide here would require a
-    // mixture PDF for both throughput and NEE MIS.
-    next_rd = reflect(rd_i, microNormal);
-    // Folding an invalid VNDF reflection about the geometry normal changes
-    // the sampling density and biases f/pdf. Reject it instead.
+    bool useGuide = getRandom() < guide.prob;
+    if (useGuide) {
+        next_rd = sample_maxent_guiding(guide.axis, guide.kappa, xi);
+        HalfVector sampledHalf = computeHalfVector(wo, next_rd);
+        microNormal = sampledHalf.valid ? sampledHalf.H : macroNormal;
+    } else {
+        next_rd = reflect(rd_i, microNormal);
+    }
+    // The MaxEnt proposal is spherical and may select the lower geometric
+    // hemisphere. Rejection is unbiased because the target BRDF is zero there.
     if (dot(next_rd, geometryNormal) <= 0.0) {
         bsdf_weight = vec3(0.0);
         return;
@@ -47,9 +55,12 @@ void handleFirstBounce_Reflection(
     if (evaluateSpecularBRDF(wo, wi, macroNormal, surf.Cs, surf.S.x,
             surf.S.y, etaRatio, surf.R.x,
             fSpecTimesNoL_val, pdfNDF)) {
-        sampledStrategyPdf = pdfNDF;
-        bsdf_weight = (pdfNDF > 1e-8)
-            ? (fSpecTimesNoL_val / pdfNDF) : vec3(0.0);
+        sampledStrategyPdf = specularGuideMixturePdf(
+            guide, pdfNDF, wi);
+        qLiResponse = evaluateSpecularQLiResponse(wo, wi, macroNormal,
+            surf.Cs, surf.S.x, surf.S.y, etaRatio, surf.R.x);
+        bsdf_weight = sampledStrategyPdf > 1e-20
+            ? fSpecTimesNoL_val / sampledStrategyPdf : vec3(0.0);
     } else {
         bsdf_weight = vec3(0.0);
     }

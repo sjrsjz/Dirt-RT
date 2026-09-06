@@ -40,6 +40,17 @@ struct MaxEntSpecularHistory {
     uint materialID;
 };
 
+// Version the reflection history whenever its stored lighting measure or
+// temporal estimator changes. Ray tracing uses the same signature to reject
+// stale guide taps before sampling them.
+uint specularHistoryMaterialSignature(uint materialID) {
+#if MAXENT_TEMPORAL_CONFIDENCE_CLAMP == 1
+    return materialID ^ 0x7800u;
+#else
+    return materialID ^ 0x4800u;
+#endif
+}
+
 // ray3 publishes only PSR resolve metadata. The old refraction history planes
 // are intentionally repurposed because refraction no longer has a standalone
 // temporal/spatial denoiser.
@@ -353,6 +364,27 @@ void writeMaxEntSpecularDenoisedHistory(uvec2 xy, SpecularMaxEnt signal, float m
 void writeMaxEntSpecularDenoisedHistoryInvalid(uvec2 xy) {
     reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)] = uvec4(0u, 0u, 0u,
         packHalf2x16(vec2(-1.0, 0.0)));
+}
+
+// Read the stable, final spatially denoised q*Li state from N3. N0 is written
+// by the current ray pass and N2 contains the pre-spatial temporal estimate;
+// neither is a valid source for next-frame path guiding.
+bool readMaxEntSpecularDenoisedHistory(uvec2 xy,
+        out SpecularMaxEnt signal, out float monteCarloStandardDeviation,
+        out float effectiveSamples) {
+    uvec4 words = reflectBuffer.data[addr(SPEC_N_HISTMETA, xy)];
+    vec2 metadata = unpackHalf2x16(words.w);
+    monteCarloStandardDeviation = metadata.x;
+    effectiveSamples = metadata.y;
+    bool valid = denoiserSigmaUsable(monteCarloStandardDeviation)
+        && effectiveSamples >= 1.0 && effectiveSamples <= 65504.0
+        && !any(isnan(metadata)) && !any(isinf(metadata));
+    signal = valid ? unpackSpecularMaxEnt(words.xyz)
+        : emptySpecularMaxEnt();
+    valid = valid && !any(isnan(signal.maxEntY))
+        && !any(isinf(signal.maxEntY)) && signal.maxEntY.w > 0.0;
+    if (!valid) signal = emptySpecularMaxEnt();
+    return valid;
 }
 
 // Transient layout consumed by the final spatial pass:

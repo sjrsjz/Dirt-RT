@@ -30,6 +30,9 @@ option.RAY_BOUNCES.comment = Maximum surfaces visited by each camera path. More 
 option.PATH_GUIDING_STRENGTH = Path Guiding Strength
 option.PATH_GUIDING_STRENGTH.comment = MaxEnt guiding strength for diffuse paths and the total MaxEnt+RIS guided probability for radiance-cache probes. Cache probes always retain at least 10% uniform-sphere sampling. Higher values can converge faster in stable scenes; excessive values can increase lag or variance after lighting changes.
 
+option.SPECULAR_PATH_GUIDING_STRENGTH = Specular Path Guiding
+option.SPECULAR_PATH_GUIDING_STRENGTH.comment = Mixes the previous final denoised qLi distribution into primary non-delta GGX reflection sampling. Directional concentration and reprojection coverage reduce the selected strength; at least 25% VNDF sampling is retained. Set to 0 for VNDF-only sampling.
+
 option.SUN_PATH_ROTATION = Sun Path Rotation
 option.SUN_PATH_ROTATION.comment = Tilts the apparent sun and moon path around the world X axis like latitude. This changes lighting direction, not day length. 30° is the spring clear-sky calibration reference for the atmosphere.
 
