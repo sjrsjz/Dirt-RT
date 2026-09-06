@@ -6,8 +6,10 @@
 #include "/lib/lighting/denoiser/light_difference.glsl"
 #include "/lib/math/statistics.glsl"
 
-// The denoiser operates on m=(E[R u], E[R]). No decoder distribution is
-// involved. For one raw sample z=(R u,R), |z|^2=2R^2.
+// The denoiser mean remains the linear state m=(E[R u],E[R]). Differences use
+// its 2x2 PSD Bures geometry. Variance preparation uses the alpha=1 g^-3 family
+// only as an explicit closure for missing R^2-weighted angular moments;
+// lighting reconstruction remains independent of this filtering policy.
 
 float maxentTemporalEstimatorVariance(float monteCarloStandardDeviation, float effectiveSamples) {
     monteCarloStandardDeviation = max(monteCarloStandardDeviation, 0.0);

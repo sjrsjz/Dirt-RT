@@ -100,7 +100,7 @@ float statisticsKishUpdateEffectiveSampleCount(float historyEffectiveSamples,
 
 // Minimum-variance current weight V_H/(V_H+V_C) for two independent unbiased
 // estimators. This is exposed only as a diagnostic; temporal response uses its
-// separately tuned moment-distance function.
+// separately tuned Bures-distance response.
 float statisticsMinimumVarianceIndependentCurrentWeight(float historyVariance, float currentVariance) {
     historyVariance = max(historyVariance, 0.0);
     currentVariance = max(currentVariance, 0.0);

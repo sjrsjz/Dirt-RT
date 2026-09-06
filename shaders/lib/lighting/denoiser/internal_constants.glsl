@@ -18,15 +18,19 @@ const float MAXENT_SPATIAL_REJECTION_CONFIDENCE_STEP_8 = 12.61065131;
 const float MAXENT_SPATIAL_REJECTION_CONFIDENCE_STEP_16 = 25.90473642;
 const float MAXENT_SPATIAL_REJECTION_CONFIDENCE_STEP_32 = 52.46326890;
 
-// Constant-correlation closure for the overlap between estimators entering each A-Trous pass. These values depend
-// only on the fixed sampling kernels accumulated before the pass. They affect Kish N_eff, never linear moments or MC
-// variance propagation.
+// Recursive constant-correlation closure for the independent-current Kish
+// N_eff. Calibrated on a homogeneous front-facing plane with the runtime
+// Bures rejection, phi=0.5, FP16 fields, history=1/4/16/64 and kappa=0/.7/.98.
+// Independent probes isolate overlap under frozen signal weights; a held-out
+// MC ensemble audits the full adaptive filter separately. See
+// tools/calibrate_bures_pass_correlations.py and doc/calibration/README.md.
+// Recalibrate when rejection strength, sample pattern or variance policy changes.
 const float MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_1 = 0.0;
-const float MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_2 = 0.1060;
-const float MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_4 = 0.1412;
-const float MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_8 = 0.1394;
-const float MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_16 = 0.1471;
-const float MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_32 = 0.1525;
+const float MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_2 = 0.09184833;
+const float MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_4 = 0.12613998;
+const float MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_8 = 0.13781854;
+const float MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_16 = 0.14262104;
+const float MAXENT_SPATIAL_EFFECTIVE_SAMPLE_CORRELATION_STEP_32 = 0.14655028;
 
 // Surface and virtual specular histories can overlap. This closure affects only their reconstructed Kish N_eff;
 // MC variance remains a linearly reconstructed field.

@@ -152,8 +152,8 @@ option.RADIANCE_CACHE_RIS_GUIDING_KAPPA.comment = Concentration of the continuou
 # ===========================================================================
 # Shared MaxEnt Temporal Response
 # ===========================================================================
-option.MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE = Moment-distance Response Scale
-option.MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE.comment = Shared by diffuse and specular temporal accumulation. It scales squared moment distance relative to the combined estimator variance. Higher values give the current frame more weight for the same difference and reject history more aggressively.
+option.MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE = Bures Response Scale
+option.MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE.comment = Shared by diffuse and specular temporal accumulation. It scales squared Bures distance relative to the matching combined estimator variance. Higher values give the current frame more weight for the same difference and reject history more aggressively.
 
 # ===========================================================================
 # MaxEnt Diffuse Temporal
@@ -185,7 +185,7 @@ option.MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS.comment = Specular temporal 
 # MaxEnt Variance Preparation
 # ===========================================================================
 option.MAXENT_VARIANCE_KERNEL_SIGMA = Kernel Sigma
-option.MAXENT_VARIANCE_KERNEL_SIGMA.comment = Shared diffuse/specular Gaussian kernel width for short-history MaxEnt variance pooling. Higher values trade edge precision for a more stable estimate.
+option.MAXENT_VARIANCE_KERNEL_SIGMA.comment = Shared diffuse/specular Gaussian kernel width for short-history Bures variance pooling. Linear moments are pooled before the g^-3 variance closure is evaluated. Higher values trade edge precision for a more stable estimate.
 
 option.MAXENT_VARIANCE_SPATIAL_ONLY_SAMPLES = Spatial-Only Effective Frames
 option.MAXENT_VARIANCE_SPATIAL_ONLY_SAMPLES.comment = Diffuse and specular variance preparation uses spatially reconstructed temporal-moment MC variance until this Kish effective-frame count is reached.
@@ -200,10 +200,10 @@ option.MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE = Plane-distance Tolerance
 option.MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE.comment = Relative projected plane-depth tolerance used by MaxEnt virtual-image rejection, refraction, and path-guide spatial tests. Higher values permit more cross-plane filtering.
 
 option.MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY = Diffuse Light-field Sensitivity
-option.MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY.comment = Variance-normalized diffuse moment-space rejection strength. Higher values preserve more light-field contrast; lower values smooth more.
+option.MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY.comment = Variance-normalized diffuse Bures rejection strength. Higher values preserve more light-field contrast; lower values smooth more.
 
 option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY = Specular Light-field Sensitivity
-option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY.comment = Variance-normalized specular moment-space rejection strength. Higher values preserve more reflection contrast; lower values smooth more.
+option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY.comment = Variance-normalized specular Bures rejection strength. Higher values preserve more reflection contrast; lower values smooth more.
 
 # ===========================================================================
 # Bloom

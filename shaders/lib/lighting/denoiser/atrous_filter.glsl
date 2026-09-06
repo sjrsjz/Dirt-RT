@@ -111,9 +111,9 @@ float denoiserSpatialWeight(DenoiserMaxEntSignal centerSignal,
     // estimator variances: V_c/N_eff,c + V_s/N_eff,s.
     float differenceEstimatorVariance =
         centerSignal.standardDeviation * centerSignal.standardDeviation
-            / max(centerEffectiveSamples, 1.0)
+            / clamp(centerEffectiveSamples, 1.0, 16.0)
         + sampleSignal.standardDeviation * sampleSignal.standardDeviation
-            / max(sampleEffectiveSamples, 1.0);
+            / clamp(sampleEffectiveSamples, 1.0, 16.0);
     signalExponent += phiLuminance
         * sqrt(distanceSq / max(differenceEstimatorVariance, 1e-20));
     float surfaceWeight = kernelWeight * exp(-signalExponent);

@@ -3,16 +3,17 @@
 
 Each training tile has one analytic, spatially constant MaxEnt target.  Its
 input pixels are independent N-spp importance-sampling estimates of the same
-discrete incident-radiance measure.  The model mirrors the shader's exact
-moment-trace variance preparation, Euclidean moment-space weights, six A-Trous
-levels, and per-pass equicorrelation covariance expansion.  Geometry weights
-are deliberately omitted.
+discrete incident-radiance measure.  The model shares the shader's 2x2 PSD
+Bures distance, alpha=1 g^-3 MC-variance closure, six A-Trous levels, and
+per-pass equicorrelation covariance expansion.  Geometry weights are
+deliberately omitted.
 
-The shader defaults are derived from fixed-kernel overlap by
-estimate_maxent_pass_correlations.py.  This script instead probes the actual
-data-dependent operator.  Its end-to-end objective contains filtering bias,
-so any trained value is an engineering tuning result, not an alternative
-statistical estimate of p_const.
+This legacy optimization model propagates estimator variance directly and
+uses a difference-correlation term, unlike the current shader's separate
+MC-variance/Kish fields and cumulative rejection scales. Use
+calibrate_bures_pass_correlations.py for current runtime coefficients.
+The objective here includes filtering bias and only provides an experimental
+engineering tuning result for this legacy operator.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ DEFAULT_DIFFERENCE_CORRELATIONS = (
     0.0, 0.1633, 0.2171, 0.2508, 0.2585, 0.2665
 )
 DEFAULT_PROPAGATION_CORRELATIONS = (
-    0.0, 0.1060, 0.1412, 0.1394, 0.1471, 0.1525
+    0.0, 0.09184833, 0.12613998, 0.13781854, 0.14262104, 0.14655028
 )
 GRID_OFFSETS = (
     (-1, -1),
@@ -84,12 +85,73 @@ def safe_normalize(value: torch.Tensor, dim: int) -> torch.Tensor:
     return value * torch.rsqrt(value.square().sum(dim=dim, keepdim=True).clamp_min(1.0e-20))
 
 
+def exact_forward_smooth_sqrt(
+    value: torch.Tensor, epsilon: float = 1.0e-12
+) -> torch.Tensor:
+    """Exact nonnegative sqrt values with finite optimization gradients at zero."""
+    value = value.clamp_min(0.0)
+    exact = value.sqrt()
+    differentiable = (value + epsilon).sqrt() - math.sqrt(epsilon)
+    return exact.detach() + differentiable - differentiable.detach()
+
+
 def canonicalize_mean(mean: torch.Tensor) -> torch.Tensor:
     direction = mean[:, :3]
     energy = mean[:, 3:4].clamp_min(0.0)
-    direction_length = direction.square().sum(dim=1, keepdim=True).sqrt()
+    direction_length = direction.square().sum(dim=1, keepdim=True).clamp_min(1.0e-30).sqrt()
     scale = torch.where(direction_length > energy, energy / direction_length.clamp_min(1.0e-20), 1.0)
     return torch.cat((direction * scale, energy), dim=1)
+
+
+def bures_distance_squared(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Stable 2x2 PSD Bures--Wasserstein distance for channel-first states."""
+    a = canonicalize_mean(a)
+    b = canonicalize_mean(b)
+    va, wa = a[:, :3], a[:, 3:4]
+    vb, wb = b[:, :3], b[:, 3:4]
+
+    def cone_radius(vector: torch.Tensor, energy: torch.Tensor) -> torch.Tensor:
+        slack = (energy.square() - vector.square().sum(dim=1, keepdim=True)).clamp_min(0.0)
+        exact = slack.sqrt()
+        epsilon = (energy.square() * 1.0e-12).clamp_min(1.0e-30)
+        differentiable = (slack + epsilon).sqrt() - epsilon.sqrt()
+        # Keep the exact shader value in the forward pass and use the smooth
+        # continuation only for training gradients at rank-one states.
+        return exact.detach() + differentiable - differentiable.detach()
+
+    qa = cone_radius(va, wa)
+    qb = cone_radius(vb, wb)
+    root_affinity = exact_forward_smooth_sqrt(
+        0.5 * (wa * wb + (va * vb).sum(dim=1, keepdim=True) + qa * qb)
+    )
+    numerator = (va - vb).square().sum(dim=1, keepdim=True) + (qa - qb).square()
+    denominator = wa + wb + 2.0 * root_affinity
+    return torch.where(
+        denominator > 0.0,
+        numerator / denominator.clamp_min(1.0e-30),
+        torch.zeros_like(numerator),
+    ).squeeze(1)
+
+
+def g3_bures_biased_observation_variance(
+    mean: torch.Tensor, mean_r2: torch.Tensor
+) -> torch.Tensor:
+    """Plug-in Bures observation variance from empirical R^2 and g^-3 angles."""
+    mean = canonicalize_mean(mean)
+    energy = mean[:, 3:4]
+    energy2 = energy.square()
+    mean_r2 = torch.maximum(mean_r2.clamp_min(0.0), energy2)
+    root_mean_r2 = mean_r2.sqrt()
+    kappa2 = (
+        mean[:, :3].square().sum(dim=1, keepdim=True)
+        / energy2.clamp_min(1.0e-30)
+    ).clamp(0.0, 1.0)
+    radial_variance = (root_mean_r2 - energy) * (root_mean_r2 + energy)
+    angular_scale = 3.0 * (1.0 - kappa2) / (3.0 + kappa2)
+    variance = (
+        radial_variance + angular_scale * mean_r2
+    ) / (4.0 * energy.clamp_min(1.0e-30))
+    return torch.where(energy > 0.0, variance.clamp_min(0.0), torch.zeros_like(variance))
 
 
 def circular_filter(value: torch.Tensor, kernel: torch.Tensor) -> torch.Tensor:
@@ -128,8 +190,7 @@ def prepare_variance(batch: Batch, simulate_fp16: bool) -> Tuple[torch.Tensor, t
         mean_y2 = quantize_half(mean_y2.sqrt()).square()
 
     mean_y2 = torch.maximum(mean_y2, mean[:, 3:4].square())
-    mean_y2 = torch.maximum(mean_y2, mean[:, :3].square().sum(dim=1, keepdim=True))
-    population = (2.0 * mean_y2 - mean.square().sum(dim=1, keepdim=True)).clamp_min(0.0)
+    population = g3_bures_biased_observation_variance(mean, mean_y2)
     if batch.history > 1:
         temporal = population / float(batch.history - 1)
     else:
@@ -143,12 +204,9 @@ def prepare_variance(batch: Batch, simulate_fp16: bool) -> Tuple[torch.Tensor, t
     pooled_mean = canonicalize_mean(circular_filter(mean, pool_kernel))
     pooled_y2 = circular_filter(mean_y2, pool_kernel)
     pooled_y2 = torch.maximum(pooled_y2, pooled_mean[:, 3:4].square())
-    pooled_y2 = torch.maximum(
-        pooled_y2, pooled_mean[:, :3].square().sum(dim=1, keepdim=True)
+    pooled_population = g3_bures_biased_observation_variance(
+        pooled_mean, pooled_y2
     )
-    pooled_population = (
-        2.0 * pooled_y2 - pooled_mean.square().sum(dim=1, keepdim=True)
-    ).clamp_min(0.0)
     spatial = pooled_population / float(max(batch.history, 1))
 
     trust_linear = min(max((batch.history - 2.0) / 10.0, 0.0), 1.0)
@@ -252,7 +310,7 @@ class AtrousModel:
         neighbor_mean = self._gather_neighbors(mean, indices)
         neighbor_variance = self._gather_neighbors(variance, indices)
 
-        distance2 = (mean.unsqueeze(2) - neighbor_mean).square().sum(dim=1)
+        distance2 = bures_distance_squared(mean.unsqueeze(2), neighbor_mean)
 
         center_variance = variance[:, 0].unsqueeze(1)
         sample_variance = neighbor_variance[:, 0]
@@ -262,7 +320,7 @@ class AtrousModel:
             - 2.0 * difference_correlation
             * (center_variance * sample_variance).clamp_min(0.0).sqrt()
         ).clamp_min(0.0)
-        normalized_distance = torch.sqrt(
+        normalized_distance = exact_forward_smooth_sqrt(
             distance2 / variance_sum.clamp_min(1.0e-12)
         )
         weight = kernel[:, 0] * torch.exp(-self.phi * normalized_distance)
@@ -276,8 +334,8 @@ class AtrousModel:
         squared_weight_variance = variance + (
             neighbor_variance * weight.square().unsqueeze(1)
         ).sum(dim=2)
-        weighted_stddev = variance.sqrt() + (
-            neighbor_variance.sqrt() * weight.unsqueeze(1)
+        weighted_stddev = exact_forward_smooth_sqrt(variance) + (
+            exact_forward_smooth_sqrt(neighbor_variance) * weight.unsqueeze(1)
         ).sum(dim=2)
         output_variance = (
             (1.0 - propagation_correlation) * squared_weight_variance
@@ -389,9 +447,9 @@ def normalized_level_metrics(
     levels: Sequence[Tuple[torch.Tensor, torch.Tensor]],
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     target = batch.target
-    input_error = (batch.mean - target).square().sum(dim=1).mean().detach().clamp_min(1.0e-12)
+    input_error = bures_distance_squared(batch.mean, target).mean().detach().clamp_min(1.0e-12)
     errors = torch.stack(
-        [(mean - target).square().sum(dim=1).mean() for mean, _ in levels]
+        [bures_distance_squared(mean, target).mean() for mean, _ in levels]
     )
     predicted = torch.stack([variance.mean() for _, variance in levels])
     mse_match = (torch.log(predicted.clamp_min(1.0e-12)) - torch.log(errors.clamp_min(1.0e-12))).square().mean()
@@ -448,7 +506,7 @@ def evaluate(
                 history_signal.append(float(signal))
                 history_patch.append(float(patch))
                 for level, (mean, variance) in enumerate(levels):
-                    error = (mean - batch.target).square().sum(dim=1).mean()
+                    error = bures_distance_squared(mean, batch.target).mean()
                     all_errors[level].append(float(error))
                     all_predicted[level].append(float(variance.mean()))
             per_history[str(history)] = {

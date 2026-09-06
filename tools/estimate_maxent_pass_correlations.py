@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
-"""Derive the moment-error correlations induced by the fixed spatial kernel.
+"""Derive the Bures-tangent error correlations of the fixed spatial kernel.
 
 Start with independent, equal-variance errors at every pixel. If the linear
-response at output pixel x is h_x, then the trace-error correlation is
+response at output pixel x is h_x, then the correlation in any fixed local
+quadratic metric G, including the Bures tangent metric, is
 
     rho(x, y) = <h_x, h_y> / (||h_x|| ||h_y||).
+
+Indeed, E[e_x^T G e_y] is <h_x,h_y> tr(G Sigma), so the metric and input
+covariance factor cancels from the normalized correlation.
 
 The three grid passes are translation invariant and are evaluated exactly.
 The rotating Poisson passes use the shader's integer hash and rounding. Their
 spatial average is estimated by sampling pixel coordinates, but every sampled
-kernel overlap is evaluated exactly; no light samples, MaxEnt decoder, phi,
-geometry weight, signal-dependent weight, or N_eff enters the calculation.
+kernel overlap is evaluated exactly. These are structural fixed-kernel closure
+coefficients; signal-dependent rejection is deliberately outside their scope
+because it does not admit one scene- and history-independent correlation.
 """
 
 from __future__ import annotations
@@ -499,6 +504,8 @@ def main() -> None:
         "model": {
             "input_errors": "independent_equal_variance",
             "weights": "fixed_sampling_kernel_only",
+            "metric": "any fixed PSD quadratic metric, including local Bures",
+            "metric_factor": "tr(G Sigma) cancels from normalized correlation",
             "depends_on_phi": False,
             "depends_on_maxent": False,
             "grid_kernel_coefficients": len(grid_kernel),

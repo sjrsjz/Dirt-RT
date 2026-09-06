@@ -1,182 +1,160 @@
-# 矩空间降噪器的统计口径
+# Bures 矩降噪器的统计口径
 
-本文档只描述 encoder 与 decoder 之间的 latent 滤波。MaxEnt 是 decoder 的闭包选择，不参与本节的距离、方差或相似度定义。
+本文档描述 encoder 与 decoder 之间的 latent 滤波。均值状态始终在线性矩空间中累积；距离使用该状态的 \(2\times2\) PSD Bures--Wasserstein 几何。alpha=1 的 \(g^{-3}\) 联合 MaxEnt 族只负责补全未存储的 \(R^2\) 加权角向矩，不参与最终光照解码。
 
 ## 1. 编码与可识别量
 
-对一个非负亮度样本 (R) 和单位入射方向 \(\mathbf u\)，encoder 输出
+对非负亮度样本 \(R\) 和单位入射方向 \(\mathbf u\)，encoder 输出
 
 \[
-Z=(R\mathbf u,R)\in\mathbb R^4.
+Z=(R\mathbf u,R).
 \]
 
 时域状态保存
 
 \[
-\widehat{\mathbf a}=\widehat{E[R\mathbf u]},\qquad
-\widehat b=\widehat{E[R]},\qquad
-\widehat q=\widehat{E[R^2]},\qquad N_{\rm eff}.
+\mathbf v=E[R\mathbf u],\qquad
+w=E[R],\qquad
+e_2=E[R^2],\qquad N_{\rm eff}.
 \]
 
-因为 \(\|\mathbf u\|=1\)，所以 \(\|Z\|^2=2R^2\)。由此可精确恢复编码向量的总体中心散布迹
+一阶状态对应 Hermitian 矩阵
 
 \[
-S_Z=2\widehat q-\|\widehat{\mathbf a}\|^2-\widehat b^2.
+M(\mathbf v,w)=\frac12
+\begin{pmatrix}
+w+v_z&v_x-i v_y\\
+v_x+i v_y&w-v_z
+\end{pmatrix}.
 \]
 
-若归一化时域权重为 \(w_i\)，且 \(N_{\rm eff}=1/\sum_iw_i^2\)，则在独立同分布、权重视为给定的条件下，
+可实现条件 \(\lVert\mathbf v\rVert\leq w\) 等价于 \(M\succeq0\)。滤波、重投影和历史更新仍直接作用于 \((\mathbf v,w,e_2)\) 的线性坐标；PSD 投影只在距离与方差求值的局部副本上执行，不回写历史。
+
+## 2. Bures 光场距离
+
+对两个状态 \((\mathbf v_i,w_i)\)，定义
 
 \[
-\widehat V_{\bar Z}=\frac{S_Z}{N_{\rm eff}-1}
-\]
-
-无偏估计加权均值误差的总方差 \(E\|\bar Z-EZ\|^2\)。当 \(N_{\rm eff}\le1\) 时，单个状态不能估计采样方差，必须使用冷启动空间估计或返回零可信度。
-
-## 2. 矩空间差异
-
-两个 latent 状态的 decoder 无关距离取为
-
-\[
-d_M^2=\|\widehat{\mathbf a}_1-\widehat{\mathbf a}_2\|^2
-      +(\widehat b_1-\widehat b_2)^2.
-\]
-
-它是原始 encoder 坐标的旋转不变欧氏距离。它不使用 MaxEnt 分布、MaxEnt 协方差、Gaussian proxy 或 Bures/Wasserstein 距离。
-
-只保存 \(E[R^2]\) 无法识别四维协方差矩阵的形状，因此不能构造精确 Mahalanobis、Wald 或卡方统计量。实现使用的是“距离平方除以误差总方差”的迹归一化差异；在正确的平稳误差模型下其期望为一，但不能宣称其服从卡方分布。
-
-## 3. 未存储交叉协方差的闭包
-
-令估计器误差向量为 \(\varepsilon_A,\varepsilon_B\)，总方差为
-
-\[
-V_A=E\|\varepsilon_A\|^2,\qquad V_B=E\|\varepsilon_B\|^2.
-\]
-
-无法存储迹交叉协方差时，对每个 pass 或混合上下文 \(c\) 采用显式闭包
-
-\[
-E[\varepsilon_A^T\varepsilon_B]
-\approx p_c\sqrt{V_AV_B}.
-\]
-
-因此差值总方差必须包含协方差项：
-
-\[
-V_{A-B}=V_A+V_B-2p_c\sqrt{V_AV_B}.
-\]
-
-这是迹协方差闭包，不等价于恢复完整协方差矩阵。一次空间 pass 最多混合九个估计器；若该 pass 的所有非对角项采用同一个 \(p_c\)，为保证等相关矩阵半正定，需要
-
-\[
--\frac1{8}\le p_c\le1.
-\]
-
-不能从单像素保存矩中识别 \(p_c\)，但可以给它一个不依赖 \(\phi\) 的、可重复推导的固定核口径。令原始像素误差 \(\varepsilon_q\) 相互独立且具有相同迹方差 \(\sigma^2\)，并令 pass \(\ell\) 之前像素 \(x\) 的累计线性冲激响应为 \(h_x^{(\ell-1)}(q)\)，则
-
-\[
-V_x=\sigma^2\sum_q h_x(q)^2,\qquad
-C_{xy}=\sigma^2\sum_q h_x(q)h_y(q),\qquad
-\rho_{xy}=\frac{C_{xy}}{\sqrt{V_xV_y}}.
-\]
-
-对当前 pass 的中心与八个 tap 记固定核权重为 \(a_i\)，实现所需的两个标量分别定义为
-
-\[
-p_{\rm diff}=\frac{\sum_x\sum_{i=1}^8a_iC_{0i}(x)}
-{\sum_x\sum_{i=1}^8a_i\sqrt{V_0(x)V_i(x)}},
+q_i=\sqrt{\max(w_i^2-\lVert\mathbf v_i\rVert^2,0)},
 \]
 
 \[
-p_{\rm prop}=\frac{\sum_x\sum_{i<j}a_ia_jC_{ij}(x)}
-{\sum_x\sum_{i<j}a_ia_j\sqrt{V_i(x)V_j(x)}}.
+c=\sqrt{\frac{w_1w_2+\mathbf v_1\cdot\mathbf v_2+q_1q_2}{2}}.
 \]
 
-前者使中心–tap 差值的核权重平均交叉协方差匹配，后者使该 pass 的完整非对角传播项匹配。前三个规则网格 pass 平移不变，可由离散卷积精确求值；后三个 pass 使用 shader 的逐像素 whash 旋转，表中值为空间采样平均，但每个被采样位置的核重叠仍是精确计算：
-
-| 上下文 | \(p_{\rm diff}\) | \(p_{\rm prop}\) |
-|---|---:|---:|
-| à-trous step 1 | 0 | 0 |
-| à-trous step 2 | 0.1633227 | 0.1060087 |
-| à-trous step 4 | 0.2170925 | 0.1411698 |
-| à-trous step 8 | 0.2507545 ± 0.0000606 | 0.1394126 ± 0.0000329 |
-| à-trous step 16 | 0.2584918 ± 0.0001035 | 0.1470511 ± 0.0000270 |
-| à-trous step 32 | 0.2665217 ± 0.0003202 | 0.1525312 ± 0.0001094 |
-| 最终输出相邻相关 | 轴向 0.94461、对角 0.94434 | 均匀双线性相位 0.94456 |
-| 新时域样本–历史创新 | 独立采样假设 | 0 |
-
-这些数值只由采样位置、固定核权重与 pass 顺序决定，因此不含 \(\phi\)、\(N_{\rm eff}\)、光照分布、几何或 MaxEnt。代价是它明确把信号与几何权重条件化为固定值；真实自适应滤波器偏离该线性化时，这些常数不再是其精确相关。既要求对任意 \(\phi\) 的真实自适应算子精确，又要求估计完全不依赖 \(\phi\)，二者不可同时满足。原来的全局 0.2 则连 pass 的累计核重叠也没有表达。
-
-## 4. 任意权重的协方差传播
-
-对
+Bures--Wasserstein 距离平方为
 
 \[
-\bar X=\frac{\sum_i w_iX_i}{W},\qquad W=\sum_iw_i,
+d_B^2=w_1+w_2-2c.
 \]
 
-完整展开为
+shader 使用抗相消的等价形式
 
 \[
-V_{\bar X}=\frac{1}{W^2}\left(
-\sum_iw_i^2V_i+2\sum_{i<j}w_iw_j\operatorname{Cov}_{\rm tr}(X_i,X_j)
-\right).
+d_B^2=
+\frac{\lVert\mathbf v_1-\mathbf v_2\rVert^2+(q_1-q_2)^2}
+{w_1+w_2+2c}.
 \]
 
-代入常相关闭包后，令
+若两边均为零，距离取零。该量一次齐次：同时把两个光场乘以 \(s\geq0\) 时，\(d_B^2\) 乘以 \(s\)。
+
+## 3. \(g^{-3}\) 补全的局部 Bures MC 方差
+
+Bures 距离的局部二次展开还依赖 \(E[R^2\mathbf u]\) 和 \(E[R^2\mathbf u\mathbf u^T]\)。现有标量存储无法识别它们，因此实现显式采用 alpha=1 联合 MaxEnt 闭包。令
 
 \[
-Q=\sum_iw_i^2V_i,\qquad S=\sum_iw_i\sqrt{V_i},
+\kappa=\frac{\lVert\mathbf v\rVert}{w},\qquad
+\mathbf n=\frac{\mathbf v}{\lVert\mathbf v\rVert}.
 \]
 
-得到
+该族的 \(R\) 加权方向边缘正比于 \(g^{-3}\)。多乘一个 \(R\) 后，\(R^2\) 加权角密度正比于 \(g^{-4}\)，其所需矩为
 
 \[
-V_{\bar X}=\frac{(1-p_c)Q+p_cS^2}{W^2}.
+\frac{E[R^2\mathbf u]}{e_2}
+=\frac{4\kappa}{3+\kappa^2}\mathbf n,
 \]
-
-该式同时覆盖 à-trous、双线性时域重投影和镜面双分支混合。原来的分数阶幂传播没有对应的协方差模型，已弃用。
-
-## 5. 时域创新量
-
-在线性矩空间中，若当前递推状态
 
 \[
-T=(1-\alpha)H+\alpha X,
+\frac{E[R^2\mathbf u\mathbf u^T]}{e_2}
+=\frac{(1-\kappa^2)I+4\kappa^2\mathbf n\mathbf n^T}
+{3+\kappa^2}.
 \]
 
-则
+将它们代入 \(M(\mathbf v,w)\) 处的局部 Bures 度量并化简，得到
 
 \[
-\|T-H\|^2/\alpha^2=\|X-H\|^2
+\boxed{
+V_B^{g^{-3}}=
+\frac{2e_2(3-\kappa^2)/(3+\kappa^2)-w^2}{4w}}
 \]
 
-在未经过后续非线性处理的 encoder 时域状态上是严格恒等式。当前实现比较的是又经过空间滤波的信号，因此实际使用时还包含“当前与历史共享同一个局部固定权重空间算子”的线性化；数据依赖权重变化会破坏严格恒等。若历史均值含 \(N_{\rm eff}\) 个等效样本，使用 \(V_X\approx N_{\rm eff}V_H\) 与上述闭包可得
+作为单个 MC 观测的局部 Bures 方差模型。shader 使用数值上更稳定的等价形式
 
 \[
-V_{X-H}\approx V_H\left(N_{\rm eff}+1
--2p_{\rm innovation}\sqrt{N_{\rm eff}}\right).
+V_B^{g^{-3}}=
+\frac{(e_2-w^2)+3(1-\kappa^2)e_2/(3+\kappa^2)}{4w},
 \]
 
-这替代了把当前值与历史值无条件视为独立的 \((N_{\rm eff}+1)V_H\)。
-
-实现还显式建模降噪器内蕴的矩空间误差。令
-\(\sigma_D^2=10^{-5}\) 为该误差的总方差（单位是矩坐标的平方），则实际观测到的降噪状态差异使用
+把非负的径向和角向项分开；其中径向差进一步按 \((\sqrt{e_2}-w)(\sqrt{e_2}+w)\) 求值，避免在 \(\kappa\to1\)、\(e_2\to w^2\) 时相消。它保留实测 \(e_2\)，因此径向 firefly 能量仍来自路径追踪器。边界连续为
 
 \[
-V_{T-H}=\alpha^2V_{X-H}+\sigma_D^2,
-\qquad
-D=\sqrt{\frac{\|T-H\|^2}{V_{T-H}}}.
+V_B(0)=\frac{2e_2-w^2}{4w},\qquad
+V_B(1)=\frac{e_2-w^2}{4w}.
 \]
 
-\(\sigma_D^2\) 位于 \(\alpha^2\) 外部，因为它描述时域混合之后由降噪、重投影及有限表示共同留下的附加误差，而不是原始创新量 \(X-H\) 的采样方差。它同时避免零分母只是这一统计模型的结果，不能把它解释为普通数值 epsilon；修改它会直接改变标准化差异和历史样本上限的尺度。
+实现先把 \(e_2\) 提升到物理下界 \(w^2\)，再计算闭式。若 \(w=e_2=0\)，方差为零；若 FP16 状态出现 \(w=0,e_2>0\)，则把标准差饱和到可存储上限，以免把未解析的稀疏能量误判为零噪声。对 \(N_{\rm eff}>1\)，使用 \(1/(1-1/N_{\rm eff})\) 修正有限样本的 plug-in 中心矩。该因子对径向中心矩严格成立；由于 \(\kappa\) 同样由有限历史估计，对角向闭包属于有限样本近似。
 
-## 6. 适用边界
+## 4. 空域冷启动方差
 
-- \(\widehat q\) 必须与 \((\widehat{\mathbf a},\widehat b)\) 使用同一组时域权重更新。
-- 公式的无偏性以独立同分布且权重条件给定为前提。若权重直接依赖同一批亮度样本，仍可能有选择偏差。
-- 固定核推导针对所有 tap 均存在的图像内部。图像边界、几何拒绝和信号拒绝都会改变实际归一化核，统计式本身不能修复这种模型失配。
-- \(p_c\) 无法由单个运行状态的保存矩识别；表中数值由指定固定核推导。若要得到精确多维显著性检验，必须额外保存足够的二阶矩，例如 \(E[R^2\mathbf u]\) 与 \(E[R^2\mathbf u\mathbf u^T]\)。
-- 每个 pass 内仍用一个标量近似不同 tap 对。\(p_{\rm diff}\) 与 \(p_{\rm prop}\) 是不同加权投影，不能互换；若该近似仍不够，必须把 tap/offset 类别纳入参数或保存交叉协方差。
-- 镜面 surface/virtual 分支相关性取决于两个运动投影的实际间距，当前用固定核相邻输出值 0.9446 作为局部重叠近似；这不是由现有状态或固定核本身唯一确定的量。
-- 当 \(p_c=1\) 且 \(V_A=V_B\) 时，闭包必然给出 \(V_{A-B}=0\)：模型此时声称两项误差完全相同，任何非零差异都应被拒绝。这是闭包端点的数学退化。
+短历史阶段在 \(7\times7\) 几何核内先计算
+
+\[
+\bar{\mathbf v}=\frac{\sum_i a_i\mathbf v_i}{W},\quad
+\bar w=\frac{\sum_i a_iw_i}{W},\quad
+\bar e_2=\frac{\sum_i a_ie_{2,i}}{W},\quad W=\sum_i a_i.
+\]
+
+随后只在汇聚状态 \((\bar{\mathbf v},\bar w,\bar e_2)\) 上计算一次 \(V_B^{g^{-3}}\)。这个顺序把邻域样本之间的方向与亮度散布计入方差；逐像素先算 \(V_B\) 再平均会遗漏该项。
+
+同一组权重对应的有效样本数单独重建为
+
+\[
+N_{\rm eff}=\frac{W^2}{\sum_i a_i^2/N_i}.
+\]
+
+空间估计与中心像素的时域估计按历史长度平滑切换。两者都表示单观测 Bures 方差，后续消费者才除以各自 \(N_{\rm eff}\)。单个样本无法从自身估计方差，因此 \(N_{\rm eff}=1\) 的中心时域方差为零，并由空间池化提供冷启动尺度。
+
+## 5. A-Trous 传播与拒绝
+
+standardDeviation² 在每个 A-Trous 边界表示局部单观测 Bures 方差。中心与 tap 的差异使用
+
+\[
+D=\sqrt{
+\frac{d_B^2(M_c,M_s)}
+{V_{B,c}/N_c+V_{B,s}/N_s}
+}.
+\]
+
+由于分子和分母都随辐亮度一次缩放，该标准化差异对统一曝光缩放不变。
+
+上式的空域拒绝计数取 \(\min(N_{\rm eff},16)\)，再乘逐级置信度尺度。每个 pass 用信号权重线性汇聚 \(V_B\)，并独立传播 Kish \(N_{\rm eff}\)。后者使用平面场景上标定的常相关闭包处理前序 pass 产生的样本重叠。标定保留实际 Bures 权重、FP16 格式及逐级拒绝尺度，覆盖 \(\kappa=0,0.7,0.98\) 和历史 \(N=1,4,16,64\)；配置、逐场数据与留出验证见 [标定说明](calibration/README.md)。
+
+## 6. 时域响应
+
+最终独立 current 与重投影 history 分别形成
+
+\[
+V_{\rm est,C}=V_{B,C}/N_C,\qquad
+V_{\rm est,H}=V_{B,H}/N_H.
+\]
+
+时域响应使用 \(d_B^2/(V_{\rm est,C}+V_{\rm est,H})\) 调节当前帧权重。提交历史时，\((\mathbf v,w,e_2)\) 仍按同一个时域 alpha 线性更新，\(N_{\rm eff}\) 按 Kish 规则更新；过滤后的 Bures 方差字段只用于下一次显著性判断，不能反演成 \(e_2\)。
+
+## 7. 适用边界
+
+- \(e_2\) 必须与 \((\mathbf v,w)\) 使用同一组原始时域权重更新。
+- \(g^{-3}\) 闭包恢复的是模型高阶矩。任意真实 PT 分布，特别是低概率、极亮且与主轴相反的样本，可以具有相同保存矩而产生不同的局部 Bures 方差。
+- 局部 Bures 方差来自距离在均值处的二阶展开；它是用于标准化估计器差异的 delta-method 尺度，不等于任意大偏差下 \(E[d_B^2(Z,EZ)]\) 的精确值。
+- 空域方差假设几何核内局部平稳；真实信号边缘会被解释为额外 MC 散布。这是保守偏差，仍需用独立时间样本校准。
+- \(\kappa\to1\) 时闭式本身有限，无需运行时解析分支。距离函数仍须先投影 FP16 舍入造成的 \(\lVert\mathbf v\rVert>w\)。
+- 当前六级传播常数为 \(0,0.09184833,0.12613998,0.13781854,0.14262104,0.14655028\)，是对平面测试域的递归重叠近似。固定权重下，Bures 二次型的公共因子 \(\operatorname{tr}(G\Sigma)\) 在归一化相关性中消去；实际信号拒绝会改变核重叠。独立探针冻结信号权重后标定该部分，独立 MC 重复采样另行验证完整自适应滤波的中心方差。常数的适用性依赖拒绝强度、采样模式和初始方差策略。

@@ -14,15 +14,17 @@
 //   historyEffectiveSamples = Kish effective temporal sample count N_eff
 //
 // Outputs are returned through the including domain adapter. standardDeviation
-// initially stores the Monte Carlo observation standard deviation matched to
-// the configured light-sample metric; A-Trous then propagates it once per pass.
-// For two independent observations, E[distance^2]/2 is
-// E[Y^2]-|E[Y u]|^2, available directly from the stored moments. The
-// short-history fallback linearly reconstructs the temporal fields E[Y u],
-// E[Y] and E[Y^2] in space, while Kish N_eff is reconstructed separately from
-// the same weights. N_eff only removes finite-sample bias; the result remains
-// the variance of one MC observation. The signal's upper metadata half stores
-// constructed radial virtual distance, not reflection hit distance.
+// stores the square root of the local Bures MC observation variance. The stored
+// E[Y^2] fixes radial noise exactly; the alpha=1 g^-3 joint closure supplies the
+// otherwise unidentified R^2-weighted angular moments. The resulting scalar is
+// matched to maxentLightSampleDistanceSq and remains finite at kappa=0 and 1.
+//
+// The short-history fallback first reconstructs the linear temporal fields
+// E[Y u], E[Y], and E[Y^2] in space and only then evaluates the closure. This
+// order includes between-pixel directional spread in the spatial variance.
+// Kish N_eff is reconstructed separately from the same weights and applies the
+// finite-sample correction. The signal's upper metadata half stores constructed
+// radial virtual distance, not reflection hit distance.
 
 struct DenoiserVarianceSource {
     vec4 maxEntY;
@@ -75,19 +77,43 @@ vec4 denoiserVarianceFiniteMean(vec4 meanState) {
     return any(isnan(meanState)) || any(isinf(meanState)) ? vec4(0.0) : meanState;
 }
 
-float denoiserVarianceBiasedMetricMoment(vec4 meanState, float rootMeanY2) {
+float denoiserVarianceBiasedBuresG3Moment(vec4 meanState, float rootMeanY2) {
     meanState = denoiserVarianceFiniteMean(meanState);
     rootMeanY2 = denoiserVarianceSanitizeNonnegative(rootMeanY2);
-    // The metric's directional and intensity terms cancel E[Y]^2 in pairwise
-    // expectation, leaving the biased central moment of Y u.
-    return statisticsBiasedCentralSecondMoment(rootMeanY2 * rootMeanY2, meanState.xyz);
+    float meanY = max(meanState.w, 0.0);
+    if (!(meanY > 0.0)) {
+        // A nonzero RMS with a zero FP16 mean is an under-resolved sparse
+        // event. Preserve uncertainty instead of turning it into zero noise.
+        return rootMeanY2 > 0.0
+            ? DENOISER_SPATIAL_FP16_MAX * DENOISER_SPATIAL_FP16_MAX
+            : 0.0;
+    }
+
+    rootMeanY2 = max(rootMeanY2, meanY);
+    float meanY2 = rootMeanY2 * rootMeanY2;
+    float kappaSquared = clamp(dot(meanState.xyz, meanState.xyz)
+        / (meanY * meanY), 0.0, 1.0);
+
+    // The R-weighted angular marginal is g^-3; its R^2-weighted moments use
+    // g^-4. Contracting their elementary first and second angular moments with
+    // the local Bures metric cancels the apparent 1/(1-kappa^2) singularity.
+    // This is the cancellation-free form of
+    // [2 E[Y^2](3-k^2)/(3+k^2)-E[Y]^2] / [4 E[Y]].
+    float radialVariance = (rootMeanY2 - meanY)
+        * (rootMeanY2 + meanY);
+    float angularScale = 3.0 * (1.0 - kappaSquared)
+        / (3.0 + kappaSquared);
+    return (radialVariance + angularScale * meanY2)
+        / (4.0 * meanY);
 }
 
 float denoiserMonteCarloVarianceFromTemporalMoments(vec4 meanState, float rootMeanY2, float historyEffectiveSamples) {
-    // N_eff only removes the finite weighted-sample bias. The returned quantity
-    // is the metric-matched variance of one Monte Carlo observation.
+    // This weighted-sample factor is exact for the central radial terms and is
+    // the finite-history correction used for the g^-3 plug-in angular closure.
+    // Consumers divide the returned per-observation variance by estimator
+    // N_eff exactly once.
     return statisticsObservationVarianceFromBiasedCentralMoment(
-        denoiserVarianceBiasedMetricMoment(meanState, rootMeanY2), historyEffectiveSamples);
+        denoiserVarianceBiasedBuresG3Moment(meanState, rootMeanY2), historyEffectiveSamples);
 }
 
 DenoiserVarianceSource denoiserVarianceSanitizeSource(DenoiserVarianceSource source) {

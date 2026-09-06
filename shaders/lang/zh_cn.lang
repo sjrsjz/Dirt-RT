@@ -152,8 +152,8 @@ option.RADIANCE_CACHE_RIS_GUIDING_KAPPA.comment = RIS 选中方向周围连续�
 # ===========================================================================
 # MaxEnt 共享时域响应
 # ===========================================================================
-option.MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE = 矩差响应尺度
-option.MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE.comment = 漫反射与镜面时域累积共用。它控制矩距离平方相对于两侧估计器总方差的缩放；数值越大，相同帧间差异产生的当前帧权重越高，历史拒绝越强。
+option.MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE = Bures 响应尺度
+option.MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE.comment = 漫反射与镜面时域累积共用。它控制 Bures 距离平方相对于两侧匹配估计器总方差的缩放；数值越大，相同帧间差异产生的当前帧权重越高，历史拒绝越强。
 
 # ===========================================================================
 # MaxEnt 漫反射时域
@@ -185,7 +185,7 @@ option.MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS.comment = 镜面时域足迹
 # MaxEnt 方差准备
 # ===========================================================================
 option.MAXENT_VARIANCE_KERNEL_SIGMA = 核 Sigma
-option.MAXENT_VARIANCE_KERNEL_SIGMA.comment = 漫反射与镜面共用的短历史 MaxEnt 方差池化高斯核宽度。提高可增强稳定性，但会降低边缘精度。
+option.MAXENT_VARIANCE_KERNEL_SIGMA.comment = 漫反射与镜面共用的短历史 Bures 方差池化高斯核宽度。实现先汇聚线性矩，再计算 g^-3 方差闭包。提高可增强稳定性，但会降低边缘精度。
 
 option.MAXENT_VARIANCE_SPATIAL_ONLY_SAMPLES = 强制空域有效帧数
 option.MAXENT_VARIANCE_SPATIAL_ONLY_SAMPLES.comment = 漫反射与镜面方差准备在达到该Kish有效帧数前使用空域重建时域矩所得的MC方差。
@@ -200,10 +200,10 @@ option.MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE = 平面距离容差
 option.MAXENT_SPATIAL_PLANE_DISTANCE_TOLERANCE.comment = MaxEnt 虚像拒绝、折射和路径引导空域测试共用的相对投影平面深度容差。数值越大，越允许跨平面滤波。
 
 option.MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY = 漫反射光场灵敏度
-option.MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY.comment = 按方差归一化的漫反射矩空间拒绝强度。提高会保留更多光场对比，降低则会进行更多平滑。
+option.MAXENT_SPATIAL_DIFFUSE_LIGHT_FIELD_SENSITIVITY.comment = 按方差归一化的漫反射 Bures 拒绝强度。提高会保留更多光场对比，降低则会进行更多平滑。
 
 option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY = 镜面光场灵敏度
-option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY.comment = 按方差归一化的镜面矩空间拒绝强度。提高会保留更多反射对比，降低则会进行更多平滑。
+option.MAXENT_SPATIAL_SPECULAR_LIGHT_FIELD_SENSITIVITY.comment = 按方差归一化的镜面 Bures 拒绝强度。提高会保留更多反射对比，降低则会进行更多平滑。
 
 # ===========================================================================
 # 泛光
