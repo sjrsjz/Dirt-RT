@@ -517,8 +517,14 @@ void main() {
     // ---------------------------------------------------------------------
     #elif DEBUG_VIEW == DEBUG_VIEW_PATH_GUIDE_FINAL_DIRECTION
     {
-        vec4 guideY;
-        if (!readPathGuide(xy, guideY)) {
+        uvec4 guideWords = readDiffuseDenoisedCurrentRaw(xy);
+        vec4 guideY = vec4(unpackHalf2x16(guideWords.x),
+            unpackHalf2x16(guideWords.y));
+        vec2 guideMetadata = unpackHalf2x16(guideWords.w);
+        bool guideValid = denoiserSigmaUsable(guideMetadata.x)
+            && guideMetadata.y <= -1.0 && guideY.w > 1e-8
+            && !any(isnan(guideY)) && !any(isinf(guideY));
+        if (!guideValid) {
             fragColor.xyz = vec3(0.0);
         } else {
             vec3 dir = guideY.xyz / max(length(guideY.xyz), 1e-6);

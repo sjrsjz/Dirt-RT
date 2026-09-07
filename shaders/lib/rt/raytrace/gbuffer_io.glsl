@@ -80,7 +80,7 @@ void writePrimarySurfaceGBuffer(uvec2 xy, FirstBounceData fb,
     writePrimaryMaterial(xy, surf.Cs, surf.Cd, surf.S);
 }
 
-void loadPrimarySurfaceGBuffer(uvec2 xy, vec3 ro,
+void loadPrimarySurfaceGBuffer(uvec2 xy, vec3 ro, vec3 primaryRay,
     out FirstBounceData fb, out material surf) {
     fb = initFirstBounceData(ro, vec3(0.0, 0.0, -1.0));
 
@@ -90,7 +90,10 @@ void loadPrimarySurfaceGBuffer(uvec2 xy, vec3 ro,
     fb.roughness = unpackHalf2x16(geometryWords.y).x;
     fb.pathRoughness = fb.roughness;
     fb.materialID = int(geometryWords.y >> 16u);
-    fb.rd_i = reconstructPrimaryRay(xy, uvec2(gl_LaunchSizeEXT.xy));
+    // Continuation passes run before ray4 publishes the current camera into
+    // FrameData. Reuse the exact current ray already constructed from cam;
+    // reconstructPrimaryRay() intentionally still sees the previous frame here.
+    fb.rd_i = primaryRay;
     vec3 positionRelative = fb.t >= 0.0
         ? fb.rd_i * fb.t : vec3(0.0);
     fb.p = ro + positionRelative;
@@ -113,7 +116,7 @@ void loadPrimarySurfaceGBuffer(uvec2 xy, vec3 ro,
     readPrimaryMaterial(xy, Cs, Cd, S);
     surf = newMaterial(Cs, Cd, S, vec4(fb.roughness, 0.0, 0.0, 0.0),
             vec3(0.0));
-    #if defined(FIRST_LOBE_DIFFUSE) || defined(FIRST_LOBE_REFLECTION)
+    #if defined(FIRST_LOBE_DIFFUSE)
     readSurfaceMotion(xy, fb.surfaceMotion, fb.motionValid);
     #endif
 }
@@ -196,7 +199,7 @@ void writeRefractionOutput(uvec2 xy, FirstBounceData fb, vec3 totalIllumination,
 }
 
 #if defined(FIRST_LOBE_REFRACTION)
-void TraceRefractionPSR(uvec2 xy, vec3 ro) {
+void TraceRefractionPSR(uvec2 xy, vec3 ro, vec3 primaryRay) {
     PSRResolveData outputData;
     outputData.endpointRelative = vec3(0.0);
     outputData.refractedDirection = vec3(0.0, 0.0, -1.0);
@@ -213,7 +216,7 @@ void TraceRefractionPSR(uvec2 xy, vec3 ro) {
 
     FirstBounceData fb;
     material surf;
-    loadPrimarySurfaceGBuffer(xy, ro, fb, surf);
+    loadPrimarySurfaceGBuffer(xy, ro, primaryRay, fb, surf);
     if (fb.t > -0.5 && surf.S.y > 1e-4) {
         bool wasInside = (cam.flags & 3u) != 0u;
         float surfaceIor = transportIorFromMaterial(surf);

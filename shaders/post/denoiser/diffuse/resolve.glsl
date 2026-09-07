@@ -3,7 +3,7 @@
 // Dispatch: 16x16.
 // Reads: colortex4 final A-Trous signal, colortex6 raw reprojection,
 //        shared independent-current scratch, Raw RT diffuse signal, filtered-history reprojection.
-// Writes: diffuse raw history, geometry history, filtered history, swap state, and path guide.
+// Writes: diffuse raw history, geometry history, filtered history, and swap state.
 // Persistent side effects: this is the only diffuse history commit point.
 // Invalid representation: invalid signal metadata clears every owned persistent record.
 layout(local_size_x = 16, local_size_y = 16) in;
@@ -20,17 +20,6 @@ layout(local_size_x = 16, local_size_y = 16) in;
 uniform usampler2D colortex4;
 uniform usampler2D colortex6;
 
-#if MAXENT_TEMPORAL_CONFIDENCE_CLAMP == 1
-#include "/lib/lighting/denoiser/temporal_confidence.glsl"
-void maxentConfidenceLoadRaw(ivec2 pixel, out vec4 moment, out vec2 chroma) {
-    MaxEntEncoding raw;
-    float rms;
-    readDiffuseLightRT(uvec2(pixel), raw, rms);
-    moment = raw.maxEntY;
-    chroma = raw.CoCg;
-}
-#endif
-
 void main() {
     uvec2 gid = gl_GlobalInvocationID.xy;
     if (any(greaterThanEqual(gid, uvec2(resolution_global)))) return;
@@ -46,7 +35,6 @@ void main() {
         // instead of decoding two light textures and previous histories.
         diffuseBuffer.data[addr(DIF_N_HIST, gxy)] = uvec4(0u);
         diffuseBuffer.data[addr(DIF_N_SWAP, gxy)] = uvec4(0u);
-        diffuseBuffer.data[addr(DIF_N_PATHGUIDE, gxy)] = uvec4(0u);
         writeDiffuseHistGeoInvalid(gxy);
         debugWriteDiffuseNoiseOnlyCurrentWeight(gxy, -1.0);
         return;
@@ -84,7 +72,6 @@ void main() {
         ? denoiserUnpackMaxEntSignal(independentCurrentWords) : denoiserEmptyMaxEntSignal();
     if (hasHistory) {
         currentAlpha = clamp(float(MAXENT_TEMPORAL_FIXED_ALPHA), 0.0, 1.0);
-#if MAXENT_TEMPORAL_CONFIDENCE_CLAMP == 0
         if (independentCurrentValid) {
             float reprojectionAlphaFloor = 1.0 - clamp(validWeight, 0.0, 1.0);
             currentAlpha = maxentTemporalResponseAlpha(reprojectionAlphaFloor, independentCurrent.maxEntY,
@@ -92,17 +79,8 @@ void main() {
                 historyDenoisedMonteCarloStandardDeviation,
                 historyEffectiveSamples, noiseOnlyCurrentWeight);
         }
-#endif
     }
     debugWriteDiffuseNoiseOnlyCurrentWeight(gxy, noiseOnlyCurrentWeight);
-
-#if MAXENT_TEMPORAL_CONFIDENCE_CLAMP == 1
-    // Raw population moments have a predictable gain. No confidence decision
-    // or raw-current brightness selects their temporal write weight.
-    hasHistory = hasHistory && denoiserSigmaKnown(historyDenoisedMonteCarloStandardDeviation);
-    currentAlpha = hasHistory ? max(float(MAXENT_TEMPORAL_FIXED_ALPHA),
-        1.0 - clamp(validWeight, 0.0, 1.0)) : 1.0;
-#endif
 
     MaxEntEncoding committedRaw;
     float committedRootMeanY2;
@@ -122,7 +100,6 @@ void main() {
     DenoiserMaxEntSignal resolvedSignal = filteredSignal;
     MaxEntEncoding filteredEncoding;
     float resolvedDenoisedEffectiveSamples = 1.0; // Reserved history ABI; sigma is estimator uncertainty.
-#if MAXENT_TEMPORAL_CONFIDENCE_CLAMP == 0
     if (independentCurrentValid) {
         // Temporal response and filtered history consume the exact same final A-Trous center estimator.
         if (hasHistory) {
@@ -137,30 +114,6 @@ void main() {
     } else {
         filteredEncoding.CoCg = filteredSignal.CoCg;
     }
-#endif
-#if MAXENT_TEMPORAL_CONFIDENCE_CLAMP == 1
-    MaxentConfidenceGroup pilot, checkA, checkB, splitCurrent;
-    maxentConfidenceGather(pix, pilot, checkA, checkB, splitCurrent);
-    if (splitCurrent.valid) {
-        float priorVariance = hasHistory ? maxentConfidencePriorObservationVariance(
-            reprojectedRaw.maxEntY, historyRootMeanY2, historyEffectiveSamples) : 0.0;
-        float estimatorVariance, confidenceGain;
-        maxentConfidenceResolve(pilot, checkA, checkB, splitCurrent, historyDenoisedMoment,
-            historyDenoisedCoCg, historyDenoisedMonteCarloStandardDeviation
-                * historyDenoisedMonteCarloStandardDeviation, hasHistory, priorVariance, historyEffectiveSamples,
-            hasHistory ? 1.0 - clamp(validWeight, 0.0, 1.0) : 1.0,
-            resolvedSignal.maxEntY, filteredEncoding.CoCg, estimatorVariance, confidenceGain);
-        resolvedSignal.standardDeviation = sqrt(estimatorVariance);
-        debugWriteDiffuseNoiseOnlyCurrentWeight(gxy, confidenceGain);
-    } else {
-        // Valid center normally guarantees splitCurrent. Invalid raw packets
-        // fail closed and carry deliberately broad linear-moment uncertainty.
-        resolvedSignal.maxEntY = currentRaw.maxEntY;
-        filteredEncoding.CoCg = currentRaw.CoCg;
-        resolvedSignal.standardDeviation = DENOISER_UNKNOWN_UNCERTAINTY;
-    }
-    resolvedDenoisedEffectiveSamples = 1.0;
-#endif
     filteredEncoding.maxEntY = resolvedSignal.maxEntY;
     // The ping-ponged denoised history must contain the exact same resolved
     // six-component estimator as DIF_N_SWAP.
@@ -178,11 +131,4 @@ void main() {
     writeDiffuseSwap(gxy, filteredEncoding, committedEffectiveSamples,
         committedRootMeanY2);
 
-    // Publish the exact packed final denoised moments for next-frame guiding.
-    // The two fixed validity tags preserve the direct-guide cache layout.
-    // The next frame's sampler and NEE both read this same guide cache.
-    bool guideValid = unpackHalf2x16(packedLight.y).y > 1e-8;
-    diffuseBuffer.data[addr(DIF_N_PATHGUIDE, gxy)] = guideValid
-        ? uvec4(packedLight.xy, floatBitsToUint(1.0), floatBitsToUint(1.0))
-        : uvec4(0u);
 }

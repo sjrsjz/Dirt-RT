@@ -14,15 +14,9 @@ remains active. Temporal response falls back to the ordinary history update.
 Prepared/Filtered debug views show unknown uncertainty in neutral gray.
 See [ingress guard and validation](../../../doc/uncertainty_ingress_guard.md).
 
-The experiment is disabled by default after an in-game noise regression.
-`MAXENT_TEMPORAL_CONFIDENCE_CLAMP=0` now uses direct Bures estimator-variance propagation.
-See [the current trial and validation](../../../doc/estimator_variance_trial.md).
-Experimental mode `MAXENT_TEMPORAL_CONFIDENCE_CLAMP=1` uses disjoint raw
-5x5 groups and a corroborated confidence resolve. Raw history uses predictable
-EMA weights; filtered history stores linear-moment estimator uncertainty with
-N=1. The spatial Bures stages below remain scheduled, but their final current
-estimate is replaced in resolve. Mode 0 uses the estimator-variance pipeline below.
-See [design, limitations and audit results](../../../doc/temporal_confidence_resolve.md).
+Temporal resolve uses direct Bures estimator-variance propagation over the
+final A-Trous current estimate and reprojected denoised history. See
+[the current trial and validation](../../../doc/estimator_variance_trial.md).
 
 The encoder stores linear moment state `(E[R u], E[R], sqrt(E[R²]), N_eff)`. The filtered mean remains linear. Light differences use the Bures--Wasserstein geometry of its `2x2` PSD embedding, and MC variance uses the alpha=1 `g^-3` family only to close the missing `R²`-weighted angular moments. Lighting decoding remains a separate operation.
 
@@ -71,7 +65,7 @@ require recalibration for the new adaptive weights.
 - The tuned temporal response in `temporal_response.glsl` is part of the current behavior and must not be silently changed.
 - Fixed estimator and provisional-pipeline constants live in `internal_constants.glsl`; they are code invariants, not shader-pack options.
 
-The estimator-variance trial preserves workgroup sizes, signal formats and A-Trous pass count. The subsequent PG removal compacts diffuse storage to eleven RGBA32UI planes (176 bytes per allocated pixel), releasing the three PG scratch planes and the unused Neff metadata plane.
+The estimator-variance trial preserves workgroup sizes, signal formats and A-Trous pass count. The subsequent PG removal and shared diffuse-history reprojection compact diffuse storage to ten RGBA32UI planes (160 bytes per allocated pixel), releasing the obsolete guiding plane, three PG scratch planes, and the unused Neff metadata plane.
 
 ## Numerical audit
 

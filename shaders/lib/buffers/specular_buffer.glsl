@@ -8,13 +8,15 @@
 #include "/lib/common/oct_encode.glsl"
 
 // Reflection has no current-frame position plane. Primary position is
-// reconstructed from the compact G-buffer. N4 is transient reprojected
-// denoised chroma paired with the N0 reprojected denoised moments.
+// reconstructed from the compact G-buffer. Before continuation tracing, ray0
+// uses N4 for the shared surface-reprojected denoised history. Reflection
+// temporal consumes it, then repurposes N4 for chroma paired with N0.
 #define SPEC_N_LIGHT     0u
 #define SPEC_N_HISTGEO   1u
 #define SPEC_N_HISTLIGHT 2u
 #define SPEC_N_HISTMETA  3u
 #define SPEC_N_DENOISED_REPROJECTED_CHROMA 4u
+#define SPEC_N_PREPARED_SURFACE_DENOISED 4u
 
 // Refraction owns four PSR planes with unrelated semantics.
 #define REFR_N_ENDPOINT  0u
@@ -44,11 +46,7 @@ struct MaxEntSpecularHistory {
 // temporal estimator changes. Ray tracing uses the same signature to reject
 // stale guide taps before sampling them.
 uint specularHistoryMaterialSignature(uint materialID) {
-#if MAXENT_TEMPORAL_CONFIDENCE_CLAMP == 1
-    return materialID ^ 0x7800u;
-#else
     return materialID ^ 0x4800u;
-#endif
 }
 
 // ray3 publishes only PSR resolve metadata. The old refraction history planes
@@ -382,7 +380,46 @@ bool readMaxEntSpecularDenoisedHistory(uvec2 xy,
     signal = valid ? unpackSpecularMaxEnt(words.xyz)
         : emptySpecularMaxEnt();
     valid = valid && !any(isnan(signal.maxEntY))
-        && !any(isinf(signal.maxEntY)) && signal.maxEntY.w > 0.0;
+        && !any(isinf(signal.maxEntY)) && signal.maxEntY.w >= 0.0;
+    if (!valid) signal = emptySpecularMaxEnt();
+    return valid;
+}
+
+// ray0 output consumed by both primary reflection guiding and the surface
+// branch of reflection temporal accumulation. Packing all six MaxEnt values
+// plus estimator sigma and valid bilinear coverage fits the existing N4
+// scratch plane exactly.
+void writeMaxEntSpecularPreparedSurfaceDenoised(uvec2 xy,
+        SpecularMaxEnt signal, float monteCarloStandardDeviation,
+        float validCoverage) {
+    uvec3 packedSignalWords = packSpecularMaxEnt(signal);
+    reflectBuffer.data[addr(SPEC_N_PREPARED_SURFACE_DENOISED, xy)] =
+        uvec4(packedSignalWords, packHalf2x16(vec2(
+            denoiserSigmaOrUnknown(monteCarloStandardDeviation),
+            clamp(validCoverage, 0.0, 1.0))));
+}
+
+void writeMaxEntSpecularPreparedSurfaceDenoisedInvalid(uvec2 xy) {
+    reflectBuffer.data[addr(SPEC_N_PREPARED_SURFACE_DENOISED, xy)] =
+        uvec4(0u, 0u, 0u, packHalf2x16(vec2(-1.0, 0.0)));
+}
+
+bool readMaxEntSpecularPreparedSurfaceDenoised(uvec2 xy,
+        out SpecularMaxEnt signal, out float monteCarloStandardDeviation,
+        out float validCoverage) {
+    uvec4 words = reflectBuffer.data[
+        addr(SPEC_N_PREPARED_SURFACE_DENOISED, xy)];
+    vec2 metadata = unpackHalf2x16(words.w);
+    monteCarloStandardDeviation = metadata.x;
+    validCoverage = metadata.y;
+    bool valid = denoiserSigmaUsable(monteCarloStandardDeviation)
+        && validCoverage > 0.0 && validCoverage <= 1.0
+        && !any(isnan(metadata)) && !any(isinf(metadata));
+    signal = valid ? unpackSpecularMaxEnt(words.xyz)
+        : emptySpecularMaxEnt();
+    valid = valid && signal.maxEntY.w >= 0.0
+        && !any(isnan(signal.maxEntY)) && !any(isinf(signal.maxEntY))
+        && !any(isnan(signal.CoCg)) && !any(isinf(signal.CoCg));
     if (!valid) signal = emptySpecularMaxEnt();
     return valid;
 }

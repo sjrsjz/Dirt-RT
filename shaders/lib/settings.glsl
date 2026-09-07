@@ -54,8 +54,6 @@
 #define RADIANCE_CACHE_RIS_GUIDING_KAPPA 0.75 // Concentration of the finite-width RIS proposal lobe. Higher values focus more tightly around the selected direction. [0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.75 0.8 0.85 0.9 0.95]
 
 // -- Shared MaxEnt temporal response (diffuse + specular) --
-#define MAXENT_TEMPORAL_CONFIDENCE_CLAMP 0 // Disabled after in-game spatial-denoising regression; 0 uses the original A-Trous resolve. [0 1]
-#define MAXENT_TEMPORAL_CONFIDENCE_FAILURE_PROBABILITY 0.01 // Nominal moment-bound threshold with known variance; runtime uses estimated variance. 0 disables projection. [0.0 0.001 0.005 0.01 0.025 0.05 0.1]
 #define MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE 0.005 // Legacy Bures response strength; 0 disables light-change response. Higher values reject history more aggressively. [0.0 0.00001 0.000025 0.00005 0.0001 0.00025 0.0005 0.001 0.0025 0.005 0.01 0.025 0.05 0.1]
 
 // -- MaxEnt diffuse temporal accumulation --

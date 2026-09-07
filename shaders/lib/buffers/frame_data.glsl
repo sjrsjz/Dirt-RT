@@ -6,8 +6,8 @@ layout(std430, set = 3, binding = 1) buffer FrameData {
     // 光线追踪推导矩阵 (单源, 无 Iris 混合, 供重投影)
     mat4 rtModelView;                       // 当前帧世界→视图旋转
 
-    // Precomposed once by the primary-visibility ray pass. Reprojection
-    // shaders must not rebuild P * MV independently for every pixel.
+    // Published once by ray4 after all full-screen path passes. Before that
+    // point these fields remain the stable previous-frame camera state.
     mat4 rtViewProjection, rtPrevViewProjection;
     mat4 rtInverseViewProjection;
 

@@ -419,15 +419,15 @@ MediumResult evalMedium(float t, vec3 rd_i, float ro_i_y, bool inside,
 // MaxEnt Path Guiding
 // ===========================================================================
 
-GuideInfo computeMaxEntGuide(vec3 ro_o, float strengthMultiplier) {
+GuideInfo computeMaxEntGuide(uvec2 pixel, uint currentFrameId,
+        float strengthMultiplier) {
     GuideInfo g = emptyGuideInfo();
 
-    vec2 prev_coord = reproject(ro_o).xy;
-    bool validPrev = all(greaterThanEqual(prev_coord, vec2(0.0)))
-            && all(lessThanEqual(prev_coord, vec2(1.0)));
-    if (!validPrev) return g;
-
-    vec4 guideY = samplePathGuide(prev_coord * vec2(resolution_global));
+    vec4 guideY;
+    vec2 guideChroma;
+    float guideSigma, validCoverage;
+    if (!readDiffuseDenoisedReprojectionForFrame(pixel, currentFrameId,
+            guideY, guideChroma, guideSigma, validCoverage)) return g;
     vec3 x = guideY.xyz;
     float omega = guideY.w;
     float length_x = max(length(x), 1e-20);
@@ -436,27 +436,37 @@ GuideInfo computeMaxEntGuide(vec3 ro_o, float strengthMultiplier) {
     float rho = clamp(length_x / omega, 0.0, 1.0);
     g.kappa = maxent_kappa(length_x, omega);
     g.valid = length_x > 1e-8;
-    g.prob = float(g.valid) * strengthMultiplier * rho;
+    g.prob = float(g.valid) * strengthMultiplier * rho
+        * validCoverage;
     return g;
 }
 
-// Reproject and bilinearly gather the previous final denoised q*Li state.
-// Every tap is checked against the same surface/material contract as temporal
-// accumulation, so history from another reflector cannot steer this path.
-GuideInfo computeSpecularMaxEntGuide(vec3 previousSurfaceWorld,
-        vec3 currentGeometryNormal, float currentPerceptualRoughness,
-        uint currentMaterialID, float currentSurfaceDistance,
-        float motionValid, float strengthMultiplier) {
-    GuideInfo g = emptyGuideInfo();
-    if (motionValid < 0.5 || strengthMultiplier <= 0.0)
-        return g;
+// ray0 owns the current primary surface, the Vulkanite camera, and a barrier
+// before continuation tracing. It therefore performs the surface-history
+// reprojection once and publishes the result in the existing N4 scratch.
+void prepareSpecularDenoisedSurfaceReprojection(uvec2 currentPixel,
+        vec3 currentSurfacePosition, vec3 currentGeometryNormal,
+        uint currentMaterialID, vec3 cameraDelta, float motionValid,
+        mat4 historyViewProjection, mat4 currentViewProjection) {
+    if (motionValid < 0.5) {
+        writeMaxEntSpecularPreparedSurfaceDenoisedInvalid(currentPixel);
+        return;
+    }
 
-    vec3 projected = reproject(previousSurfaceWorld);
-    if (any(isnan(projected)) || any(isinf(projected))
-            || projected.z < 0.0 || projected.z > 1.0
+    vec4 previousClip = historyViewProjection
+        * vec4(currentSurfacePosition + cameraDelta, 1.0);
+    if (previousClip.w <= 1e-8 || any(isnan(previousClip))
+            || any(isinf(previousClip))) {
+        writeMaxEntSpecularPreparedSurfaceDenoisedInvalid(currentPixel);
+        return;
+    }
+    vec3 projected = previousClip.xyz / previousClip.w * 0.5 + 0.5;
+    if (projected.z < 0.0 || projected.z > 1.0
             || any(lessThan(projected.xy, vec2(0.0)))
-            || any(greaterThan(projected.xy, vec2(1.0))))
-        return g;
+            || any(greaterThan(projected.xy, vec2(1.0)))) {
+        writeMaxEntSpecularPreparedSurfaceDenoisedInvalid(currentPixel);
+        return;
+    }
 
     ivec2 size = ivec2(resolution_global);
     vec2 pixelPosition = projected.xy * vec2(size);
@@ -464,10 +474,12 @@ GuideInfo computeSpecularMaxEntGuide(vec3 previousSurfaceWorld,
     vec2 f = fract(pixelPosition);
     vec4 bilinear = vec4((1.0 - f.x) * (1.0 - f.y),
         f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
-    vec4 momentSum = vec4(0.0);
+    SpecularMaxEnt signalSum = emptySpecularMaxEnt();
+    DenoiserEstimatorVarianceAccumulator uncertainty =
+        denoiserBeginEstimatorVariance();
     float sumWeight = 0.0;
     float depthThreshold = MAXENT_SPECULAR_TEMPORAL_DISOCCLUSION_THRESHOLD
-        * max(currentSurfaceDistance, 1.0);
+        * max(length(currentSurfacePosition), 1.0);
     uint expectedMaterial = specularHistoryMaterialSignature(
         currentMaterialID);
 
@@ -479,9 +491,20 @@ GuideInfo computeSpecularMaxEntGuide(vec3 previousSurfaceWorld,
         uvec2 historyPixel = uvec2(p);
         uvec4 geometryWords = reflectBuffer.data[
             addr(SPEC_N_HISTGEO, historyPixel)];
+        uvec4 rawWords = reflectBuffer.data[
+            addr(SPEC_N_HISTLIGHT, historyPixel)];
         float historyDistance = uintBitsToFloat(geometryWords.x);
+        vec2 rawMetadata = unpackHalf2x16(rawWords.w);
         if (!(historyDistance >= 0.0) || isnan(historyDistance)
-                || isinf(historyDistance))
+                || isinf(historyDistance) || !(rawMetadata.x >= 0.0)
+                || !(rawMetadata.y >= 1.0) || any(isnan(rawMetadata))
+                || any(isinf(rawMetadata)))
+            continue;
+        vec4 rawMoment = vec4(unpackHalf2x16(rawWords.x),
+            unpackHalf2x16(rawWords.y));
+        vec2 rawChroma = unpackHalf2x16(rawWords.z);
+        if (!denoiserTemporalMomentsFinite(
+                rawMoment, rawChroma, rawMetadata.x))
             continue;
 
         vec3 historyNormal;
@@ -494,27 +517,58 @@ GuideInfo computeSpecularMaxEntGuide(vec3 previousSurfaceWorld,
 
         vec3 historyWorld = prevRaytracingCamPos
             + decodeNormalU(geometryWords.y) * historyDistance;
-        if (abs(dot(historyWorld - previousSurfaceWorld,
+        vec3 historyPosition = historyWorld - prevRaytracingCamPos;
+        vec3 historyPositionCurrent = historyPosition - cameraDelta;
+        if (abs(dot(historyPositionCurrent - currentSurfacePosition,
                 currentGeometryNormal)) > depthThreshold)
             continue;
 
-        vec2 hitRoughness = unpackHalf2x16(geometryWords.w);
-        float roughnessCompatibility = exp(-8.0 * abs(
-            hitRoughness.y - currentPerceptualRoughness));
+        vec4 currentClip = currentViewProjection
+            * vec4(historyPositionCurrent, 1.0);
+        if (currentClip.w <= 1e-8 || any(isnan(currentClip))
+                || any(isinf(currentClip)))
+            continue;
+        vec2 currentHistoryPixel = (currentClip.xy / currentClip.w
+            * 0.5 + 0.5) * vec2(size);
+        if (any(greaterThan(abs(currentHistoryPixel - vec2(currentPixel)),
+                vec2(MAXENT_SPECULAR_TEMPORAL_REPROJECTION_RADIUS + 1e-5))))
+            continue;
+
         SpecularMaxEnt tap;
         float tapSigma, tapEffectiveSamples;
         if (!readMaxEntSpecularDenoisedHistory(historyPixel, tap,
                 tapSigma, tapEffectiveSamples))
             continue;
 
-        float w = bilinear[i] * roughnessCompatibility;
-        momentSum += tap.maxEntY * w;
+        float w = bilinear[i];
+        signalSum.maxEntY += tap.maxEntY * w;
+        signalSum.CoCg += tap.CoCg * w;
+        denoiserAccumulateEstimatorVariance(uncertainty, tapSigma, w);
         sumWeight += w;
     }
 
-    if (sumWeight <= 1e-6)
+    if (sumWeight <= 1e-6) {
+        writeMaxEntSpecularPreparedSurfaceDenoisedInvalid(currentPixel);
+        return;
+    }
+    float inverseWeight = 1.0 / sumWeight;
+    signalSum.maxEntY *= inverseWeight;
+    signalSum.CoCg *= inverseWeight;
+    float sigma = denoiserResolveEstimatorSigma(uncertainty, 1.0);
+    writeMaxEntSpecularPreparedSurfaceDenoised(currentPixel,
+        signalSum, sigma, clamp(sumWeight, 0.0, 1.0));
+}
+
+GuideInfo computeSpecularMaxEntGuide(uvec2 pixel,
+        float strengthMultiplier) {
+    GuideInfo g = emptyGuideInfo();
+    SpecularMaxEnt signal;
+    float sigma, validCoverage;
+    if (strengthMultiplier <= 0.0
+            || !readMaxEntSpecularPreparedSurfaceDenoised(
+                pixel, signal, sigma, validCoverage))
         return g;
-    vec4 moment = momentSum / sumWeight;
+    vec4 moment = signal.maxEntY;
     float directionalLength = length(moment.xyz);
     float totalEnergy = max(moment.w, directionalLength);
     if (!(totalEnergy > 1e-8) || !(directionalLength > 1e-8)
@@ -526,7 +580,7 @@ GuideInfo computeSpecularMaxEntGuide(vec3 previousSurfaceWorld,
     g.kappa = min(maxent_kappa(directionalLength, totalEnergy),
         1.0 - 1e-6);
     g.prob = min(0.75, strengthMultiplier * rho
-        * clamp(sumWeight, 0.0, 1.0));
+        * validCoverage);
     g.valid = g.prob > 0.0;
     return g;
 }

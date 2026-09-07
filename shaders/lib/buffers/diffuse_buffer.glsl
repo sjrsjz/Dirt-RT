@@ -14,12 +14,12 @@
 // N=0: Current Light  — MaxEnt6 + current second moment.
 // N=1: History Light  — MaxEnt6 + Kish N_eff/rootMeanY2.
 // N=2: History Geo A  — F32 distance + oct ray + oct normal + N_eff/frame stamp.
-// N=3: Swap Light     — MaxEnt6 + Kish N_eff/rootMeanY2.
-// N=4: Denoised Path Guide -- packed directional/energy moments + validity tags.
-// N=5: Oct8 macro/geometry normals, diffuse material, motion, F32 distance.
-// N=6: Alternate history geometry for race-free frame ping-pong.
-// N=7..8: Exact previous/current denoiser output ping-pong.
-// N=9..10: Shared independent-current ping-pong, reused serially by domains.
+// N=3: Prepared Raw / Swap Light — MaxEnt6 + Kish N_eff/rootMeanY2.
+// N=4: Oct8 macro/geometry normals, diffuse material, motion, F32 distance.
+// N=5: Alternate history geometry for race-free frame ping-pong.
+// N=6..7: Exact previous/current denoiser output ping-pong. Before temporal,
+//         current parity holds ray1's shared filtered-history reprojection.
+// N=8..9: Shared independent-current ping-pong, reused serially by domains.
 //
 // .w lane uses packHalf2x16: Kish N_eff:f16 + rootMeanY2:f16.
 // Storage APIs accept sqrt(E[Y²]) directly. Arithmetic code squares it only
@@ -38,54 +38,75 @@ MaxEntEncoding sanitizeDiffuseMaxEntEncoding(MaxEntEncoding maxent) {
     return maxent;
 }
 
-// Active eleven-plane layout. Primary geometry remains in geomBuffer;
+// Active ten-plane layout. Primary geometry remains in geomBuffer;
 // diffuse geometry uses the same camera ray and its own F32 hit distance.
 // DIF_N_HISTGEO/ALT = F32 distance + oct ray + oct normal + N_eff/frame stamp.
 #define DIF_N_LIGHT    0u
 #define DIF_N_HIST     1u
 #define DIF_N_HISTGEO  2u
 #define DIF_N_SWAP     3u
-#define DIF_N_PATHGUIDE 4u
-#define DIF_N_SURFACE          5u
-#define DIF_N_HISTGEO_ALT      6u
-#define DIF_N_DENOISED_A      7u
-#define DIF_N_DENOISED_B      8u
-#define DIF_N_CURRENT_A       9u
-#define DIF_N_CURRENT_B       10u
+#define DIF_N_SURFACE          4u
+#define DIF_N_HISTGEO_ALT      5u
+#define DIF_N_DENOISED_A       6u
+#define DIF_N_DENOISED_B       7u
+#define DIF_N_CURRENT_A        8u
+#define DIF_N_CURRENT_B        9u
+
+uint diffuseHistoryGeometryWritePlaneForFrame(uint currentFrameId) {
+    return (currentFrameId & 1u) == 0u
+        ? DIF_N_HISTGEO : DIF_N_HISTGEO_ALT;
+}
+
+uint diffuseHistoryGeometryReadPlaneForFrame(uint currentFrameId) {
+    return (currentFrameId & 1u) == 0u
+        ? DIF_N_HISTGEO_ALT : DIF_N_HISTGEO;
+}
+
+uint diffuseDenoisedWritePlaneForFrame(uint currentFrameId) {
+    return (currentFrameId & 1u) == 0u
+        ? DIF_N_DENOISED_A : DIF_N_DENOISED_B;
+}
+
+uint diffuseDenoisedReadPlaneForFrame(uint currentFrameId) {
+    return (currentFrameId & 1u) == 0u
+        ? DIF_N_DENOISED_B : DIF_N_DENOISED_A;
+}
 
 uint diffuseHistoryGeometryWritePlane() {
-    return (uint(frame_id) & 1u) == 0u ? DIF_N_HISTGEO : DIF_N_HISTGEO_ALT;
+    return diffuseHistoryGeometryWritePlaneForFrame(uint(frame_id));
 }
 
 uint diffuseHistoryGeometryReadPlane() {
-    return (uint(frame_id) & 1u) == 0u ? DIF_N_HISTGEO_ALT : DIF_N_HISTGEO;
+    return diffuseHistoryGeometryReadPlaneForFrame(uint(frame_id));
 }
 
 uint diffuseDenoisedWritePlane() {
-    return (uint(frame_id) & 1u) == 0u ? DIF_N_DENOISED_A : DIF_N_DENOISED_B;
+    return diffuseDenoisedWritePlaneForFrame(uint(frame_id));
 }
 
 uint diffuseDenoisedReadPlane() {
-    return (uint(frame_id) & 1u) == 0u ? DIF_N_DENOISED_B : DIF_N_DENOISED_A;
+    return diffuseDenoisedReadPlaneForFrame(uint(frame_id));
 }
 
 uint packDiffuseHistoryWeightStamp(float historyWeight) {
     if (!(historyWeight >= 0.0) || isinf(historyWeight)) historyWeight = 0.0;
     uint packedWeight = packHalf2x16(vec2(historyWeight, 0.0)) & 0xffffu;
     uint stamp = (uint(frame_id) & 0xffffu) ^ 0x2600u;
-#if MAXENT_TEMPORAL_CONFIDENCE_CLAMP == 1
-    stamp ^= 0x5a00u;
-#endif
     return packedWeight | (stamp << 16u);
 }
 
 bool unpackDiffusePreviousHistoryWeight(uint packed_, out float historyWeight) {
     historyWeight = unpackHalf2x16(packed_).x;
     uint expectedStamp = ((uint(frame_id) - 1u) & 0xffffu) ^ 0x2600u;
-#if MAXENT_TEMPORAL_CONFIDENCE_CLAMP == 1
-    expectedStamp ^= 0x5a00u;
-#endif
     return (packed_ >> 16u) == expectedStamp && historyWeight > 0.0 && !isnan(historyWeight) && !isinf(historyWeight);
+}
+
+bool unpackDiffusePreviousHistoryWeightForFrame(uint packed_,
+        uint currentFrameId, out float historyWeight) {
+    historyWeight = unpackHalf2x16(packed_).x;
+    uint expectedStamp = ((currentFrameId - 1u) & 0xffffu) ^ 0x2600u;
+    return (packed_ >> 16u) == expectedStamp && historyWeight > 0.0
+        && !isnan(historyWeight) && !isinf(historyWeight);
 }
 
 void writeDiffuseDenoisedCurrentRaw(uvec2 xy, uvec4 words) {
@@ -107,6 +128,12 @@ uvec4 readDiffuseDenoisedCurrentRaw(uvec2 xy) {
 
 uvec4 readDiffuseDenoisedPreviousRaw(uvec2 xy) {
     return diffuseBuffer.data[addr(diffuseDenoisedReadPlane(), xy)];
+}
+
+uvec4 readDiffuseDenoisedPreviousRawForFrame(uvec2 xy,
+        uint currentFrameId) {
+    return diffuseBuffer.data[addr(
+        diffuseDenoisedReadPlaneForFrame(currentFrameId), xy)];
 }
 
 void writeDiffuseIndependentCurrentA(uvec2 xy, uvec4 words) {
@@ -146,6 +173,26 @@ void writeDiffuseDenoisedReprojectionInvalid(uvec2 xy) {
         0u, 0u, 0u, packHalf2x16(vec2(-1.0, 0.0)));
 }
 
+void writeDiffuseDenoisedReprojectionForFrame(uvec2 xy,
+        uint currentFrameId, vec4 maxEntY, vec2 CoCg,
+        float monteCarloStandardDeviation, float validWeight) {
+    diffuseBuffer.data[addr(
+        diffuseDenoisedWritePlaneForFrame(currentFrameId), xy)] = uvec4(
+        packHalf2x16(clamp(maxEntY.xy, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(maxEntY.zw, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(clamp(CoCg, vec2(-65504.0), vec2(65504.0))),
+        packHalf2x16(vec2(
+            denoiserSigmaOrUnknown(monteCarloStandardDeviation),
+            clamp(validWeight, 0.0, 1.0))));
+}
+
+void writeDiffuseDenoisedReprojectionInvalidForFrame(uvec2 xy,
+        uint currentFrameId) {
+    diffuseBuffer.data[addr(
+        diffuseDenoisedWritePlaneForFrame(currentFrameId), xy)] = uvec4(
+        0u, 0u, 0u, packHalf2x16(vec2(-1.0, 0.0)));
+}
+
 bool readDiffuseDenoisedReprojection(uvec2 xy, out vec4 maxEntY,
         out vec2 CoCg, out float monteCarloStandardDeviation, out float validWeight) {
     uvec4 words = readDiffuseDenoisedCurrentRaw(xy);
@@ -155,6 +202,26 @@ bool readDiffuseDenoisedReprojection(uvec2 xy, out vec4 maxEntY,
     validWeight = deviationWeight.y;
     bool valid = denoiserSigmaUsable(monteCarloStandardDeviation) && validWeight > 0.0
         && !any(isnan(CoCg)) && !any(isinf(CoCg))
+        && !any(isnan(deviationWeight)) && !any(isinf(deviationWeight));
+    maxEntY = valid
+        ? vec4(unpackHalf2x16(words.x), unpackHalf2x16(words.y))
+        : vec4(0.0);
+    valid = valid && !any(isnan(maxEntY)) && !any(isinf(maxEntY));
+    if (!valid) CoCg = vec2(0.0);
+    return valid;
+}
+
+bool readDiffuseDenoisedReprojectionForFrame(uvec2 xy,
+        uint currentFrameId, out vec4 maxEntY, out vec2 CoCg,
+        out float monteCarloStandardDeviation, out float validWeight) {
+    uvec4 words = diffuseBuffer.data[addr(
+        diffuseDenoisedWritePlaneForFrame(currentFrameId), xy)];
+    CoCg = unpackHalf2x16(words.z);
+    vec2 deviationWeight = unpackHalf2x16(words.w);
+    monteCarloStandardDeviation = deviationWeight.x;
+    validWeight = deviationWeight.y;
+    bool valid = denoiserSigmaUsable(monteCarloStandardDeviation)
+        && validWeight > 0.0 && !any(isnan(CoCg)) && !any(isinf(CoCg))
         && !any(isnan(deviationWeight)) && !any(isinf(deviationWeight));
     maxEntY = valid
         ? vec4(unpackHalf2x16(words.x), unpackHalf2x16(words.y))
@@ -392,6 +459,11 @@ uvec4 readDiffuseHistGeoRaw(uvec2 xy) {
     return diffuseBuffer.data[addr(diffuseHistoryGeometryReadPlane(), xy)];
 }
 
+uvec4 readDiffuseHistGeoRawForFrame(uvec2 xy, uint currentFrameId) {
+    return diffuseBuffer.data[addr(
+        diffuseHistoryGeometryReadPlaneForFrame(currentFrameId), xy)];
+}
+
 void readDiffuseHistGeo(uvec2 xy, out vec3 pos, out vec3 geometryNormal) {
     uvec4 v = readDiffuseHistGeoRaw(xy);
     float historyWeight;
@@ -406,7 +478,7 @@ void readDiffuseHistGeo(uvec2 xy, out vec3 pos, out vec3 geometryNormal) {
 }
 
 // ===========================================================================
-// N=3 — Swap Light
+// N=3 — Prepared raw history before temporal, then swap proposal
 // ===========================================================================
 // .w = packHalf2x16(N_eff, rootMeanY2)
 
@@ -430,48 +502,6 @@ void readDiffuseSwap(uvec2 xy, out MaxEntEncoding maxent, out float weight,
     vec2 wm = unpackHalf2x16(v.w);
     weight = wm.x;
     rootMeanY2 = sanitizeRootMeanSquareFP16(wm.y);
-}
-
-// ===========================================================================
-// N=4 -- Final denoised path-guide moments
-// ===========================================================================
-// Layout: uvec4(
-//   packHalf2x16(maxEntY.xy),   // sample direction × luminance
-//   packHalf2x16(maxEntY.zw),   // total energy
-//   floatBitsToUint(1.0),      // valid-state tag
-//   floatBitsToUint(1.0))      // valid-state tag
-
-bool readPathGuide(uvec2 xy, out vec4 maxEntY) {
-    uvec4 v = diffuseBuffer.data[addr(DIF_N_PATHGUIDE, xy)];
-    maxEntY = vec4(unpackHalf2x16(v.x), unpackHalf2x16(v.y));
-    // Fixed tags preserve the tested direct-guide layout; no W/M state.
-    bool valid = v.z == floatBitsToUint(1.0) && v.w == floatBitsToUint(1.0)
-        && maxEntY.w > 1e-8 && !any(isnan(maxEntY)) && !any(isinf(maxEntY));
-    if (!valid) maxEntY = vec4(0.0);
-    return valid;
-}
-
-// 2×2 bilinear path guide sampling with validity mask
-vec4 samplePathGuide(vec2 prevCoord) {
-    ivec2 p0 = ivec2(floor(prevCoord));
-    vec2  pf = prevCoord - vec2(p0);
-
-    vec4 y00, y10, y01, y11;
-    bool v00 = readPathGuide(uvec2(clamp(p0 + ivec2(0, 0), ivec2(0), ivec2(resolution_global) - 1)), y00);
-    bool v10 = readPathGuide(uvec2(clamp(p0 + ivec2(1, 0), ivec2(0), ivec2(resolution_global) - 1)), y10);
-    bool v01 = readPathGuide(uvec2(clamp(p0 + ivec2(0, 1), ivec2(0), ivec2(resolution_global) - 1)), y01);
-    bool v11 = readPathGuide(uvec2(clamp(p0 + ivec2(1, 1), ivec2(0), ivec2(resolution_global) - 1)), y11);
-
-
-    float w00 = v00 ? (1.0 - pf.x) * (1.0 - pf.y) : 0.0;
-    float w10 = v10 ? pf.x * (1.0 - pf.y) : 0.0;
-    float w01 = v01 ? (1.0 - pf.x) * pf.y : 0.0;
-    float w11 = v11 ? pf.x * pf.y : 0.0;
-
-    float sumW = w00 + w10 + w01 + w11;
-    if (sumW < 1e-8) return vec4(0.0);
-
-    return (y00 * w00 + y10 * w10 + y01 * w01 + y11 * w11) / sumW;
 }
 
 #endif // BUFFERS_DIFFUSE_BUFFER_GLSL

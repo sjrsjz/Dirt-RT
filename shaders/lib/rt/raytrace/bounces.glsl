@@ -133,7 +133,7 @@ void handleFirstBounce_Refraction(
 
 void handleFirstBounce_Diffuse(
     vec3 rd_i, vec3 ro_o, vec3 macroNormal, vec3 geometryNormal,
-    material surf, LobeProbs lobes, vec2 xi,
+    material surf, LobeProbs lobes, GuideInfo guide, vec2 xi,
     out vec3 bsdf_weight, out vec3 next_rd, out float sampledStrategyPdf
 ) {
     bsdf_weight = vec3(0.0);
@@ -143,7 +143,6 @@ void handleFirstBounce_Diffuse(
     // diffuse sample; avoid the guide-buffer lookup and continuation ray.
     if (lobes.P_diff <= 1e-8) return;
 
-    GuideInfo guide = computeMaxEntGuide(ro_o, PATH_GUIDING_STRENGTH);
     float guideWeight;
     sampleDiffuseWithGuide(
         geometryNormal, macroNormal, ro_o, guide, xi, next_rd, guideWeight,

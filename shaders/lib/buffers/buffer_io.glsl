@@ -10,7 +10,7 @@
 //   lib/buffers/addr.glsl            — SSBO tiled addressing + buffer declarations
 //   lib/buffers/debug_buffer.glsl    — isolated per-pixel diagnostic records
 //   lib/buffers/gbuffer.glsl         — GeometryMaterialBuffer read/write
-//   lib/buffers/diffuse_buffer.glsl  — DiffuseBuffer read/write + samplePathGuide
+//   lib/buffers/diffuse_buffer.glsl  — DiffuseBuffer read/write
 //   lib/buffers/specular_buffer.glsl — Reflect/Refract buffer read/write
 //   lib/lighting/maxent_encode.glsl   — MaxEntEncoding + encode/decode/project
 //   lib/buffers/diffuse_io.glsl      — Diffuse data structs + load/fetch/write

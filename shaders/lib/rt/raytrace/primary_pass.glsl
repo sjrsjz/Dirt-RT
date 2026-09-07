@@ -4,7 +4,8 @@
 // Primary visibility pass and shared surface publication.
 
 #if defined(PRIMARY_GBUFFER_PASS)
-void TracePrimaryGBuffer(uvec2 xy, vec3 ro, vec3 rd) {
+void TracePrimaryGBuffer(uvec2 xy, vec3 ro, vec3 rd,
+        mat4 currentViewProjection) {
     uint eyeMedium = cam.flags & 3u;
     bool inside = eyeMedium != 0u;
     vec4 fogColor = eyeMedium == 2u
@@ -49,6 +50,14 @@ void TracePrimaryGBuffer(uvec2 xy, vec3 ro, vec3 rd) {
     }
 
     writePrimarySurfaceGBuffer(xy, fb, surf, ro);
+    if (fb.t > -0.5) {
+        vec3 cameraDelta = ro - prevRaytracingCamPos - fb.surfaceMotion;
+        prepareSpecularDenoisedSurfaceReprojection(xy, fb.p - ro,
+            fb.geometry_n, uint(max(fb.materialID, 0)), cameraDelta,
+            fb.motionValid, rtViewProjection, currentViewProjection);
+    } else {
+        writeMaxEntSpecularPreparedSurfaceDenoisedInvalid(xy);
+    }
 }
 #endif
 

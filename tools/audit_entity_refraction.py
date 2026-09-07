@@ -7,10 +7,10 @@ from pathlib import Path
 import argparse
 import json
 import math
-import runpy
 import subprocess
 
 import numpy as np
+from shader_compile import GLSLANG, expand
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -125,7 +125,6 @@ def source_contracts():
     for file in ('temporal.glsl', 'resolve.glsl'):
         assert 'readPrimaryGeometryNormal(' not in read('post/denoiser/diffuse/'+file)
     assert 'return readDiffuseGeometryWords(' in read('post/denoiser/diffuse/variance_pass.glsl')
-    assert 'return readDiffuseGeometryWords(' in read('lib/lighting/denoiser/temporal_confidence.glsl')
     for stage in ('rahit', 'rchit'):
         assert 'getEntityTextureBox(quad)' in read('lib/rt/raytrace_'+stage+'.glsl')
     assert 'vec4 entityAtlas = atlas;' in read('lib/rt/raytrace/scene.glsl')
@@ -134,15 +133,14 @@ def source_contracts():
     assert 'sampleDiffuse(samplePixel)' not in psr
     assert 'uv * vec2(resolution_global) - 0.5' not in psr
     assert ': reusedScreen ? vec3(0.0, 1.0, 0.0)' in psr
-    assert 'bufferObject.2 = 176 true 1.1 1.1' in read('shaders.properties')
+    assert 'bufferObject.2 = 160 true 1.1 1.1' in read('shaders.properties')
 
 
 def compile_routes():
-    audit = runpy.run_path(str(ROOT/'tools/audit_temporal_confidence.py'))
     folder = ROOT/'temp/entity_refraction_validate'
     folder.mkdir(parents=True, exist_ok=True)
-    compiler = 'E:/VulkanSDK/Bin/glslangValidator.exe'
-    source = audit['expand'](ROOT/'shaders/post/composite_lighting.glsl')
+    compiler = str(GLSLANG)
+    source = expand(ROOT/'shaders/post/composite_lighting.glsl')
     lines = source.splitlines()
     version = lines.pop(next(i for i, s in enumerate(lines) if s.lstrip().startswith('#version')))
     for view in (0, 40, 41):

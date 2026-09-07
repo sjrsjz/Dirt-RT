@@ -24,9 +24,8 @@
 //
 // sigma=-1 marks invalid light; sigma=-2 preserves light with unknown variance.
 // Geometry is supplied separately by the signal policy.
-// Persistent filtered history in confidence-resolve mode reuses the packing
-// with sigma=sqrt(linear-moment estimator trace variance) and tagged N=1.
-// That history ABI is consumed by reprojection/resolve only, never A-Trous.
+// Persistent filtered history reuses the same packing; that history ABI is
+// consumed by reprojection/resolve only, never directly by A-Trous.
 
 const float DENOISER_SPATIAL_FP16_MAX = 65504.0;
 struct DenoiserMaxEntSignal {

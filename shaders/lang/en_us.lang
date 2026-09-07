@@ -124,10 +124,6 @@ option.RADIANCE_CACHE_RIS_GUIDING_KAPPA.comment = Concentration of the continuou
 # Shared MaxEnt Temporal Response
 # ===========================================================================
 option.MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE = Bures Response Scale
-option.MAXENT_TEMPORAL_CONFIDENCE_CLAMP = Experimental Confidence Resolve
-option.MAXENT_TEMPORAL_CONFIDENCE_CLAMP.comment = Uses disjoint raw 5x5 sample groups, confidence projection and variance-weighted resolve. 0 restores the legacy A-Trous temporal response. Switching rejects incompatible histories. No additional SSBO storage.
-option.MAXENT_TEMPORAL_CONFIDENCE_FAILURE_PROBABILITY = Nominal Failure Probability
-option.MAXENT_TEMPORAL_CONFIDENCE_FAILURE_PROBABILITY.comment = Confidence mode only. Larger values allow more history projection; 0 disables projection while retaining split-sample variance-weighted accumulation. Runtime estimated variances make this a nominal threshold, not a guaranteed false-alarm rate.
 option.MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE.comment = Shared by diffuse and specular temporal accumulation. It scales squared Bures distance relative to the matching combined estimator variance. Higher values give the current frame more weight for the same difference and reject history more aggressively.
 
 # ===========================================================================

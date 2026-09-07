@@ -9,10 +9,10 @@ import argparse
 import hashlib
 import json
 import math
-import runpy
 import subprocess
 
 import numpy as np
+from shader_compile import GLSLANG, expand
 
 ROOT = Path(__file__).resolve().parents[1]
 UNKNOWN = -2.
@@ -97,19 +97,18 @@ def tests():
 
 
 def compile_more():
-    audit = runpy.run_path(str(ROOT/'tools/audit_temporal_confidence.py'))
-    result = audit['compile_shaders']()
-    compiler = result['compiler']
+    compiler = str(GLSLANG)
     folder = ROOT/'temp/uncertainty_validate'
     folder.mkdir(parents=True, exist_ok=True)
     entries = [(ROOT/f'shaders/composite{i}.csh', 'comp', None)
-               for i in (52, 53, 54, 55, 59, 67, 68, 69, 70)]
+               for i in (1, 50, 51, 52, 53, 54, 55, 56, 58, 59,
+                         61, 63, 65, 66, 67, 68, 69, 70, 71, 72)]
     entries += [(ROOT/'shaders/post/composite_lighting.glsl', 'frag', v) for v in (24, 25, 37, 38, 50)]
     entries += [(ROOT/f'shaders/ray{i}.rgen', 'rgen', None) for i in range(6)]
     entries += [(ROOT/f'shaders/ray{i}_0.{stage}', stage, None)
                 for i in (0, 4, 5) for stage in ('rahit', 'rchit', 'rmiss')]
     for source_path, stage, view in entries:
-        source = audit['expand'](source_path)
+        source = expand(source_path)
         lines = source.splitlines()
         i = next(i for i, s in enumerate(lines) if s.lstrip().startswith('#version'))
         version = lines.pop(i)
@@ -126,7 +125,7 @@ def compile_more():
         proc = subprocess.run(cmd, text=True, capture_output=True)
         if proc.returncode:
             raise RuntimeError(proc.stdout+proc.stderr)
-    return dict(variants=len(result['entries'])+len(entries), compiler=compiler,
+    return dict(variants=len(entries), compiler=compiler,
                 scope='SPIR-V compilation only; not GPU execution')
 
 

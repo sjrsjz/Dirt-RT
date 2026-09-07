@@ -74,9 +74,15 @@ def audit_sources() -> None:
     bounces = read("shaders/lib/rt/raytrace/bounces.glsl")
     trace = read("shaders/lib/rt/raytrace/path_trace.glsl")
     output = read("shaders/lib/rt/raytrace/gbuffer_io.glsl")
+    primary = read("shaders/lib/rt/raytrace/primary_pass.glsl")
+    rgen = read("shaders/lib/rt/raytrace_rgen.glsl")
+    ray4 = read("shaders/ray4.rgen")
+    camera_state = read("shaders/lib/rt/camera_state.glsl")
+    temporal = read("shaders/post/denoiser/reflection/temporal.glsl")
 
     assert "addr(SPEC_N_HISTMETA, xy)" in buffer_source
     assert "computeSpecularMaxEntGuide" in transport
+    assert "readMaxEntSpecularPreparedSurfaceDenoised" in transport
     assert "(1.0 - guide.prob) * vndfPdf" in transport
     assert "evaluateSpecularQLiResponse" in bounces
     assert "fSpecTimesNoL_val / sampledStrategyPdf" in bounces
@@ -84,6 +90,12 @@ def audit_sources() -> None:
     assert "pdfNDF * misWeight" in trace
     assert "(f/p)*Li" in output and "(q/p)*Li" in output
     assert "reflectionFirstBsdfWeight" not in trace
+    assert "fb.motionValid, rtViewProjection, currentViewProjection" in primary
+    assert "rtPrevViewProjection =" not in rgen
+    assert "publishRtCameraState(currentCamera);" in ray4
+    assert "rtPrevViewProjection = rtViewProjection" in camera_state
+    assert "false, true, false" in temporal
+    assert "readMaxEntSpecularPreparedSurfaceDenoised(" in temporal
 
 
 def main() -> None:
@@ -98,7 +110,7 @@ def main() -> None:
         "mixture_measure_cases": 10_000,
         "mixture_measure_max_relative_error": mixture_error,
         "guide_probability_cap": 0.75,
-        "history_source": "previous final denoised qLi (SPEC_N_HISTMETA)",
+        "history_source": "ray0 shared surface reprojection: N3 history -> N4 scratch",
         "scope": "CPU algebra and source contract; GPU behavior requires in-game validation",
     }, indent=2))
 

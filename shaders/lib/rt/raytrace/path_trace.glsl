@@ -41,6 +41,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     vec3 L_direct_0_incident = vec3(0.0);
     vec3 reflectionFirstQLiResponse = vec3(1.0);
     GuideInfo reflectionGuide = emptyGuideInfo();
+    GuideInfo diffuseGuide = emptyGuideInfo();
     vec2 firstReflectionXi = vec2(0.5);
     float cascadedRoughness2 = 0.0;
     // Sampling metadata for MIS if the current continuation ray reaches the
@@ -59,7 +60,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     // ===== FIRST BOUNCE =====
     #if defined(FIRST_LOBE_DIFFUSE) || defined(FIRST_LOBE_REFLECTION) || defined(FIRST_LOBE_REFRACTION)
     material surf;
-    loadPrimarySurfaceGBuffer(xy, ro, fb, surf);
+    loadPrimarySurfaceGBuffer(xy, ro, rd, fb, surf);
 
     #if defined(FIRST_LOBE_DIFFUSE)
     // The denoised diffuse domain represents the opaque scene behind primary
@@ -115,6 +116,9 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
     if (fb.t < -0.5) {
         throughput = vec3(0.0);
+        #if defined(FIRST_LOBE_DIFFUSE)
+        invalidatePreparedDiffuseHistory(xy, cam.frameId);
+        #endif
     } else {
         vec3 geometryNormal = fb.geometry_n;
         vec3 macroNormal = fb.macro_n;
@@ -129,10 +133,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         #elif defined(FIRST_LOBE_REFLECTION)
         firstReflectionXi = rtBlueNoise2D(xy, 0u);
         reflectionGuide = computeSpecularMaxEntGuide(
-            ro_o - fb.surfaceMotion, geometryNormal,
-            sqrt(clamp(surf.R.x, 0.0, 1.0)), uint(max(fb.materialID, 0)),
-            max(fb.t, 0.0), fb.motionValid,
-            SPECULAR_PATH_GUIDING_STRENGTH);
+            xy, SPECULAR_PATH_GUIDING_STRENGTH);
         vec3 microNormal = macroNormal;
         if (!isDeltaSpecular(surf.R.x))
             microNormal = GGXVNDFNormal(macroNormal, -fb.rd_i, surf.R.x,
@@ -176,8 +177,17 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         fb.pathRoughness = psr.pathRoughness;
         #else
         current_type = DIFFUSION;
+        prepareDiffuseDenoisedSurfaceReprojection(xy, ro_o - ro,
+            geometryNormal,
+            ro - prevRaytracingCamPos - fb.surfaceMotion,
+            fb.motionValid, cam.frameId, rtViewProjection,
+            mat3(rtCurrentModelViewLocal),
+            rtCurrentProjectionParamsLocal);
+        diffuseGuide = computeMaxEntGuide(xy, cam.frameId,
+            PATH_GUIDING_STRENGTH);
         handleFirstBounce_Diffuse(fb.rd_i, ro_o, macroNormal,
-            geometryNormal, surf, lobes, rtBlueNoise2D(xy, 0u),
+            geometryNormal, surf, lobes, diffuseGuide,
+            rtBlueNoise2D(xy, 0u),
             bsdf_weight, next_rd,
             lastBsdfStrategyPdf);
         lastBsdfDelta = false;
@@ -197,12 +207,10 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                     sunWi, sunLi, lightPdf)) {
                 L_direct_0_dir = sunWi;
                 if (current_type == DIFFUSION) {
-                    GuideInfo directGuide = computeMaxEntGuide(
-                            ro_o, PATH_GUIDING_STRENGTH);
-                    float proposalPdf = (1.0 - directGuide.prob)
+                    float proposalPdf = (1.0 - diffuseGuide.prob)
                             * (1.0 / (2.0 * PI));
-                    proposalPdf += directGuide.prob * maxent_guiding_pdf(
-                                sunWi, directGuide.axis, directGuide.kappa);
+                    proposalPdf += diffuseGuide.prob * maxent_guiding_pdf(
+                        sunWi, diffuseGuide.axis, diffuseGuide.kappa);
                     float misWeight = powerHeuristic(lightPdf, proposalPdf);
                     #if EON_ENABLED
                     // The deferred EON projection supplies f_r * NoL * rho.
@@ -259,6 +267,9 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
 
     if (t < -0.5) {
         // Primary ray hit sky
+        #if defined(FIRST_LOBE_DIFFUSE)
+        invalidatePreparedDiffuseHistory(xy, cam.frameId);
+        #endif
         vec3 sky = sampleSky(ro_i.y, rd_i, lightDir).xyz;
         if (any(isnan(sky)) || any(isinf(sky))) sky = vec3(0.0);
         L_indirect += throughput * sky;
@@ -291,10 +302,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         firstReflectionXi = rtBlueNoise2D(xy, 0u);
         #if defined(FIRST_LOBE_REFLECTION)
         reflectionGuide = computeSpecularMaxEntGuide(
-            ro_o - fb.surfaceMotion, geometryNormal,
-            sqrt(clamp(surf.R.x, 0.0, 1.0)), uint(max(maxentMaterialID, 0)),
-            max(t, 0.0), fb.motionValid,
-            SPECULAR_PATH_GUIDING_STRENGTH);
+            xy, SPECULAR_PATH_GUIDING_STRENGTH);
         #endif
         vec3 microNormal = isDeltaSpecular(surf.R.x) ? macroNormal
             : GGXVNDFNormal(macroNormal, -rd_i, surf.R.x,
@@ -351,8 +359,17 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         #else
         {
             current_type = DIFFUSION;
+            prepareDiffuseDenoisedSurfaceReprojection(xy, ro_o - ro,
+                geometryNormal,
+                ro - prevRaytracingCamPos - fb.surfaceMotion,
+                fb.motionValid, cam.frameId, rtViewProjection,
+                mat3(rtCurrentModelViewLocal),
+                rtCurrentProjectionParamsLocal);
+            diffuseGuide = computeMaxEntGuide(xy, cam.frameId,
+                PATH_GUIDING_STRENGTH);
             handleFirstBounce_Diffuse(rd_i, ro_o, macroNormal, geometryNormal,
-                surf, lobes, rtBlueNoise2D(xy, 0u), bsdf_weight, next_rd,
+                surf, lobes, diffuseGuide, rtBlueNoise2D(xy, 0u),
+                bsdf_weight, next_rd,
                 lastBsdfStrategyPdf);
             lastBsdfDelta = false;
             lastNeeCompatible = true;
@@ -374,12 +391,10 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                 L_direct_0_dir = sunWi;
 
                 if (current_type == DIFFUSION) {
-                    GuideInfo directGuide = computeMaxEntGuide(
-                            ro_o, PATH_GUIDING_STRENGTH);
-                    float proposalPdf = (1.0 - directGuide.prob)
+                    float proposalPdf = (1.0 - diffuseGuide.prob)
                             * (1.0 / (2.0 * PI));
-                    proposalPdf += directGuide.prob * maxent_guiding_pdf(
-                                sunWi, directGuide.axis, directGuide.kappa);
+                    proposalPdf += diffuseGuide.prob * maxent_guiding_pdf(
+                        sunWi, diffuseGuide.axis, diffuseGuide.kappa);
                     float misWeight = powerHeuristic(lightPdf, proposalPdf);
                     #if EON_ENABLED
                     // The deferred EON projection supplies f_r * NoL * rho.

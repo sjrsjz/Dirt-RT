@@ -2,7 +2,8 @@
 
 // Purpose: reproject reflection raw/filtered histories and build the provisional temporal proposal.
 // Dispatch: 8x8.
-// Reads: colortex6 Raw reflection, previous reflection history, compact geometry, motion.
+// Reads: colortex6 raw reflection, previous raw/virtual history, compact
+// geometry, motion, and ray0's shared surface-denoised reprojection.
 // Writes: colorimg4 proposal, colorimg5 raw reprojection, filtered-history reprojection scratch.
 // Persistent side effects: none; resolve.glsl owns the accepted history update.
 // Invalid representation: zero image words plus invalid filtered reprojection metadata.
@@ -63,7 +64,8 @@ MaxEntReprojectedHistory maxentLoadHistory(
     uint currentMaterial,
     vec3 cameraDelta,
     bool requireFullFootprint,
-    bool requireSurfaceFootprint
+    bool requireSurfaceFootprint,
+    bool loadDenoisedHistory
 ) {
     MaxEntReprojectedHistory outHistory = maxentEmptyHistory();
     if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
@@ -92,16 +94,22 @@ MaxEntReprojectedHistory maxentLoadHistory(
         uvec2 historyPixel = uvec2(p);
         uvec4 geometryWords = reflectBuffer.data[addr(SPEC_N_HISTGEO, historyPixel)];
         uvec4 signalWords = reflectBuffer.data[addr(SPEC_N_HISTLIGHT, historyPixel)];
-        uvec4 denoisedWords = reflectBuffer.data[addr(SPEC_N_HISTMETA, historyPixel)];
+        uvec4 denoisedWords = loadDenoisedHistory
+            ? reflectBuffer.data[addr(SPEC_N_HISTMETA, historyPixel)]
+            : uvec4(0u);
         float surfaceDistance = uintBitsToFloat(geometryWords.x);
         vec2 momentHistory = unpackHalf2x16(signalWords.w);
         vec2 denoisedMetadata = unpackHalf2x16(denoisedWords.w);
+        bool denoisedTapValid = !loadDenoisedHistory
+            || ((denoisedMetadata.y >= 1.0)
+                && denoiserSigmaUsable(denoisedMetadata.x)
+                && !any(isnan(denoisedMetadata))
+                && !any(isinf(denoisedMetadata)));
         if (!(surfaceDistance >= 0.0) || isnan(surfaceDistance) || isinf(surfaceDistance)
                 || !(momentHistory.x >= 0.0)
-                || !(momentHistory.y >= 1.0) || !(denoisedMetadata.y >= 1.0)
-                || !denoiserSigmaUsable(denoisedMetadata.x) || any(isnan(momentHistory))
-                || any(isinf(momentHistory)) || any(isnan(denoisedMetadata))
-                || any(isinf(denoisedMetadata))) continue;
+                || !(momentHistory.y >= 1.0) || !denoisedTapValid
+                || any(isnan(momentHistory)) || any(isinf(momentHistory)))
+            continue;
 
         vec3 historyNormal;
         uint historyMaterial;
@@ -124,18 +132,26 @@ MaxEntReprojectedHistory maxentLoadHistory(
         vec2 rawChroma = unpackHalf2x16(signalWords.z);
         vec4 filteredTap = vec4(unpackHalf2x16(denoisedWords.x), unpackHalf2x16(denoisedWords.y));
         vec2 filteredChroma = unpackHalf2x16(denoisedWords.z);
-        if (!denoiserTemporalMomentsFinite(rawTap, rawChroma, momentHistory.x)
-                || any(isnan(filteredTap)) || any(isinf(filteredTap))
-                || any(isnan(filteredChroma)) || any(isinf(filteredChroma))) continue;
+        bool filteredFinite = !loadDenoisedHistory
+            || (!any(isnan(filteredTap)) && !any(isinf(filteredTap))
+                && !any(isnan(filteredChroma))
+                && !any(isinf(filteredChroma)));
+        if (!denoiserTemporalMomentsFinite(rawTap, rawChroma,
+                momentHistory.x) || !filteredFinite)
+            continue;
         validBilinearWeight += w;
         if (w <= 0.0) continue;
         vec4 tapMaxEntY = vec4(unpackHalf2x16(signalWords.x),
             unpackHalf2x16(signalWords.y));
         signalSum.maxEntY += tapMaxEntY * w;
         signalSum.CoCg += unpackHalf2x16(signalWords.z) * w;
-        denoisedSum.maxEntY += vec4(unpackHalf2x16(denoisedWords.x), unpackHalf2x16(denoisedWords.y)) * w;
-        denoisedSum.CoCg += unpackHalf2x16(denoisedWords.z) * w;
-        denoiserAccumulateEstimatorVariance(denoisedUncertainty, denoisedMetadata.x, w);
+        if (loadDenoisedHistory) {
+            denoisedSum.maxEntY += vec4(unpackHalf2x16(
+                denoisedWords.x), unpackHalf2x16(denoisedWords.y)) * w;
+            denoisedSum.CoCg += unpackHalf2x16(denoisedWords.z) * w;
+            denoiserAccumulateEstimatorVariance(
+                denoisedUncertainty, denoisedMetadata.x, w);
+        }
         vec2 hitRoughness = unpackHalf2x16(geometryWords.w);
         outHistory.hitDistance += hitRoughness.x * w;
         outHistory.roughness += (hitRoughness.y - 1.0) * w;
@@ -156,10 +172,13 @@ MaxEntReprojectedHistory maxentLoadHistory(
     float invWeight = 1.0 / sumWeight;
     signalSum = maxentScaleMaxEnt(signalSum, invWeight);
     outHistory.signalWords = packSpecularMaxEnt(signalSum);
-    denoisedSum = maxentScaleMaxEnt(denoisedSum, invWeight);
-    float denoisedMonteCarloStandardDeviation = denoiserResolveEstimatorSigma(denoisedUncertainty, 1.0);
-    outHistory.denoisedWords = uvec4(packSpecularMaxEnt(denoisedSum),
-        floatBitsToUint(denoisedMonteCarloStandardDeviation));
+    if (loadDenoisedHistory) {
+        denoisedSum = maxentScaleMaxEnt(denoisedSum, invWeight);
+        float denoisedMonteCarloStandardDeviation =
+            denoiserResolveEstimatorSigma(denoisedUncertainty, 1.0);
+        outHistory.denoisedWords = uvec4(packSpecularMaxEnt(denoisedSum),
+            floatBitsToUint(denoisedMonteCarloStandardDeviation));
+    }
     outHistory.hitDistance *= invWeight;
     outHistory.roughness = clamp(1.0 +
         (outHistory.roughness - 1.0) * invWeight, 0.0, 1.0);
@@ -302,7 +321,22 @@ void main() {
     vec2 surfaceUv = maxentProjectPrevious(currentPos, cameraDelta);
     MaxEntReprojectedHistory surface = maxentLoadHistory(surfaceUv, pixel,
         currentPos, currentNormal, currentMaterial, cameraDelta,
-        false, true);
+        false, true, false);
+    SpecularMaxEnt preparedSurfaceDenoised;
+    float preparedSurfaceSigma, preparedSurfaceCoverage;
+    bool preparedSurfaceValid = readMaxEntSpecularPreparedSurfaceDenoised(
+        pixel, preparedSurfaceDenoised, preparedSurfaceSigma,
+        preparedSurfaceCoverage);
+    if (surface.found && preparedSurfaceValid) {
+        surface.denoisedWords = uvec4(
+            packSpecularMaxEnt(preparedSurfaceDenoised),
+            floatBitsToUint(preparedSurfaceSigma));
+        surface.denoisedEffectiveSamples = 1.0;
+        surface.footprintQuality = min(surface.footprintQuality,
+            preparedSurfaceCoverage);
+    } else {
+        surface.found = false;
+    }
 
     // Keep the tracking guide per-pixel. Spatial minimum reconstruction changes its statistical meaning and creates
     // a persistent current/history mismatch even for a static delta mirror on a smooth hit-distance gradient.
@@ -318,7 +352,7 @@ void main() {
     vec2 virtualUv = maxentProjectPrevious(virtualPoint, cameraDelta);
     MaxEntReprojectedHistory virtualHistory = maxentLoadHistory(virtualUv,
         pixel, currentPos, currentNormal, currentMaterial, cameraDelta,
-        true, false);
+        true, false, true);
     if (motionValid < 0.5) {
         surface.found = false;
         virtualHistory.found = false;

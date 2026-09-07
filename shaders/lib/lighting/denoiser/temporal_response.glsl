@@ -10,8 +10,7 @@
 // its 2x2 PSD Bures geometry. Variance preparation uses the alpha=1 g^-3 family
 // only as an explicit closure for missing R^2-weighted angular moments;
 // lighting reconstruction remains independent of this filtering policy.
-// These functions are the active Bures mode (MAXENT_TEMPORAL_CONFIDENCE_CLAMP=0).
-// The experimental linear-moment estimator ABI lives in temporal_confidence.glsl.
+// These functions define the shared diffuse/specular temporal response.
 
 float maxentTemporalEstimatorVariance(float monteCarloStandardDeviation) {
     if (!denoiserSigmaKnown(monteCarloStandardDeviation)) return DENOISER_UNKNOWN_UNCERTAINTY;

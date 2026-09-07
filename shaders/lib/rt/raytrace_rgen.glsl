@@ -28,6 +28,8 @@
 #include "/lib/math/quaternions.glsl"
 #include "/lib/buffers/buffer_io.glsl"
 #include "/lib/buffers/frame_data.glsl"
+#include "/lib/rt/camera_state.glsl"
+#include "/lib/lighting/denoiser/diffuse_reprojection.glsl"
 #include "/lib/buffers/radiance_cache.glsl"
 #include "/lib/pbr/material.glsl"
 #include "/lib/common.glsl"
@@ -54,14 +56,6 @@ const float PSR_ROUGHNESS_THRESHOLD = 0.15;
 const float PSR_PATH_ROUGHNESS_THRESHOLD = 0.8;
 const int MAX_REFRACTIVE_BOUNCES = 4; // max refractive surfaces to trace through before stopping
 
-layout(std430, binding = 0) uniform CameraInfo {
-    vec3 corners[4];
-    mat4 viewInverse;
-    uint frameId;
-    uint flags;
-    uint world_type;
-} cam;
-
 layout(binding = 1) uniform accelerationStructureEXT acc;
 layout(binding = 3) uniform sampler2D blockTex;
 layout(binding = 4) uniform sampler2D blockTexNormal;
@@ -83,12 +77,16 @@ layout(std430, set = 0, binding = 2, scalar) readonly buffer EntityMotionBuffer 
 
 #if !defined(RADIANCE_CACHE_TRACE)
 void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir);
-void TracePrimaryGBuffer(uvec2 coord, vec3 ro, vec3 rd);
+void TracePrimaryGBuffer(uvec2 coord, vec3 ro, vec3 rd,
+    mat4 currentViewProjection);
 #endif
 
 bool isDarkened = false;
 float rtCurrentConeWidth = 0.0;
 float rtCurrentConeSpread = 0.0;
+mat4 rtCurrentModelViewLocal;
+vec4 rtCurrentProjectionParamsLocal;
+mat4 rtCurrentViewProjectionLocal;
 
 // Shared payload and feature modules. Keep this order: later modules use
 // types and helpers declared by the modules before them.
@@ -115,6 +113,7 @@ bool clearSkyContinuation(uvec2 pixel) {
     #if defined(FIRST_LOBE_DIFFUSE)
     diffuseBuffer.data[addr(DIF_N_LIGHT, pixel)] = uvec4(0u);
     writeDiffuseSurfaceInvalid(pixel);
+    invalidatePreparedDiffuseHistory(pixel, cam.frameId);
     #elif defined(FIRST_LOBE_REFLECTION)
     reflectBuffer.data[addr(SPEC_N_LIGHT, pixel)] = uvec4(0u);
     #else
@@ -134,9 +133,13 @@ void main() {
     #endif
 
     vec2 px = vec2(gl_LaunchIDEXT.xy);
-    vec2 taaJitter = vec2(0.0);
-    #if defined(PRIMARY_GBUFFER_PASS)
-    taaJitter = rtTaaJitter(cam.frameId);
+    vec2 taaJitter = rtTaaJitter(cam.frameId);
+    #if defined(PRIMARY_GBUFFER_PASS) || defined(FIRST_LOBE_DIFFUSE)
+    RtCameraMatrices currentCamera = buildRtCameraMatrices(
+        vec2(gl_LaunchSizeEXT.xy));
+    rtCurrentModelViewLocal = currentCamera.modelView;
+    rtCurrentProjectionParamsLocal = currentCamera.projectionParams;
+    rtCurrentViewProjectionLocal = currentCamera.viewProjection;
     #endif
     vec2 p = (px + taaJitter) / vec2(gl_LaunchSizeEXT.xy);
 
@@ -150,10 +153,14 @@ void main() {
         cam.corners[1], cam.corners[2], coneResolution);
 
     setFrame(cam.frameId);
+    int currentWorldType = int(cam.world_type);
     #if END_SKYBOX == 1
-    isDarkened = world_type_global != WORLD_OVERWORLD && world_type_global != WORLD_THE_NETHER;
+    isDarkened = currentWorldType != WORLD_OVERWORLD
+        && currentWorldType != WORLD_THE_NETHER;
     #else
-    isDarkened = world_type_global != WORLD_OVERWORLD && world_type_global != WORLD_THE_END && world_type_global != WORLD_THE_NETHER;
+    isDarkened = currentWorldType != WORLD_OVERWORLD
+        && currentWorldType != WORLD_THE_END
+        && currentWorldType != WORLD_THE_NETHER;
     #endif
 
     wseed = floatBitsToUint(hash12(px + fract(cam.frameId * vec2(0.6180339887498949, 0.4142135623730950))));
@@ -165,51 +172,13 @@ void main() {
 
     setSkyVars();
     #if defined(PRIMARY_GBUFFER_PASS)
-    TracePrimaryGBuffer(pixel, origin, direction);
+    TracePrimaryGBuffer(pixel, origin, direction,
+        rtCurrentViewProjectionLocal);
     #elif defined(FIRST_LOBE_REFRACTION)
-    TraceRefractionPSR(pixel, origin);
+    TraceRefractionPSR(pixel, origin, direction);
     #else
     Trace(pixel, origin, direction, -lightDir_global);
     #endif
 
-    // Per-frame-once global state: only primary pass pixel (0,0). Updating the
-    // previous matrices from any continuation pass would break reprojection.
-    #if defined(PRIMARY_GBUFFER_PASS)
-    if (gl_LaunchIDEXT.xy == vec2(0)) {
-        world_type_global = int(cam.world_type);
-        frame_id = int(cam.frameId);
-        eye_medium_global = cam.flags & 3u;
-        camPos = origin;
-        camY_global = (cam.viewInverse * vec4(normalize(cam.corners[0] - cam.corners[2]), 0)).xyz;
-        camX_global = (cam.viewInverse * vec4(normalize(cam.corners[0] - cam.corners[1]), 0)).xyz;
-
-        // Save the already-composed transform for next-frame reprojection.
-        rtPrevViewProjection = rtViewProjection;
-
-        // ModelView: pure rotation (transpose of viewInverse), no translation
-        rtModelView = mat4(transpose(mat3(cam.viewInverse)));
-
-        // The projection carries the same sub-pixel phase as the traced ray,
-        // so distance-only G-buffer reconstruction remains exact.
-        float zNear = -cam.corners[0].z;
-        float w = cam.corners[1].x - cam.corners[0].x;
-        float h = cam.corners[2].y - cam.corners[0].y;
-        vec2 jitterNdc = 2.0 * taaJitter / vec2(gl_LaunchSizeEXT.xy);
-        float farD = 2048.0;
-        mat4 projection = mat4(0.0);
-        projection[0][0] = (2.0 * zNear) / w;
-        projection[1][1] = (2.0 * zNear) / h;
-        projection[2][0] = (cam.corners[1].x + cam.corners[0].x) / w + jitterNdc.x;
-        projection[2][1] = (cam.corners[2].y + cam.corners[0].y) / h + jitterNdc.y;
-        projection[2][2] = -(farD + zNear) / (farD - zNear);
-        projection[2][3] = -1.0;
-        projection[3][2] = -(2.0 * farD * zNear) / (farD - zNear);
-        rtViewProjection = projection * rtModelView;
-        rtInverseViewProjection = inverse(rtViewProjection);
-        rtProjectionParams = vec4(
-            projection[0][0], projection[1][1],
-            projection[2][0], projection[2][1]);
-    }
-    #endif
 }
 #endif

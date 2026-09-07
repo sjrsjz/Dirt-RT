@@ -123,10 +123,6 @@ option.RADIANCE_CACHE_RIS_GUIDING_KAPPA.comment = RIS 选中方向周围连续�
 # MaxEnt 共享时域响应
 # ===========================================================================
 option.MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE = Bures 响应尺度
-option.MAXENT_TEMPORAL_CONFIDENCE_CLAMP = 实验性置信域时域解算
-option.MAXENT_TEMPORAL_CONFIDENCE_CLAMP.comment = 使用两组不重叠的原始 5x5 邻域、置信域投影和方差加权累积。0 恢复原 A-Trous 时域响应。切换时拒绝不兼容历史，不增加 SSBO 存储。
-option.MAXENT_TEMPORAL_CONFIDENCE_FAILURE_PROBABILITY = 名义误触发概率
-option.MAXENT_TEMPORAL_CONFIDENCE_FAILURE_PROBABILITY.comment = 仅用于置信域模式。数值越大越容易钳制历史；0 关闭投影，保留分组与方差加权累积。运行时使用估计方差，因此此值是名义阈值，实际误触发率需要测量。
 option.MAXENT_TEMPORAL_RESPONSE_DISTANCE_SCALE.comment = 漫反射与镜面时域累积共用。它控制 Bures 距离平方相对于两侧匹配估计器总方差的缩放；数值越大，相同帧间差异产生的当前帧权重越高，历史拒绝越强。
 
 # ===========================================================================
