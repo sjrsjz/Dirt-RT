@@ -93,8 +93,6 @@ Material evaluateMaterial(Payload pld, vec3 rayOrigin, vec3 rd_i,
     vec3 tint;
     float skylight;
     payload_unpackQuadExtras(pld.data, tint, skylight);
-    int blockID;
-    // vec3 _shadow = payload_unpackShadow(pld.data, blockID);
     bool _inside, handedness, _isNEE;
     payload_unpackFlags(pld.data, _inside, handedness, _isNEE);
     float bitangentSign = handedness ? 1.0 : -1.0;
@@ -117,11 +115,6 @@ Material evaluateMaterial(Payload pld, vec3 rayOrigin, vec3 rd_i,
     vec3 texturePlaneNormal = cross(gradientU, gradientV);
     texturePlaneNormal = dot(texturePlaneNormal, texturePlaneNormal) > 1e-20
         ? normalize(texturePlaneNormal) : geomN;
-    vec2 mipResolution = max(vec2(resolution_global),
-            vec2(gl_LaunchSizeEXT.xy));
-    float pixelConeSpread = rtPixelConeSpread(cam.corners[0],
-            cam.corners[1], cam.corners[2], mipResolution);
-
     vec2 sampleUV = uv;
     vec4 albedoTex;
     vec4 specularTex;

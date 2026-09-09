@@ -1,6 +1,7 @@
 #ifndef BUFFERS_DEBUG_BUFFER_GLSL
 #define BUFFERS_DEBUG_BUFFER_GLSL
 
+#include "/lib/settings.glsl"
 #include "/lib/buffers/addr.glsl"
 #include "/lib/common/oct_encode.glsl"
 #include "/lib/common/pack_half.glsl"
@@ -14,6 +15,8 @@
 // one compile-time DEBUG_VIEW can produce it in a frame.
 // SPECULAR_TEMPORAL: xyz=resolved temporal MaxEnt, w=FP16x2 temporal tracking
 // hit distance/resolved history contribution (1-currentAlpha).
+// DEBUG_VIEW is a compile-time option. Produce only records consumed by that
+// view; inactive fields are unspecified and must never feed renderer state.
 const uint DEBUG_N_COMMON = 0u;
 const uint DEBUG_N_SPECULAR_TEMPORAL = 1u;
 
@@ -30,10 +33,9 @@ uvec4 debugLoad(uint record, uvec2 xy) {
 }
 
 void debugWriteReflectionSampleDirection(uvec2 xy, vec3 direction) {
-    // The reflection ray pass owns the start of the diagnostic frame and also
-    // clears values that later compute passes may replace.
-    debugStore(DEBUG_N_COMMON, xy, uvec4(encodeNormalU(direction),
-        floatBitsToUint(-1.0), floatBitsToUint(-1.0), 0u));
+#if DEBUG_VIEW == DEBUG_VIEW_SPECULAR_SAMPLED_DIRECTION
+    debugBuffer.data[addr(DEBUG_N_COMMON, xy)].x = encodeNormalU(direction);
+#endif
 }
 
 vec3 debugReadReflectionSampleDirection(uvec2 xy) {
@@ -41,7 +43,9 @@ vec3 debugReadReflectionSampleDirection(uvec2 xy) {
 }
 
 void debugWriteDiffuseNoiseOnlyCurrentWeight(uvec2 xy, float currentWeight) {
+#if DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_NOISE_ONLY_CURRENT_WEIGHT
     debugBuffer.data[addr(DEBUG_N_COMMON, xy)].y = floatBitsToUint(currentWeight);
+#endif
 }
 
 float debugReadDiffuseNoiseOnlyCurrentWeight(uvec2 xy) {
@@ -49,7 +53,9 @@ float debugReadDiffuseNoiseOnlyCurrentWeight(uvec2 xy) {
 }
 
 void debugWriteSpecularNoiseOnlyCurrentWeight(uvec2 xy, float currentWeight) {
+#if DEBUG_VIEW == DEBUG_VIEW_SPECULAR_NOISE_ONLY_CURRENT_WEIGHT
     debugBuffer.data[addr(DEBUG_N_COMMON, xy)].z = floatBitsToUint(currentWeight);
+#endif
 }
 
 float debugReadSpecularNoiseOnlyCurrentWeight(uvec2 xy) {
@@ -57,17 +63,19 @@ float debugReadSpecularNoiseOnlyCurrentWeight(uvec2 xy) {
 }
 
 void debugWriteDiffuseMonteCarloStandardDeviation(uvec2 xy, float standardDeviation) {
-    uint index = addr(DEBUG_N_COMMON, xy);
-    vec2 standardDeviations = unpackHalf2x16(debugBuffer.data[index].w);
-    standardDeviations.x = clamp(standardDeviation, -2.0, 65504.0);
-    debugBuffer.data[index].w = packHalf2x16(standardDeviations);
+#if DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_PREPARED_MONTE_CARLO_VARIANCE || DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_FILTERED_MONTE_CARLO_VARIANCE
+    // A selected view consumes one half only. Writing zero to the unused half
+    // avoids a read/modify/write dependency and any per-frame initialization.
+    debugBuffer.data[addr(DEBUG_N_COMMON, xy)].w =
+        packHalf2x16(vec2(clamp(standardDeviation, -2.0, 65504.0), 0.0));
+#endif
 }
 
 void debugWriteSpecularMonteCarloStandardDeviation(uvec2 xy, float standardDeviation) {
-    uint index = addr(DEBUG_N_COMMON, xy);
-    vec2 standardDeviations = unpackHalf2x16(debugBuffer.data[index].w);
-    standardDeviations.y = clamp(standardDeviation, -2.0, 65504.0);
-    debugBuffer.data[index].w = packHalf2x16(standardDeviations);
+#if DEBUG_VIEW == DEBUG_VIEW_SPECULAR_PREPARED_MONTE_CARLO_VARIANCE || DEBUG_VIEW == DEBUG_VIEW_SPECULAR_FILTERED_MONTE_CARLO_VARIANCE
+    debugBuffer.data[addr(DEBUG_N_COMMON, xy)].w =
+        packHalf2x16(vec2(0.0, clamp(standardDeviation, -2.0, 65504.0)));
+#endif
 }
 
 void debugWriteDiffusePreparedMonteCarloStandardDeviation(uvec2 xy, float standardDeviation) { debugWriteDiffuseMonteCarloStandardDeviation(xy, standardDeviation); }
@@ -83,14 +91,18 @@ float debugReadDiffuseFilteredMonteCarloStandardDeviation(uvec2 xy) { return deb
 float debugReadSpecularFilteredMonteCarloStandardDeviation(uvec2 xy) { return debugReadSpecularMonteCarloStandardDeviation(xy); }
 
 void debugWriteSpecularTemporalState(uvec2 xy, uvec3 signalWords, float trackingHitDistance, float resolvedHistoryContribution) {
+#if DEBUG_VIEW == DEBUG_VIEW_SPECULAR_CURRENT_TRACKING_HIT_DISTANCE || DEBUG_VIEW == DEBUG_VIEW_SPECULAR_TEMPORAL_HISTORY_SIGNAL || DEBUG_VIEW == DEBUG_VIEW_SPECULAR_RESOLVED_HISTORY_CONTRIBUTION
     debugStore(DEBUG_N_SPECULAR_TEMPORAL, xy, uvec4(signalWords,
         packHalf2x16(clamp(vec2(trackingHitDistance, resolvedHistoryContribution),
             vec2(-65504.0), vec2(65504.0)))));
+#endif
 }
 
 void debugWriteSpecularTemporalStateInvalid(uvec2 xy) {
+#if DEBUG_VIEW == DEBUG_VIEW_SPECULAR_CURRENT_TRACKING_HIT_DISTANCE || DEBUG_VIEW == DEBUG_VIEW_SPECULAR_TEMPORAL_HISTORY_SIGNAL || DEBUG_VIEW == DEBUG_VIEW_SPECULAR_RESOLVED_HISTORY_CONTRIBUTION
     debugStore(DEBUG_N_SPECULAR_TEMPORAL, xy, uvec4(
         0u, 0u, 0u, packHalf2x16(vec2(-1.0, 0.0))));
+#endif
 }
 
 void debugReadSpecularTemporalState(uvec2 xy, out uvec3 signalWords, out float trackingHitDistance, out float resolvedHistoryContribution) {

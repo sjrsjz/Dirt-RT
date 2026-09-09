@@ -1,3 +1,6 @@
+#ifndef DIRT_RT_MATH_HASH_GLSL
+#define DIRT_RT_MATH_HASH_GLSL
+
 // Hash without Sine
 // MIT License...
 /* Copyright (c)2014 David Hoskins.
@@ -157,3 +160,4 @@ vec4 hash44(vec4 p4)
     p4 += dot(p4, p4.wzxy+33.33);
     return fract((p4.xxyz+p4.yzzw)*p4.zywx);
 }
+#endif // DIRT_RT_MATH_HASH_GLSL

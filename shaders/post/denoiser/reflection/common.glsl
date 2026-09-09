@@ -50,22 +50,8 @@ vec3 maxentSafeNormalize(vec3 v, vec3 fallback) {
     return l2 > 1e-20 ? v * inversesqrt(l2) : fallback;
 }
 
-vec3 maxentFiniteColor(vec3 c) {
-    if (any(isnan(c)) || any(isinf(c))) return vec3(0.0);
-    return clamp(c, vec3(0.0), vec3(65504.0));
-}
-
 bool maxentInBounds(ivec2 p, ivec2 size) {
     return all(greaterThanEqual(p, ivec2(0))) && all(lessThan(p, size));
-}
-
-vec2 maxentHash2(uvec2 pixel, uint frame) {
-    uvec2 v = pixel ^ uvec2(frame * 0x9e3779b9u,
-        (frame + 1u) * 0x85ebca6bu);
-    v ^= v.yx >> 16u;
-    v *= uvec2(0x7feb352du, 0x846ca68bu);
-    v ^= v.yx >> 15u;
-    return vec2(v & 0x00ffffffu) * (1.0 / 16777216.0);
 }
 
 vec2 maxentProjectPrevious(vec3 currentRelativePosition, vec3 cameraDelta) {

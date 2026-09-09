@@ -38,107 +38,7 @@ in vec2 texCoord;
 /* RENDERTARGETS: 0 */
 layout(location = 0) out vec4 fragColor;
 
-// ---------------------------------------------------------------------------
-// Jet/rainbow colormap: [0,1] → blue→cyan→green→yellow→red
-// ---------------------------------------------------------------------------
-vec3 jetColormap(float t) {
-    return vec3(
-        clamp(min(4.0 * t - 1.5, -4.0 * t + 4.5), 0.0, 1.0),
-        clamp(min(4.0 * t - 0.5, -4.0 * t + 3.5), 0.0, 1.0),
-        clamp(min(4.0 * t + 0.5, -4.0 * t + 2.5), 0.0, 1.0));
-}
-
-// Log-scale normalize for ray-segment distance (0.01m..~160m → [0,1])
-float logDistNorm(float d) {
-    return clamp(log2(max(d, 0.01) * 100.0 + 1.0) / 14.0, 0.0, 1.0);
-}
-
-#if DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_NOISE_ONLY_CURRENT_WEIGHT || DEBUG_VIEW == DEBUG_VIEW_SPECULAR_NOISE_ONLY_CURRENT_WEIGHT
-vec3 debugNoiseOnlyCurrentWeight(float currentWeight) {
-    if (!(currentWeight >= 0.0) || isnan(currentWeight) || isinf(currentWeight))
-        return vec3(1.0, 0.0, 1.0);
-    return jetColormap(clamp(currentWeight, 0.0, 1.0));
-}
-#endif
-
-#if DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_PREPARED_MONTE_CARLO_VARIANCE || DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_FILTERED_MONTE_CARLO_VARIANCE || DEBUG_VIEW == DEBUG_VIEW_SPECULAR_PREPARED_MONTE_CARLO_VARIANCE || DEBUG_VIEW == DEBUG_VIEW_SPECULAR_FILTERED_MONTE_CARLO_VARIANCE
-vec3 debugMonteCarloVariance(float standardDeviation) {
-    // Neutral gray is valid light without a usable uncertainty estimate.
-    if (standardDeviation == -2.0) return vec3(0.35);
-    if (!(standardDeviation >= 0.0) || isnan(standardDeviation)
-            || isinf(standardDeviation))
-        return vec3(1.0, 0.0, 1.0);
-    float variance = standardDeviation * standardDeviation;
-    // Log2 display of the actual trace variance. V=1 occupies 1/16 of the
-    // scale and V=65535 reaches red; larger HDR variances saturate.
-    float normalizedVariance = clamp(log2(1.0 + variance) / 16.0,
-        0.0, 1.0);
-    return jetColormap(normalizedVariance);
-}
-#endif
-
-#if DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_KISH_EFFECTIVE_SAMPLES || DEBUG_VIEW == DEBUG_VIEW_SPECULAR_KISH_EFFECTIVE_SAMPLES
-vec3 debugKishEffectiveSamples(float effectiveSamples) {
-    if (!(effectiveSamples >= 1.0) || isnan(effectiveSamples) || isinf(effectiveSamples)) return vec3(1.0, 0.0, 1.0);
-    return jetColormap(clamp(log2(effectiveSamples) / log2(65504.0), 0.0, 1.0));
-}
-#endif
-
-#if DEBUG_VIEW == DEBUG_VIEW_SPECULAR_FINAL_VIRTUAL_NORMAL
-bool debugReadFinalDenoisedVirtualPosition(ivec2 pixel,
-        out vec3 position) {
-    if (any(lessThan(pixel, ivec2(0)))
-            || any(greaterThanEqual(pixel, ivec2(resolution_global)))) {
-        position = vec3(0.0);
-        return false;
-    }
-
-    SpecularMaxEnt unusedSignal;
-    float virtualDistance, validWeight;
-    readReflMaxEnt(uvec2(pixel), unusedSignal, virtualDistance, validWeight);
-    if (!(validWeight > 0.0) || !(virtualDistance > 0.0)
-            || isnan(virtualDistance) || isinf(virtualDistance)) {
-        position = vec3(0.0);
-        return false;
-    }
-
-    position = reconstructPrimaryRay(uvec2(pixel)) * virtualDistance;
-    return !any(isnan(position)) && !any(isinf(position));
-}
-
-bool debugFinalDenoisedVirtualNormal(ivec2 pixel, out vec3 normal) {
-    vec3 centerPosition;
-    if (!debugReadFinalDenoisedVirtualPosition(pixel, centerPosition)) {
-        normal = vec3(0.0);
-        return false;
-    }
-
-    // Match the denoiser's one-pixel central-difference reconstruction.
-    // Missing image-edge or invalid neighbors collapse to the center point.
-    vec3 left = centerPosition;
-    vec3 right = centerPosition;
-    vec3 down = centerPosition;
-    vec3 up = centerPosition;
-    vec3 candidate;
-    if (debugReadFinalDenoisedVirtualPosition(
-            pixel + ivec2(-1, 0), candidate)) left = candidate;
-    if (debugReadFinalDenoisedVirtualPosition(
-            pixel + ivec2(1, 0), candidate)) right = candidate;
-    if (debugReadFinalDenoisedVirtualPosition(
-            pixel + ivec2(0, -1), candidate)) down = candidate;
-    if (debugReadFinalDenoisedVirtualPosition(
-            pixel + ivec2(0, 1), candidate)) up = candidate;
-
-    vec3 virtualTangentX = right - left;
-    vec3 virtualTangentY = up - down;
-    vec3 unnormalizedNormal = cross(virtualTangentX, virtualTangentY);
-    float normalLength2 = dot(unnormalizedNormal, unnormalizedNormal);
-    vec3 fallback = normalize(reconstructPrimaryRay(uvec2(pixel)));
-    normal = normalLength2 > 1e-20
-        ? unnormalizedNormal * inversesqrt(normalLength2) : fallback;
-    return !any(isnan(normal)) && !any(isinf(normal));
-}
-#endif
+#include "/lib/debug/lighting_views.glsl"
 
 vec3 projectDiffuseLighting(MaxEntEncoding encoded, vec3 normal,
         vec3 primaryRay, float ggxAlpha, vec3 diffuseAlbedo) {
@@ -154,97 +54,7 @@ vec3 projectDiffuseLighting(MaxEntEncoding encoded, vec3 normal,
     #endif
 }
 
-float primaryTransmissionIor(float transmissionCode) {
-    if (transmissionCode < 0.999) return 1.0;
-    int mediumClass = int(transmissionCode + 0.5);
-    if (mediumClass == 1) return REFRACTIVE_INDEX;
-    if (mediumClass == 2) return GLASS_REFRACTIVE_INDEX;
-    if (mediumClass == 3) return 1.31;
-    return 1.0;
-}
-
-vec3 resolvePSRRefraction(uvec2 xy, out bool reusedScreen) {
-    PSRResolveData psr = readPSRResolve(xy);
-    reusedScreen = false;
-
-    if (psr.environment) {
-        setSkyVars();
-        vec3 sky = sampleSky(camPos.y, psr.refractedDirection,
-            -lightDir_global);
-        return psr.transmittance * max(sky, vec3(0.0));
-    }
-    if (!psr.endpointValid) return vec3(0.0);
-
-    vec3 resolved = vec3(0.0);
-    if (psr.screenCandidate) {
-        vec4 clip = rtViewProjection * vec4(psr.endpointRelative, 1.0);
-        if (clip.w > 1e-6) {
-            vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
-            if (all(greaterThanEqual(uv, vec2(0.0)))
-                    && all(lessThan(uv, vec2(1.0)))) {
-                // RT rays use integer pixel/resolution, including the current
-                // projection phase. A raster-style -0.5 shifts every reuse tap.
-                vec2 samplePixel = uv * vec2(resolution_global);
-                ivec2 basePixel = ivec2(floor(samplePixel));
-                vec2 fraction = fract(samplePixel);
-                float pixelFootprint = max(length(psr.endpointRelative)
-                    / max(float(resolution_global.y), 1.0), 0.025);
-                float positionTolerance = max(0.12,
-                    6.0 * pixelFootprint);
-                MaxEntEncoding background = init_maxent();
-                float acceptedWeight = 0.0;
-                for (int y = 0; y < 2; ++y) {
-                    for (int x = 0; x < 2; ++x) {
-                        ivec2 tap = basePixel + ivec2(x, y);
-                        if (any(lessThan(tap, ivec2(0))) || any(greaterThanEqual(
-                                tap, ivec2(resolution_global)))) continue;
-                        float weight = (x == 0 ? 1.0 - fraction.x : fraction.x)
-                            * (y == 0 ? 1.0 - fraction.y : fraction.y);
-                        if (weight <= 0.0) continue;
-                        vec3 position;
-                        float distance;
-                        readDiffusePrimaryGeometry(uvec2(tap), position, distance);
-                        if (!(distance >= 0.0) || isinf(distance)) continue;
-                        if (length(position - psr.endpointRelative) > positionTolerance
-                                || dot(readDiffuseGeometryNormal(uvec2(tap)),
-                                    psr.geometryNormal) <= 0.75) continue;
-                        MaxEntEncoding light;
-                        float effectiveSamples, rms;
-                        readDiffuseSwap(uvec2(tap), light, effectiveSamples, rms);
-                        background.maxEntY += weight * light.maxEntY;
-                        background.CoCg += weight * light.CoCg;
-                        acceptedWeight += weight;
-                    }
-                }
-                if (acceptedWeight > 1e-6) {
-                    background.maxEntY /= acceptedWeight;
-                    background.CoCg /= acceptedWeight;
-                    resolved = projectDiffuseLighting(background,
-                        psr.macroNormal, psr.refractedDirection,
-                        psr.roughness, psr.diffuseAlbedo);
-                    reusedScreen = true;
-                }
-            }
-        }
-    }
-
-    if (!reusedScreen) {
-        vec3 cachePosition = camPos + psr.endpointRelative
-            + psr.geometryNormal * RADIANCE_CACHE_SURFACE_EPSILON;
-        RadianceCache cache = loadRadianceCacheHistWorld(cachePosition);
-        if (radianceCacheValueValid(cache)) {
-            resolved = radianceCacheDiffuseIncident(cache,
-                psr.macroNormal) * psr.diffuseAlbedo;
-        }
-    }
-
-    return psr.transmittance * (resolved + psr.surfaceLight);
-}
-
-vec3 resolvePSRRefraction(uvec2 xy) {
-    bool reusedScreen;
-    return resolvePSRRefraction(xy, reusedScreen);
-}
+#include "/post/resolve_refraction.glsl"
 
 void main() {
     uvec2 xy = uvec2(gl_FragCoord.xy);
@@ -256,6 +66,13 @@ void main() {
     uvec4 primaryGeometryWords = readPrimaryGeometryWords(xy);
     float primaryDistance = uintBitsToFloat(primaryGeometryWords.w);
     float surfaceMask = primaryDistance >= 0.0 ? 1.0 : 0.0;
+    vec3 pixelPrimaryRay = reconstructPrimaryRay(xy);
+#if DEBUG_VIEW == DEBUG_VIEW_OUTPUT_COMPOSITE
+    // Derivatives must be evaluated before nonuniform sky/surface control
+    // flow, otherwise the solar footprint is undefined at silhouettes.
+    vec3 primaryRayDx = dFdx(pixelPrimaryRay);
+    vec3 primaryRayDy = dFdy(pixelPrimaryRay);
+#endif
 
     #if DEBUG_VIEW == DEBUG_VIEW_DIFFUSE_NOISE_ONLY_CURRENT_WEIGHT
     fragColor.xyz = surfaceMask < 0.5 ? vec3(0.0)
@@ -313,7 +130,7 @@ void main() {
         vec3 emisVal, rdVal, absorptionVal;
         vec3 transAlbedo_unused, lightVal_unused;
         readMiscTransport(GEO_N_MISC, xy, transAlbedo_unused, emisVal);
-        rdVal = reconstructPrimaryRay(xy);
+        rdVal = pixelPrimaryRay;
         readLightAbs(GEO_N_LIGHTABS, xy, lightVal_unused, absorptionVal);
 
         setSkyVars();
@@ -326,8 +143,8 @@ void main() {
             camPos.y,
             rdVal,
             -lightDir_global,
-            dFdx(rdVal),
-            dFdy(rdVal));
+            primaryRayDx,
+            primaryRayDy);
         sky = max(sky - pointSunDisc + filteredSunDisc, vec3(0.0));
         fragColor.xyz = absorptionVal * sky + emisVal;
         #elif DEBUG_VIEW == DEBUG_VIEW_OUTPUT_MEDIUM_EMISSION
@@ -356,7 +173,7 @@ void main() {
     vec3 textureNormal = decodeNormalU(primaryGeometryWords.z);
     readAlbedosPath(GEO_N_ALBEDOS, xy, specAlbedo, diffAlbedo);
     readMiscTransport(GEO_N_MISC, xy, transAlbedo, emisVal);
-    rdVal = reconstructPrimaryRay(xy);
+    rdVal = pixelPrimaryRay;
     readLightAbs(GEO_N_LIGHTABS, xy, lightVal, absorptionVal);
     vec3 primaryCs, primaryCd;
     vec2 primaryS;

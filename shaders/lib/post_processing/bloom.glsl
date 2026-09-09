@@ -37,25 +37,6 @@ vec3 bloomDiffusionSigmaScale() {
     return max(vec3(1e-3), bloomChromaticSigmaScale() * BLOOM_DIFFUSION_SCALE);
 }
 
-vec3 bloomGaussianWeight(float distanceSquared, float greenExp2Coefficient) {
-    vec3 sigma = bloomDiffusionSigmaScale();
-    return exp2(vec3(-distanceSquared * greenExp2Coefficient) / (sigma * sigma));
-}
-
-// Rescale an existing normalized reconstruction kernel without shifting its
-// center. At chromatic strength zero this is exactly one and preserves the
-// legacy B-spline/bilinear reconstruction. Physical diffusion itself is done
-// by the Gaussian stages; this only prevents achromatic reconstruction from
-// partially undoing their wavelength-dependent footprint.
-vec3 bloomReconstructionWeight(float baseWeight, float distanceSquared) {
-    vec3 sigma = bloomChromaticSigmaScale();
-    const float reconstructionSigma = 1.25;
-    float coefficient = LOG2_E / (2.0 * reconstructionSigma * reconstructionSigma);
-    vec3 correction = exp2(vec3(-distanceSquared * coefficient) *
-        (vec3(1.0) / (sigma * sigma) - vec3(1.0)));
-    return baseWeight * correction;
-}
-
 ivec2 bloomOrigin(int l, ivec2 sz) {
     return sz - (sz >> l);
 }
@@ -114,55 +95,4 @@ void bloomFindLOD(
 }
 
 
-int bloomKernelR(int diff) {
-    return diff <= 0 ? 1 : 1 << (diff - 1);
-}
-
-#define BLOOM_SAMPLE(result,img,srcL,dstL,dp,as) do{ \
-    ivec2 _srcSize=bloomSize(srcL,as); \
-    ivec2 _dstSize=bloomSize(dstL,as); \
-    ivec2 _sO=bloomOrigin(srcL,as),_sM=_sO+_srcSize-1; \
-    int _diff=(dstL)-(srcL);int _absDiff=_diff>=0?_diff:-_diff; \
-    int _R=bloomKernelR(_absDiff); \
-    vec2 _scf=vec2(_sO)+vec2( \
-        _dstSize.x>1?float((dp).x)*float(_srcSize.x)/float(_dstSize.x):0.5*float(max(_srcSize.x-1,0)), \
-        _dstSize.y>1?float((dp).y)*float(_srcSize.y)/float(_dstSize.y):0.5*float(max(_srcSize.y-1,0))); \
-    ivec2 _sc=ivec2(floor(_scf));vec2 _frac=_scf-vec2(_sc); \
-    float _S_f=float(1<<_absDiff);float _alpha=LOG2_E/(_S_f*_S_f); \
-    vec3 _s=vec3(0),_w=vec3(0); \
-    for(int _dy=-_R;_dy<=_R;_dy++)for(int _dx=-_R;_dx<=_R;_dx++){ \
-        vec2 _d=vec2(_dx,_dy)-_frac; \
-        vec3 _gw=bloomGaussianWeight(dot(_d,_d),_alpha); \
-        _w+=_gw; \
-        ivec2 _sc2=_sc+ivec2(_dx,_dy); \
-        if(_sc2.x>=_sO.x&&_sc2.x<=_sM.x&&_sc2.y>=_sO.y&&_sc2.y<=_sM.y) \
-            _s+=bloomSafeFloat(imageLoad(img,_sc2).rgb)*_gw; \
-    } \
-    (result)=_s/max(_w,vec3(1e-5)); \
-}while(false)
-
-#define BLOOM_SAMPLE_TEX(result,tex,srcL,dstL,dp,tsz,as) do{ \
-    int _srcEq=(srcL)<0?-1:(srcL); \
-    ivec2 _srcSize=_srcEq<0?tsz:bloomSize(_srcEq,as); \
-    ivec2 _dstSize=bloomSize(dstL,as); \
-    ivec2 _sO=_srcEq<0?ivec2(0):bloomOrigin(_srcEq,as); \
-    ivec2 _sM=_sO+_srcSize-1; \
-    int _diff=(dstL)-_srcEq;int _absDiff=_diff>=0?_diff:-_diff; \
-    int _R=bloomKernelR(_absDiff); \
-    vec2 _scf=vec2(_sO)+vec2( \
-        _dstSize.x>1?float((dp).x)*float(_srcSize.x)/float(_dstSize.x):0.5*float(max(_srcSize.x-1,0)), \
-        _dstSize.y>1?float((dp).y)*float(_srcSize.y)/float(_dstSize.y):0.5*float(max(_srcSize.y-1,0))); \
-    ivec2 _sc=ivec2(floor(_scf));vec2 _frac=_scf-vec2(_sc); \
-    float _S_f=float(1<<_absDiff);float _alpha=LOG2_E/(_S_f*_S_f); \
-    vec3 _s=vec3(0),_w=vec3(0); \
-    for(int _dy=-_R;_dy<=_R;_dy++)for(int _dx=-_R;_dx<=_R;_dx++){ \
-        vec2 _d=vec2(_dx,_dy)-_frac; \
-        vec3 _gw=bloomGaussianWeight(dot(_d,_d),_alpha); \
-        _w+=_gw; \
-        ivec2 _sc2=_sc+ivec2(_dx,_dy); \
-        if(_sc2.x>=_sO.x&&_sc2.x<=_sM.x&&_sc2.y>=_sO.y&&_sc2.y<=_sM.y) \
-            _s+=bloomSafeFloat(texelFetch(tex,_sc2,0).rgb)*_gw; \
-    } \
-    (result)=_s/max(_w,vec3(1e-5)); \
-}while(false)
-#endif
+#endif // BLOOM_GLSL

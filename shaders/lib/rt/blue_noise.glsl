@@ -9,8 +9,8 @@ layout(set = 2, binding = 0) uniform sampler2D aaaRtBlueNoise;
 
 const uint RT_BLUE_NOISE_TILE_SIZE = 64u;
 const uint RT_BLUE_NOISE_ATLAS_COLUMNS = 4u;
-const vec2 RT_BLUE_NOISE_FRAME_ROTATION =
-    vec2(0.7548776662466927, 0.5698402909980532);
+const uvec2 RT_BLUE_NOISE_FRAME_ROTATION =
+    uvec2(0xc13fa9a9u, 0x91e10da5u);
 
 uint rtBlueNoisePassIndex() {
 #if defined(FIRST_LOBE_DIFFUSE)
@@ -38,8 +38,9 @@ vec2 rtBlueNoise2D(uvec2 pixel, uint dimensionPair) {
     vec2 encoded = texelFetch(aaaRtBlueNoise, atlasPixel, 0).rg;
     // Decode normalized RG8 at texel centers so the sample stays in [0, 1).
     vec2 base = encoded * (255.0 / 256.0) + (0.5 / 256.0);
-    float temporalIndex = float(cam.frameId & 0xffffu);
-    return fract(base + temporalIndex * RT_BLUE_NOISE_FRAME_ROTATION);
+    uvec2 phase = cam.frameId * RT_BLUE_NOISE_FRAME_ROTATION;
+    vec2 rotation = vec2(phase >> 8u) * (1.0 / 16777216.0);
+    return fract(base + rotation);
 }
 
 #endif

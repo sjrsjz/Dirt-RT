@@ -1,7 +1,8 @@
 #ifndef DIRT_RT_RAYTRACE_PATH_TRACE_GLSL
 #define DIRT_RT_RAYTRACE_PATH_TRACE_GLSL
 
-// Forward path traversal for diffuse, reflection and refraction continuations.
+// ray1/ray2 forward paths; secondary vertices may select any surface lobe.
+// ray3 primary refraction uses the endpoint traversal in refraction.glsl.
 
 // -----------------------------------------------------------------------------------
 // Core: Forward Path Tracing
@@ -58,7 +59,6 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     FirstBounceData fb = initFirstBounceData(ro, rd);
 
     // ===== FIRST BOUNCE =====
-    #if defined(FIRST_LOBE_DIFFUSE) || defined(FIRST_LOBE_REFLECTION) || defined(FIRST_LOBE_REFRACTION)
     material surf;
     loadPrimarySurfaceGBuffer(xy, ro, rd, fb, surf);
 
@@ -135,25 +135,11 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         reflectionGuide = computeSpecularMaxEntGuide(
             xy, SPECULAR_PATH_GUIDING_STRENGTH);
         vec3 microNormal = macroNormal;
-        if (!isDeltaSpecular(surf.R.x))
-            microNormal = GGXVNDFNormal(macroNormal, -fb.rd_i, surf.R.x,
-                firstReflectionXi);
-        #else
-        vec3 microNormal = macroNormal;
-        if (lobes.P_refr > 1e-8 && !isDeltaSpecular(surf.R.x))
-            microNormal = GGXVNDFNormal(macroNormal, -fb.rd_i, surf.R.x,
-                rtBlueNoise2D(xy, 0u));
         #endif
 
         vec3 bsdf_weight = vec3(0.0);
         vec3 next_rd = fb.rd_i;
         int current_type = -1;
-        bool firstSurfaceInside = inside;
-        PSRResult psr;
-        psr.virtualDist = 0.0;
-        psr.pathRoughness = 0.0;
-        psr.refrDir = fb.rd_i;
-
         #if defined(FIRST_LOBE_REFLECTION)
         current_type = REFLECTION;
         bool firstDelta;
@@ -163,18 +149,6 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             reflectionFirstQLiResponse, lastBsdfStrategyPdf, firstDelta);
         lastBsdfDelta = firstDelta;
         lastNeeCompatible = true;
-        #elif defined(FIRST_LOBE_REFRACTION)
-        current_type = REFRACTION;
-        bool wasInside = inside;
-        handleFirstBounce_Refraction(fb.rd_i, ro_o, macroNormal,
-            geometryNormal, microNormal, surf, lobes, rs, bsdf_weight,
-            next_rd, inside, psr, wasInside, 0);
-        lastBsdfStrategyPdf = 0.0;
-        lastBsdfDelta = true;
-        lastNeeCompatible = false;
-        fb.refr_dir = psr.refrDir;
-        fb.t2_ior_adjusted = psr.virtualDist;
-        fb.pathRoughness = psr.pathRoughness;
         #else
         current_type = DIFFUSION;
         prepareDiffuseDenoisedSurfaceReprojection(xy, ro_o - ro,
@@ -231,8 +205,6 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
                             fSpecTimesNoL, pdfNDF)) {
                         float proposalPdf = specularGuideMixturePdf(
                             reflectionGuide, pdfNDF, sunWi);
-                        L_direct_0 = misLightContribution(
-                            fSpecTimesNoL, sunLi, lightPdf, proposalPdf);
                         float misWeight = powerHeuristic(
                             lightPdf, proposalPdf);
                         // Convert the light-proposal sample to the same q*Li
@@ -249,212 +221,13 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
         fb.micro_n = microNormal;
         fb.type = current_type;
         fb.n_i = n_i;
-        fb.n_o = current_type == REFRACTION ? n_o : n_i;
+        fb.n_o = n_i;
         cascadedRoughness2 = current_type == DIFFUSION
             ? 1.0 : surf.R.x * surf.R.x;
         throughput *= bsdf_weight;
-        if (current_type == REFRACTION && inside != firstSurfaceInside) {
-            updatePathMedium(surf, inside, activeMediumBlockID,
-                activeMediumTint, activeMediumExtinctionWeight);
-        }
-        ro_i = ro_o + geometryNormal
-                    * (current_type == REFRACTION ? -0.001 : 0.001);
+        ro_i = ro_o + geometryNormal * 0.001;
         rd_i = next_rd;
     }
-    #else
-    vec3 ro_o, rd_o;
-    float t = raycast(ro_i, rd_i, ro_o, rd_o, !inside, false);
-
-    if (t < -0.5) {
-        // Primary ray hit sky
-        #if defined(FIRST_LOBE_DIFFUSE)
-        invalidatePreparedDiffuseHistory(xy, cam.frameId);
-        #endif
-        vec3 sky = sampleSky(ro_i.y, rd_i, lightDir).xyz;
-        if (any(isnan(sky)) || any(isinf(sky))) sky = vec3(0.0);
-        L_indirect += throughput * sky;
-        throughput = vec3(0.0);
-        fb.t = -1.0;
-        fb.absorption = originalInside ? vec3(0.0) : vec3(1.0);
-    } else {
-        vec4 primaryMotion = getPrimarySurfaceMotion(tmp_Payload);
-        fb.surfaceMotion = primaryMotion.xyz;
-        fb.motionValid = primaryMotion.w;
-        // --- Material evaluation ---
-        Material surfaceMat = evaluateMaterial(tmp_Payload, ro_i, rd_i, 0u);
-        vec3 geomN = payload_unpackGeomNormal(tmp_Payload.data);
-        vec3 geometryNormal = faceforward(geomN, geomN, rd_i);
-        #if defined(FIRST_LOBE_DIFFUSE)
-        markRadianceCacheGeometryHit(xy, ro_o, geometryNormal);
-        #endif
-        vec3 macroNormal = surfaceMat.macroNormal;
-        int blockID;
-        payload_unpackShadow(tmp_Payload.data, blockID);
-        material surf = materialFromEvaluated(surfaceMat, blockID);
-        // tmp_Payload is shared by every trace issued by this invocation.
-        // Freeze the primary-surface signature before PSR or sun NEE can
-        // replace it with a secondary/shadow-hit payload. Otherwise material
-        // continuity follows sun visibility and MaxEnt rejects valid history.
-        int maxentMaterialID = getMaxEntMaterialID(tmp_Payload, blockID);
-        #if defined(FIRST_LOBE_DIFFUSE)
-        vec3 microNormal = macroNormal;
-        #else
-        firstReflectionXi = rtBlueNoise2D(xy, 0u);
-        #if defined(FIRST_LOBE_REFLECTION)
-        reflectionGuide = computeSpecularMaxEntGuide(
-            xy, SPECULAR_PATH_GUIDING_STRENGTH);
-        #endif
-        vec3 microNormal = isDeltaSpecular(surf.R.x) ? macroNormal
-            : GGXVNDFNormal(macroNormal, -rd_i, surf.R.x,
-                firstReflectionXi);
-        #endif
-        float surfaceIor = transportIorFromMaterial(surf);
-        float n_i = inside ? surfaceIor : 1.0;
-        float n_o = inside ? 1.0 : surfaceIor;
-        float rs = n_i / n_o;
-
-        // --- Medium absorption ---
-        MediumResult medium = evalMedium(t, rd_i, ro_i.y, inside,
-            activeMediumBlockID, activeMediumTint,
-            activeMediumExtinctionWeight, fogColor, globalEmission);
-
-        // --- Lobe probabilities ---
-        LobeProbs lobes = computeLobeProbs(surf, rd_i, macroNormal, rs);
-
-        // --- First bounce direction: compile-time dispatched ---
-        vec3 bsdf_weight = vec3(0.0);
-        vec3 next_rd = rd_i;
-        int current_type = -1;
-        bool firstSurfaceInside = inside;
-        PSRResult psr;
-        psr.virtualDist = 0.0;
-        psr.pathRoughness = 0.0;
-        psr.refrDir = rd;
-
-        #if defined(FIRST_LOBE_REFLECTION)
-        {
-            current_type = REFLECTION;
-            bool firstDelta;
-            handleFirstBounce_Reflection(rd_i, ro_o, macroNormal, geometryNormal, microNormal,
-                surf, rs, reflectionGuide, firstReflectionXi,
-                bsdf_weight, next_rd, reflectionFirstQLiResponse,
-                lastBsdfStrategyPdf, firstDelta);
-            lastBsdfDelta = firstDelta;
-            lastNeeCompatible = true;
-        }
-        #elif defined(FIRST_LOBE_REFRACTION)
-        {
-            current_type = REFRACTION;
-            bool wasInside = inside;
-            handleFirstBounce_Refraction(rd_i, ro_o, macroNormal, geometryNormal, microNormal,
-                surf, lobes, rs, bsdf_weight, next_rd,
-                inside, psr, wasInside, 0);
-            lastBsdfStrategyPdf = 0.0;
-            lastBsdfDelta = true;
-            lastNeeCompatible = false;
-            fb.refr_dir = psr.refrDir;
-            fb.t2_ior_adjusted = psr.virtualDist;
-            fb.pathRoughness = psr.pathRoughness;
-        }
-        #else
-        {
-            current_type = DIFFUSION;
-            prepareDiffuseDenoisedSurfaceReprojection(xy, ro_o - ro,
-                geometryNormal,
-                ro - prevRaytracingCamPos - fb.surfaceMotion,
-                fb.motionValid, cam.frameId, rtViewProjection,
-                mat3(rtCurrentModelViewLocal),
-                rtCurrentProjectionParamsLocal);
-            diffuseGuide = computeMaxEntGuide(xy, cam.frameId,
-                PATH_GUIDING_STRENGTH);
-            handleFirstBounce_Diffuse(rd_i, ro_o, macroNormal, geometryNormal,
-                surf, lobes, diffuseGuide, rtBlueNoise2D(xy, 0u),
-                bsdf_weight, next_rd,
-                lastBsdfStrategyPdf);
-            lastBsdfDelta = false;
-            lastNeeCompatible = true;
-        }
-        #endif
-
-        // --- NEE at depth 0 ---
-        bool firstHasSunNee = (current_type == DIFFUSION
-                    && lobes.P_diff > 1e-8)
-                || (current_type == REFLECTION
-                    && !isDeltaSpecular(surf.R.x));
-        if (!isDarkened && firstHasSunNee) {
-            vec3 sunWi, sunLi;
-            float lightPdf;
-            if (sampleDirectSun(ro_o, geometryNormal, macroNormal,
-                    lightDir, inside,
-                    rtBlueNoise2D(xy, 1u),
-                    sunWi, sunLi, lightPdf)) {
-                L_direct_0_dir = sunWi;
-
-                if (current_type == DIFFUSION) {
-                    float proposalPdf = (1.0 - diffuseGuide.prob)
-                            * (1.0 / (2.0 * PI));
-                    proposalPdf += diffuseGuide.prob * maxent_guiding_pdf(
-                        sunWi, diffuseGuide.axis, diffuseGuide.kappa);
-                    float misWeight = powerHeuristic(lightPdf, proposalPdf);
-                    #if EON_ENABLED
-                    // The deferred EON projection supplies f_r * NoL * rho.
-                    L_direct_0 = max(vec3(0.0), sunLi
-                                * (misWeight / max(lightPdf, 1e-20)));
-                    #else
-                    float Fd = evaluateDisneyDiffuseFactor(
-                            -rd_i, sunWi, macroNormal, surf.R.x);
-                    // Legacy MaxEnt composition supplies NoL and base color.
-                    L_direct_0 = max(vec3(0.0), sunLi
-                                * (Fd * misWeight / max(PI * lightPdf, 1e-20)));
-                    #endif
-                } else if (current_type == REFLECTION
-                        && !isDeltaSpecular(surf.R.x)) {
-                    vec3 fSpecTimesNoL;
-                    float pdfNDF;
-                    if (evaluateSpecularBRDF(
-                            -rd_i, sunWi, macroNormal,
-                            surf.Cs, surf.S.x, surf.S.y, rs, surf.R.x,
-                            fSpecTimesNoL, pdfNDF)) {
-                        float proposalPdf = specularGuideMixturePdf(
-                            reflectionGuide, pdfNDF, sunWi);
-                        L_direct_0 = misLightContribution(
-                            fSpecTimesNoL, sunLi, lightPdf, proposalPdf);
-                        float misWeight = powerHeuristic(
-                            lightPdf, proposalPdf);
-                        // Convert the light proposal to the same q*Li measure
-                        // as the VNDF continuation sample.
-                        L_direct_0_incident = max(vec3(0.0), sunLi *
-                            (pdfNDF * misWeight
-                                / max(lightPdf, 1e-20)));
-                    }
-                }
-            }
-        }
-
-        // --- Record G-Buffer ---
-        recordFirstBounceGBuffer(ro_o, ro, macroNormal, geometryNormal, microNormal,
-            surf, maxentMaterialID, rd_i, next_rd, t, n_i,
-            (current_type == REFRACTION) ? n_o : n_i,
-            current_type, medium.emission,
-            medium.absorption, fb);
-
-        // PSR uses sqrt(sum(r_i^2)); a diffuse event is fully rough.
-        cascadedRoughness2 = current_type == DIFFUSION
-            ? 1.0 : surf.R.x * surf.R.x;
-
-        // --- Update throughput ---
-        throughput *= bsdf_weight;
-        if (current_type == REFRACTION && inside != firstSurfaceInside) {
-            updatePathMedium(surf, inside, activeMediumBlockID,
-                activeMediumTint, activeMediumExtinctionWeight);
-        }
-
-        // --- Advance ray ---
-        ro_i = ro_o + geometryNormal * ((current_type == REFRACTION) ? -0.001 : 0.001);
-        rd_i = next_rd;
-    }
-
-    #endif
 
     // ===== SECONDARY LOOP =====
     if (max(throughput.r, max(throughput.g, throughput.b)) > 0.0
@@ -512,8 +285,6 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             int blockID;
             payload_unpackShadow(tmp_Payload.data, blockID);
             material surf = materialFromEvaluated(surfaceMat, blockID);
-            vec3 microNormal = isDeltaSpecular(surf.R.x) ? macroNormal
-                : GGXVNDFNormal(macroNormal, -rd_i, surf.R.x, ro_o);
             float surfaceIor2 = transportIorFromMaterial(surf);
             float n_i2 = inside ? surfaceIor2 : 1.0;
             float n_o2 = inside ? 1.0 : surfaceIor2;
@@ -547,7 +318,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             float sampledStrategyPdf;
             bool sampledDeltaLobe;
             bool neeCompatible;
-            handleSecondaryBounce(rd_i, ro_o, macroNormal, geometryNormal, microNormal,
+            handleSecondaryBounce(rd_i, ro_o, macroNormal, geometryNormal,
                 surf, lobes, bsdf_weight, next_rd,
                 current_type, sampledSpecularLobe, sampledStrategyPdf,
                 sampledDeltaLobe, neeCompatible, inside);
@@ -626,7 +397,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             bool specularLobeEligible = sampledSpecularLobe
                     && (nextCascadedRoughness2 >= roughThreshold2 || bounceNumber >= 2);
             bool viaSpecularEligible = arrivedViaSpecular
-                    && bounceNumber >= 2;
+                    && current_type != REFRACTION && bounceNumber >= 2;
             bool cacheEligible = !inside
                     && (diffuseEligible || specularLobeEligible || viaSpecularEligible);
             if (cacheEligible) {
@@ -662,7 +433,7 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
             // --- Russian Roulette ---
             if (depth >= 2) {
                 float p = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05, 0.95);
-                if (getRandom() > p) break;
+                if (getRandom() >= p) break;
                 throughput /= p;
             }
 
@@ -682,9 +453,6 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     if (any(isnan(L_direct_0)) || any(isinf(L_direct_0)))
         L_direct_0 = vec3(0.0);
 
-    vec3 totalIllumination = clamp(
-            L_indirect + L_direct_0, 0.0, 65504.0);
-
     #if defined(FIRST_LOBE_DIFFUSE)
     writeDiffuseOutput(
         xy, fb, L_indirect,
@@ -694,8 +462,6 @@ void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir) {
     writeReflectionOutput(xy, fb, L_indirect,
         L_direct_0_incident, L_direct_0_dir,
         reflectionFirstQLiResponse, ro);
-    #else
-    writeRefractionOutput(xy, fb, totalIllumination, ro);
     #endif
 }
 

@@ -75,12 +75,6 @@ layout(std430, set = 0, binding = 2, scalar) readonly buffer EntityMotionBuffer 
     EntityMotionVertex vertices[];
 } entityMotionBuffer;
 
-#if !defined(RADIANCE_CACHE_TRACE)
-void Trace(uvec2 coord, vec3 ro, vec3 rd, vec3 lightDir);
-void TracePrimaryGBuffer(uvec2 coord, vec3 ro, vec3 rd,
-    mat4 currentViewProjection);
-#endif
-
 bool isDarkened = false;
 float rtCurrentConeWidth = 0.0;
 float rtCurrentConeSpread = 0.0;
@@ -94,11 +88,13 @@ Payload tmp_Payload;
 
 #include "/lib/rt/raytrace/scene.glsl"
 #include "/lib/rt/raytrace/transport.glsl"
-#include "/lib/rt/raytrace/bounces.glsl"
 #include "/lib/rt/raytrace/lighting.glsl"
 #include "/lib/rt/raytrace/gbuffer_io.glsl"
 #include "/lib/rt/raytrace/primary_pass.glsl"
+#if !defined(RADIANCE_CACHE_TRACE) && !defined(PRIMARY_GBUFFER_PASS) && !defined(FIRST_LOBE_REFRACTION)
+#include "/lib/rt/raytrace/bounces.glsl"
 #include "/lib/rt/raytrace/path_trace.glsl"
+#endif
 
 #if !defined(RADIANCE_CACHE_TRACE)
 

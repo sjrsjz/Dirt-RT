@@ -185,19 +185,6 @@ void writeReflectionOutput(uvec2 xy, FirstBounceData fb,
     writeReflMaxEntSample(xy, signal, refl_vprojdist, refl_R);
 }
 
-void writeRefractionOutput(uvec2 xy, FirstBounceData fb, vec3 totalIllumination, vec3 ro) {
-    vec3 pos_rel = fb.p - ro;
-    vec3 refr_R = fb.refr_dir;
-    float refr_vprojdist = 0.0;
-    vec3 refr_color = vec3(0.0);
-    if (fb.t > -0.5) {
-        refr_vprojdist = fb.t2_ior_adjusted;
-        refr_color = clamp(totalIllumination / max(fb.transmissionAlbedo, vec3(1e-6)), 0.0, 200.0 * div_avgExposure);
-    }
-    writeRefrGeo(xy, pos_rel, refr_R);
-    writeRefrLight(xy, refr_color, refr_vprojdist, 0.0);
-}
-
 #if defined(FIRST_LOBE_REFRACTION)
 void TraceRefractionPSR(uvec2 xy, vec3 ro, vec3 primaryRay) {
     PSRResolveData outputData;

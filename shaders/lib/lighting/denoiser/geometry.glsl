@@ -16,6 +16,16 @@
 #include "/lib/buffers/gbuffer.glsl"
 #include "/lib/lighting/denoiser/signal.glsl"
 
+// Small kernels supply a cooperatively reconstructed FP32 ray tile. Large
+// Poisson gathers reconstruct directly because their footprint is sparse.
+#ifdef MAXENT_ATROUS_SMALL_KERNEL
+vec3 denoiserSpatialPrimaryRay(ivec2 pixel);
+#else
+vec3 denoiserSpatialPrimaryRay(ivec2 pixel) {
+    return reconstructPrimaryRay(uvec2(pixel));
+}
+#endif
+
 bool denoiserSpatialGeometryWordsValid(uvec4 words) {
     return uintBitsToFloat(words.x) >= 0.0;
 }
@@ -34,7 +44,7 @@ DenoiserSpatialCenterGeometry denoiserSpatialDecodeCenterGeometry(
     DenoiserSpatialCenterGeometry geometry;
     geometry.surfaceDistance = uintBitsToFloat(words.x);
     geometry.geometryNormal = decodeNormalU(words.y);
-    geometry.primaryRay = reconstructPrimaryRay(uvec2(pixel));
+    geometry.primaryRay = denoiserSpatialPrimaryRay(pixel);
     geometry.surfacePlaneOffset = geometry.surfaceDistance
         * dot(geometry.geometryNormal, geometry.primaryRay);
     vec2 roughnessEffectiveSamples = unpackHalf2x16(words.w);
@@ -47,19 +57,19 @@ DenoiserSpatialCenterGeometry denoiserSpatialDecodeCenterGeometry(
 void denoiserSpatialDecodeSampleGeometry(uvec4 words, ivec2 pixel,
         out vec3 primaryRay, out float surfaceDistance,
         out float effectiveSamples) {
-    primaryRay = reconstructPrimaryRay(uvec2(pixel));
+    primaryRay = denoiserSpatialPrimaryRay(pixel);
     surfaceDistance = uintBitsToFloat(words.x);
     effectiveSamples = unpackHalf2x16(words.w).y;
 }
 
 bool denoiserSpatialTryVirtualWorldPositionFromWords(
         ivec2 pixel, uvec4 signalWords, out vec3 position) {
-    if (!denoiserSpatialSignalWordsValid(signalWords)) {
+    if (!denoiserSpatialPreparedSignalWordsValid(signalWords)) {
         position = vec3(0.0);
         return false;
     }
     float virtualDistance = unpackHalf2x16(signalWords.w).y;
-    position = reconstructPrimaryRay(uvec2(pixel)) * virtualDistance;
+    position = denoiserSpatialPrimaryRay(pixel) * virtualDistance;
     return true;
 }
 

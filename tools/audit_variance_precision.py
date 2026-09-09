@@ -180,6 +180,7 @@ def main():
     assert all(c['records'][-1]['modes'][m]['temporal']['finite']
         and c['records'][-1]['modes'][m]['spatial']['finite'] for c in result['histories'] for m in MODES)
     paths=[Path(__file__), ROOT/'shaders/lib/lighting/denoiser/variance_prepare.glsl',
+        ROOT/'shaders/lib/lighting/denoiser/variance_tile.glsl',
         ROOT/'shaders/lib/math/statistics.glsl',ROOT/'shaders/lib/common/pack_half.glsl',
         ROOT/'shaders/lib/buffers/diffuse_buffer.glsl',ROOT/'shaders/lib/buffers/specular_buffer.glsl',
         ROOT/'shaders/post/denoiser/diffuse/temporal.glsl',ROOT/'shaders/post/denoiser/reflection/temporal.glsl',

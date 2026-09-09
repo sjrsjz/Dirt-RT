@@ -2,8 +2,8 @@
 #define MAXENT_DENOISER_ATROUS_LARGE_GLSL
 
 // Same policy interface as atrous_small.glsl, except stores are
-// owned by the including pass. This lets the shared Poisson implementation be
-// used by both fragment and compute entry points.
+// owned by the including compute pass. Both signal domains use an 8x8
+// workgroup for cooperative virtual-normal reconstruction.
 
 #define DENOISER_SPATIAL_LARGE_WORKGROUP_SIZE 8
 #define DENOISER_SPATIAL_LARGE_TILE_SIZE (DENOISER_SPATIAL_LARGE_WORKGROUP_SIZE + 2)
@@ -86,8 +86,8 @@ bool denoiserSpatialFilterLarge(ivec2 pixel,
 
     uvec4 centerCurrentWords =
         denoiserSpatialLoadIndependentCurrentWords(pixel);
-    if (!denoiserSpatialSignalWordsValid(centerSignalWords)
-            || !denoiserSpatialSignalWordsValid(centerCurrentWords))
+    if (!denoiserSpatialPreparedSignalWordsValid(centerSignalWords)
+            || !denoiserSpatialPreparedSignalWordsValid(centerCurrentWords))
         return false;
     uvec4 centerGeometryWords = denoiserSpatialLoadGeometryWords(pixel);
     if (!denoiserSpatialGeometryWordsValid(centerGeometryWords))
@@ -102,12 +102,12 @@ bool denoiserSpatialFilterLarge(ivec2 pixel,
         return false;
     float surfaceRejectionScale = denoiserSpatialDistanceRejectionScale(
         centerGeometry.surfaceDistance, float(size.y));
+    MaxEntLightMetric centerMetric = maxentPrepareLightMetric(centerSignal.maxEntY);
     float virtualDistanceAlpha = centerGeometry.ggxAlpha;
     vec3 centerVirtualPosition =
         denoiserSpatialLargeTileVirtualPosition[centerIndex].xyz;
     float virtualRejectionScale = denoiserSpatialVirtualRejectionScale(
             centerGeometry.ggxAlpha, centerSignal.virtualDistance);
-    float lightDifferenceScale = DENOISER_SPATIAL_PHI_LUMINANCE;
     uint rowStride = uint(DENOISER_SPATIAL_LARGE_TILE_SIZE);
 
     vec3 virtualTangentX = -denoiserSpatialLargeReadVirtualPosition(centerIndex - 1u, centerVirtualPosition);
@@ -116,10 +116,13 @@ bool denoiserSpatialFilterLarge(ivec2 pixel,
     virtualTangentY += denoiserSpatialLargeReadVirtualPosition(centerIndex + rowStride, centerVirtualPosition);
     vec3 centerVirtualNormal = denoiserSpatialVirtualNormal(
         virtualTangentX, virtualTangentY, centerGeometry.primaryRay);
+    float lightDifferenceScale = DENOISER_SPATIAL_PHI_LUMINANCE;
 
+#if DENOISER_SPATIAL_ACCUMULATE_PROPOSAL
     DenoiserSpatialAccumulator accum = denoiserSpatialBeginAccumulation(centerSignal);
-    DenoiserSpatialAccumulator currentAccum =
-        denoiserSpatialBeginAccumulation(centerCurrent);
+#endif
+    DenoiserSpatialCurrentAccumulator currentAccum =
+        denoiserSpatialBeginCurrentAccumulation(centerCurrent);
 
     // Independent per-pixel rotation avoids exposing the 8x8 workgroup grid
     // through correlated Poisson directions. Use a scalar integer hash here:
@@ -136,48 +139,13 @@ bool denoiserSpatialFilterLarge(ivec2 pixel,
         ivec2 samplePixel = pixel + ivec2(round(rotation * DENOISER_SPATIAL_POISSON_8[i].xy));
         if (!denoiserSpatialLargeInBounds(samplePixel, size)) continue;
 
-        uvec4 sampleGeometryWords = denoiserSpatialLoadGeometryWords(samplePixel);
-        uvec4 sampleSignalWords = denoiserSpatialLoadSignalWords(samplePixel);
-        uvec4 sampleCurrentWords =
-            denoiserSpatialLoadIndependentCurrentWords(samplePixel);
-        if (!denoiserSpatialGeometryWordsValid(sampleGeometryWords)
-                || !denoiserSpatialSignalWordsValid(sampleSignalWords)
-                || !denoiserSpatialSignalWordsValid(sampleCurrentWords))
-            continue;
-        vec3 samplePrimaryRay;
-        float sampleSurfaceDistance;
-        float sampleEffectiveSamples;
-        denoiserSpatialDecodeSampleGeometry(sampleGeometryWords, samplePixel,
-            samplePrimaryRay, sampleSurfaceDistance,
-            sampleEffectiveSamples);
-        if (!statisticsValidEffectiveSampleCount(sampleEffectiveSamples))
-            continue;
-        float surfaceGeometryExponent =
-            denoiserSpatialAxialDistanceExponent(
-                centerGeometry.surfacePlaneOffset,
-                centerGeometry.geometryNormal, samplePrimaryRay,
-                sampleSurfaceDistance, surfaceRejectionScale);
-
-        DenoiserMaxEntSignal sampleSignal = denoiserUnpackMaxEntSignalTrusted(sampleSignalWords);
-        DenoiserMaxEntSignal sampleCurrent =
-            denoiserUnpackMaxEntSignalTrusted(sampleCurrentWords);
-
-        float virtualDistanceWeight;
-        float weight = denoiserSpatialWeight(centerSignal,
-                sampleSignal, samplePrimaryRay,
-                surfaceGeometryExponent,
-                DENOISER_SPATIAL_POISSON_8[i].w,
-                lightDifferenceScale,
-                virtualDistanceAlpha, centerVirtualPosition,
-                centerVirtualNormal, virtualRejectionScale,
-                virtualDistanceWeight);
-        denoiserSpatialAccumulate(accum, sampleSignal, weight,
-            virtualDistanceWeight);
-        denoiserSpatialAccumulate(currentAccum, sampleCurrent, weight,
-            virtualDistanceWeight);
+        float kernelWeight = DENOISER_SPATIAL_POISSON_8[i].w;
+#include "/lib/lighting/denoiser/atrous_tap.glsl"
     }
 
+#if DENOISER_SPATIAL_ACCUMULATE_PROPOSAL
     outputSignal = denoiserSpatialResolve(accum, DENOISER_SPATIAL_STEP);
+#endif
     outputIndependentCurrent = denoiserSpatialResolve(currentAccum, DENOISER_SPATIAL_STEP);
     return true;
 }

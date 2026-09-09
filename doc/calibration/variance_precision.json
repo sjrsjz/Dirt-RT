@@ -16054,14 +16054,15 @@
     }
   ],
   "source_sha256": {
-    "tools/audit_variance_precision.py": "2dd3cfdae39269dfb81c67d33c99877b97da5492d12413c250f163ec9b9dfbdf",
-    "shaders/lib/lighting/denoiser/variance_prepare.glsl": "e0a5c957a79f905bde20ca2b86b841e655d7b06007ea4763279d7fd2f2f113eb",
+    "tools/audit_variance_precision.py": "fa856f6ce4364b6f82dc0030af6a27f7907dc5073f5cad3ec44968845b1da47e",
+    "shaders/lib/lighting/denoiser/variance_prepare.glsl": "7ea245d3fed00f2bdeb53fe4a9354e1f92e7c040d8583dff8b1c7b044fbddf0e",
+    "shaders/lib/lighting/denoiser/variance_tile.glsl": "1a3b634a92440940308c61826a25169f5068da3029847fc8ea51d3edd826fbc1",
     "shaders/lib/math/statistics.glsl": "273a0fc01e016f5e520794dc38106b588b6c23189fe8e8a6abc0555ce7b77d51",
     "shaders/lib/common/pack_half.glsl": "91ed7b930e31c0cb59760e77fa2b931c1635fa2c6f8a6cc82f0e3f8ffccebc63",
-    "shaders/lib/buffers/diffuse_buffer.glsl": "506e93e2af835cbc828779e223d34c9ab3a673e4066cad21764322665ab6688a",
-    "shaders/lib/buffers/specular_buffer.glsl": "d70dff328d5b0d683cf948603f47bdf7c95660a1c207cdbfbc271ee0e6a0f349",
-    "shaders/post/denoiser/diffuse/temporal.glsl": "0f551972878ac725bb5aee360aae762d0a04f464704000fff6f8146e098fc94a",
-    "shaders/post/denoiser/reflection/temporal.glsl": "ccb0365792d3f2f2e828dbcd04dd9e8fe0a5720a84139b0604f3117c64b89d46",
-    "shaders/post/composite_lighting.glsl": "6202c97039a4bb709632bade189837e023d1aa50f0e5e8d62eea7d6a3fda34bb"
+    "shaders/lib/buffers/diffuse_buffer.glsl": "46c272db7afd425b2addb1c2e52bfe2ddf069b817d8b9a9fbb05faa94ae31555",
+    "shaders/lib/buffers/specular_buffer.glsl": "84744a8aa5bc3c8453531a3a7a186a3789a19153165b81136156478b3e47cc8f",
+    "shaders/post/denoiser/diffuse/temporal.glsl": "7c4d43b6b80a6a13d259bf3fecdb182bd0437ae31a33f919c80000efa6a86526",
+    "shaders/post/denoiser/reflection/temporal.glsl": "89e7d4699360d59d545580f8d2316d677f15dc7954493c383a62f2187fec2c0d",
+    "shaders/post/composite_lighting.glsl": "9bfe3963c4c34d053ec0ab4f5dd1233bec0be7e62e043e6e60f98914ce541f12"
   }
 }

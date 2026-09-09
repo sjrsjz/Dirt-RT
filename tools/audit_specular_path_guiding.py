@@ -6,6 +6,7 @@ import json
 import math
 import random
 from pathlib import Path
+from shader_compile import expand
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,7 +71,7 @@ def audit_mixture_measure(cases: int = 10_000) -> float:
 def audit_sources() -> None:
     read = lambda p: (ROOT / p).read_text(encoding="utf-8")
     buffer_source = read("shaders/lib/buffers/specular_buffer.glsl")
-    transport = read("shaders/lib/rt/raytrace/transport.glsl")
+    transport = expand(ROOT / "shaders/lib/rt/raytrace/transport.glsl")
     bounces = read("shaders/lib/rt/raytrace/bounces.glsl")
     trace = read("shaders/lib/rt/raytrace/path_trace.glsl")
     output = read("shaders/lib/rt/raytrace/gbuffer_io.glsl")
@@ -84,9 +85,9 @@ def audit_sources() -> None:
     assert "computeSpecularMaxEntGuide" in transport
     assert "readMaxEntSpecularPreparedSurfaceDenoised" in transport
     assert "(1.0 - guide.prob) * vndfPdf" in transport
-    assert "evaluateSpecularQLiResponse" in bounces
-    assert "fSpecTimesNoL_val / sampledStrategyPdf" in bounces
-    assert trace.count("specularGuideMixturePdf(") == 2
+    assert "pdfNDF, qLiResponse" in bounces
+    assert "qLiResponse * (pdfNDF / sampledStrategyPdf)" in bounces
+    assert trace.count("specularGuideMixturePdf(") == 1
     assert "pdfNDF * misWeight" in trace
     assert "(f/p)*Li" in output and "(q/p)*Li" in output
     assert "reflectionFirstBsdfWeight" not in trace

@@ -25,8 +25,13 @@
 //  [6] f16(bary.x) | f16(bary.y)               — packHalf2x16
 //  [7] packUnorm4x8(shadow.r, shadow.g, shadow.b, blockID_enc)
 //  [8] f16(prevDist) | u16(flags)
-//      flags: bit0=inside, bit1=handedness, bit2=isNEE
-//  [9-15] FREE
+//      raw flags: bit0=inside, bit1=handedness, bit2=isNEE,
+//                 bit3=ignoreTransmissive
+//  [9-10] f32 atlas UV
+//  [11-12] f16 atlas origin and extent
+//  [13] oct32 geometry normal
+//  [14] oct32 tangent
+//  [15] unorm8 vertex tint RGB and skylight
 // ===========================================================================
 
 #define PAYLOAD_SLOTS 16
@@ -135,7 +140,9 @@ void payload_packFlags(inout uint d[PAYLOAD_SLOTS], float prevDist,
             | (handedness ? 2u : 0u)
             | (isNEE ? 4u : 0u)
             | (ignoreTransmissive ? 8u : 0u);
-    d[8] = packHalf2x16(vec2(prevDist, float(f)));
+    // Flags are integer bits, not a half-float number. All RT stages share
+    // this transient ABI, so no persistent history migration is involved.
+    d[8] = (packHalf2x16(vec2(prevDist, 0.0)) & 0xffffu) | (f << 16u);
 }
 
 void payload_packFlags(inout uint d[PAYLOAD_SLOTS], float prevDist,
@@ -146,13 +153,12 @@ void payload_packFlags(inout uint d[PAYLOAD_SLOTS], float prevDist,
 float payload_unpackFlags(uint d[PAYLOAD_SLOTS],
     out bool inside, out bool handedness, out bool isNEE,
     out bool ignoreTransmissive) {
-    vec2 v = unpackHalf2x16(d[8]);
-    uint f = uint(v.y + 0.5);
+    uint f = d[8] >> 16u;
     inside     = (f & 1u) != 0u;
     handedness = (f & 2u) != 0u;
     isNEE      = (f & 4u) != 0u;
     ignoreTransmissive = (f & 8u) != 0u;
-    return v.x;
+    return unpackHalf2x16(d[8]).x;
 }
 
 float payload_unpackFlags(uint d[PAYLOAD_SLOTS],
@@ -166,40 +172,40 @@ float payload_unpackFlags(uint d[PAYLOAD_SLOTS],
 // Quad-derived data for material evaluation in rgen [9-15]
 // ---------------------------------------------------------------------------
 
-void payload_packQuadUV(inout uint d[16], vec2 uv) {
+void payload_packQuadUV(inout uint d[PAYLOAD_SLOTS], vec2 uv) {
     d[9]  = floatBitsToUint(uv.x);
     d[10] = floatBitsToUint(uv.y);
 }
-vec2 payload_unpackQuadUV(uint d[16]) {
+vec2 payload_unpackQuadUV(uint d[PAYLOAD_SLOTS]) {
     return vec2(uintBitsToFloat(d[9]), uintBitsToFloat(d[10]));
 }
 
-void payload_packAtlasBox(inout uint d[16], vec4 box) {
+void payload_packAtlasBox(inout uint d[PAYLOAD_SLOTS], vec4 box) {
     d[11] = packHalf2x16(box.xy);
     d[12] = packHalf2x16(box.zw);
 }
-vec4 payload_unpackAtlasBox(uint d[16]) {
+vec4 payload_unpackAtlasBox(uint d[PAYLOAD_SLOTS]) {
     return vec4(unpackHalf2x16(d[11]), unpackHalf2x16(d[12]));
 }
 
-void payload_packGeomNormal(inout uint d[16], vec3 n) {
+void payload_packGeomNormal(inout uint d[PAYLOAD_SLOTS], vec3 n) {
     d[13] = encodeNormalU(n);
 }
-vec3 payload_unpackGeomNormal(uint d[16]) {
+vec3 payload_unpackGeomNormal(uint d[PAYLOAD_SLOTS]) {
     return decodeNormalU(d[13]);
 }
 
-void payload_packTangent(inout uint d[16], vec3 t) {
+void payload_packTangent(inout uint d[PAYLOAD_SLOTS], vec3 t) {
     d[14] = encodeNormalU(t);
 }
-vec3 payload_unpackTangent(uint d[16]) {
+vec3 payload_unpackTangent(uint d[PAYLOAD_SLOTS]) {
     return decodeNormalU(d[14]);
 }
 
-void payload_packQuadExtras(inout uint d[16], vec3 tint, float sky) {
+void payload_packQuadExtras(inout uint d[PAYLOAD_SLOTS], vec3 tint, float sky) {
     d[15] = packUnorm4x8(vec4(tint, sky));
 }
-void payload_unpackQuadExtras(uint d[16], out vec3 tint, out float sky) {
+void payload_unpackQuadExtras(uint d[PAYLOAD_SLOTS], out vec3 tint, out float sky) {
     vec4 v = unpackUnorm4x8(d[15]);
     tint = v.rgb;
     sky  = v.a;

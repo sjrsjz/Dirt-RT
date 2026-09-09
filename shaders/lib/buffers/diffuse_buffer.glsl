@@ -19,7 +19,7 @@
 // N=5: Alternate history geometry for race-free frame ping-pong.
 // N=6..7: Exact previous/current denoiser output ping-pong. Before temporal,
 //         current parity holds ray1's shared filtered-history reprojection.
-// N=8..9: Shared independent-current ping-pong, reused serially by domains.
+// Independent-current scratch uses the two bloom images before bloom begins.
 //
 // .w lane uses packHalf2x16: Kish N_eff:f16 + rootMeanY2:f16.
 // Storage APIs accept sqrt(E[Y²]) directly. Arithmetic code squares it only
@@ -38,7 +38,7 @@ MaxEntEncoding sanitizeDiffuseMaxEntEncoding(MaxEntEncoding maxent) {
     return maxent;
 }
 
-// Active ten-plane layout. Primary geometry remains in geomBuffer;
+// Active eight-plane layout. Primary geometry remains in geomBuffer;
 // diffuse geometry uses the same camera ray and its own F32 hit distance.
 // DIF_N_HISTGEO/ALT = F32 distance + oct ray + oct normal + N_eff/frame stamp.
 #define DIF_N_LIGHT    0u
@@ -49,8 +49,6 @@ MaxEntEncoding sanitizeDiffuseMaxEntEncoding(MaxEntEncoding maxent) {
 #define DIF_N_HISTGEO_ALT      5u
 #define DIF_N_DENOISED_A       6u
 #define DIF_N_DENOISED_B       7u
-#define DIF_N_CURRENT_A        8u
-#define DIF_N_CURRENT_B        9u
 
 uint diffuseHistoryGeometryWritePlaneForFrame(uint currentFrameId) {
     return (currentFrameId & 1u) == 0u
@@ -136,21 +134,7 @@ uvec4 readDiffuseDenoisedPreviousRawForFrame(uvec2 xy,
         diffuseDenoisedReadPlaneForFrame(currentFrameId), xy)];
 }
 
-void writeDiffuseIndependentCurrentA(uvec2 xy, uvec4 words) {
-    diffuseBuffer.data[addr(DIF_N_CURRENT_A, xy)] = words;
-}
 
-void writeDiffuseIndependentCurrentB(uvec2 xy, uvec4 words) {
-    diffuseBuffer.data[addr(DIF_N_CURRENT_B, xy)] = words;
-}
-
-uvec4 readDiffuseIndependentCurrentA(uvec2 xy) {
-    return diffuseBuffer.data[addr(DIF_N_CURRENT_A, xy)];
-}
-
-uvec4 readDiffuseIndependentCurrentB(uvec2 xy) {
-    return diffuseBuffer.data[addr(DIF_N_CURRENT_B, xy)];
-}
 
 // Before history resolve, the current parity is scratch for the previous
 // denoised signal reprojected by the real diffuse temporal pass. Resolve reads

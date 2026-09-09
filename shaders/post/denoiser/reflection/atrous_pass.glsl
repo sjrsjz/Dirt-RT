@@ -1,9 +1,11 @@
 // Purpose: one reflection A-Trous iteration over the proposal and independent-current signals.
 // Dispatch: 16x16 for steps 1/2/4, otherwise 8x8.
-// Reads: colortex3 geometry; colortex4/5 signal input; shared scratch plane A/B.
-// Writes: the opposite colortex4/5 image and the opposite scratch plane.
+// Reads: colortex3 geometry; colortex4/5 proposal; scratch A/B in the bloom images.
+// Writes: opposite scratch image; opposite colortex4/5 proposal for steps 1-16.
+// Step 32 keeps proposal inputs for weights, but emits no proposal image;
+// proposal accumulation is retained only for filtered-variance debug views.
 // Persistent side effects: none; reflection history is published only by resolve.glsl.
-// Invalid representation: negative standardDeviation in signal metadata.
+// Metadata: sigma=-1 invalid; sigma=-2 is usable light with unknown variance.
 
 #ifndef DENOISER_SPATIAL_PHI_LUMINANCE
 #error "DENOISER_SPATIAL_PHI_LUMINANCE must be configured by the pass"
@@ -49,10 +51,12 @@ uvec4 denoiserSpatialLoadIndependentCurrentWords(ivec2 pixel) {
 }
 
 void denoiserSpatialStoreSignalWords(ivec2 pixel, uvec4 words) {
+#if DENOISER_SPATIAL_WRITE_PROPOSAL
 #ifdef MAXENT_ATROUS_WRITE_ALTERNATE
     imageStore(colorimg4, pixel, words);
 #else
     imageStore(colorimg5, pixel, words);
+#endif
 #endif
 }
 

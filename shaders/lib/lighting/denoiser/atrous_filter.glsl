@@ -2,19 +2,53 @@
 #define MAXENT_DENOISER_ATROUS_FILTER_GLSL
 
 #include "/lib/lighting/denoiser/internal_constants.glsl"
+#include "/lib/lighting/denoiser/atrous_policy.glsl"
 #include "/lib/lighting/denoiser/signal.glsl"
 #include "/lib/lighting/denoiser/light_difference.glsl"
 #include "/lib/lighting/denoiser/geometry.glsl"
 #include "/lib/lighting/denoiser/virtual_projection.glsl"
 #include "/lib/math/statistics.glsl"
 
+// Trusted spatial weights are finite, nonnegative, and bounded by the
+// kernel coefficient. They share the moment accumulator's total weight.
+// Unknown uncertainty still owns squared weights and borrows only known sigma.
+struct DenoiserSpatialVariance {
+    float independentVariance;
+    float weightedSigma;
+    float knownWeight;
+    float unknownSquaredWeight;
+};
+
+void denoiserSpatialAccumulateVariance(inout DenoiserSpatialVariance variance,
+        float sigma, float weight) {
+    // Preparation sanitizes sigma; invalid records are rejected before this
+    // update. The remaining values are finite nonnegative FP16 or exactly -2.
+    if (sigma >= 0.0) {
+        float weightedSigma = weight * sigma;
+        variance.independentVariance += weightedSigma * weightedSigma;
+        variance.weightedSigma += weightedSigma;
+        variance.knownWeight += weight;
+    } else {
+        variance.unknownSquaredWeight += weight * weight;
+    }
+}
+
 struct DenoiserSpatialAccumulator {
     vec4 maxEntY;
-    vec2 CoCg;
-    DenoiserEstimatorVarianceAccumulator uncertainty;
+    DenoiserSpatialVariance uncertainty;
     float weight;
     float virtualDistance;
     float virtualWeight;
+};
+
+
+// The current estimator owns the output chroma; only the proposal guides
+// virtual geometry. No current virtual-distance statistic survives resolve.
+struct DenoiserSpatialCurrentAccumulator {
+    vec4 maxEntY;
+    vec2 CoCg;
+    DenoiserSpatialVariance uncertainty;
+    float weight;
 };
 
 float denoiserSpatialEffectiveSampleCorrelationForStep(int stepRadius) {
@@ -54,7 +88,8 @@ float denoiserSpatialVirtualPlaneDepthExponent(
     return virtualRejectionScale * planeDepth;
 }
 
-float denoiserSpatialWeight(DenoiserMaxEntSignal centerSignal,
+float denoiserSpatialWeight(MaxEntLightMetric centerMetric,
+    DenoiserMaxEntSignal centerSignal,
     DenoiserMaxEntSignal sampleSignal,
     vec3 samplePrimaryRay, float surfaceGeometryExponent,
     float kernelWeight,
@@ -63,14 +98,14 @@ float denoiserSpatialWeight(DenoiserMaxEntSignal centerSignal,
     vec3 centerVirtualNormal, float virtualRejectionScale,
     out float virtualDistanceWeight) {
 
-    float signalExponent = surfaceGeometryExponent
-        + denoiserSpatialVirtualPlaneDepthExponent(
+    float signalExponent = surfaceGeometryExponent;
+    signalExponent += denoiserSpatialVirtualPlaneDepthExponent(
             centerVirtualPosition, centerVirtualNormal, samplePrimaryRay,
             sampleSignal.virtualDistance, virtualRejectionScale);
-    if (denoiserSigmaKnown(centerSignal.standardDeviation)
-            && denoiserSigmaKnown(sampleSignal.standardDeviation)) {
+    if (centerSignal.standardDeviation >= 0.0
+            && sampleSignal.standardDeviation >= 0.0) {
         float distanceSq = maxentLightSampleDistanceSq(
-                centerSignal.maxEntY, sampleSignal.maxEntY);
+                centerMetric, maxentPrepareLightMetric(sampleSignal.maxEntY));
         // Endpoints already store estimator uncertainty at this kernel level.
         // Endpoint covariance is omitted (independent-difference approximation).
         float differenceEstimatorVariance =
@@ -89,9 +124,8 @@ DenoiserSpatialAccumulator denoiserSpatialBeginAccumulation(
     DenoiserMaxEntSignal center) {
     DenoiserSpatialAccumulator accum;
     accum.maxEntY = center.maxEntY;
-    accum.CoCg = center.CoCg;
-    accum.uncertainty = denoiserBeginEstimatorVariance();
-    denoiserAccumulateEstimatorVariance(accum.uncertainty, center.standardDeviation, 1.0);
+    accum.uncertainty = DenoiserSpatialVariance(0.0, 0.0, 0.0, 0.0);
+    denoiserSpatialAccumulateVariance(accum.uncertainty, center.standardDeviation, 1.0);
     accum.weight = 1.0;
     accum.virtualDistance = center.virtualDistance;
     accum.virtualWeight = 1.0;
@@ -102,8 +136,7 @@ void denoiserSpatialAccumulate(inout DenoiserSpatialAccumulator accum,
     DenoiserMaxEntSignal neighbor, float weight,
     float virtualDistanceWeight) {
     accum.maxEntY += neighbor.maxEntY * weight;
-    accum.CoCg += neighbor.CoCg * weight;
-    denoiserAccumulateEstimatorVariance(accum.uncertainty, neighbor.standardDeviation, weight);
+    denoiserSpatialAccumulateVariance(accum.uncertainty, neighbor.standardDeviation, weight);
     accum.weight += weight;
     accum.virtualDistance += neighbor.virtualDistance
         * virtualDistanceWeight;
@@ -115,11 +148,50 @@ DenoiserMaxEntSignal denoiserSpatialResolve(DenoiserSpatialAccumulator accum, in
     float invWeight = 1.0 / accum.weight;
     DenoiserMaxEntSignal outputSignal;
     outputSignal.maxEntY = accum.maxEntY * invWeight;
-    outputSignal.CoCg = accum.CoCg * invWeight;
-    outputSignal.standardDeviation = denoiserResolveEstimatorSigma(accum.uncertainty,
+    // Proposal chroma has no consumer: only the current estimator is resolved.
+    outputSignal.CoCg = vec2(0.0);
+    outputSignal.standardDeviation = denoiserResolveEstimatorSigma(DenoiserEstimatorVarianceAccumulator(
+        accum.uncertainty.independentVariance, accum.uncertainty.weightedSigma,
+        accum.uncertainty.knownWeight, accum.weight, accum.uncertainty.unknownSquaredWeight),
         denoiserSpatialEffectiveSampleCorrelationForStep(stepRadius));
     outputSignal.virtualDistance = accum.virtualDistance
         / accum.virtualWeight;
+    return denoiserSanitizeMaxEntSignal(outputSignal);
+}
+
+
+DenoiserSpatialCurrentAccumulator denoiserSpatialBeginCurrentAccumulation(
+    DenoiserMaxEntSignal center) {
+    DenoiserSpatialCurrentAccumulator accum;
+    accum.maxEntY = center.maxEntY;
+    accum.CoCg = center.CoCg;
+    accum.uncertainty = DenoiserSpatialVariance(0.0, 0.0, 0.0, 0.0);
+    denoiserSpatialAccumulateVariance(accum.uncertainty, center.standardDeviation, 1.0);
+    accum.weight = 1.0;
+    return accum;
+}
+
+void denoiserSpatialAccumulate(inout DenoiserSpatialCurrentAccumulator accum,
+    DenoiserMaxEntSignal neighbor, float weight,
+    float virtualDistanceWeight) {
+    accum.maxEntY += neighbor.maxEntY * weight;
+    accum.CoCg += neighbor.CoCg * weight;
+    denoiserSpatialAccumulateVariance(accum.uncertainty, neighbor.standardDeviation, weight);
+    accum.weight += weight;
+}
+
+DenoiserMaxEntSignal denoiserSpatialResolve(DenoiserSpatialCurrentAccumulator accum, int stepRadius) {
+    float invWeight = 1.0 / accum.weight;
+    DenoiserMaxEntSignal outputSignal;
+    outputSignal.maxEntY = accum.maxEntY * invWeight;
+    outputSignal.CoCg = accum.CoCg * invWeight;
+    outputSignal.standardDeviation = denoiserResolveEstimatorSigma(DenoiserEstimatorVarianceAccumulator(
+        accum.uncertainty.independentVariance, accum.uncertainty.weightedSigma,
+        accum.uncertainty.knownWeight, accum.weight, accum.uncertainty.unknownSquaredWeight),
+        denoiserSpatialEffectiveSampleCorrelationForStep(stepRadius));
+    // Persistent outputs either replace this half with their history tag or
+    // derive virtual distance from primary geometry and the committed hit.
+    outputSignal.virtualDistance = 0.0;
     return denoiserSanitizeMaxEntSignal(outputSignal);
 }
 

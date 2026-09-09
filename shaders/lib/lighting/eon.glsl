@@ -1,6 +1,8 @@
 #ifndef LIGHTING_EON_GLSL
 #define LIGHTING_EON_GLSL
 
+#include "/lib/lighting/maxent.glsl"
+
 // ============================================================================
 // EON rough diffuse BRDF + four-parameter directional convolution
 // ============================================================================
@@ -280,21 +282,6 @@ float eon_direction_pdf(vec3 wo, vec3 wi, vec3 normal,
         transpose(frame) * wi, roughness);
 }
 
-// Exact clamped-cosine response of the cubic-reciprocal closure.
-float eon_cosine_response(float kappa, float cosine) {
-    float oneMinusK2 = (1.0 - kappa) * (1.0 + kappa);
-    float kCosine = kappa * cosine;
-    float denominator = sqrt(max(
-        oneMinusK2 + kCosine * kCosine, 1.0e-20));
-    if (kCosine < 0.0) {
-        float sumTerm = denominator - kCosine;
-        return oneMinusK2 * oneMinusK2
-            / (4.0 * denominator * sumTerm * sumTerm);
-    }
-    return (oneMinusK2 + 2.0 * kCosine * kCosine)
-        / (4.0 * denominator) + 0.5 * kCosine;
-}
-
 float eon_cubic_bernstein(vec4 control, float t) {
     float a = mix(control.x, control.y, t);
     float b = mix(control.y, control.z, t);
@@ -515,7 +502,7 @@ float eon_missing_shape_integral_closed(float kappa, float cosine)
 
 vec3 eon_channel_response(float kappa, vec3 axis,
         float muO, float sineO, float roughness, vec3 rho) {
-    float irradiance = eon_cosine_response(kappa, axis.z);
+    float irradiance = maxent_cosine_response(kappa, axis.z);
     float fonPartition = eon_lut_fon_partition(
         kappa, axis, muO, sineO, irradiance);
 

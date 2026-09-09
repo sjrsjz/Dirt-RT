@@ -40,6 +40,8 @@ void handleFirstBounce_Reflection(
         HalfVector sampledHalf = computeHalfVector(wo, next_rd);
         microNormal = sampledHalf.valid ? sampledHalf.H : macroNormal;
     } else {
+        // Only pay for VNDF sampling when that proposal is actually chosen.
+        microNormal = GGXVNDFNormal(macroNormal, wo, surf.R.x, xi);
         next_rd = reflect(rd_i, microNormal);
     }
     // The MaxEnt proposal is spherical and may select the lower geometric
@@ -54,79 +56,14 @@ void handleFirstBounce_Reflection(
     float pdfNDF;
     if (evaluateSpecularBRDF(wo, wi, macroNormal, surf.Cs, surf.S.x,
             surf.S.y, etaRatio, surf.R.x,
-            fSpecTimesNoL_val, pdfNDF)) {
+            fSpecTimesNoL_val, pdfNDF, qLiResponse)) {
         sampledStrategyPdf = specularGuideMixturePdf(
             guide, pdfNDF, wi);
-        qLiResponse = evaluateSpecularQLiResponse(wo, wi, macroNormal,
-            surf.Cs, surf.S.x, surf.S.y, etaRatio, surf.R.x);
-        bsdf_weight = sampledStrategyPdf > 1e-20
-            ? fSpecTimesNoL_val / sampledStrategyPdf : vec3(0.0);
+        // q remains needed for the mixture/MIS. Cancel f/q analytically;
+        // an unguided VNDF draw then has exactly qLiResponse as throughput.
+        bsdf_weight = sampledStrategyPdf > 0.0
+            ? qLiResponse * (pdfNDF / sampledStrategyPdf) : vec3(0.0);
     } else {
-        bsdf_weight = vec3(0.0);
-    }
-}
-
-void handleFirstBounce_Refraction(
-    vec3 rd_i, vec3 ro_o, vec3 macroNormal, vec3 geometryNormal, vec3 microNormal,
-    material surf, LobeProbs lobes, float rs,
-    out vec3 bsdf_weight, out vec3 next_rd, inout bool inside_state,
-    out PSRResult psr, bool wasInside, int baseDepth
-) {
-    bsdf_weight = vec3(0.0);
-    next_rd = rd_i;
-    psr.virtualDist = 0.0;
-    psr.pathRoughness = 0.0;
-    psr.refrDir = rd_i;
-    // Most primary surfaces are opaque. This guard must precede refract() and,
-    // especially, tracePSRChain(), which can issue four additional RT rays.
-    if (lobes.P_refr <= 1e-8) return;
-
-    vec3 refract_dir = refract(rd_i, microNormal, rs);
-    vec3 psr_refract_dir = refract(rd_i, geometryNormal, rs);
-
-    if (dot(refract_dir, refract_dir) > 0.0) {
-        next_rd = refract_dir;
-        bool was_inverse_0 = inside_state;
-        inside_state = !inside_state;
-
-        bool psrEnabled = surf.R.x < PSR_ROUGHNESS_THRESHOLD;
-        if (psrEnabled) {
-            vec3 chain_rd = dot(psr_refract_dir, psr_refract_dir) > 0.0 ? psr_refract_dir : refract_dir;
-            float savedConeWidth = rtCurrentConeWidth;
-            int firstMediumBlockID = transportBlockFromMaterial(surf);
-            psr = tracePSRChain(ro_o, chain_rd, geometryNormal,
-                surf.R.x, was_inverse_0, firstMediumBlockID, surf.Cd,
-                transportExtinctionWeightFromMaterial(surf), baseDepth);
-            rtCurrentConeWidth = savedConeWidth;
-        } else {
-            psr.virtualDist = 0.0;
-            psr.pathRoughness = surf.R.x;
-            psr.refrDir = dot(psr_refract_dir, psr_refract_dir) > 0.0 ? psr_refract_dir : refract_dir;
-        }
-
-        vec3 fTransmissionTimesNoL;
-        float pdfTransmission;
-        vec3 transmissionColor = evaluateTransmissionAlbedo(surf)
-            * clamp(surf.S.y, 0.0, 1.0);
-        if (isDeltaSpecular(surf.R.x)) {
-            float F = clamp(fresnel(-rd_i, macroNormal, rs), 0.0, 1.0);
-            // Radiance transport through a delta dielectric carries eta_i^2 /
-            // eta_t^2. The inverse factor at the exit interface cancels it.
-            bsdf_weight = transmissionColor * (1.0 - F) * (rs * rs);
-        } else {
-            bool validTransmission = evaluateTransmissionBSDF(
-                    -rd_i, next_rd, macroNormal, microNormal,
-                    transmissionColor, rs, surf.R.x,
-                    fTransmissionTimesNoL, pdfTransmission);
-            bsdf_weight = validTransmission && pdfTransmission > 1e-8
-                ? fTransmissionTimesNoL / pdfTransmission : vec3(0.0);
-        }
-    } else {
-        // TIR
-        next_rd = reflect(rd_i, microNormal);
-        psr.virtualDist = 0.0;
-        psr.pathRoughness = surf.R.x;
-        psr.refrDir = next_rd;
         bsdf_weight = vec3(0.0);
     }
 }
@@ -166,7 +103,7 @@ void handleFirstBounce_Diffuse(
 // ===========================================================================
 
 void handleSecondaryBounce(
-    vec3 rd_i, vec3 ro_o, vec3 macroNormal, vec3 geometryNormal, vec3 microNormal,
+    vec3 rd_i, vec3 ro_o, vec3 macroNormal, vec3 geometryNormal,
     material surf, LobeProbs lobes,
     out vec3 bsdf_weight, out vec3 next_rd, out int lobeType,
     out bool sampledSpecularLobe, out float sampledStrategyPdf,
@@ -182,6 +119,12 @@ void handleSecondaryBounce(
     float n_i = inside_state ? surfaceIor : 1.0;
     float n_o = inside_state ? 1.0 : surfaceIor;
     float rs = n_i / n_o;
+
+    // Lobe choice does not depend on H. Diffuse paths need no GGX sample.
+    vec3 microNormal = macroNormal;
+    if (rnd_lobe < lobes.P_spec + lobes.P_refr
+            && !isDeltaSpecular(surf.R.x))
+        microNormal = GGXVNDFNormal(macroNormal, -rd_i, surf.R.x, ro_o);
 
     if (rnd_lobe < lobes.P_spec) {
         // Reflection
@@ -208,13 +151,12 @@ void handleSecondaryBounce(
                 bsdf_weight = F / max(lobes.P_spec, 1e-8);
                 return;
             }
-            vec3 fSpecTimesNoL_val;
+            vec3 fSpecTimesNoL_val, qLiResponse;
             float pdfNDF;
             if (evaluateSpecularBRDF(wo, wi, macroNormal, surf.Cs, surf.S.x,
                     surf.S.y, rs, surf.R.x,
-                    fSpecTimesNoL_val, pdfNDF)) {
-                bsdf_weight = (pdfNDF > 1e-8)
-                    ? (fSpecTimesNoL_val / (pdfNDF * lobes.P_spec)) : vec3(0.0);
+                    fSpecTimesNoL_val, pdfNDF, qLiResponse)) {
+                bsdf_weight = qLiResponse / lobes.P_spec;
                 sampledStrategyPdf = pdfNDF * lobes.P_spec;
             } else {
                 bsdf_weight = vec3(0.0);
@@ -226,10 +168,14 @@ void handleSecondaryBounce(
         // Refraction
         lobeType = REFRACTION;
         vec3 refract_dir = refract(rd_i, microNormal, rs);
-        if (dot(refract_dir, refract_dir) > 0.0) {
+        // A shading-normal transmission must cross the geometric interface.
+        // Reject invalid draws without changing the selected lobe: relabeling
+        // them as reflection could feed a zero BTDF sample into the cache's
+        // integrated reflection fallback with the wrong selection probability.
+        if (dot(refract_dir, refract_dir) > 0.0
+                && dot(refract_dir, geometryNormal) < 0.0) {
             next_rd = refract_dir;
-            vec3 fTransmissionTimesNoL;
-            float pdfTransmission;
+            vec3 transmissionWeight;
             vec3 transmissionColor = evaluateTransmissionAlbedo(surf)
                 * clamp(surf.S.y, 0.0, 1.0);
             bool validTransmission;
@@ -241,18 +187,16 @@ void handleSecondaryBounce(
                 validTransmission = true;
                 sampledDeltaLobe = true;
             } else {
-                validTransmission = evaluateTransmissionBSDF(
+                validTransmission = sampleTransmissionWeight(
                         -rd_i, next_rd, macroNormal, microNormal,
                         transmissionColor, rs, surf.R.x,
-                        fTransmissionTimesNoL, pdfTransmission);
-                bsdf_weight = validTransmission && pdfTransmission > 1e-8
-                    ? fTransmissionTimesNoL
-                        / (pdfTransmission * max(lobes.P_refr, 1e-8)) : vec3(0.0);
+                        transmissionWeight);
+                bsdf_weight = validTransmission
+                    ? transmissionWeight / lobes.P_refr : vec3(0.0);
             }
             inside_state = validTransmission ? !inside_state : inside_state;
         } else {
-            next_rd = reflect(rd_i, microNormal);
-            lobeType = REFLECTION;
+            next_rd = rd_i;
             bsdf_weight = vec3(0.0);
         }
     } else {

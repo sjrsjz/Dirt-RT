@@ -42,15 +42,12 @@ float maxentTemporalResponseAlpha(float alphaFloor, vec4 currentMoment, float cu
     if (any(isnan(currentMoment))
             || any(isinf(currentMoment))
             || any(isnan(historyMoment)) || any(isinf(historyMoment))
-            || !(currentMonteCarloStandardDeviation >= 0.0) || isnan(currentMonteCarloStandardDeviation)
-            || isinf(currentMonteCarloStandardDeviation)
-            || !(historyMonteCarloStandardDeviation >= 0.0) || isnan(historyMonteCarloStandardDeviation)
-            || isinf(historyMonteCarloStandardDeviation)
             || !statisticsValidEffectiveSampleCount(temporalHistoryEffectiveSamples))
         return alphaFloor;
 
-    float historyVariance = maxentTemporalEstimatorVariance(historyMonteCarloStandardDeviation);
-    float currentVariance = maxentTemporalEstimatorVariance(currentMonteCarloStandardDeviation);
+    // Both sigmas passed the known-uncertainty guard above.
+    float historyVariance = historyMonteCarloStandardDeviation * historyMonteCarloStandardDeviation;
+    float currentVariance = currentMonteCarloStandardDeviation * currentMonteCarloStandardDeviation;
     float distanceSq = maxentLightSampleDistanceSq(currentMoment, historyMoment);
     float combinedVariance = historyVariance + currentVariance + MAXENT_TEMPORAL_DENOISER_INTRINSIC_VARIANCE;
     noiseOnlyCurrentWeight = statisticsMinimumVarianceIndependentCurrentWeight(historyVariance,

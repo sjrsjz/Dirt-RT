@@ -133,7 +133,7 @@ def source_contracts():
     assert 'sampleDiffuse(samplePixel)' not in psr
     assert 'uv * vec2(resolution_global) - 0.5' not in psr
     assert ': reusedScreen ? vec3(0.0, 1.0, 0.0)' in psr
-    assert 'bufferObject.2 = 160 true 1.1 1.1' in read('shaders.properties')
+    assert 'bufferObject.2 = 128 true 1.1 1.1' in read('shaders.properties')
 
 
 def compile_routes():

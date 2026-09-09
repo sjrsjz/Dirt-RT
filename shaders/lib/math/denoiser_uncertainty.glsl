@@ -10,14 +10,14 @@ bool denoiserTemporalMomentsFinite(vec4 moment, vec2 chroma, float rms) {
         && moment.w >= 0.0 && rms >= 0.0 && !isnan(rms) && !isinf(rms);
 }
 bool denoiserSigmaKnown(float sigma) {
-    return sigma >= 0.0 && sigma <= 65504.0 && !isnan(sigma) && !isinf(sigma);
+    // Ordered bounds also reject both infinities and NaN.
+    return sigma >= 0.0 && sigma <= 65504.0;
 }
 bool denoiserSigmaUsable(float sigma) {
     return denoiserSigmaKnown(sigma) || sigma == DENOISER_UNKNOWN_UNCERTAINTY;
 }
 bool denoiserVarianceKnown(float variance) {
-    return variance >= 0.0 && variance <= 65504.0 * 65504.0
-        && !isnan(variance) && !isinf(variance);
+    return variance >= 0.0 && variance <= 65504.0 * 65504.0;
 }
 float denoiserSigmaOrUnknown(float sigma) {
     return denoiserSigmaKnown(sigma) ? sigma : DENOISER_UNKNOWN_UNCERTAINTY;
@@ -27,6 +27,9 @@ float denoiserVarianceToSigma(float variance) {
 }
 // Variance of a weighted estimator under a constant-correlation closure.
 // Accumulators are invocation-local registers, not additional stored channels.
+// independentVariance/weightedSigma are needed even with all sigmas known.
+// knownWeight/unknownSquaredWeight support the missing-statistics donor;
+// totalWeight is also the normalization of the filtered signal.
 struct DenoiserEstimatorVarianceAccumulator {
     float independentVariance;
     float weightedSigma;
@@ -64,7 +67,15 @@ float denoiserResolveEstimatorSigma(DenoiserEstimatorVarianceAccumulator a, floa
     float inverseWeight = 1.0 / a.totalWeight;
     float variance = mix(independentVariance, weightedSigma * weightedSigma,
         clamp(correlation, 0.0, 1.0)) * inverseWeight * inverseWeight;
-    return denoiserVarianceToSigma(variance);
+    // Known endpoint sigma and the unknown-sigma donor are bounded by
+    // 65504. Their normalized constant-correlation estimate has the same
+    // bound. Correct a small finite FP32 overshoot here only: the generic
+    // variance ingress remains strict, and NaN/Inf/larger violations fail.
+    const float maximumVariance = 65504.0 * 65504.0;
+    return variance >= 0.0
+            && variance <= maximumVariance * (1.0 + 0.00001)
+        ? sqrt(min(variance, maximumVariance))
+        : DENOISER_UNKNOWN_UNCERTAINTY;
 }
 float denoiserMixEstimatorSigma(float a, float b, float t, float correlation) {
     DenoiserEstimatorVarianceAccumulator accum = denoiserBeginEstimatorVariance();

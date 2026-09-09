@@ -180,7 +180,7 @@ void writeReflect(vec3IlluminationData data, ivec2 p) {
 #endif
 
 // ===========================================================================
-// Refract fetch/write — compatible with temporal_refract + composite
+// Legacy refraction accessors; active PSR transport uses specular_buffer.glsl.
 // ===========================================================================
 
 #if defined(REFRACT_BUFFER) || defined(REFRACT_BUFFER_MIN) || defined(REFRACT_BUFFER_MIN2)

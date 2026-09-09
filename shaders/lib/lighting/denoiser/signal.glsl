@@ -3,9 +3,10 @@
 
 #include "/lib/math/denoiser_uncertainty.glsl"
 
-// Canonical input/output ABI for the MaxEnt spatial denoiser.
+// Generic 16-byte input/output ABI for the MaxEnt denoiser.
 //
-// Image format: RGBA32UI
+// Word layout: uvec4 (proposal images use RGBA32UI; scratch_io.glsl defines
+// the reversible transport into the independent-current scratch images).
 //   x = packHalf2x16(maxEntY.xy)
 //   y = packHalf2x16(maxEntY.zw)
 //   z = packHalf2x16(CoCg.xy)
@@ -19,13 +20,22 @@
 // a per-step overlap-correlation closure. No spatial N_eff is propagated.
 // Pack/unpack never performs a hidden sqrt or square.
 // Camera-relative radial virtual distance is independent. Input and
-// output use the same layout, so every spatial pass may ping-pong the same
-// RGBA32UI resources.
+// output use the same word layout; the storage adapters own the two separate
+// ping-pong streams and their image formats.
+//
+// Spatial roles use this same ABI in both signal domains. From variance
+// preparation onward, proposal carries maxEntY/sigma/virtualDistance with
+// CoCg=0; independent current carries maxEntY/CoCg/sigma with virtualDistance=0.
+// Their accumulators omit those unused statistics. The last spatial step
+// publishes only current; role pruning does not change the generic word layout
+// or persistent history fields. Resolve reconstructs public distance separately.
 //
 // sigma=-1 marks invalid light; sigma=-2 preserves light with unknown variance.
 // Geometry is supplied separately by the signal policy.
 // Persistent filtered history reuses the same packing; that history ABI is
 // consumed by reprojection/resolve only, never directly by A-Trous.
+// Only the sanitized preparation -> spatial chain may use the compact validity
+// predicate below. History, reprojection and resolve retain checked readers.
 
 const float DENOISER_SPATIAL_FP16_MAX = 65504.0;
 struct DenoiserMaxEntSignal {
@@ -47,6 +57,13 @@ DenoiserMaxEntSignal denoiserEmptyMaxEntSignal() {
 bool denoiserSpatialSignalWordsValid(uvec4 words) {
     float standardDeviation = unpackHalf2x16(words.w).x;
     return denoiserSigmaUsable(standardDeviation);
+}
+
+// Only for the closed variance-preparation -> spatial ping-pong chain.
+// Its writers sanitize sigma to finite nonnegative, -1 (invalid), or -2
+// (unknown). General history/ingress readers must retain the checked predicate.
+bool denoiserSpatialPreparedSignalWordsValid(uvec4 words) {
+    return (words.w & 0xffffu) != 0xbc00u;
 }
 
 uvec4 denoiserInvalidMaxEntSignalWords() {

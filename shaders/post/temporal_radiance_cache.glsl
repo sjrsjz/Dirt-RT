@@ -31,7 +31,8 @@ float radianceCacheRisRandom(ivec3 worldVoxel, uint frameStamp) {
     uvec3 v = uvec3(worldVoxel);
     uint seed = v.x * 0x8da6b343u ^ v.y * 0xd8163841u
         ^ v.z * 0xcb1ab31fu ^ frameStamp * 0x9e3779b9u;
-    return float(radianceCacheRisHash(seed)) * (1.0 / 4294967296.0);
+    // Exact FP32 grid in [0,1): converting all 32 bits can round up to 1.
+    return float(radianceCacheRisHash(seed) >> 8u) * (1.0 / 16777216.0);
 }
 
 float radianceCacheRisTarget(RadianceCache candidate) {
@@ -111,10 +112,10 @@ RadianceCache resampleTemporalRadiance(RadianceCache current,
     RadianceCacheRisReservoir r;
     radianceCacheRisInit(r);
 
-    // Two independent hashes avoid order-correlated replacement decisions.
-    float currentRandom = radianceCacheRisRandom(worldVoxel, frameStamp * 2u);
+    // The first positive candidate is selected with probability one. A random
+    // draw here is redundant, and a rounded value of one could lose it.
     float historyRandom = radianceCacheRisRandom(worldVoxel, frameStamp * 2u + 1u);
-    radianceCacheRisMerge(r, current, currentRandom);
+    radianceCacheRisMerge(r, current, 0.0);
     radianceCacheRisMerge(r, history, historyRandom);
     return radianceCacheRisFinalize(r);
 }

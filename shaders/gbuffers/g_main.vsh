@@ -12,15 +12,13 @@ uniform mat4 gbufferModelView;
 uniform vec3 shadowLightPosition;
 out vec2 texCoord;
 out vec3 normal;
-out vec3 position;
 out vec3 viewPos;  // view-space position for linear depth in fragment shader
 void main() {
-    gl_Position = projectionMatrix * modelViewMatrix *
-        vec4(vaPosition, 1.0);
-    position = vaPosition;
+    vec4 viewPosition = modelViewMatrix * vec4(vaPosition, 1.0);
+    gl_Position = projectionMatrix * viewPosition;
     normal = (normalMatrix * vaNormal) * mat3(gbufferModelView);
     texCoord = (textureMatrix * vec4(vaUV0, 0.0, 1.0)).xy;
     // modelViewMatrix contains per-draw chunk/entity transforms. Using only
     // gbufferModelView drops that translation and corrupts the overlay depth.
-    viewPos = (modelViewMatrix * vec4(vaPosition, 1.0)).xyz;
+    viewPos = viewPosition.xyz;
 }

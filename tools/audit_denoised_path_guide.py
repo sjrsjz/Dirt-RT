@@ -3,6 +3,7 @@ from pathlib import Path
 import json
 import re
 import numpy as np
+from shader_compile import expand
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -28,13 +29,16 @@ def main():
             assert (shaders/f'ray{i}_0.{stage}').exists()
     buf = source['lib/buffers/diffuse_buffer.glsl']
     layers = [int(v) for v in re.findall(r'^#define DIF_N_\w+\s+(\d+)u', buf, re.M)]
-    assert sorted(layers) == list(range(10))
-    assert 'bufferObject.2 = 160 true 1.1 1.1' in props
+    assert sorted(layers) == list(range(8))
+    assert 'bufferObject.2 = 128 true 1.1 1.1' in props
+    scratch = source['lib/lighting/denoiser/scratch_io.glsl']
+    assert 'bloomAtlas_Sampler' in scratch and 'bloomBlur_Sampler' in scratch
+    assert 'DIF_N_CURRENT_' not in buf
     resolve = source['post/denoiser/diffuse/resolve.glsl']
     assert 'DIF_N_PATHGUIDE' not in buf
     assert 'DIF_N_PATHGUIDE' not in resolve
     assert 'prepareDiffuseDenoisedSurfaceReprojection' in source['lib/rt/raytrace/path_trace.glsl']
-    assert 'readDiffuseDenoisedReprojectionForFrame(pixel' in source['lib/rt/raytrace/transport.glsl']
+    assert 'readDiffuseDenoisedReprojectionForFrame(pixel' in expand(shaders/'lib/rt/raytrace/transport.glsl')
     assert 'publishDenoisedReprojection' not in source['post/denoiser/diffuse/temporal.glsl']
     assert 'readDiffuseHistGeoRaw' not in source['post/denoiser/diffuse/temporal.glsl']
     assert 'readDiffuseSwap(pixel' in source['post/denoiser/diffuse/temporal.glsl']
@@ -65,7 +69,7 @@ def main():
     # Daytime stays on the canonical complementary MIS pair.
     trace = source['lib/rt/raytrace/path_trace.glsl']
     assert 'cam.frameId, rtViewProjection' in trace
-    assert trace.count('float misWeight = powerHeuristic(lightPdf, proposalPdf);') == 2
+    assert trace.count('float misWeight = powerHeuristic(lightPdf, proposalPdf);') == 1
     assert 'lastBsdfStrategyPdf, lightPdf' in trace
     assert 'writeDiffuseOutput(' in trace and 'L_direct_0_dir, ro' in trace
     print(json.dumps(dict(rt_stages=6, diffuse_layers=10, bytes_per_pixel=160,

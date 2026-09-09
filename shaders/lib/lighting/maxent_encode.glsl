@@ -10,7 +10,6 @@
 // (maxent.glsl). They handle:
 //   - RGB-to-MaxEnt encoding (radiance_to_maxent)
 //   - Irradiance reconstruction (project_maxent_irradiance)
-//   - Dual-vector packing for temporal storage
 //   - MaxEntEncoding composition (mix, init, scale, accumulate)
 //   - MaxEntEncoding ⇄ packed vec3 (for SSBO/texture I/O)
 // ===========================================================================
@@ -47,19 +46,6 @@ vec3 project_maxent_irradiance(MaxEntEncoding encoded, vec3 N)
     vec3 total_RGB = vec3(t + Co, Y + Cg, t - Co);
 
     return max(total_RGB * attenuation, vec3(0.0));
-}
-
-// Dual-vector packing for temporal storage
-vec4 packDualVector(vec3 dual_theta, float dual_beta) {
-    return vec4(dual_theta, dual_beta);
-}
-vec4 packDualVectorFromEncoded(vec4 maxentEncoded) {
-    vec4 tb = maxent_theta_beta(maxentEncoded);
-    return tb;
-}
-void unpackDualVector(vec4 packed_, out vec3 dual_theta, out float dual_beta) {
-    dual_theta = packed_.xyz;
-    dual_beta = packed_.w;
 }
 
 // MaxEnt composition primitives

@@ -253,6 +253,7 @@ void prepareDiffuseDenoisedSurfaceReprojection(uvec2 currentPixel,
             ? 1.0 - previousFraction.y : previousFraction.y;
         float reconstructionWeight = weightX * weightY;
         totalKernelWeight += reconstructionWeight;
+        if (reconstructionWeight <= 0.0) continue;
         if (any(lessThan(sampleTexel, ivec2(0)))
                 || any(greaterThanEqual(sampleTexel,
                     ivec2(resolution_global)))) continue;

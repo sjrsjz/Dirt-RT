@@ -25,10 +25,7 @@ float specularMaxEntKappa(float rho) {
 
 vec3 specularSurfaceFresnel(vec3 wo, vec3 halfVector,
         vec3 Cs, vec2 S, float etaRatio) {
-    vec3 conductorF = reflectanceColor(Cs,
-        abs(dot(wo, halfVector))).rgb * S.x;
-    float dielectricF = fresnel(wo, halfVector, etaRatio);
-    return mix(conductorF, vec3(dielectricF), clamp(S.y, 0.0, 1.0));
+    return surfaceFresnel(wo, halfVector, Cs, S.x, S.y, etaRatio);
 }
 
 vec3 projectSpecularMaxEnt(SpecularMaxEnt signal,

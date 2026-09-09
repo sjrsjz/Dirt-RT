@@ -31,7 +31,6 @@ vec3 applyCameraVignette(vec3 hdrColor, vec2 uv) {
 
 void main() {
     uvec2 xy = uvec2(gl_FragCoord.xy);
-    vec4 entity = texture(colortex7, texCoord);
     vec4 scene = texture(colortex0, texCoord);
     float marker = texture(colortex8, texCoord).r; // magnitude = linear depth
 
@@ -40,6 +39,8 @@ void main() {
         fragColor = vec4(applyCameraVignette(scene.rgb, texCoord), 1.0);
         return;
     }
+
+    vec4 entity = texture(colortex7, texCoord);
 
     // --- Read RT linear depth (world-space hit distance from camera) ---
     float rtDist = readPrimaryDistance(xy);

@@ -23,11 +23,11 @@ void main() {
     }
 
     // 3. Simple directional lighting
-    float intensity = dot(lightDir_global, normal);
-    vec3 sun = vec3(10.0);
-    vec3 final = clamp(sun * intensity, 0.2, 1.0) * 2.0;
+    // Perspective interpolation does not preserve unit length.
+    float intensity = dot(lightDir_global, normalize(normal));
+    float lighting = clamp(10.0 * intensity, 0.2, 1.0) * 2.0;
 
-    fragColor = pow(texVal, vec4(2.2, 2.2, 2.2, 1.0)) * vec4(final, 1.0);
+    fragColor = vec4(pow(texVal.rgb, vec3(2.2)) * lighting, 1.0);
 
     #ifdef LIGHT
     fragColor.xyz *= 200.0;
