@@ -1,27 +1,75 @@
 # Dirt RT
 
-A simple path tracing shader for vulkanite mod,which uses Nvidia GPU's RT cores to render
+English | [简体中文](README.zh-CN.md)
 
-**WARNING: You need a LabPBR resourcepack to use this shader pack properly. IF you reload your resourcepack, you need to RESTART the game to make the shader work properly.**
+Dirt RT is a real-time path-tracing shader pack for Minecraft. Built for Vulkanite, it combines multi-bounce ray tracing, physically based materials, directional light reconstruction, path guiding, and spatiotemporal denoising in a complete real-time rendering pipeline.
 
-**This pack needs this version of [Vulkanite](https://github.com/sjrsjz/vulkanite-modified/releases/tag/26.2-v0.0.6)**, you may build the latest version by yourself.
+> [!IMPORTANT]
+> Dirt RT requires [Vulkanite modified 26.2-v0.0.6-lut](https://github.com/sjrsjz/vulkanite-modified/releases/tag/26.2-v0.0.6-lut), a compatible NVIDIA RTX GPU, and a LabPBR resource pack.
 
-**Technical documentation:** [ZH](doc/tech.pdf) | [EN](doc/tech_en.pdf)
+## Gallery
 
-**Code guide:** [模块与管线](doc/shader_architecture.md) | [优化与验证记录](doc/transport_optimization.md)
+![Dirt RT outdoor scene](image/README/1784211218150.png)
 
-**1080p profile:** [针对性优化与验证](doc/bench1080_optimization.md) | [游戏反馈后的联合诊断（捕获 11）](doc/bench11_joint_optimization.md)
+![Dirt RT interior lighting](image/README/1784211225727.png)
 
-**Historical baseline:** [捕获 9、提交历史与性能回归](doc/bench9_regression_analysis.md) | [同输入提交消融与 oct32 净收益](doc/bench_culprit_analysis.md)
+![Dirt RT materials and reflections](image/README/1784211234505.png)
 
-**Sigma / ray analysis:** [未知统计、预计算射线与独立派发实测](doc/bench_sigma_ray_analysis.md)
+## Features
 
-# Screenshots
+- Multi-bounce real-time path tracing for direct and indirect illumination.
+- GGX microfacet reflection, energy-preserving rough diffuse shading, transmission, volumetric absorption, and emissive materials.
+- MaxEnt directional light moments for compact radiance reconstruction and guided sampling.
+- Unified diffuse and specular denoising with temporal reprojection, variance tracking, and six-stage A-Trous filtering.
+- Sparse radiance cache with temporal RIS and path-guiding integration.
+- Screen-space reconstruction for stable reflection and refraction history.
+- LabPBR materials, parallax occlusion mapping, wet surfaces, automatic exposure, bloom, and display tone mapping.
+- Built-in diagnostic views for lighting, history, variance, geometry, and cache state.
 
-![1784211218150](image/README/1784211218150.png)
+## Installation
 
-![1784211225727](image/README/1784211225727.png)
+1. Install Minecraft 26.2 with Fabric Loader 0.19.3.
+2. Install [Vulkanite modified 26.2-v0.0.6-lut](https://github.com/sjrsjz/vulkanite-modified/releases/tag/26.2-v0.0.6-lut), or a compatible source build.
+3. Copy the `Dirt RT` directory into Minecraft's `shaderpacks` directory.
+4. Enable Dirt RT in the shader-pack menu.
+5. Use a resource pack containing LabPBR material data.
 
-![1784211234505](image/README/1784211234505.png)
+Shader options are available in game. Their defaults and descriptions live in [`shaders/lib/settings.glsl`](shaders/lib/settings.glsl).
 
-降噪、缓存、光栅和后处理的改动及验证：[所有 pass 优化记录](doc/all_pass_optimization.md)。
+## Rendering architecture
+
+```text
+Raster G-buffer
+      │
+      ▼
+Primary visibility ──► diffuse / specular / transmission paths
+      │                              │
+      ├────────► sparse radiance cache and path guiding
+      │                              │
+      ▼                              ▼
+Temporal reconstruction ──► variance preparation ──► A-Trous filtering
+      │
+      ▼
+Lighting composition ──► bloom ──► exposure and tone mapping
+```
+
+| System | Main source locations |
+| --- | --- |
+| Ray-tracing entry points and scheduling | [`shaders/ray0.rgen`](shaders/ray0.rgen)–[`ray5.rgen`](shaders/ray5.rgen), [`shaders/lib/rt/raytrace_rgen.glsl`](shaders/lib/rt/raytrace_rgen.glsl) |
+| Path integration and bounce policy | [`shaders/lib/rt/raytrace/path_trace.glsl`](shaders/lib/rt/raytrace/path_trace.glsl), [`bounces.glsl`](shaders/lib/rt/raytrace/bounces.glsl) |
+| BSDF, lobe selection, and refraction | [`bsdf.glsl`](shaders/lib/rt/raytrace/bsdf.glsl), [`lobe_selection.glsl`](shaders/lib/rt/raytrace/lobe_selection.glsl), [`refraction.glsl`](shaders/lib/rt/raytrace/refraction.glsl) |
+| GGX, Fresnel, and material models | [`shaders/lib/pbr/`](shaders/lib/pbr/), [`shaders/lib/lighting/eon.glsl`](shaders/lib/lighting/eon.glsl) |
+| Path guiding | [`shaders/lib/rt/raytrace/guiding.glsl`](shaders/lib/rt/raytrace/guiding.glsl) |
+| MaxEnt light representation | [`shaders/lib/lighting/maxent.glsl`](shaders/lib/lighting/maxent.glsl), [`maxent_encode.glsl`](shaders/lib/lighting/maxent_encode.glsl) |
+| Specular directional reconstruction | [`shaders/lib/lighting/specular_maxent.glsl`](shaders/lib/lighting/specular_maxent.glsl), [`shaders/lib/lighting/specular_cdf/`](shaders/lib/lighting/specular_cdf/) |
+| Unified denoiser core | [`shaders/lib/lighting/denoiser/`](shaders/lib/lighting/denoiser/) |
+| Diffuse and reflection denoiser passes | [`shaders/post/denoiser/`](shaders/post/denoiser/) |
+| Sparse radiance cache | [`shaders/lib/buffers/radiance_cache/`](shaders/lib/buffers/radiance_cache/), [`shaders/post/temporal_radiance_cache.glsl`](shaders/post/temporal_radiance_cache.glsl) |
+| Buffer layouts and GPU data interfaces | [`shaders/lib/buffers/`](shaders/lib/buffers/), [`shaders/lib/rt/payload_pack.glsl`](shaders/lib/rt/payload_pack.glsl) |
+| Lighting composition and refraction resolve | [`shaders/post/composite_lighting.glsl`](shaders/post/composite_lighting.glsl), [`resolve_refraction.glsl`](shaders/post/resolve_refraction.glsl) |
+| Bloom, exposure, and tone mapping | [`shaders/lib/post_processing/`](shaders/lib/post_processing/), [`shaders/post/auto_exposure.glsl`](shaders/post/auto_exposure.glsl) |
+| Shader settings and resource bindings | [`shaders/lib/settings.glsl`](shaders/lib/settings.glsl), [`shaders/shaders.properties`](shaders/shaders.properties) |
+
+## License
+
+Dirt RT is released under the [GNU General Public License v3.0](LICENSE). Assets carrying their own source or license notice remain subject to that notice.
